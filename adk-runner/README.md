@@ -41,7 +41,7 @@ adk-rust = "3.0.0"
 | `artifacts` | yes | `artifact_service` through `adk-artifact` |
 | `plugins` | yes | `plugin_manager` through `adk-plugin` |
 | `skills` | yes | `Runner::with_auto_skills` and skill injection through `adk-skill` |
-| `context-compaction` | no | The `compaction` module: `CompactionStrategy`, `TruncationCompaction`, `SummarisationCompaction`, and `RunnerConfigBuilder::context_compaction` for token-budget overflow |
+| `context-compaction` | no | The `compaction` module: `CompactionStrategy`, `TruncationCompaction`, `SummarisationCompaction`, and `RunnerConfigBuilder::context_compaction`, a strategy auto-compaction applies in place of a summary |
 | `sandbox-runner` | no | The `sandbox_runner` module: `SandboxRunner` provisions an `adk-sandbox` workspace, binds its tools for the run, and stops it afterwards |
 
 ## Quick Start
@@ -115,8 +115,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `identity_source`, `agent_principal` | The principal the root agent acts as |
 | `subject_delegation` | Which runs may act for a subject other than the session's user |
 | `compaction_config` | Post-invocation `EventsCompactionConfig` |
-| `intra_compaction_config`, `intra_compaction_summarizer` | Compaction within an invocation |
-| `context_compaction` | Overflow compaction (`context-compaction`) |
+| `intra_compaction_config`, `intra_compaction_summarizer`, `without_intra_compaction` | Auto-compaction before each model call; on by default at 80% of the model's context window |
+| `context_compaction` | A compaction strategy in place of the summary (`context-compaction`) |
 | `context_cache_config`, `cache_capable` | Provider prompt-cache lifecycle |
 | `request_context` | Auth middleware context |
 | `cancellation_token` | Cooperative cancellation of every run |
@@ -177,7 +177,7 @@ fn budgeted(agent: Arc<dyn Agent>, sessions: Arc<dyn SessionService>) -> Result<
 
 ## Spend Ledger
 
-When `RunConfig::spend_ledger` is set, every model call of the run — agent turns, compaction summaries (post-run, intra-invocation, and `context-compaction`), LLM routing, and MCP sampling — reserves its upper-bound cost (`Llm::max_cost_micro_usd`) before it is sent and commits its reported `UsageMetadata::cost`, keyed by app, agent, and vendor, through `adk_core::ModelCallScope`. A reservation the ledger refuses fails the call with `spend.limit_exceeded`, so a capped run never spends past its cap. `Runner::with_llm_spend_estimate` sets what an unpriced call commits when it reports no cost. See [Spend Ledger](../docs/official_docs/security/spend-ledger.md).
+When `RunConfig::spend_ledger` is set, every model call of the run — agent turns, compaction summaries (session compaction and auto-compaction), LLM routing, and MCP sampling — reserves its upper-bound cost (`Llm::max_cost_micro_usd`) before it is sent and commits its reported `UsageMetadata::cost`, keyed by app, agent, and vendor, through `adk_core::ModelCallScope`. A reservation the ledger refuses fails the call with `spend.limit_exceeded`, so a capped run never spends past its cap. `Runner::with_llm_spend_estimate` sets what an unpriced call commits when it reports no cost. See [Spend Ledger](../docs/official_docs/security/spend-ledger.md).
 
 ## Model History After Overlapping or Interrupted Turns
 
@@ -216,7 +216,9 @@ fn compacting(
 }
 ```
 
-Compaction runs after each invocation completes. When the session's count of user events is a multiple of the interval, older events are summarized into a single compacted event, and `MutableSession::conversation_history()` uses the most recent summary instead of the original events. No compaction covers a tool call still held for confirmation: session, intra-invocation, and context compaction all stop before it, so its approval can still resume it. `BaseEventsSummarizer` and `EventsCompactionConfig` are re-exported from `adk-core`.
+Compaction runs after each invocation completes. When the session's count of user events is a multiple of the interval, older events are summarized into a single compacted event, and `MutableSession::conversation_history()` uses the most recent summary instead of the original events. No compaction covers a tool call still held for confirmation: session compaction and auto-compaction both stop before it, so its approval can still resume it.
+
+Auto-compaction is on by default. Before every model call, `LlmAgent` and `CodeActAgent` pass their history to the compactor the runner installs on `RunConfig::history_compactor` (`IntraInvocationCompactor`); once the request passes 80% of the model's context window (`Llm::context_window`), or 100,000 estimated tokens when the model reports none, all but the 10 most recent history entries are summarized by the agent's model, and the compaction is recorded in the session so later runs start from the summary. A request the model rejects as too long is compacted and sent once more. See [Context Compaction](../docs/official_docs/sessions/context-compaction.md#auto-compaction-within-a-run). `BaseEventsSummarizer` and `EventsCompactionConfig` are re-exported from `adk-core`.
 
 See [Context Compaction](../docs/official_docs/sessions/context-compaction.md) for the full guide.
 

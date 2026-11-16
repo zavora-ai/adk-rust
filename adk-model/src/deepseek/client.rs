@@ -274,6 +274,10 @@ impl Llm for DeepSeekClient {
         )
     }
 
+    fn context_window(&self) -> Option<u64> {
+        crate::pricing::PricingCatalog::standard().context_window(Some("deepseek"), self.name())
+    }
+
     fn name(&self) -> &str {
         &self.config.model
     }

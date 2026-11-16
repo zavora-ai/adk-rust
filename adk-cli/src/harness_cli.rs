@@ -510,6 +510,9 @@ impl Setup {
                 builder = builder.memory_embedder(embedder.clone());
             }
         }
+        if let Some(config) = &self.resolved.compaction {
+            builder = builder.intra_compaction(config.clone());
+        }
         // Snapshots before each turn (spec 3.1 §7.27, §13 Q11): records in harness.db and
         // objects beside it, in memory with --ephemeral; a harness served from a shared store
         // keeps none, since the replicas share no workspace.

@@ -172,6 +172,10 @@ mod at_effort {
             self.inner.max_cost_micro_usd(request)
         }
 
+        fn context_window(&self) -> Option<u64> {
+            self.inner.context_window()
+        }
+
         fn native_web_search(&self) -> Option<adk_core::NativeWebSearch> {
             self.inner.native_web_search()
         }

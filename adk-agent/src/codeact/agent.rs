@@ -627,18 +627,68 @@ fn drive_codeact(
                         }
                     }
                     unanswered = false;
-                    let script = match next_script(
-                        model.as_ref(),
-                        &transcript,
-                        &generate_content_config,
-                        &model_hooks,
-                    )
-                    .await
-                    {
-                        Ok(s) => s,
-                        Err(e) => {
-                            yield Err(e);
-                            return;
+                    // Auto-compaction before the model call, and once more after the model
+                    // rejected the request as too long; the system prompt is never compacted.
+                    let mut rejected: Option<AdkError> = None;
+                    let mut resent = false;
+                    let script = loop {
+                        let rejection = rejected.take();
+                        if let Some(compactor) =
+                            invocation_ctx.run_config().history_compactor.clone()
+                        {
+                            let request = adk_core::HistoryCompactionRequest {
+                                preamble: &transcript[..1],
+                                history: &transcript[1..],
+                                reported_prompt_tokens: None,
+                                trigger: if rejection.is_some() {
+                                    adk_core::CompactionTrigger::ContextLimitExceeded
+                                } else {
+                                    adk_core::CompactionTrigger::BeforeModelCall
+                                },
+                            };
+                            match compactor
+                                .compact(invocation_ctx.clone(), model.clone(), request)
+                                .await
+                            {
+                                Ok(Some(compacted)) => {
+                                    transcript.truncate(1);
+                                    transcript.extend(compacted.history);
+                                    if let Some(event) = compacted.event {
+                                        yield Ok(event);
+                                    }
+                                }
+                                Ok(None) => {
+                                    if let Some(error) = rejection {
+                                        yield Err(error);
+                                        return;
+                                    }
+                                }
+                                Err(error) => {
+                                    yield Err(error);
+                                    return;
+                                }
+                            }
+                        }
+                        match next_script(
+                            model.as_ref(),
+                            &transcript,
+                            &generate_content_config,
+                            &model_hooks,
+                        )
+                        .await
+                        {
+                            Ok(s) => break s,
+                            Err(e)
+                                if invocation_ctx.run_config().history_compactor.is_some()
+                                    && adk_core::intra_compaction::is_context_limit_error(&e)
+                                    && !std::mem::replace(&mut resent, true) =>
+                            {
+                                rejected = Some(e);
+                            }
+                            Err(e) => {
+                                yield Err(e);
+                                return;
+                            }
                         }
                     };
                     transcript.push(Content::new("model").with_text(script.clone()));
@@ -3701,6 +3751,125 @@ mod tests {
         .await;
         assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("caught"));
         assert!(rt.last_raise().unwrap().contains("not_found"));
+    }
+
+    /// Replaces the history with one notice once asked `compact_on` times or more, recording
+    /// each trigger it is asked with.
+    #[derive(Debug, Default)]
+    struct NoticeCompactor {
+        compact_on: usize,
+        triggers: StdMutex<Vec<adk_core::CompactionTrigger>>,
+    }
+
+    #[async_trait]
+    impl adk_core::HistoryCompactor for NoticeCompactor {
+        async fn compact(
+            &self,
+            _ctx: Arc<dyn InvocationContext>,
+            _model: Arc<dyn Llm>,
+            request: adk_core::HistoryCompactionRequest<'_>,
+        ) -> adk_core::Result<Option<adk_core::CompactedHistory>> {
+            let mut triggers = self.triggers.lock().unwrap();
+            triggers.push(request.trigger);
+            if triggers.len() < self.compact_on {
+                return Ok(None);
+            }
+            let mut event = Event::new("inv-1");
+            event.actions.compaction = Some(adk_core::EventCompaction {
+                start_timestamp: chrono::Utc::now(),
+                end_timestamp: chrono::Utc::now(),
+                compacted_content: adk_core::history::system_notice("compacted"),
+            });
+            Ok(Some(adk_core::CompactedHistory {
+                history: vec![adk_core::history::system_notice("compacted")],
+                event: Some(event),
+            }))
+        }
+    }
+
+    /// Rejects its first request as too long inside the stream, then answers as `FakeLlm`.
+    struct RejectsFirst {
+        inner: Arc<FakeLlm>,
+        rejected: StdMutex<bool>,
+    }
+
+    #[async_trait]
+    impl Llm for RejectsFirst {
+        fn name(&self) -> &str {
+            "rejects-first"
+        }
+        async fn generate_content(
+            &self,
+            req: LlmRequest,
+            stream: bool,
+        ) -> adk_core::Result<adk_core::LlmResponseStream> {
+            if !std::mem::replace(&mut *self.rejected.lock().unwrap(), true) {
+                let error = AdkError::new(
+                    ErrorComponent::Model,
+                    ErrorCategory::InvalidInput,
+                    "model.test.api_error",
+                    "400: prompt is too long: 1048577 tokens > 1000000 maximum",
+                );
+                return Ok(Box::pin(futures::stream::once(async move { Err(error) })));
+            }
+            self.inner.generate_content(req, stream).await
+        }
+    }
+
+    fn with_compactor(input: &mut LoopInputs, compactor: Arc<NoticeCompactor>) {
+        let config = RunConfig { history_compactor: Some(compactor), ..RunConfig::default() };
+        input.invocation_ctx =
+            Arc::new(MockInvocationContext::new(user("go")).with_run_config(config));
+    }
+
+    #[tokio::test]
+    async fn the_transcript_is_compacted_before_each_model_call() {
+        let model = FakeLlm::new("noop");
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![
+            vec![Planned::Raised("the first try failed".to_string())],
+            vec![Planned::Complete(json!({"type": "final_result", "value": "done"}))],
+        ]));
+        let compactor = Arc::new(NoticeCompactor { compact_on: 2, ..Default::default() });
+        let mut input = base_inputs(model.clone(), rt, user("go"));
+        with_compactor(&mut input, compactor.clone());
+
+        let events = collect(input).await;
+
+        assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("done"));
+        assert_eq!(
+            *compactor.triggers.lock().unwrap(),
+            vec![adk_core::CompactionTrigger::BeforeModelCall; 2]
+        );
+        // The system prompt stays; the rest of the transcript is the compactor's.
+        assert_eq!(
+            model.seen.lock().unwrap()[1],
+            vec![user("sys"), adk_core::history::system_notice("compacted")]
+        );
+        assert_eq!(events.iter().filter(|event| event.actions.compaction.is_some()).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_script_request_rejected_as_too_long_is_compacted_and_sent_once_more() {
+        let inner = FakeLlm::new("noop");
+        let model = Arc::new(RejectsFirst { inner: inner.clone(), rejected: StdMutex::new(false) });
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![Planned::Complete(
+            json!({"type": "final_result", "value": "done"}),
+        )]]));
+        let compactor = Arc::new(NoticeCompactor { compact_on: 2, ..Default::default() });
+        let mut input = base_inputs(model, rt, user("go"));
+        with_compactor(&mut input, compactor.clone());
+
+        let events = collect(input).await;
+
+        assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("done"));
+        assert_eq!(
+            *compactor.triggers.lock().unwrap(),
+            vec![
+                adk_core::CompactionTrigger::BeforeModelCall,
+                adk_core::CompactionTrigger::ContextLimitExceeded
+            ]
+        );
+        assert_eq!(inner.calls(), 1, "the compacted request was sent once more");
     }
 
     /// The full Agent path: `run()` reads session state, suspends, and on a

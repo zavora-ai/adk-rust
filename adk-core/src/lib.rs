@@ -153,6 +153,8 @@ pub mod egress;
 pub mod error;
 /// Event types representing agent interactions in a conversation.
 pub mod event;
+/// The LLM summarizer that session and in-run compaction share.
+pub mod event_summarizer;
 mod event_stream;
 /// Governed tool execution: kill switch, durable approvals, and the authorization path.
 pub mod governance;
@@ -167,7 +169,7 @@ pub mod history;
 pub mod identity;
 /// Template-based instruction injection with session state interpolation.
 pub mod instruction_template;
-/// Intra-turn context compaction configuration.
+/// Auto-compaction during a run: its threshold, the token estimate, and the agents' hook.
 pub mod intra_compaction;
 /// Leases with fencing epochs: one owner of a named resource at a time.
 pub mod lease;
@@ -292,7 +294,11 @@ pub use identity::{
     AdkIdentity, AppName, ExecutionIdentity, IdentityError, InvocationId, SessionId, UserId,
 };
 pub use instruction_template::inject_session_state;
-pub use intra_compaction::IntraCompactionConfig;
+pub use event_summarizer::LlmEventSummarizer;
+pub use intra_compaction::{
+    CompactedHistory, CompactionTrigger, HistoryCompactionRequest, HistoryCompactor,
+    IntraCompactionConfig,
+};
 pub use lease::{InMemoryLeaseStore, Lease, LeaseStore};
 pub use metering::{
     LlmSpendEstimate, MeteredLlm, MeteredUsage, ModelCallScope, ModelSpendHold,

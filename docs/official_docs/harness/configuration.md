@@ -24,6 +24,7 @@ required; everything else has a default.
 | `tool_timeout(duration)` | 300 s | Timeout of one tool call |
 | `history_max_events(n)` | all | Most recent events loaded per run |
 | `compaction(config)` / `without_compaction()` | interval 10, overlap 4 | Event compaction for the harness's runner |
+| `intra_compaction(config)` / `without_intra_compaction()` | on, at 80% of the model's window | Auto-compaction before each model call; see [Context Compaction](../sessions/context-compaction.md#auto-compaction-within-a-run) |
 | `tool(tool)` / `toolset(toolset)` | none | Extra tools, governed as `External` |
 | `customize_llm(f)` | none | The escape hatch to the underlying `LlmAgentBuilder`; its rustdoc states what it can bypass |
 
@@ -119,6 +120,7 @@ works in, so it may only tighten (spec 3.1 §9.2 I3):
 | `fail_if_unavailable = true` | Refuses to build without the sandbox |
 | `[deploy]` | Not by the harness: deployment tooling reads it |
 | `[ultracode]` | Not by the harness: `adk-rust ultracode` reads it, tighten-only — see below |
+| `[compaction]` | Not by the harness: the CLI reads it — see below; in code, use `intra_compaction` |
 | `yes`, `allow_unsandboxed`, `trust`, `packs`, `members` | Never: they would loosen what the agent may do. Set them in code |
 
 Ignored keys and a looser mode are logged as warnings and listed in `HarnessConfig::notes`.
@@ -150,6 +152,26 @@ fn main() -> anyhow::Result<()> {
 
 The CLI reads the same file with the same rule, plus `<config dir>/adk-rust/harness.toml`
 for settings only you may make; see [Configuration files](cli.md#configuration-files).
+
+### `[compaction]`
+
+A run compacts the agent's history before a model call once the request nears the model's
+context window. The CLI reads a `[compaction]` table that changes when: the user config first,
+then `.adk/harness.toml`, which may set it too, since it changes what the model is sent rather
+than what the agent may do.
+
+| Key | Default | Effect |
+|---|---|---|
+| `auto` | `true` | `false` turns auto-compaction off |
+| `threshold_tokens` | none | A fixed threshold in estimated tokens, in place of the window fraction |
+| `window_fraction` | `0.8` | The share of the model's context window a request may reach |
+| `keep_recent` | `10` | How many of the most recent history entries are kept as they are |
+
+```toml
+[compaction]
+window_fraction = 0.6
+keep_recent = 6
+```
 
 ### `[ultracode]`
 

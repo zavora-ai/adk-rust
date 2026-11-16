@@ -11,10 +11,11 @@
 //!
 //! # Overview
 //!
-//! When a model rejects a request due to token limits, the runner can apply a
-//! [`CompactionStrategy`] to shrink the event history and retry. The
-//! [`ContextOverflowError`] captures the current token count and the model's
-//! maximum, enabling callers to diagnose overflow conditions.
+//! A strategy set with `RunnerConfigBuilder::context_compaction` takes the place of
+//! auto-compaction's summary: before any model call whose request passes the budget, the
+//! agent's history is shortened with it ([`crate::IntraInvocationCompactor`]). The
+//! [`ContextOverflowError`] captures the current token count and the budget when a strategy
+//! cannot get under it.
 //!
 //! # Example
 //!
@@ -372,10 +373,9 @@ fn build_summary_prompt(events: &[Event]) -> String {
 
 /// Configuration for automatic context compaction in the runner.
 ///
-/// When the conversation history exceeds `context_budget` tokens, the runner
-/// applies the configured [`CompactionStrategy`] to shrink the event list. If
-/// compaction still leaves the context over budget, the runner retries up to
-/// `max_retries` times before returning a [`ContextOverflowError`].
+/// Before any model call whose request passes `context_budget` estimated tokens, an
+/// agent's history is shortened with the configured [`CompactionStrategy`], applied up to
+/// `max_retries` times; a history still over budget after that is sent as it is.
 ///
 /// # Fields
 ///
@@ -447,11 +447,8 @@ impl std::fmt::Debug for CompactionConfig {
 
 /// Checks whether an [`AdkError`] represents a token/context limit error from a model.
 ///
-/// Token limit errors are typically reported by model providers as
-/// `ErrorCategory::InvalidInput` with messages containing keywords like
-/// "token", "context length", "too long", or "maximum context". This function
-/// uses heuristic message matching since different providers use different
-/// phrasing.
+/// Forwards to [`adk_core::intra_compaction::is_context_limit_error`], which agents use to
+/// compact and retry a model call the model rejected as too long.
 ///
 /// # Example
 ///
@@ -471,47 +468,13 @@ impl std::fmt::Debug for CompactionConfig {
 /// assert!(!is_token_limit_error(&other));
 /// ```
 pub fn is_token_limit_error(err: &AdkError) -> bool {
-    // Must be a model error with InvalidInput category
-    if err.component != adk_core::ErrorComponent::Model {
-        return false;
-    }
-    if err.category != adk_core::ErrorCategory::InvalidInput {
-        return false;
-    }
-
-    // Check for the specific context overflow code we emit
-    if err.code == "runner.context_overflow" {
-        return true;
-    }
-
-    // Heuristic: check the error message for token/context limit keywords.
-    // Different providers phrase this differently:
-    // - OpenAI: "maximum context length is X tokens"
-    // - Anthropic: "prompt is too long: X tokens"
-    // - Gemini: "request payload size exceeds the limit"
-    // - Generic: "token limit", "context length exceeded"
-    let msg = err.message.to_lowercase();
-    let token_limit_patterns = [
-        "token",
-        "context length",
-        "context_length",
-        "too long",
-        "too many tokens",
-        "payload size exceeds",
-        "maximum context",
-        "max_tokens",
-        "input too large",
-        "prompt is too long",
-        "exceeds the model",
-    ];
-
-    token_limit_patterns.iter().any(|pattern| msg.contains(pattern))
+    adk_core::intra_compaction::is_context_limit_error(err)
 }
 
 /// Applies compaction to the given events and returns the compacted result.
 ///
-/// This is the core retry loop used by the runner when a token limit error is
-/// detected. It applies the configured [`CompactionStrategy`] up to
+/// This is the retry loop auto-compaction runs a strategy through. It applies the
+/// configured [`CompactionStrategy`] up to
 /// `max_retries` times. If compaction cannot reduce the context below the
 /// budget after all retries, a [`ContextOverflowError`] is returned.
 ///

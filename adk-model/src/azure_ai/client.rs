@@ -130,6 +130,10 @@ impl Llm for AzureAIClient {
         )
     }
 
+    fn context_window(&self) -> Option<u64> {
+        crate::pricing::PricingCatalog::standard().context_window(Some("azure-ai"), self.name())
+    }
+
     fn name(&self) -> &str {
         &self.model
     }

@@ -267,6 +267,10 @@ impl Llm for SwitchableModel {
         self.current().and_then(|model| model.max_cost_micro_usd(request))
     }
 
+    fn context_window(&self) -> Option<u64> {
+        self.current().and_then(|model| model.context_window())
+    }
+
     fn native_web_search(&self) -> Option<NativeWebSearch> {
         self.current().and_then(|model| model.native_web_search())
     }

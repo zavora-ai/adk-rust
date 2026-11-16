@@ -75,7 +75,7 @@ reqwest = { workspace = true }
 adk-auth = { path = "../adk-auth", features = ["signed-audit"] }
 adk-model = { path = "../adk-model", features = ["anthropic", "gemini", "gemini-interactions", "openai"] }
 adk-plugin = { path = "../adk-plugin" }
-adk-runner = { path = "../adk-runner" }
+adk-runner = { path = "../adk-runner", features = ["context-compaction"] }
 adk-session = { path = "../adk-session" }
 adk-tool = { path = "../adk-tool" }
 anyhow = "1"

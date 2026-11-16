@@ -382,6 +382,74 @@ pub fn balanced_content_cut(contents: &[Content], end: usize) -> usize {
     cut_keeping_pairs(&contents.iter().map(Some).collect::<Vec<_>>(), end)
 }
 
+/// The largest index at or before `end` that comes before every call in `contents` still held
+/// for confirmation.
+///
+/// The content-history counterpart of
+/// [`held_call_compaction_limit`](crate::held_call_compaction_limit): a call is held while its
+/// latest response is a [`confirmation_pending_response`](crate::confirmation_pending_response).
+/// A compaction that summarises `contents[..index]` keeps the held call and everything after
+/// it, so a decision given later still resumes it. Calls are matched by ID.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::history::held_call_content_limit;
+/// use adk_core::{Content, FunctionResponseData, Part, confirmation_pending_response};
+/// use serde_json::json;
+///
+/// let contents = vec![
+///     Content::new("user").with_text("pay 5"),
+///     Content {
+///         role: "model".into(),
+///         parts: vec![Part::FunctionCall {
+///             name: "pay".into(),
+///             args: json!({ "amount": 5 }),
+///             id: Some("c1".into()),
+///             thought_signature: None,
+///         }],
+///     },
+///     Content {
+///         role: "function".into(),
+///         parts: vec![Part::FunctionResponse {
+///             function_response: FunctionResponseData::new("pay", confirmation_pending_response("held")),
+///             id: Some("c1".into()),
+///             annotations: None,
+///         }],
+///     },
+/// ];
+/// // Only the message before the held call may be compacted.
+/// assert_eq!(held_call_content_limit(&contents, contents.len()), 1);
+/// assert_eq!(held_call_content_limit(&contents[..1], 1), 1);
+/// ```
+pub fn held_call_content_limit(contents: &[Content], end: usize) -> usize {
+    let end = end.min(contents.len());
+    let mut called_at = HashMap::<&str, usize>::new();
+    let mut pending = HashMap::<&str, bool>::new();
+    for (index, content) in contents.iter().enumerate() {
+        for part in &content.parts {
+            match part {
+                Part::FunctionCall { id: Some(id), .. } => {
+                    called_at.entry(id.as_str()).or_insert(index);
+                }
+                Part::FunctionResponse { function_response, id: Some(id), .. } => {
+                    pending.insert(
+                        id.as_str(),
+                        crate::is_confirmation_pending(&function_response.response),
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+    pending
+        .iter()
+        .filter(|(_, held)| **held)
+        .filter_map(|(id, _)| called_at.get(id).copied())
+        .min()
+        .map_or(end, |at| at.min(end))
+}
+
 /// [`balanced_cut`] over contents, where `None` stands for an event history ignores.
 fn cut_keeping_pairs(contents: &[Option<&Content>], end: usize) -> usize {
     let end = end.min(contents.len());

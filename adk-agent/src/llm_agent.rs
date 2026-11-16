@@ -4193,8 +4193,15 @@ impl Agent for LlmAgent {
             // Multi-turn loop with max iterations
             let mut iteration = 0;
             let mut schema_retry_count: usize = 0;
+            // The prompt tokens the provider reported for the last request, which the
+            // compactor weighs against its threshold until the history is compacted.
+            let mut reported_prompt_tokens: Option<u64> = None;
+            // A request the model rejected as longer than its context window, which the next
+            // pass compacts for and sends once more; set once per model call.
+            let mut rejected_as_too_long: Option<adk_core::AdkError> = None;
+            let mut resent_after_compaction = false;
 
-            loop {
+            'model_calls: loop {
                 // Cooperative cancellation: exit before starting another turn
                 // if the invocation was cancelled (e.g. Runner::interrupt()).
                 if ctx.is_cancelled() {
@@ -4263,6 +4270,48 @@ impl Agent for LlmAgent {
                         history.after = conversation_history.len(),
                         "history processors rewrote the history"
                     );
+                }
+
+                // ===== AUTO-COMPACTION =====
+                // Before every model call, and once more after the model rejected a request as
+                // too long; the instructions at the head of the history are never compacted.
+                let rejected = rejected_as_too_long.take();
+                if let Some(compactor) = ctx.run_config().history_compactor.clone() {
+                    let preamble = conversation_history
+                        .iter()
+                        .take_while(|content| content.role == "system")
+                        .count();
+                    let request = adk_core::HistoryCompactionRequest {
+                        preamble: &conversation_history[..preamble],
+                        history: &conversation_history[preamble..],
+                        reported_prompt_tokens,
+                        trigger: if rejected.is_some() {
+                            adk_core::CompactionTrigger::ContextLimitExceeded
+                        } else {
+                            adk_core::CompactionTrigger::BeforeModelCall
+                        },
+                    };
+                    match compactor.compact(ctx.clone(), model.clone(), request).await {
+                        Ok(Some(compacted)) => {
+                            conversation_history.truncate(preamble);
+                            conversation_history.extend(compacted.history);
+                            reported_prompt_tokens = None;
+                            if let Some(event) = compacted.event {
+                                yield Ok(event);
+                            }
+                        }
+                        Ok(None) => {
+                            // Sending the same request again would be rejected again.
+                            if let Some(error) = rejected {
+                                yield Err(error);
+                                return;
+                            }
+                        }
+                        Err(error) => {
+                            yield Err(error);
+                            return;
+                        }
+                    }
                 }
 
                 // Call IDs the agent generated for a provider that sent none stay out of
@@ -4522,6 +4571,15 @@ impl Agent for LlmAgent {
                                     "model call failed"
                                 )
                             });
+                            // A request too long for the model is compacted and sent once more.
+                            if ctx.run_config().history_compactor.is_some()
+                                && adk_core::intra_compaction::is_context_limit_error(&error)
+                                && !std::mem::replace(&mut resent_after_compaction, true)
+                            {
+                                rejected_as_too_long = Some(error);
+                                iteration -= 1;
+                                continue 'model_calls;
+                            }
                             // A hook's response, from a fallback model for example, answers
                             // the turn in the failed call's place.
                             match recover_model_error(&ctx, failed_request.as_ref(), &error).await {
@@ -4570,6 +4628,17 @@ impl Agent for LlmAgent {
                                         "model stream failed"
                                     )
                                 });
+                                // A request too long for the model fails before any output;
+                                // it is compacted and sent once more.
+                                if last_chunk.is_none()
+                                    && ctx.run_config().history_compactor.is_some()
+                                    && adk_core::intra_compaction::is_context_limit_error(&e)
+                                    && !std::mem::replace(&mut resent_after_compaction, true)
+                                {
+                                    rejected_as_too_long = Some(e);
+                                    iteration -= 1;
+                                    continue 'model_calls;
+                                }
                                 // A hook's response replaces the whole failed response, so
                                 // the deltas already received are dropped.
                                 match recover_model_error(&ctx, failed_request.as_ref(), &e).await {
@@ -4686,6 +4755,11 @@ impl Agent for LlmAgent {
                             last_interaction_id = chunk.interaction_id.clone();
                         }
 
+                        if let Some(usage) = &chunk.usage_metadata
+                            && usage.prompt_token_count > 0
+                        {
+                            reported_prompt_tokens = Some(usage.prompt_token_count as u64);
+                        }
                         if chunk.finish_reason.is_some() {
                             last_turn_finish_reason = chunk.finish_reason;
                         }
@@ -4701,6 +4775,7 @@ impl Agent for LlmAgent {
                     if let Some(last) = &last_chunk {
                         final_provider_metadata = last.provider_metadata.clone();
                     }
+                    resent_after_compaction = false;
                     normalize_option_content(&mut accumulated_content);
 
                     // A stream whose last chunk is partial never produced the complete event

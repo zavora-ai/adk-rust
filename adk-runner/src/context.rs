@@ -91,6 +91,12 @@ impl MutableSession {
         *events = new_events;
     }
 
+    /// Runs `read` over the events without copying them.
+    pub(crate) fn read_events<R>(&self, read: impl FnOnce(&[Event]) -> R) -> R {
+        let events = self.events.read().unwrap_or_else(PoisonError::into_inner);
+        read(&events)
+    }
+
     /// Return the number of accumulated events without cloning the full list.
     pub fn events_len(&self) -> usize {
         let events = self.events.read().unwrap_or_else(PoisonError::into_inner);
@@ -141,12 +147,16 @@ impl MutableSession {
         // end_timestamp has been summarized and should be replaced by the
         // compacted content.
         let mut compaction_boundary = None;
+        // Turns the compaction kept were answered with the history before it; a provider binds
+        // thinking to that history, so their thinking is not replayed after the summary.
+        let mut compacted_at = None;
         for event in events.iter().rev() {
             if let Some(ref compaction) = event.actions.compaction {
                 let mut content = compaction.compacted_content.clone();
                 adk_core::history::strip_native(&mut content);
                 history.push(HistoryContent { content, invocation_id: None });
                 compaction_boundary = Some(compaction.end_timestamp);
+                compacted_at = Some(event.timestamp);
                 break;
             }
         }
@@ -225,6 +235,12 @@ impl MutableSession {
                     // Native items replay only from a model turn, to the provider and model
                     // whose origin the event recorded; user turns (A2A input included) never
                     // carry them.
+                    if compacted_at.is_some_and(|at| event.timestamp < at) {
+                        mapped_content.parts.retain(|part| !matches!(part, Part::Thinking { .. }));
+                        if mapped_content.parts.is_empty() {
+                            continue;
+                        }
+                    }
                     if mapped_content.role == "model" {
                         adk_core::history::mark_origin(
                             &mut mapped_content,

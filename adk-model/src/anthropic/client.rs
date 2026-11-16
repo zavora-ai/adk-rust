@@ -725,6 +725,10 @@ impl Llm for AnthropicClient {
         )
     }
 
+    fn context_window(&self) -> Option<u64> {
+        crate::pricing::PricingCatalog::standard().context_window(Some("anthropic"), self.name())
+    }
+
     fn name(&self) -> &str {
         &self.model
     }

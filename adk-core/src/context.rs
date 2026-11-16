@@ -1866,6 +1866,22 @@ pub struct RunConfig {
     /// agents, teams and `GraphAgent` do; another [`Agent`] answers it with
     /// [`RequestedCall::refusal_events`](crate::RequestedCall::refusal_events).
     pub requested_call: Option<crate::RequestedCall>,
+    /// When the run's agents compact their history before a model call.
+    ///
+    /// `None` uses the runner's setting, which is on by default
+    /// ([`IntraCompactionConfig::default`](crate::IntraCompactionConfig)): a request is
+    /// compacted once it nears the model's context window.
+    /// `Some(IntraCompactionConfig::disabled())` turns it off for this run.
+    pub intra_compaction: Option<crate::IntraCompactionConfig>,
+    /// The compactor the run's agents call before each model call, and once after a model
+    /// rejects a request as longer than its context window.
+    ///
+    /// At the start of each run the runner installs its own, built from
+    /// [`intra_compaction`](Self::intra_compaction) or the runner's setting, when this is
+    /// `None` and compaction is enabled. A compactor already set is kept, so a caller can
+    /// supply its own. Transfer targets, workflow sub-agents and agent tools inherit it with
+    /// the config. See [`HistoryCompactor`](crate::HistoryCompactor).
+    pub history_compactor: Option<Arc<dyn crate::HistoryCompactor>>,
 }
 
 impl Default for RunConfig {
@@ -1907,6 +1923,8 @@ impl Default for RunConfig {
             acting: crate::ActingConfig::default(),
             deny_on_confirmation_timeout: false,
             requested_call: None,
+            intra_compaction: None,
+            history_compactor: None,
         }
     }
 }
@@ -2141,6 +2159,31 @@ impl RunConfigBuilder {
     /// Prevents infinite transfer loops. Defaults to 10 when `None`.
     pub fn max_transfer_depth(mut self, depth: u32) -> Self {
         self.config.max_transfer_depth = Some(depth);
+        self
+    }
+
+    /// Sets when the run's agents compact their history, in place of the runner's setting.
+    ///
+    /// See [`RunConfig::intra_compaction`].
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{IntraCompactionConfig, RunConfig};
+    ///
+    /// let config = RunConfig::builder().intra_compaction(IntraCompactionConfig::disabled()).build();
+    /// assert_eq!(config.intra_compaction, Some(IntraCompactionConfig::disabled()));
+    /// ```
+    pub fn intra_compaction(mut self, config: crate::IntraCompactionConfig) -> Self {
+        self.config.intra_compaction = Some(config);
+        self
+    }
+
+    /// Sets the compactor the run's agents call before each model call.
+    ///
+    /// See [`RunConfig::history_compactor`].
+    pub fn history_compactor(mut self, compactor: Arc<dyn crate::HistoryCompactor>) -> Self {
+        self.config.history_compactor = Some(compactor);
         self
     }
 
