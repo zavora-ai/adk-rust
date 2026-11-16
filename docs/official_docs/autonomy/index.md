@@ -119,12 +119,21 @@ cargo run -- up
 ```
 
 ```text
-OUTPUT-UP
+ADK-Rust kernel up on http://127.0.0.1:8080
+  socket .adk/kernel.sock
+  home .adk
+  mode auto · shell OS sandbox (seatbelt, no network)
+  queues interactive, background, maintenance
+  control: adk-rust ps | top | attach | kill | suspend | resume | freeze | events | proc
+  approvals: GET /api/approvals, POST /api/approvals/{id}/decide
+Press Ctrl+C to drain and stop
 ```
 
-The kernel's home is `.adk`: its control socket, `.adk/kernel.sock`, admits only your OS user,
-and every `adk-rust` control command reaches it with `--home .adk` from the project directory.
-`cargo run -- up` refuses to start when any kernel store would be kept in memory.
+The banner follows the kernel's log lines. The kernel's home is `.adk`: its control socket,
+`.adk/kernel.sock`, admits only your OS user — when the project's path is too long for a
+socket, the banner names one in your temporary directory instead — and every `adk-rust`
+control command reaches it with `--home .adk` from the project directory. `cargo run -- up`
+refuses to start when any kernel store would be kept in memory.
 
 ## 3. Give it a goal and walk away
 
@@ -136,7 +145,22 @@ cargo run -- goal "Write STATUS.md from the notes in notes/ and publish it" \
 ```
 
 ```text
-OUTPUT-GOAL
+goal on the kernel at .adk · mode auto
+goal:  Write STATUS.md from the notes in notes/ and publish it
+until: test -s outbox/published.md  (budget: 8 iterations)
+process 0803e865-8337-40cf-bbb9-32a8d4cac6dc · session 1e0281ee-df19-40ad-a380-1d78bf4a3f79
+Ctrl-C detaches; the goal keeps running.
+
+· glob {"pattern":"**/*"}
+· read_file {"path":"notes/example.md"}
+· read_file {"path":"README.md"}
+· write_file {"content":"# Status\n\n- The release candidate passed the integration suite.\n- Two flaky tests in the payments module …
+· publish_status {}
+Tool confirmation required for 'publish_status'. Provide approve/deny decision to continue.
+
+1 call(s) wait for a decision; the goal waits on the kernel and resumes once they are decided:
+  apr_b6134e76e2bafcb16010237ac55cc6a9  publish_status {}
+Decide with `adk-rust approvals --home .adk approve ID` (or `deny ID`), or from any surface.
 ```
 
 The goal runs as a process of the kernel, as you, on its `background` queue. In `auto` mode the
@@ -172,7 +196,10 @@ adk-rust approvals --home .adk approve apr_…
 ```
 
 ```text
-OUTPUT-APPROVE
+$ adk-rust approvals --home .adk list
+apr_b6134e76e2bafcb16010237ac55cc6a9  session 1e0281ee-df19-40ad-a380-1d78bf4a3f79  publish_status {}  (Tool 'publish_status' requires confirmation: 'publish_status' is an external too…)
+$ adk-rust approvals --home .adk approve apr_b6134e76e2bafcb16010237ac55cc6a9
+approved publish_status once; process 0803e865-8337-40cf-bbb9-32a8d4cac6dc continues now
 ```
 
 The decision resumes the parked process at once: `publish_status` runs exactly once, the check
@@ -180,7 +207,9 @@ passes, and the goal ends. `adk-rust approvals --home .adk deny ID --reason "…
 instead, and the agent is told why.
 
 ```text
-OUTPUT-PS-DONE
+$ adk-rust ps --home .adk
+PID                                   STATE      KIND           QUEUE            AGE      TODAY      CALLS  NOTE
+0803e865-8337-40cf-bbb9-32a8d4cac6dc  completed  goal           background        0s    $0.0443        7/6  goal 1/8, check exit 0
 ```
 
 ## 5. Let it wake itself
@@ -205,13 +234,18 @@ A trigger lives in code, so a restart neither loses nor duplicates it. The expre
 fields, seconds first, in UTC. `MissedFirePolicy::FireOnce` fires one run for the 09:00 a
 stopped kernel missed; `Skip` fires only an occurrence that is on time, and `CatchUp(n)` up to
 the last `n` ([missed occurrences](../kernel/scheduling.md#cron-wakes-and-missed-occurrences)).
-Each scheduled run holds `publish_status` in the inbox like the goal did.
+A scheduled run that publishes holds `publish_status` in the inbox as the goal did.
 
 To watch one fire now, set the expression to `"0 * * * * *"` (every minute), restart
-`cargo run -- up`, and list the processes:
+`cargo run -- up`, and list the processes. Each run read the notes, found `STATUS.md`
+current, and published nothing:
 
 ```text
-OUTPUT-CRON
+$ adk-rust ps --home .adk          # three minutes after the restart
+PID                                   STATE      KIND                      QUEUE            AGE      TODAY      CALLS  NOTE
+b2fc1c55-edd0-4f63-8d00-a5df096b0aba  completed  triggered:weekday-status  background     2m01s    $0.0096        3/3
+8c5e4a08-d476-4de2-9b77-b0683a0d1120  completed  triggered:weekday-status  background     1m01s    $0.0102        3/3
+6b54fd29-baa1-4b6a-be3e-06bf954047a9  completed  triggered:weekday-status  background        1s    $0.0096        3/3
 ```
 
 A webhook wakes the agent the same way: a `Trigger` on `Wake::Webhook { hook }` and a
@@ -233,9 +267,18 @@ adk-rust unfreeze --home .adk
 ```
 
 ```text
-OUTPUT-FREEZE
+$ adk-rust freeze --home .adk --reason "investigating the outbox"
+frozen (investigating the outbox); 0 running process(es) parked on this replica, every replica parks its own. Lift it with `adk-rust unfreeze`.
+$ cargo run -- goal "Add a Risks section to STATUS.md naming the quarantined tests, then publish it" --until "grep -q Risks outbox/published.md"
+$ adk-rust ps --home .adk
+PID                                   STATE      KIND           QUEUE            AGE      TODAY      CALLS  NOTE
+0803e865-8337-40cf-bbb9-32a8d4cac6dc  completed  goal           background       33s    $0.0443        7/6  goal 1/8, check exit 0
+9db0bd96-0408-429e-b54a-d9ea14244c9a  queued     goal           background       11s    $0.0000        0/0  goal 0/8
+$ adk-rust unfreeze --home .adk
+unfrozen; the processes the freeze parked resume.
 ```
 
+A goal started while frozen waits `queued` and makes no model call; after `unfreeze` it runs.
 The freeze is kept in `.adk/state.db`, so a kernel restarted while frozen stays frozen.
 
 ## 7. Crash and resume
@@ -247,8 +290,24 @@ kill -9 <pid of cargo run -- up>
 cargo run -- up
 ```
 
+The terminal following a goal stops with `server.unavailable` when the kernel dies; the goal
+does not. After the restart the running goal is reclaimed once its 30-second lease lapses
+(its age starts again at the new attempt) and finishes, and the call another goal held before
+the crash is still in the inbox:
+
 ```text
-OUTPUT-CRASH
+$ adk-rust ps --home .adk          # before the kill: a goal mid-run, another holding a call
+9db0bd96-0408-429e-b54a-d9ea14244c9a  waiting    goal           background       26s    $0.0116        4/6  goal 0/8
+89cdfa94-9c82-4935-98b8-6556b2b0ccd6  running    goal           background        1s    $0.0000        1/1  goal 0/8
+$ kill -9 84911
+$ cargo run -- up
+$ adk-rust ps --home .adk          # every 3 seconds after the restart
+89cdfa94-9c82-4935-98b8-6556b2b0ccd6  running    goal           background       28s    $0.0000        1/1  goal 0/8
+89cdfa94-9c82-4935-98b8-6556b2b0ccd6  running    goal           background        1s    $0.0000        1/1  goal 0/8
+89cdfa94-9c82-4935-98b8-6556b2b0ccd6  running    goal           background        7s    $0.0106        4/7  goal 0/8
+89cdfa94-9c82-4935-98b8-6556b2b0ccd6  completed  goal           background        2s    $0.0288        7/8  goal 1/8, check exit 0
+$ adk-rust approvals --home .adk list
+apr_1acf73b6f84320518841a0d9dbd2d2d4  session 110f88dc-588d-42fe-9716-9f431407d5b1  publish_status {}  (Tool 'publish_status' requires confirmation: 'publish_status' is an external too…)
 ```
 
 | What | After the restart |
@@ -273,18 +332,34 @@ way the harness runs.
 | What it did, provably | `adk-rust audit export` and `adk-rust audit verify` |
 
 Steer a running turn with a message it takes after its current tool step, before its next model
-call ([steering](../kernel/control-plane.md#steering-a-running-turn)). `SOCKET` is the `socket`
-line `up` printed: `.adk/kernel.sock`, or a path in your temporary directory when the
-project's path is too long for a socket.
+call ([steering](../kernel/control-plane.md#steering-a-running-turn)). Here a goal writes a
+risk list —
+`cargo run -- goal "Write RISKS.md: for each note, one line naming a risk it implies, then a line rating the overall risk" --until "test \$(wc -l < RISKS.md) -ge 4"`
+— and the message narrows it while it runs. `SOCKET` is the `socket` line `up` printed;
+`SESSION` is the session `goal` printed.
 
 ```bash
 curl --unix-socket SOCKET -H 'content-type: application/json' \
-  -d '{"text": "Keep STATUS.md under ten lines."}' \
+  -d '{"text": "Keep RISKS.md under ten lines and rate the overall risk as low, medium or high."}' \
   http://localhost/api/kernel/sessions/SESSION/steer
 ```
 
 ```text
-OUTPUT-STEER
+{"outcome":"accepted","steerId":"steer-7f0eb162-5dc8-422b-8f56-42e28c6a6e36","pid":"5d72ee56-4528-4361-91b6-f37dffdafe32","leaseEpoch":1}
+```
+
+`{"outcome":"returned"}` means no turn of the session takes messages yet — the process is
+queued, between turns, or finished; send it again once `adk-rust ps` shows it `running`.
+`adk-rust attach --home .adk --session SESSION` shows the message where the turn took it:
+
+```text
+You > Goal: Write RISKS.md: for each note, one line naming a risk it implies, then a line rating the overall risk…
+· glob {"pattern":"notes/**"}
+You > Keep RISKS.md under ten lines and rate the overall risk as low, medium or high.
+· read_file {"path":"notes/example.md"}
+· write_file {"content":"- Release candidate passed integration: the suite may not cover payments paths hidden by quarantined tests.\…
+I wrote RISKS.md with 4 lines, which is under the ten-line limit. …
+Goal check `test $(wc -l < RISKS.md) -ge 4` passed on iteration 1. The goal is done.
 ```
 
 Verify the signed audit log:
@@ -295,7 +370,14 @@ adk-rust audit verify audit.jsonl --key "$(cat .adk/audit.vkey)"
 ```
 
 ```text
-OUTPUT-AUDIT
+log:                  ops-agent
+origin:               adk-audit/ops-agent
+records:              244 (0 pruned)
+checkpoints verified: 4
+signed through:       204
+root:                 d96168f80119e79af0e235beaad0d9e5ac65d57b825677174e06010fc9594d79
+unsigned tail:        40
+result:               VALID
 ```
 
 ## The umbrella paths
