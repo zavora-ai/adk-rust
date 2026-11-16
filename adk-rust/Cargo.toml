@@ -5,11 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Rust Agent Development Kit (ADK-Rust): build AI agents in Rust with modular components for models, tools, memory, and more"
+description = "Rust Agent Development Kit (ADK-Rust): build AI agents in Rust, including autonomous agents governed by policies, approvals and budgets, with durable runs, tools, memory, and more"
 homepage = "https://github.com/zavora-ai/adk-rust"
 repository.workspace = true
 documentation = "https://docs.rs/adk-rust"
-keywords = ["ai", "agent", "llm", "adk", "framework"]
+keywords = ["ai", "agent", "llm", "adk", "autonomous"]
 categories = ["api-bindings", "asynchronous", "web-programming"]
 readme = "README.md"
 exclude = ["tests/", "examples/"]
@@ -442,7 +442,7 @@ name = "performance_0_8_llm_agents"
 required-features = ["minimal"]
 
 [package.metadata.docs.rs]
-# Use "full" to show the complete API surface on docs.rs, plus the Monty
-# opt-ins (not part of any tier) so their modules appear in the docs.
-features = ["full", "code-embedded-python", "codeact-monty"]
+# Use "full" to show the complete API surface on docs.rs, plus the opt-ins in no tier
+# whose modules belong in the docs: Monty and agent surfaces.
+features = ["full", "code-embedded-python", "codeact-monty", "surface"]
 rustdoc-args = ["--cfg", "docsrs"]

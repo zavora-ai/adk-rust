@@ -4,8 +4,9 @@
 Every pull request records its user-facing change as one file under `changelog.d/`
 instead of editing `CHANGELOG.md`, so parallel pull requests never conflict on the
 same lines. A fragment is named `<section>.<slug>.md`, where `<section>` is one of
-`breaking`, `security`, `added`, `changed`, or `fixed`, and contains one or more
-Markdown list items exactly as they will appear under that heading.
+`highlights`, `breaking`, `security`, `added`, `changed`, or `fixed`, and contains one or more
+Markdown list items exactly as they will appear under that heading. `highlights` opens the
+release notes, so a release reads with its headline before its breaking changes.
 
 Usage:
   python3 scripts/changelog-assemble.py --check
@@ -28,9 +29,9 @@ ROOT = Path(__file__).resolve().parent.parent
 FRAGMENT_DIR = ROOT / "changelog.d"
 CHANGELOG = ROOT / "CHANGELOG.md"
 
-SECTIONS = ["breaking", "security", "added", "changed", "fixed"]
+SECTIONS = ["highlights", "breaking", "security", "added", "changed", "fixed"]
 HEADINGS = {s: f"### {s.capitalize()}" for s in SECTIONS}
-NAME_PATTERN = re.compile(r"^(breaking|security|added|changed|fixed)\.[a-z0-9][a-z0-9-]*\.md$")
+NAME_PATTERN = re.compile(r"^(highlights|breaking|security|added|changed|fixed)\.[a-z0-9][a-z0-9-]*\.md$")
 
 
 def fragments() -> list[Path]:

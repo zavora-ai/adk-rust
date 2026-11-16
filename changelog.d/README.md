@@ -12,6 +12,7 @@ pull request assembles the fragments into `CHANGELOG.md`.
 
    | Section | Use for |
    |---------|---------|
+   | `highlights` | the release's headline: what it lets you do, a few items written once per release; the release notes open with it |
    | `breaking` | API or behaviour changes that require caller changes |
    | `security` | fixes to a vulnerability or hardening of a trust boundary |
    | `added` | new public APIs, features, backends, or examples |
@@ -32,6 +33,6 @@ pull request assembles the fragments into `CHANGELOG.md`.
 ## Assembling
 
 `bash scripts/changelog-assemble.sh` moves every fragment under `## [Unreleased]`,
-grouped by section in the order Breaking, Security, Added, Changed, Fixed, and deletes
+grouped by section in the order Highlights, Breaking, Security, Added, Changed, Fixed, and deletes
 the fragment files. `--into <version>` targets the dated release-candidate heading
 instead. See CONTRIBUTING.md ("Release Process").

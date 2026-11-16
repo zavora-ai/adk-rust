@@ -1,12 +1,33 @@
 # ADK-Rust
 
-**Rust Agent Development Kit (ADK-Rust)** — build AI agents in Rust with modular components for models, tools, memory, RAG, security, realtime voice, graph workflows, and more.
+**Rust Agent Development Kit (ADK-Rust)** — build AI agents in Rust, including autonomous agents that work on their own inside limits you set, with modular components for models, tools, memory, RAG, security, realtime voice, graph workflows, and more.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-rust.svg)](https://crates.io/crates/adk-rust)
 [![Documentation](https://docs.rs/adk-rust/badge.svg)](https://docs.rs/adk-rust)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](../LICENSE)
 
 `adk-rust` is the umbrella crate: it re-exports the ADK-Rust crates behind feature flags, grouped into four tiers. It is model-agnostic and deployment-agnostic.
+
+## Autonomous Agents
+
+3.0 builds agents that pursue a goal over many steps, wake themselves, and keep working while
+nobody watches:
+
+| Property | What you get |
+|----------|--------------|
+| **Autonomous** | Goals that iterate until a check passes and park on a decision; wake-ups on a schedule, a file change, a webhook, a queue message, an approval or a finished run |
+| **Governed** | One tool path for every agent: tool policies, approvals that hold a call across runs, run budgets and spend caps, a kill switch across replicas, an OS sandbox, a signed audit log |
+| **Durable** | Runs that resume after a crash, held calls that survive a restart, and an action ledger that keeps a non-idempotent call from running twice |
+| **Observable and steerable** | OpenTelemetry spans, the spend ledger, the kernel's process table, and messages sent to a running turn |
+
+| Module | Feature | What it holds |
+|--------|---------|---------------|
+| `adk_rust::harness` | `harness` (in `full`) | The governed harness agent: modes, standing approvals, a sandboxed shell, plans and durable goals |
+| `adk_rust::kernel` | `harness-kernel` (in `full`) | The agent kernel `adk-rust up` runs: processes, wake sources, the event bus and the control plane |
+| `adk_rust::surface` | `surface` (in no tier) | The surface engine and the web home, over a harness or a kernel |
+
+[Build an autonomous agent](../docs/official_docs/autonomy/index.md) takes one agent from a
+scaffold to running on its own.
 
 ## Supported Providers
 
@@ -233,8 +254,9 @@ adk-rust = { version = "3.0.0", features = ["standard"] }
 # Enterprise — standard + realtime, browser, rag, payments, awp
 adk-rust = { version = "3.0.0", features = ["enterprise"] }
 
-# Full — enterprise + audio, code, sandbox, code-tools, the harness, and the
-# graph-functional, graph-node-cache, graph-delta, and graph-time-travel capabilities
+# Full — enterprise + audio, code, sandbox, code-tools, the harness and its kernel, the AWP
+# website, and the graph-functional, graph-node-cache, graph-delta, and graph-time-travel
+# capabilities
 adk-rust = { version = "3.0.0", features = ["full"] }
 
 # Gemini Enterprise Agent Platform — every Vertex/EAP integration except realtime
@@ -268,7 +290,7 @@ Features outside the tiers, composable with any of them:
 
 ## Modules
 
-Each enabled crate is re-exported as a module: `agent`, `model`, `tool`, `skill`, `session`, `artifact`, `memory`, `runner`, `server`, `telemetry`, `graph`, `realtime`, `browser`, `eval`, `guardrail`, `auth`, `payment`, `plugin`, `audio`, `rag`, `code`, `sandbox`, `computer_use`, `managed`, `harness`, `anthropic_client`, `deploy`, and others. `adk_core` is re-exported at the crate root, and `adk_rust::prelude` brings the common types into scope.
+Each enabled crate is re-exported as a module: `agent`, `model`, `tool`, `skill`, `session`, `artifact`, `memory`, `runner`, `server`, `telemetry`, `graph`, `realtime`, `browser`, `eval`, `guardrail`, `auth`, `payment`, `plugin`, `audio`, `rag`, `code`, `sandbox`, `computer_use`, `managed`, `harness`, `kernel`, `surface`, `awp`, `acp`, `website`, `site`, `anthropic_client`, `deploy`, and others. `adk_core` is re-exported at the crate root, and `adk_rust::prelude` brings the common types into scope.
 
 ## Changes in 3.0
 
@@ -276,6 +298,7 @@ Each enabled crate is re-exported as a module: `agent`, `model`, `tool`, `skill`
 - Tool calls run through one governed path: tool policy, guardrails, and confirmation bound to the acting agent and the tool's origin.
 - Run budgets, a spend ledger, an action ledger, durable runs, approvals, and audit records are part of the runtime, with stores on every session backend.
 - `standard` includes `computer-use`; provider features also enable `adk-managed`'s model resolver when `managed-runtime` is on.
+- New crates: `adk-harness` (the governed harness agent), `adk-kernel` (the agent kernel behind `adk-rust up`), `adk-surface` (the web home, terminal, phone and chat surfaces), and `adk-site`, `adk-drivers` and `adk-website` (the AWP website product). `full` includes the harness, the kernel and the website; `surface` is opt-in.
 
 See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md).
 
