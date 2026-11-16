@@ -19,8 +19,8 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::a2ui::A2uiMessage;
-use super::catalog::FORMS_CATALOG_ID;
+use super::a2ui::{A2uiBody, A2uiMessage};
+use super::catalog::{Catalog, Catalogs, FORMS_CATALOG_ID};
 use super::draw::DrawnEnvelope;
 use super::drawn::DrawnKind;
 use super::validate::{DrawnAction, Validator};
@@ -88,11 +88,15 @@ struct ActivityContent {
 #[derive(Clone, Default)]
 pub struct GenuiAgUi {
     audit: Option<AuditTrail>,
+    catalogs: Catalogs,
 }
 
 impl std::fmt::Debug for GenuiAgUi {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GenuiAgUi").field("audit", &self.audit.is_some()).finish()
+        f.debug_struct("GenuiAgUi")
+            .field("audit", &self.audit.is_some())
+            .field("catalogs", &self.catalogs)
+            .finish()
     }
 }
 
@@ -108,6 +112,22 @@ impl GenuiAgUi {
     pub fn with_audit(mut self, trail: AuditTrail) -> Self {
         self.audit = Some(trail);
         self
+    }
+
+    /// Carries drawings in the extension catalog `catalog` too, as the engine shows them
+    /// (`SurfaceEngineBuilder::with_catalog`); a drawing in a catalog not registered here is
+    /// never sent, and one a client sends back is dropped.
+    #[must_use]
+    pub fn with_catalog(mut self, catalog: &'static Catalog) -> Self {
+        self.catalogs = self.catalogs.with(catalog);
+        self
+    }
+
+    /// Whether `envelope`'s drawing passes the validator again, against its own catalog.
+    fn passes(&self, envelope: &DrawnEnvelope) -> bool {
+        self.catalogs.get(&envelope.catalog_id).is_some_and(|catalog| {
+            envelope.draft().is_some_and(|draft| Validator::new(catalog).validate(&draft).is_ok())
+        })
     }
 
     /// The activity of a drawing: its A2UI messages and what checking them again needs.
@@ -140,7 +160,6 @@ impl AgUiExtension for GenuiAgUi {
         let Some(content) = &event.llm_response.content else {
             return Vec::new();
         };
-        let validator = Validator::forms();
         content
             .parts
             .iter()
@@ -152,10 +171,7 @@ impl AgUiExtension for GenuiAgUi {
                 }
                 _ => None,
             })
-            .filter(|envelope| {
-                envelope.deleted
-                    || envelope.draft().is_some_and(|draft| validator.validate(&draft).is_ok())
-            })
+            .filter(|envelope| envelope.deleted || self.passes(envelope))
             .map(|envelope| Self::activity(&envelope))
             .collect()
     }
@@ -176,18 +192,26 @@ impl AgUiExtension for GenuiAgUi {
         else {
             return false;
         };
+        // The catalog the activity's own createSurface names; forms when it names none.
+        let catalog_id = content
+            .operations
+            .iter()
+            .find_map(|message| match &message.body {
+                A2uiBody::CreateSurface(create) => Some(create.catalog_id.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| FORMS_CATALOG_ID.to_string());
         let envelope = DrawnEnvelope {
             surface_id,
             version: 0,
             kind: content.kind.unwrap_or(DrawnKind::Screen),
-            catalog_id: FORMS_CATALOG_ID.to_string(),
+            catalog_id,
             title: content.title,
             messages: content.operations,
             actions: content.actions,
             deleted: false,
         };
-        let kept =
-            envelope.draft().is_some_and(|draft| Validator::forms().validate(&draft).is_ok());
+        let kept = self.passes(&envelope);
         if !kept {
             tracing::debug!(
                 ag_ui.message_id = ?message.id,
@@ -217,6 +241,7 @@ impl AgUiExtension for GenuiAgUi {
             })?;
         let sent = super::submission(
             action.events,
+            &self.catalogs,
             &pressed.surface_id,
             pressed.version,
             &pressed.action_id,

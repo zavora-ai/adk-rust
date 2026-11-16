@@ -17,8 +17,8 @@ use super::theme::Theme;
 use super::view::fit;
 use crate::engine::Command;
 use crate::genui::{
-    AppView, DrawnActionView, DrawnField, DrawnInput, DrawnNode, DrawnSurface, FormState,
-    FormStatus, RefusedDrawing,
+    AppView, ChartAxis, DrawnActionView, DrawnChart, DrawnField, DrawnInput, DrawnNode,
+    DrawnSurface, FormState, FormStatus, RefusedDrawing,
 };
 use crate::model::{FeedEntry, ThreadItem};
 use crate::words;
@@ -151,10 +151,71 @@ pub(crate) fn shown_value(field: &DrawnField, value: Option<&Value>) -> String {
     }
 }
 
+/// The most blocks a chart's line takes in the terminal: longer series are averaged down.
+const CHART_BLOCKS: usize = 48;
+
+/// A chart in the terminal (spec 3.3 §6.1 `genui`, extension catalogs): the sentence the server
+/// wrote for it, then a line of blocks for each series on a number or time axis, or a table of
+/// its categories.
+fn chart_rows(chart: &DrawnChart, out: &mut Vec<Row>) {
+    out.push(Row::Text(chart.summary.clone(), true));
+    match &chart.x {
+        ChartAxis::Category { labels } => {
+            let mut header = vec![String::new()];
+            header.extend(chart.series.iter().map(|series| series.name.clone()));
+            out.push(Row::Cells(header, true));
+            for (index, label) in labels.iter().enumerate().take(SHOWN_ROWS) {
+                let mut cells = vec![label.clone()];
+                cells.extend(chart.series.iter().map(|series| {
+                    series.y.get(index).map(ToString::to_string).unwrap_or_default()
+                }));
+                out.push(Row::Cells(cells, false));
+            }
+            if labels.len() > SHOWN_ROWS {
+                out.push(Row::Text(lower_first(&words::show_all(labels.len())), true));
+            }
+        }
+        ChartAxis::Number | ChartAxis::Time => {
+            for series in &chart.series {
+                let line = blocks(&series.y);
+                if series.name.trim().is_empty() {
+                    out.push(Row::Text(line, false));
+                } else {
+                    out.push(Row::Pair(series.name.clone(), line));
+                }
+            }
+        }
+    }
+}
+
+/// `values` as a line of blocks, low to high, at most [`CHART_BLOCKS`] long.
+fn blocks(values: &[serde_json::Number]) -> String {
+    const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let values: Vec<f64> = values.iter().filter_map(serde_json::Number::as_f64).collect();
+    let per = values.len().div_ceil(CHART_BLOCKS).max(1);
+    let averaged: Vec<f64> =
+        values.chunks(per).map(|chunk| chunk.iter().sum::<f64>() / chunk.len() as f64).collect();
+    let (low, high) =
+        averaged.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), value| {
+            (low.min(*value), high.max(*value))
+        });
+    averaged
+        .iter()
+        .map(|value| {
+            let step = if high > low { ((value - low) / (high - low) * 7.0).round() } else { 3.0 };
+            BLOCKS[(step as usize).min(7)]
+        })
+        .collect()
+}
+
 /// The rows of `node`, in order.
 fn rows(node: &DrawnNode, out: &mut Vec<Row>) {
     if let Some(field) = &node.field {
         out.push(Row::Pair(node.text.clone().unwrap_or_default(), shown_value(field, None)));
+        return;
+    }
+    if let Some(chart) = &node.chart {
+        chart_rows(chart, out);
         return;
     }
     match node.component.as_str() {
@@ -833,6 +894,58 @@ mod tests {
     use crate::model::{AgentRef, Avatar};
     use crate::tui::theme::Appearance;
 
+    /// A chart is its summary, then a line of blocks per series on a number or time axis, or
+    /// a table of its categories cut at the shown rows.
+    #[test]
+    fn a_chart_is_its_summary_then_blocks_or_a_table() {
+        use crate::genui::{ChartKind, ChartSeries};
+        let line = DrawnChart {
+            kind: ChartKind::Line,
+            x: ChartAxis::Number,
+            x_label: None,
+            y_label: None,
+            ticks: Vec::new(),
+            series: vec![ChartSeries {
+                name: "Latency".into(),
+                x: (0..4).map(serde_json::Number::from).collect(),
+                y: [1, 8, 4, 8].into_iter().map(serde_json::Number::from).collect(),
+            }],
+            summary: "Line chart of Latency, 4 points, from 1 to 8".into(),
+        };
+        let mut out = Vec::new();
+        chart_rows(&line, &mut out);
+        assert_eq!(
+            out,
+            vec![
+                Row::Text("Line chart of Latency, 4 points, from 1 to 8".into(), true),
+                Row::Pair("Latency".into(), "▁█▄█".into()),
+            ]
+        );
+        let long = blocks(&(0..500).map(serde_json::Number::from).collect::<Vec<_>>());
+        assert!((40..=CHART_BLOCKS).contains(&long.chars().count()), "{long}");
+
+        let labels: Vec<String> = (0..12).map(|i| format!("M{i}")).collect();
+        let bars = DrawnChart {
+            kind: ChartKind::Bar,
+            x: ChartAxis::Category { labels },
+            x_label: None,
+            y_label: None,
+            ticks: Vec::new(),
+            series: vec![ChartSeries {
+                name: "Sales".into(),
+                x: Vec::new(),
+                y: (0..12).map(serde_json::Number::from).collect(),
+            }],
+            summary: "Bar chart of Sales, 12 points, from 0 to 11".into(),
+        };
+        let mut out = Vec::new();
+        chart_rows(&bars, &mut out);
+        assert_eq!(out[1], Row::Cells(vec![String::new(), "Sales".into()], true));
+        assert_eq!(out[2], Row::Cells(vec!["M0".into(), "0".into()], false));
+        assert_eq!(out.len(), 2 + SHOWN_ROWS + 1, "cut at the shown rows, then show all");
+        assert_eq!(out.last(), Some(&Row::Text("show all 12".into(), true)));
+    }
+
     fn field(
         key: &str,
         label: &str,
@@ -858,6 +971,8 @@ mod tests {
             tabs: Vec::new(),
             show_all_text: None,
             children: Vec::new(),
+            chart: None,
+            extension: None,
         }
     }
 
@@ -897,6 +1012,8 @@ mod tests {
                     field("amount", "Amount", DrawnInput::Number, json!(4200), Vec::new()),
                     field("copy", "Copy to me", DrawnInput::Checkbox, json!(false), Vec::new()),
                 ],
+                chart: None,
+                extension: None,
             }),
             actions: vec![DrawnActionView {
                 id: "send".into(),

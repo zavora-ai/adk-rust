@@ -620,3 +620,86 @@ textarea.drawn-input {
     max-width: 100%;
   }
 }
+
+/* A chart an extension component drew (genui extension catalogs): on the card, in the chart
+   colours, never a decision's. */
+.drawn-chart {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.drawn-chart-plot {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.drawn-chart-pie {
+  max-width: 240px;
+}
+
+.drawn-chart-spark {
+  width: 120px;
+  height: 28px;
+}
+
+.drawn-chart-grid {
+  stroke: var(--chart-grid);
+  stroke-width: 1;
+}
+
+.drawn-chart-tick,
+.drawn-chart-axis {
+  fill: var(--chart-axis);
+  font-family: var(--font);
+  font-size: 11px;
+}
+
+.drawn-chart-axis {
+  font-size: 12px;
+}
+
+.drawn-chart-line {
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.drawn-chart-area {
+  fill-opacity: 0.15;
+  stroke: none;
+}
+
+.drawn-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.drawn-chart-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.drawn-chart-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.drawn-chart-value {
+  font-family: var(--mono);
+  color: var(--label);
+}
+
+.drawn-extension {
+  display: contents;
+}

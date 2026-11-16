@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::a2ui::{A2uiBody, A2uiMessage, DataModel};
+use super::catalog::{Catalog, FORMS_CATALOG_ID};
 use super::drawn::DrawnKind;
 use super::validate::{DrawRefusal, DrawnAction, SurfaceDraft, Validator};
 
@@ -262,17 +263,39 @@ struct Shared {
     /// Versions given out in this process, by app, user, session and surface, so drawings
     /// made side by side in one turn get their own.
     issued: Mutex<HashMap<(String, String, String, String), u64>>,
+    /// What `render_screen` tells the model: the catalog's components, and each extension
+    /// component's usage.
+    screen_description: String,
+    /// `render_screen`'s parameters, its components described by the catalog.
+    screen_schema: Value,
 }
 
 impl DrawToolset {
-    /// Render tools that check every drawing with `validator`.
+    /// Render tools that check every drawing with `validator`, in its catalog: `forms`, or an
+    /// extension catalog ([`Catalog::extend`]), whose components `render_screen` draws and
+    /// describes to the model. The tools keep their names in every catalog, so give an agent
+    /// one `DrawToolset`.
     pub fn new(validator: Validator) -> Self {
-        Self { shared: Arc::new(Shared { validator, issued: Mutex::new(HashMap::new()) }) }
+        let catalog = validator.catalog();
+        Self {
+            shared: Arc::new(Shared {
+                screen_description: screen_description(catalog),
+                screen_schema: screen_schema(catalog),
+                validator,
+                issued: Mutex::new(HashMap::new()),
+            }),
+        }
     }
 
     /// Render tools on the `forms` 1.0 catalog.
     pub fn forms() -> Self {
         Self::new(Validator::forms())
+    }
+
+    /// The catalog these tools draw in: register it with the engine that shows the drawings
+    /// (`SurfaceEngineBuilder::with_catalog`).
+    pub fn catalog(&self) -> &'static Catalog {
+        self.shared.validator.catalog()
     }
 
     /// The tools.
@@ -482,6 +505,50 @@ struct PatchParams {
 struct DeleteParams {
     /// The surface to remove.
     surface_id: String,
+}
+
+/// The forms catalog's `render_screen` description, unchanged for a `forms` toolset.
+const FORMS_SCREEN_DESCRIPTION: &str = "Show the person a screen of A2UI v0.9.1 components from \
+     the forms catalog (Text, Row, Column, List, Card, Tabs, Divider, Button, TextField, \
+     CheckBox, ChoicePicker, Slider, DateTimeInput), one with id root. Buttons dispatch only \
+     declared actions, which ask the person before a tool runs.";
+
+/// What `render_screen` tells the model about `catalog`.
+fn screen_description(catalog: &Catalog) -> String {
+    if !catalog.is_extension() {
+        return FORMS_SCREEN_DESCRIPTION.to_string();
+    }
+    let added: Vec<&str> = catalog.extensions().collect();
+    let mut out = format!(
+        "Show the person a screen of A2UI v0.9.1 components from the {} catalog, one with id \
+         root: the forms components (Text, Row, Column, List, Card, Tabs, Divider, Button, \
+         TextField, CheckBox, ChoicePicker, Slider, DateTimeInput) and {}. Bind data with \
+         {{\"path\": \"/...\"}} into dataModel.",
+        catalog.label(),
+        added.join(", ")
+    );
+    for usage in catalog.usage() {
+        let _ = write!(out, " {usage}");
+    }
+    out.push_str(
+        " Only buttons dispatch declared actions, which ask the person before a tool runs; the \
+         other components only show.",
+    );
+    out
+}
+
+/// `render_screen`'s parameters, its components described by `catalog`.
+fn screen_schema(catalog: &Catalog) -> Value {
+    let mut schema = schema_of::<ScreenParams>();
+    if catalog.is_extension()
+        && let Some(components) = schema.pointer_mut("/properties/components")
+    {
+        components["description"] = json!(format!(
+            "A2UI v0.9.1 components of the {} catalog, one with id `root`.",
+            catalog.label()
+        ));
+    }
+    schema
 }
 
 fn schema_of<T: JsonSchema>() -> Value {
@@ -733,7 +800,7 @@ fn table(params: TableParams) -> SurfaceDraft {
 }
 
 impl DrawTool {
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         match self.op {
             Op::Form => {
                 "Show the person a form in this thread. Each field's value is at the data path \
@@ -750,12 +817,7 @@ impl DrawTool {
                 "Show the person a table in this thread: a title, column headings and rows of \
                  text or numbers. No buttons, links or decision words."
             }
-            Op::Screen => {
-                "Show the person a screen of A2UI v0.9.1 components from the forms catalog \
-                 (Text, Row, Column, List, Card, Tabs, Divider, Button, TextField, CheckBox, \
-                 ChoicePicker, Slider, DateTimeInput), one with id root. Buttons dispatch only \
-                 declared actions, which ask the person before a tool runs."
-            }
+            Op::Screen => &self.shared.screen_description,
             Op::Patch => {
                 "Change a surface you drew in this session: set or remove data model values, \
                  add or replace components by id, or remove components. The whole surface is \
@@ -881,6 +943,22 @@ impl DrawTool {
     fn patch(&self, ctx: &dyn ToolContext, params: PatchParams) -> Result<Value> {
         let tool = Op::Patch.name();
         let latest = self.latest(ctx, &params.surface_id);
+        // A change is checked in these tools' catalog: a drawing in another catalog cannot be
+        // checked here, except one in forms, which every extension catalog holds whole.
+        let own = self.shared.validator.catalog().id();
+        if let Some(previous) = latest.as_ref()
+            && previous.catalog_id != own
+            && previous.catalog_id != FORMS_CATALOG_ID
+        {
+            return Err(invalid(
+                tool,
+                format!(
+                    "surface '{}' was drawn in the catalog {}, which these tools do not draw in; \
+                     draw it again instead",
+                    params.surface_id, previous.catalog_id
+                ),
+            ));
+        }
         let Some(mut draft) = latest.as_ref().and_then(DrawnEnvelope::draft) else {
             return Err(invalid(
                 tool,
@@ -951,7 +1029,7 @@ impl Tool for DrawTool {
             Op::Form => schema_of::<FormParams>(),
             Op::Card => schema_of::<CardParams>(),
             Op::Table => schema_of::<TableParams>(),
-            Op::Screen => schema_of::<ScreenParams>(),
+            Op::Screen => self.shared.screen_schema.clone(),
             Op::Patch => schema_of::<PatchParams>(),
             Op::Delete => schema_of::<DeleteParams>(),
         })
