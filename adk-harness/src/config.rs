@@ -93,6 +93,12 @@ struct ConfigFile {
     #[serde(default)]
     #[allow(dead_code)]
     ultracode: Option<toml::Value>,
+    /// The `[compaction]` table is read by the `adk-rust` CLI, which applies it with
+    /// `HarnessAgentBuilder::intra_compaction`, so it is neither applied here nor reported as
+    /// unknown.
+    #[serde(default)]
+    #[allow(dead_code)]
+    compaction: Option<toml::Value>,
     #[serde(flatten)]
     other: BTreeMap<String, toml::Value>,
 }

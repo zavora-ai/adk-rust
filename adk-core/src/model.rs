@@ -60,6 +60,43 @@ pub trait Llm: Send + Sync {
         None
     }
 
+    /// The most tokens a request to this model may carry, as its provider documents it, if
+    /// known.
+    ///
+    /// Auto-compaction ([`IntraCompactionConfig`](crate::IntraCompactionConfig)) compacts an
+    /// agent's history before it nears this window. `adk-model` providers read it from the
+    /// pricing catalog, which records each vendor's published figure.
+    ///
+    /// The default returns `None`, which compacts at
+    /// [`DEFAULT_TOKEN_THRESHOLD`](crate::intra_compaction::DEFAULT_TOKEN_THRESHOLD).
+    /// Wrappers forward to the model they wrap.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Llm, LlmRequest, LlmResponseStream};
+    ///
+    /// struct Local;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Llm for Local {
+    ///     fn name(&self) -> &str {
+    ///         "local-8k"
+    ///     }
+    ///     async fn generate_content(&self, _: LlmRequest, _: bool) -> adk_core::Result<LlmResponseStream> {
+    ///         unimplemented!()
+    ///     }
+    ///     fn context_window(&self) -> Option<u64> {
+    ///         Some(8_192)
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(Local.context_window(), Some(8_192));
+    /// ```
+    fn context_window(&self) -> Option<u64> {
+        None
+    }
+
     /// The provider-executed web search this model's transport serves, if any (spec 3.1
     /// §7.20 "Provider-native search and fetch").
     ///

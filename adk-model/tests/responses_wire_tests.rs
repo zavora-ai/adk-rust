@@ -344,10 +344,10 @@ async fn failures_keep_known_codes_and_their_categories() {
         ("stream_timeout", ErrorCategory::Timeout),
         ("invalid_prompt", ErrorCategory::InvalidInput),
         ("invalid_api_key", ErrorCategory::Unauthorized),
-        ("insufficient_quota", ErrorCategory::InvalidInput),
-        ("credit_balance_exhausted", ErrorCategory::InvalidInput),
-        ("organization_spend_limit_exceeded", ErrorCategory::InvalidInput),
-        ("project_spend_limit_exceeded", ErrorCategory::InvalidInput),
+        ("insufficient_quota", ErrorCategory::ResourceExhausted),
+        ("credit_balance_exhausted", ErrorCategory::ResourceExhausted),
+        ("organization_spend_limit_exceeded", ErrorCategory::ResourceExhausted),
+        ("project_spend_limit_exceeded", ErrorCategory::ResourceExhausted),
         ("context_length_exceeded", ErrorCategory::InvalidInput),
         ("content_policy_violation", ErrorCategory::InvalidInput),
         ("invalid_image_url", ErrorCategory::InvalidInput),
@@ -389,7 +389,16 @@ async fn failures_keep_known_codes_and_their_categories() {
                 ),
                 "{code}"
             );
-            assert_eq!(error.message, format!("OpenAI Responses generation failed: {code}"));
+            let failed_with = format!("OpenAI Responses generation failed: {code}");
+            if category == ErrorCategory::ResourceExhausted {
+                assert!(
+                    error.message.starts_with(&format!("{failed_with}. The account's quota")),
+                    "{}",
+                    error.message
+                );
+            } else {
+                assert_eq!(error.message, failed_with);
+            }
             assert_eq!(error.details.metadata["provider_error_code"], json!(code));
             assert!(!format!("{error:?}").contains(SECRET));
             assert!(std::error::Error::source(&error).is_none());

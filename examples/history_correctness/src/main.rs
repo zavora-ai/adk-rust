@@ -440,11 +440,7 @@ async fn ss1_intra_compaction_cut() -> anyhow::Result<Verdict> {
         .app_name(APP)
         .agent(Arc::new(desk))
         .session_service(store.sessions.clone())
-        .intra_compaction_config(IntraCompactionConfig {
-            token_threshold: 50,
-            overlap_event_count: 3,
-            chars_per_token: 4,
-        })
+        .intra_compaction_config(IntraCompactionConfig::at_tokens(50).with_overlap_event_count(3))
         .intra_compaction_summarizer(Arc::new(LlmEventSummarizer::new(model)))
         .build()?;
     let long_question = format!("where is order A1? {}", "Some background. ".repeat(60));

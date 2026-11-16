@@ -426,7 +426,8 @@ impl Event {
 
     /// Returns whether the event is the final response of an agent.
     ///
-    /// Tool-start notifications and provider-native continuation pauses are not final.
+    /// Tool-start notifications, provider-native continuation pauses and compaction records
+    /// ([`EventActions::compaction`](crate::EventActions::compaction)) are not final.
     ///
     /// An event is considered final if:
     /// - It has skip_summarization set, OR
@@ -437,6 +438,10 @@ impl Event {
     /// Note: When multiple agents participate in one invocation, there could be
     /// multiple events with is_final_response() as true, for each participating agent.
     pub fn is_final_response(&self) -> bool {
+        // A compaction record is not a response.
+        if self.actions.compaction.is_some() {
+            return false;
+        }
         if self.provider_metadata.contains_key("adk_tool_started")
             || self
                 .llm_response

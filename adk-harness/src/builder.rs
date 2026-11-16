@@ -206,6 +206,7 @@ pub struct HarnessAgentBuilder {
     history_max_events: Option<usize>,
     compaction: Option<EventsCompactionConfig>,
     compaction_enabled: bool,
+    intra_compaction: Option<adk_core::IntraCompactionConfig>,
     customize: Option<Customize>,
     unimplemented: Vec<String>,
     last_todos: Option<Arc<Mutex<TodoList>>>,
@@ -329,6 +330,7 @@ impl HarnessAgentBuilder {
             history_max_events: None,
             compaction: None,
             compaction_enabled: true,
+            intra_compaction: None,
             customize: None,
             unimplemented: Vec::new(),
             last_todos: None,
@@ -1565,6 +1567,31 @@ impl HarnessAgentBuilder {
     /// Turns events compaction off.
     pub fn without_compaction(mut self) -> Self {
         self.compaction_enabled = false;
+        self
+    }
+
+    /// When a run compacts the harness agent's history before a model call.
+    ///
+    /// Auto-compaction is on without this call: a request is compacted once it passes 80% of
+    /// the model's context window, or 100,000 estimated tokens when the model reports none,
+    /// and the summary is written by the harness model. Each run carries the setting in its
+    /// config, so it applies under any runner.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::IntraCompactionConfig;
+    ///
+    /// let builder = HarnessAgent::builder(model).intra_compaction(IntraCompactionConfig::at_window_fraction(0.6));
+    /// ```
+    pub fn intra_compaction(mut self, config: adk_core::IntraCompactionConfig) -> Self {
+        self.intra_compaction = Some(config);
+        self
+    }
+
+    /// Turns auto-compaction off for the harness's runs.
+    pub fn without_intra_compaction(mut self) -> Self {
+        self.intra_compaction = Some(adk_core::IntraCompactionConfig::disabled());
         self
     }
 
@@ -2871,6 +2898,7 @@ impl HarnessAgentBuilder {
                 }),
                 history_max_events: self.history_max_events,
                 compaction,
+                intra_compaction: self.intra_compaction,
                 toolset,
                 instructions: instruction_state,
                 non_waivable_tools: non_waivable,

@@ -252,6 +252,8 @@ fn delegated_run_config(parent: RunConfig) -> RunConfig {
         acting,
         deny_on_confirmation_timeout,
         requested_call: _,
+        intra_compaction,
+        history_compactor,
     } = parent;
     RunConfig {
         // The delegate's output is read whole.
@@ -298,6 +300,10 @@ fn delegated_run_config(parent: RunConfig) -> RunConfig {
         deny_on_confirmation_timeout,
         // The person asked the caller's agent; a delegate never takes the call.
         requested_call: None,
+        // The delegate compacts as its caller does; the runner's compactor records a
+        // compaction only for its own invocation, so the delegate's stays in its history.
+        intra_compaction,
+        history_compactor,
     }
 }
 

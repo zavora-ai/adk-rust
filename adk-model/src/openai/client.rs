@@ -213,6 +213,10 @@ impl Llm for OpenAIClient {
         self.inner.max_cost_micro_usd(request)
     }
 
+    fn context_window(&self) -> Option<u64> {
+        self.inner.context_window()
+    }
+
     fn name(&self) -> &str {
         self.inner.name()
     }

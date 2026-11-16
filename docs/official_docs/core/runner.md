@@ -85,7 +85,7 @@ fn build(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<Runner> {
 | `plugin_manager` | `PluginManager` | Runner plugins (see [Plugin hooks](#plugin-hooks)) |
 | `run_config` | `RunConfig` | Default execution options for every run |
 | `budget` | `RunBudget` | Per-run limits (see [Run Budgets](#run-budgets)) |
-| `compaction_config`, `intra_compaction_config`, `intra_compaction_summarizer`, `context_compaction` | Compaction | Keep the model context bounded (see [Context Compaction](#context-compaction)) |
+| `compaction_config`, `intra_compaction_config`, `intra_compaction_summarizer`, `context_compaction`, `without_intra_compaction` | Compaction | Keep the model context bounded; auto-compaction is on by default (see [Context Compaction](#context-compaction)) |
 | `context_cache_config`, `cache_capable` | Gemini explicit caching | Experimental; see [Prompt caching](#prompt-caching) |
 | `request_context` | `RequestContext` | The authenticated caller, from auth middleware |
 | `cancellation_token` | `CancellationToken` | Cooperative cancellation |
@@ -563,7 +563,7 @@ the session, with `llm_response.error_code` set to the `budget.*` code and the
 limit named under the `adk.budget.limit` event metadata key — followed by an
 `AdkError` with category `ResourceExhausted`.
 
-Compaction summaries (post-run, intra-invocation and token-limit compaction),
+Compaction summaries (session compaction and auto-compaction, with a summarizer or a strategy),
 `LlmConditionalAgent` routing and MCP sampling requests made during a tool call
 are model calls too: they go through `adk_core::ModelCallScope`, which checks
 the budget before the call is sent and counts its tokens and cost, and reserves
@@ -612,7 +612,43 @@ with `strict_transfer_policy` fails the run with `agent.transfer.target_forbidde
 
 ## Context Compaction
 
-For long-running sessions, enable automatic context compaction to keep the LLM context window bounded:
+**Auto-compaction is on by default.** Before every model call, `LlmAgent` and `CodeActAgent`
+pass their history to the run's compactor (`RunConfig::history_compactor`, which the runner
+installs at the start of each run). Once the request passes 80% of the model's context window
+(`Llm::context_window`), or 100,000 estimated tokens when the model reports none, all but the most
+recent history entries (at most 10, within half the threshold) are summarized by the model the agent is calling, and the
+compaction is recorded in the session. A request the model rejects as too long is compacted and
+sent once more.
+
+| Builder method | Effect |
+|----------------|--------|
+| `intra_compaction_config(IntraCompactionConfig)` | The threshold: `at_tokens(n)`, `at_window_fraction(f)`, `with_overlap_event_count(n)` |
+| `intra_compaction_summarizer(summarizer)` | A `BaseEventsSummarizer` in place of the agent's model |
+| `context_compaction(CompactionConfig)` | A `CompactionStrategy` in place of the summary (`context-compaction` feature) |
+| `without_intra_compaction()` | Turns auto-compaction off |
+
+`RunConfig::intra_compaction` overrides the runner's setting for one run, and
+`RunConfig::history_compactor` supplies a `HistoryCompactor` of your own.
+
+```rust
+use adk_core::IntraCompactionConfig;
+use adk_runner::Runner;
+use adk_session::InMemorySessionService;
+use std::sync::Arc;
+
+fn build(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<Runner> {
+    Runner::builder()
+        .app_name("my_app")
+        .agent(agent)
+        .session_service(Arc::new(InMemorySessionService::new()))
+        // A fixed threshold instead of 80% of the model's window.
+        .intra_compaction_config(IntraCompactionConfig::at_tokens(150_000))
+        .build()
+}
+```
+
+Session compaction also summarizes after every N invocations, to keep a long session's
+starting history bounded:
 
 ```rust
 use adk_agent::LlmEventSummarizer;
@@ -635,7 +671,7 @@ fn build(agent: Arc<dyn adk_core::Agent>, model: Arc<dyn Llm>) -> adk_core::Resu
 }
 ```
 
-When compaction triggers, older events are replaced by a summary event, and
+When either compaction triggers, older events are replaced by a summary event, and
 `conversation_history()` uses the summary instead of the original events. Compaction never
 covers a tool call still held for confirmation, and never cuts between a call and its
 response.

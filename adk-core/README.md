@@ -552,7 +552,7 @@ Each alias boxes an async closure: `Box<dyn Fn(..) -> Pin<Box<dyn Future<Output 
 
 ## Context Compaction
 
-`EventsCompactionConfig` configures compaction: `compaction_interval` (compaction runs when the session's user-message count is a multiple of it), `overlap_size` (the most recent invocations left out of the summary), and a `summarizer` implementing `BaseEventsSummarizer`. Compaction never covers a call still held for confirmation (`held_call_compaction_limit`). `IntraCompactionConfig` triggers compaction within an invocation when the estimated token count passes a threshold.
+`EventsCompactionConfig` configures compaction: `compaction_interval` (compaction runs when the session's user-message count is a multiple of it), `overlap_size` (the most recent invocations left out of the summary), and a `summarizer` implementing `BaseEventsSummarizer`. Compaction never covers a call still held for confirmation (`held_call_compaction_limit`). `IntraCompactionConfig` sets auto-compaction, which is on by default: before each model call an agent passes its history to `RunConfig::history_compactor` (a `HistoryCompactor`), which compacts it once the request passes 80% of the model's context window (`Llm::context_window`) or 100,000 estimated tokens. `is_context_limit_error` tells a model's rejection of a too-long request from other errors, and `LlmEventSummarizer` writes summaries for both.
 
 ## Streaming Modes
 

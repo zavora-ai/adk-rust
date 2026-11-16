@@ -201,6 +201,10 @@ impl Llm for BedrockClient {
         )
     }
 
+    fn context_window(&self) -> Option<u64> {
+        crate::pricing::PricingCatalog::standard().context_window(Some("bedrock"), self.name())
+    }
+
     fn name(&self) -> &str {
         &self.model_id
     }

@@ -52,8 +52,8 @@ sqlite-memory = ["dep:sqlx", "sqlx/sqlite"]
 # Reuses the SQLite migration runner from the sqlite-memory backend.
 graph-memory = ["sqlite-memory"]
 database-memory = ["dep:sqlx", "sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs", "dep:pgvector"]
-redis-memory = ["fred"]
+redis-memory = ["dep:fred"]
 mongodb-memory = ["dep:mongodb"]
 neo4j-memory = ["dep:neo4rs", "dep:uuid"]
 # Vertex AI Agent Engine Memory Bank backend (memories:generate / memories:retrieve)
-vertex-memory = ["adk-gcp", "google-cloud-auth", "reqwest"]
+vertex-memory = ["dep:adk-gcp", "dep:google-cloud-auth", "dep:reqwest"]

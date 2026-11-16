@@ -194,6 +194,10 @@ impl Llm for GroqClient {
         )
     }
 
+    fn context_window(&self) -> Option<u64> {
+        crate::pricing::PricingCatalog::standard().context_window(Some("groq"), self.name())
+    }
+
     fn name(&self) -> &str {
         &self.config.model
     }

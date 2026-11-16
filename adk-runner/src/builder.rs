@@ -344,13 +344,34 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
         self
     }
 
-    /// Set the intra-invocation compaction configuration (optional).
+    /// Sets when agents compact their history before a model call (auto-compaction).
+    ///
+    /// Auto-compaction is on without this call: a request is compacted once it passes 80%
+    /// of the model's context window, or 100,000 estimated tokens when the model reports none.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::IntraCompactionConfig;
+    ///
+    /// // Compact past 60% of the window, keeping the 6 most recent entries.
+    /// let builder = Runner::builder()
+    ///     .intra_compaction_config(IntraCompactionConfig::at_window_fraction(0.6).with_overlap_event_count(6));
+    /// ```
     pub fn intra_compaction_config(mut self, config: adk_core::IntraCompactionConfig) -> Self {
         self.intra_compaction_config = Some(config);
         self
     }
 
-    /// Set the summarizer for intra-invocation compaction (optional).
+    /// Turns auto-compaction off: agents send their history as it is until the model rejects
+    /// it.
+    pub fn without_intra_compaction(mut self) -> Self {
+        self.intra_compaction_config = Some(adk_core::IntraCompactionConfig::disabled());
+        self
+    }
+
+    /// Sets the summarizer auto-compaction uses, in place of a summary by the model the agent
+    /// is calling.
     pub fn intra_compaction_summarizer(
         mut self,
         summarizer: Arc<dyn adk_core::BaseEventsSummarizer>,
@@ -590,10 +611,12 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
         self
     }
 
-    /// Set the context compaction configuration for token-budget overflow handling (optional).
+    /// Sets a compaction strategy auto-compaction applies in place of a summary.
     ///
-    /// When configured, the runner applies the given [`CompactionStrategy`](crate::compaction::CompactionStrategy)
-    /// to shrink the event history when the context exceeds the token budget.
+    /// Before any model call whose request passes `config.context_budget` estimated tokens,
+    /// the agent's history is shortened with the given
+    /// [`CompactionStrategy`](crate::compaction::CompactionStrategy), up to
+    /// `config.max_retries` times.
     #[cfg(feature = "context-compaction")]
     pub fn context_compaction(mut self, config: crate::compaction::CompactionConfig) -> Self {
         self.context_compaction = Some(config);

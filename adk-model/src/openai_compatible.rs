@@ -358,6 +358,9 @@ pub(crate) struct ErrorCodes {
     pub(crate) stream_error: &'static str,
     /// Status-specific codes that take precedence over `api_error`.
     pub(crate) status: &'static [(u16, &'static str)],
+    /// Non-success HTTP status whose body says the account is out of quota or credit,
+    /// whatever the status.
+    pub(crate) quota_exhausted: &'static str,
 }
 
 impl ErrorCodes {
@@ -369,6 +372,7 @@ impl ErrorCodes {
         incomplete_stream: "model.openai_compat.incomplete_stream",
         stream_error: "model.openai_compat.stream_error",
         status: &[],
+        quota_exhausted: "model.openai_compat.quota_exhausted",
     };
 
     fn for_status(&self, status: u16) -> &'static str {
@@ -864,10 +868,16 @@ async fn send_request(
             .and_then(|value| value.to_str().ok())
             .and_then(crate::retry::parse_retry_after);
         let body = http_resp.text().await.unwrap_or_default();
+        // OpenAI answers HTTP 429 both for a rate limit and for an account with no credit.
+        let quota_exhausted = crate::error_metadata::body_reports_exhausted_quota(&body);
         let error = AdkError::new(
             ErrorComponent::Model,
             crate::retry::category_for_status_code(status_code),
-            error_codes.for_status(status_code),
+            if quota_exhausted {
+                error_codes.quota_exhausted
+            } else {
+                error_codes.for_status(status_code)
+            },
             format!(
                 "{provider_name} API error (HTTP {status}): {}",
                 adk_core::upstream_excerpt(&body)
@@ -875,6 +885,7 @@ async fn send_request(
         )
         .with_upstream_status(status_code)
         .with_provider(provider_name);
+        let error = crate::error_metadata::classify_quota(error, quota_exhausted);
         return Err(crate::retry::with_retry_after(
             crate::error_metadata::from_body(error, &body),
             retry_after,
@@ -927,6 +938,11 @@ impl Llm for OpenAICompatible {
             request,
             crate::pricing::request_output_cap(request),
         )
+    }
+
+    fn context_window(&self) -> Option<u64> {
+        crate::pricing::PricingCatalog::standard()
+            .context_window(Some(&self.provider_name), self.name())
     }
 
     fn name(&self) -> &str {

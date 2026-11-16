@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use adk_core::{AdkError, Effort, Result};
+use adk_core::{AdkError, Effort, IntraCompactionConfig, Result};
 use adk_harness::hooks::{HookSet, HookSource};
 use adk_harness::{
     EffortPolicy, HarnessMode, MemberSpec, Pack, Preset, SearchDomains, SnapshotConfig,
@@ -464,6 +464,8 @@ struct ConfigFile {
     snapshots: Option<SnapshotsTable>,
     /// `[memory]`: what embeds long-term facts (spec 3.1 §7.32).
     memory: Option<MemoryTable>,
+    /// `[compaction]`: when a run compacts the agent's history before a model call.
+    compaction: Option<CompactionTable>,
     /// `[[hooks]]` tables (spec 3.1 §7.22): the user config's are read by
     /// `HookSet::load_file`, the workspace's by the harness at build, so they are neither
     /// applied here nor reported as unknown.
@@ -530,6 +532,50 @@ struct MemoryTable {
     embedder: Option<String>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
+}
+
+/// The `[compaction]` table: when a run compacts the agent's history before a model call.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct CompactionTable {
+    /// `false` turns auto-compaction off.
+    auto: Option<bool>,
+    /// A fixed threshold in estimated tokens, in place of the window fraction.
+    threshold_tokens: Option<u64>,
+    /// The share of the model's context window a request may reach (default 0.8).
+    window_fraction: Option<f64>,
+    /// How many of the most recent history entries are kept as they are (default 10).
+    keep_recent: Option<usize>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
+}
+
+impl CompactionTable {
+    /// `current` with this table's settings applied.
+    fn apply(
+        &self,
+        current: Option<IntraCompactionConfig>,
+        origin: &str,
+        notes: &mut Vec<String>,
+    ) -> IntraCompactionConfig {
+        for key in self.unknown.keys() {
+            notes.push(format!("{origin}: unknown key `compaction.{key}` ignored"));
+        }
+        let mut config = current.unwrap_or_default();
+        if let Some(auto) = self.auto {
+            config.enabled = auto;
+        }
+        if let Some(threshold) = self.threshold_tokens {
+            config.token_threshold = Some(threshold);
+        }
+        if let Some(fraction) = self.window_fraction {
+            config.context_window_fraction = fraction;
+        }
+        if let Some(keep) = self.keep_recent {
+            config.overlap_event_count = keep;
+        }
+        config
+    }
 }
 
 /// The `[shells]` table: background shell limits (spec 3.1 §7.29).
@@ -737,6 +783,9 @@ pub struct ResolvedHarnessArgs {
     /// Snapshots before each turn (spec 3.1 §7.27): on by default, `None` with
     /// `--no-snapshots` or `[snapshots] enabled = false` in the user config.
     pub snapshots: Option<SnapshotConfig>,
+    /// `[compaction]` from the user config, then the project file: when a run compacts the
+    /// agent's history. `None` keeps auto-compaction's defaults.
+    pub compaction: Option<IntraCompactionConfig>,
 }
 
 impl HarnessArgs {
@@ -820,6 +869,7 @@ impl HarnessArgs {
         let mut checkpointer = None;
         let mut shells = ShellLimits::default();
         let mut snapshots = Some(SnapshotConfig::default());
+        let mut compaction: Option<IntraCompactionConfig> = None;
         if let Some(user) = &user {
             let origin = user_config.map_or_else(String::new, |path| path.display().to_string());
             if let Some(value) = &user.mode {
@@ -875,6 +925,9 @@ impl HarnessArgs {
             }
             if let Some(table) = &user.snapshots {
                 snapshots = table.apply(&origin, &mut notes);
+            }
+            if let Some(table) = &user.compaction {
+                compaction = Some(table.apply(compaction, &origin, &mut notes));
             }
             for key in user.unknown.keys().filter(|key| *key != DEPLOY_TABLE) {
                 notes.push(format!("{origin}: unknown key `{key}` ignored"));
@@ -962,6 +1015,10 @@ impl HarnessArgs {
             if let Some(policy) = project.effort {
                 effort = policy;
                 effort_explicit = true;
+            }
+            // Compaction, likewise, changes what the model is sent, not what the agent may do.
+            if let Some(table) = &project.compaction {
+                compaction = Some(table.apply(compaction, origin, &mut notes));
             }
             // A checkpointer location is not a permission, but a workspace file naming one
             // would send plan state to a server the repository chose.
@@ -1074,6 +1131,7 @@ impl HarnessArgs {
             shells,
             notes,
             snapshots,
+            compaction,
         })
     }
 }
@@ -1142,8 +1200,33 @@ mod tests {
                 shells: ShellLimits::default(),
                 notes: vec![],
                 snapshots: Some(SnapshotConfig::default()),
+                compaction: None,
             }
         );
+    }
+
+    /// `[compaction]` in the user config sets auto-compaction; the project file adjusts it.
+    #[test]
+    fn compaction_comes_from_the_user_config_then_the_project_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = dir.path().join("user.toml");
+        write(&user, "[compaction]\nwindow_fraction = 0.6\nkeep_recent = 4\n");
+        write(&dir.path().join(PROJECT_CONFIG_FILE), "[compaction]\nthreshold_tokens = 50000\n");
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Plan, Some(&user)).unwrap();
+        assert_eq!(
+            resolved.compaction,
+            Some(IntraCompactionConfig {
+                token_threshold: Some(50_000),
+                context_window_fraction: 0.6,
+                overlap_event_count: 4,
+                ..IntraCompactionConfig::default()
+            })
+        );
+
+        write(&user, "[compaction]\nauto = false\n");
+        std::fs::remove_file(dir.path().join(PROJECT_CONFIG_FILE)).unwrap();
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Plan, Some(&user)).unwrap();
+        assert_eq!(resolved.compaction, Some(IntraCompactionConfig::disabled()));
     }
 
     /// `[shells]` in the user config sets the limits; the project file may only lower them

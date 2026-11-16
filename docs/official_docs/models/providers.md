@@ -965,6 +965,7 @@ OpenAI-compatible, Azure OpenAI, Azure AI Inference, Anthropic, DeepSeek, Groq).
 | Behaviour | Rule |
 |-----------|------|
 | Transient upstream errors | HTTP 500, 502, 503, 504, and 529 map to `ErrorCategory::Unavailable` with the upstream status recorded, so `RetryConfig` retries them |
+| Quota and credit | An account out of quota or credit maps to `ErrorCategory::ResourceExhausted`, which is not retried, and the message says to add credit or raise the limit: HTTP 402 from any client, an error `code` or `type` of `insufficient_quota`, `credit_balance_exhausted`, `billing_hard_limit_reached`, `organization_spend_limit_exceeded` or `project_spend_limit_exceeded` (OpenAI sends these with HTTP 429), and Anthropic's `billing_error`. Gemini's `RESOURCE_EXHAUSTED` stays `RateLimited`: its quotas reset, and `retryDelay` says when |
 | `Retry-After` | A delay in seconds or an HTTP-date is attached to the error and used for the next retry. A delay above `RetryConfig::max_server_delay` (default 60 seconds) is not waited: the error is returned with the delay on `AdkError::retry` |
 | Gemini `RetryInfo` | Without a `Retry-After` header, Gemini (AI Studio and Vertex AI) takes the delay from the `retryDelay` of a `google.rpc.RetryInfo` error detail (`"37s"`, `"1.5s"`), which is how the API reports the wait a 429 quota error needs, under the same bound |
 | Mid-stream Anthropic `error` event | Fails the stream with the category of the equivalent HTTP error, so `overloaded_error` and `rate_limit_error` are retryable |

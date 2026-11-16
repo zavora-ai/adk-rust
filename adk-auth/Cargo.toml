@@ -19,8 +19,8 @@ all-features = true
 
 [features]
 default = []
-sso = ["jsonwebtoken", "reqwest", "dashmap", "base64"]
-auth-bridge = ["sso", "adk-core/auth-bridge", "axum"]
+sso = ["dep:jsonwebtoken", "dep:reqwest", "dep:dashmap", "dep:base64"]
+auth-bridge = ["sso", "adk-core/auth-bridge", "dep:axum"]
 # Cloud secret manager providers
 aws-secrets = ["dep:aws-sdk-secretsmanager", "dep:aws-config"]
 azure-keyvault = ["dep:azure_security_keyvault_secrets", "dep:azure_identity", "dep:azure_core"]
@@ -29,11 +29,11 @@ gcp-secrets = ["dep:google-cloud-secretmanager-v1", "dep:google-cloud-gax"]
 postgres-audit = ["dep:sqlx"]
 otlp-audit = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
 # Signed, Merkle-hashed audit log with Ed25519 checkpoints and offline verification
-signed-audit = ["dep:aws-lc-rs", "base64", "dep:ryu-js", "serde_json/float_roundtrip", "tokio/rt"]
+signed-audit = ["dep:aws-lc-rs", "dep:base64", "dep:ryu-js", "serde_json/float_roundtrip", "tokio/rt"]
 # RFC 8693 token-exchange credential broker
-token-exchange = ["reqwest"]
+token-exchange = ["dep:reqwest"]
 # Web Bot Auth: RFC 9421 Ed25519 request signatures, key directories, signer and verifier (spec 3.5 §7.3)
-web-bot-auth = ["dep:aws-lc-rs", "base64", "reqwest", "dep:http", "dep:httpdate", "adk-core/webhook-delivery", "tokio/net"]
+web-bot-auth = ["dep:aws-lc-rs", "dep:base64", "dep:reqwest", "dep:http", "dep:httpdate", "adk-core/webhook-delivery", "tokio/net"]
 # Agent identity federation: an OIDC issuer for agents, exchanges of its tokens at AWS, Google
 # Cloud and Microsoft Entra, and cloud agent tokens read as `AgentPrincipal`s
 agent-federation = ["sso", "dep:aws-lc-rs"]
