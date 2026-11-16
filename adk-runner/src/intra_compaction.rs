@@ -5,7 +5,7 @@
 //! once the request passes the [`IntraCompactionConfig`] threshold. By default the summary is
 //! written by the model the agent is calling ([`LlmEventSummarizer`]); a
 //! [`BaseEventsSummarizer`] or, with the `context-compaction` feature, a
-//! [`CompactionStrategy`](crate::compaction::CompactionStrategy) can take its place.
+//! `CompactionStrategy` (`compaction::CompactionStrategy`) can take its place.
 //!
 //! The runner installs one per run over the run's session, so each compaction is also
 //! recorded as a compaction event and later runs start from the summary.
@@ -20,7 +20,6 @@ use adk_core::{
     LlmEventSummarizer, Part, Result,
 };
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -332,11 +331,8 @@ impl IntraInvocationCompactor {
             let mut event = Event::new(ctx.invocation_id());
             event.author = ctx.agent_name().to_string();
             event.branch = ctx.branch().to_string();
-            event.actions.compaction = Some(EventCompaction {
-                start_timestamp: recorded.start,
-                end_timestamp: recorded.end,
-                compacted_content: summary.clone(),
-            });
+            event.actions.compaction =
+                Some(EventCompaction { compacted_content: summary.clone(), ..recorded.span });
             event
         });
         tracing::info!(
@@ -524,19 +520,16 @@ fn without_thinking(kept: &[Content]) -> impl Iterator<Item = Content> + '_ {
 }
 
 /// `contents` as session-like events for a summarizer: the user's turns authored by the user,
-/// the rest by the agent, a microsecond apart.
+/// the rest by the agent.
 fn as_events(ctx: &dyn InvocationContext, contents: &[Content]) -> Vec<Event> {
-    let start = Utc::now();
     contents
         .iter()
-        .enumerate()
-        .map(|(index, content)| {
+        .map(|content| {
             let mut event = Event::new(ctx.invocation_id());
             event.author = match content.role.as_str() {
                 "user" => "user".to_string(),
                 _ => ctx.agent_name().to_string(),
             };
-            event.timestamp = start + chrono::Duration::microseconds(index as i64);
             event.set_content(content.clone());
             event
         })
@@ -563,8 +556,8 @@ fn text_of(content: &Content) -> String {
 struct SessionCut {
     /// The cut, moved earlier to an entry the session can place.
     cut: usize,
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
+    /// The span the compaction covers; its content is the summary, filled in once written.
+    span: EventCompaction,
 }
 
 /// The latest cut at or before `cut`, in the later half, whose first kept entry is exactly one
@@ -609,7 +602,12 @@ fn session_cut(events: &[Event], history: &[Content], cut: usize) -> Option<Sess
             .into_iter()
             .chain(earlier.map(|compaction| compaction.start_timestamp))
             .min()?;
-        Some(SessionCut { cut: at, start, end })
+        let span = EventCompaction {
+            start_timestamp: start,
+            end_timestamp: end,
+            compacted_content: Content::new("model"),
+        };
+        Some(SessionCut { cut: at, span })
     })
 }
 
@@ -786,7 +784,7 @@ mod tests {
         assert!(compactor.maybe_compact(&events).await.unwrap().is_none());
     }
 
-    fn recorded(author: &str, content: Content, at: DateTime<Utc>) -> Event {
+    fn recorded(author: &str, content: Content, at: chrono::DateTime<chrono::Utc>) -> Event {
         let mut event = Event::new("inv-1");
         event.author = author.to_string();
         event.timestamp = at;
@@ -826,7 +824,7 @@ mod tests {
             call("c2"),
             result("c2"),
         ];
-        let start = Utc::now();
+        let start = chrono::Utc::now();
         let ms = |n: i64| start + chrono::Duration::milliseconds(n);
         let events = vec![
             recorded("user", history[0].clone(), ms(0)),
@@ -836,7 +834,7 @@ mod tests {
             recorded("desk", history[4].clone(), ms(40)),
         ];
         let cut = session_cut(&events, &history, 3).expect("placed");
-        assert_eq!((cut.cut, cut.start, cut.end), (3, ms(0), ms(20)));
+        assert_eq!((cut.cut, cut.span.start_timestamp, cut.span.end_timestamp), (3, ms(0), ms(20)));
 
         // The same text twice cannot be placed, so the cut moves to the call before it.
         let mut repeated = history.clone();
@@ -844,7 +842,7 @@ mod tests {
         let mut events = events;
         events[4] = recorded("user", repeated[4].clone(), ms(40));
         let cut = session_cut(&events, &repeated, 4).expect("placed earlier");
-        assert_eq!((cut.cut, cut.end), (3, ms(20)));
+        assert_eq!((cut.cut, cut.span.end_timestamp), (3, ms(20)));
 
         // Events in the same millisecond cannot be told apart by every store.
         events[3].timestamp = ms(20) + chrono::Duration::microseconds(5);

@@ -25,7 +25,6 @@ adk-session.workspace = true
 adk-plugin = { workspace = true, optional = true }
 adk-skill = { workspace = true, optional = true }
 async-trait.workspace = true
-chrono.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
 futures.workspace = true
@@ -45,6 +44,7 @@ sandbox-runner = ["dep:adk-sandbox", "adk-sandbox/workspace"]
 context-compaction = []
 
 [dev-dependencies]
+chrono = "0.4"
 proptest = "1.5"
 tempfile = "3"
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
