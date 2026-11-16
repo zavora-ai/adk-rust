@@ -5,8 +5,10 @@ pub enum SkillError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("yaml parse error: {0}")]
-    Yaml(#[from] serde_yaml::Error),
+    /// The frontmatter is not valid YAML, or a draft's frontmatter cannot be written as YAML.
+    /// The message is the YAML library's, so this type does not depend on that library.
+    #[error("yaml error: {message}. Check the frontmatter between the `---` delimiters")]
+    Yaml { message: String },
 
     #[error("invalid skill frontmatter in {path}: {message}")]
     InvalidFrontmatter { path: PathBuf, message: String },
@@ -136,7 +138,7 @@ impl From<SkillError> for adk_core::AdkError {
         };
         let (category, code) = match &err {
             SkillError::Io(_) => (ErrorCategory::Internal, "skill.io"),
-            SkillError::Yaml(_) => (ErrorCategory::InvalidInput, "skill.yaml_parse"),
+            SkillError::Yaml { .. } => (ErrorCategory::InvalidInput, "skill.yaml_parse"),
             SkillError::InvalidFrontmatter { .. } => {
                 (ErrorCategory::InvalidInput, "skill.invalid_frontmatter")
             }

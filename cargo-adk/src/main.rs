@@ -782,7 +782,7 @@ fn validate_yaml(
         fs::read_to_string(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
 
     // Parse as YAML and validate structure
-    let value: Result<serde_json::Value, _> = serde_yaml_ng::from_str(&content);
+    let value: Result<serde_json::Value, _> = serde_saphyr::from_str(&content);
     match value {
         Err(e) => {
             errors.push(format!("YAML parse error: {e}"));

@@ -975,8 +975,8 @@ dependencies = [
  "proptest",
  "regex",
  "serde",
+ "serde-saphyr 2.1.1",
  "serde_json",
- "serde_yaml",
  "sha2 0.10.9",
  "sqlx",
  "tempfile",
@@ -1245,8 +1245,8 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "serde",
+ "serde-saphyr 2.1.1",
  "serde_json",
- "serde_yaml",
  "sha2 0.10.9",
  "sqlx",
  "tempfile",
@@ -1329,8 +1329,8 @@ dependencies = [
  "reqwest 0.12.28",
  "scraper",
  "serde",
+ "serde-saphyr 2.1.1",
  "serde_json",
- "serde_yaml",
  "sha1 0.10.7",
  "sha2 0.10.9",
  "similar",
@@ -1357,8 +1357,8 @@ dependencies = [
  "google-cloud-auth 1.19.0",
  "reqwest 0.12.28",
  "serde",
+ "serde-saphyr 2.1.1",
  "serde_json",
- "serde_yaml",
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
@@ -4180,8 +4180,8 @@ dependencies = [
  "hex",
  "proptest",
  "serde",
+ "serde-saphyr 2.1.1",
  "serde_json",
- "serde_yaml_ng",
  "sha2 0.10.9",
  "syn 2.0.119",
  "tar",
@@ -8512,6 +8512,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "granit-parser"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05f05586d4d4df3d47123207826c40b252728b438a1a07bad3c01ee6bea401df"
+dependencies = [
+ "arraydeque",
+ "smallvec 1.16.5",
+]
+
+[[package]]
 name = "group"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11841,7 +11851,7 @@ dependencies = [
  "scraper",
  "serde",
  "serde-big-array",
- "serde-saphyr",
+ "serde-saphyr 0.0.16",
  "serde_json",
  "serde_plain",
  "statrs",
@@ -16274,6 +16284,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-saphyr"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d43fb82d550b07e6f929a58d7d0935182602f48ddead875f5ee313c41c8f07fe"
+dependencies = [
+ "annotate-snippets",
+ "base64 0.23.1",
+ "encoding_rs_io",
+ "granit-parser",
+ "nohash-hasher",
+ "num-traits",
+ "serde_core",
+ "smallvec 1.16.5",
+ "zmij",
+]
+
+[[package]]
 name = "serde_bytes"
 version = "0.11.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -16442,19 +16469,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.10",
-]
-
-[[package]]
-name = "serde_yaml"
-version = "0.9.34+deprecated"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
-dependencies = [
- "indexmap 2.14.2",
- "itoa",
- "ryu",
- "serde",
- "unsafe-libyaml",
 ]
 
 [[package]]

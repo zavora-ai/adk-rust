@@ -67,7 +67,7 @@ hmac = "0.12"
 http-body-util = "0.1"
 jsonschema = { workspace = true }
 proptest = "1.5"
-serde_yaml = "0.9"
+serde-saphyr.workspace = true
 tempfile = "3"
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
 tower = { version = "0.5", features = ["util"] }

@@ -236,7 +236,7 @@ impl AgentConfigLoader {
         content: &str,
         path: &Path,
     ) -> adk_core::Result<YamlAgentDefinition> {
-        let mut definition: YamlAgentDefinition = serde_yaml::from_str(content).map_err(|e| {
+        let mut definition: YamlAgentDefinition = serde_saphyr::from_str(content).map_err(|e| {
             adk_core::AdkError::config(format!("invalid YAML in '{}': {e}", path.display()))
         })?;
 

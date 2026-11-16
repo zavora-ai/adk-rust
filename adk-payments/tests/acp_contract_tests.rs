@@ -14,8 +14,8 @@ fn load_json(path: &str) -> Value {
     serde_json::from_str(&fs::read_to_string(fixture(path)).unwrap()).unwrap()
 }
 
-fn load_yaml(path: &str) -> serde_yaml::Value {
-    serde_yaml::from_str(&fs::read_to_string(fixture(path)).unwrap()).unwrap()
+fn load_yaml(path: &str) -> Value {
+    serde_saphyr::from_str(&fs::read_to_string(fixture(path)).unwrap()).unwrap()
 }
 
 fn assert_valid(schema_path: &str, definition: &str, instance: &Value) {
@@ -35,25 +35,14 @@ fn stable_openapi_documents_expose_expected_checkout_and_delegate_paths() {
     let checkout = load_yaml("openapi/openapi.agentic_checkout.yaml");
     let delegate = load_yaml("openapi/openapi.delegate_payment.yaml");
 
-    let checkout_paths = checkout["paths"].as_mapping().unwrap();
-    assert!(checkout_paths.contains_key(serde_yaml::Value::from("/checkout_sessions")));
-    assert!(
-        checkout_paths
-            .contains_key(serde_yaml::Value::from("/checkout_sessions/{checkout_session_id}"))
-    );
-    assert!(checkout_paths.contains_key(serde_yaml::Value::from(
-        "/checkout_sessions/{checkout_session_id}/complete"
-    )));
-    assert!(
-        checkout_paths.contains_key(serde_yaml::Value::from(
-            "/checkout_sessions/{checkout_session_id}/cancel"
-        ))
-    );
+    let checkout_paths = checkout["paths"].as_object().unwrap();
+    assert!(checkout_paths.contains_key("/checkout_sessions"));
+    assert!(checkout_paths.contains_key("/checkout_sessions/{checkout_session_id}"));
+    assert!(checkout_paths.contains_key("/checkout_sessions/{checkout_session_id}/complete"));
+    assert!(checkout_paths.contains_key("/checkout_sessions/{checkout_session_id}/cancel"));
 
-    let delegate_paths = delegate["paths"].as_mapping().unwrap();
-    assert!(
-        delegate_paths.contains_key(serde_yaml::Value::from("/agentic_commerce/delegate_payment"))
-    );
+    let delegate_paths = delegate["paths"].as_object().unwrap();
+    assert!(delegate_paths.contains_key("/agentic_commerce/delegate_payment"));
 }
 
 #[test]
