@@ -150,6 +150,9 @@ futures = "0.3"
 async-stream = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# YAML in skill frontmatter, site front matter and YAML agent definitions: pure Rust and
+# maintained, where serde_yaml is deprecated and its unsafe-libyaml unmaintained.
+serde-saphyr = { version = "2.1", default-features = false, features = ["serialize", "deserialize"] }
 jsonschema = { version = "0.47", default-features = false }
 thiserror = "2.0"
 anyhow = "1.0"

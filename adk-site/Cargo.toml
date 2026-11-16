@@ -12,7 +12,7 @@ documentation = "https://docs.rs/adk-site"
 readme = "README.md"
 keywords = ["adk", "awp", "static-site", "release", "agent"]
 categories = ["web-programming", "asynchronous"]
-include = ["src/**/*", "Cargo.toml", "README.md"]
+include = ["src/**/*", "Cargo.toml", "README.md", "LICENSE"]
 
 # Spec 3.5 §7.1: the default build carries the content model, the built-in generator, the
 # launch gate, releases, the site log and `DirectoryHost`. External generators and host
@@ -82,7 +82,7 @@ regex.workspace = true
 scraper = "0.25"
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml = "0.9"
+serde-saphyr.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "sync", "rt", "time"] }

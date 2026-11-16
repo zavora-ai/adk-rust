@@ -21,7 +21,7 @@
 - `openrouter`
 - `bedrock`
 - `azure-ai`
-- `fireworks`, `together`, `mistral`, `perplexity`, `cerebras`, `sambanova` — backward-compat aliases for `openai`. Use `OpenAICompatibleConfig` presets instead of separate client types.
+- Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI — the `openai` feature with an `OpenAICompatibleConfig` preset (`OpenAICompatibleConfig::fireworks(...)`); there is no feature per preset.
 
 ## Convenience APIs
 - `provider_from_env()` — auto-detect provider from env vars (precedence: Anthropic > OpenAI > Gemini)

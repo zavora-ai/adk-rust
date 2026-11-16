@@ -99,16 +99,25 @@ mod routes {
     /// ```
     pub fn router_wired(engine: SurfaceEngine, wiring: GenuiWiring) -> Router {
         Router::new()
-            .route(paths::CAPABILITIES, get(move |context: Context| capabilities(context, wiring)))
+            .route(
+                paths::CAPABILITIES,
+                get(move |State(engine): State<SurfaceEngine>, context: Context| {
+                    capabilities(engine, context, wiring)
+                }),
+            )
             .route(paths::FORMS, get(forms))
             .with_state(engine)
     }
 
-    async fn capabilities(context: Context, wiring: GenuiWiring) -> Response {
+    async fn capabilities(
+        engine: SurfaceEngine,
+        context: Context,
+        wiring: GenuiWiring,
+    ) -> Response {
         if caller(context, SurfaceKind::Web, None).is_err() {
             return unauthenticated();
         }
-        Json(crate::genui::capabilities_wired(wiring)).into_response()
+        Json(crate::genui::capabilities_with(wiring, engine.catalogs())).into_response()
     }
 
     async fn forms(

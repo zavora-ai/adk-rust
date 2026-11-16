@@ -15,7 +15,9 @@ readme = "README.md"
 exclude = ["tests/"]
 
 [package.metadata.docs.rs]
-all-features = true
+# The library's public modules need only the default features and `optimize`; the other
+# features change the binary, and `mistralrs` alone adds about 180 crates (mistral.rs, candle).
+features = ["optimize"]
 
 [lib]
 name = "adk_cli"
@@ -101,11 +103,13 @@ keyring = { version = "3.6.3", default-features = false, features = ["windows-na
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_SystemServices", "Win32_System_Threading"] }
 
+# The Secret Service over zbus, pure Rust, so the build needs no libdbus. `async-io` rather
+# than `tokio`: keyring's API is blocking, and zbus's tokio `block_on` panics inside a runtime.
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))'.dependencies]
-keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
+keyring = { version = "3.6.3", default-features = false, features = ["async-secret-service", "async-io", "crypto-rust"] }
 
 [features]
-default = ["gemini", "openai", "anthropic", "ollama", "audit", "persist", "harness", "encrypted", "memory-local", "surface", "channels", "tui", "slack", "discord", "matrix"]
+default = ["gemini", "openai", "anthropic", "ollama", "audit", "persist", "harness", "encrypted", "surface", "channels", "tui", "slack", "discord", "matrix"]
 gemini = ["adk-model/gemini"]
 openai = ["adk-model/openai"]
 anthropic = ["adk-model/anthropic"]
@@ -172,7 +176,8 @@ encrypted = ["adk-harness?/encrypted", "adk-session/encrypted-session", "dep:sql
 browser = ["harness", "adk-harness/browser", "dep:adk-browser"]
 computer-use = ["harness", "adk-harness/computer-use"]
 # The in-process ONNX embedder for long-term memory, the default of a local provider
-# (spec 3.1 §7.15.2, H10); `ort` downloads the onnxruntime binary at build time
+# (spec 3.1 §7.15.2, H10). Off by default: `ort` downloads the onnxruntime binary at build
+# time, so a default `cargo install adk-cli` would need the network.
 memory-local = ["adk-harness?/memory-embeddings-local"]
 # `--store-key secret:<provider>/<name>` through adk-auth's secret providers
 secrets-gcp = ["dep:adk-auth", "adk-auth/gcp-secrets"]

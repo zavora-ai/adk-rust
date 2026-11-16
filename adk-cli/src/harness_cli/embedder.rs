@@ -105,7 +105,21 @@ fn local(explicit: bool) -> Result<Option<(Arc<adk_harness::RagEmbedder>, String
     #[cfg(feature = "memory-local")]
     {
         let _ = explicit;
-        match adk_harness::RagEmbedder::local() {
+        // The first use downloads the model before anything else prints, for minutes on a
+        // slow link, so it is announced.
+        let fetching = !adk_harness::RagEmbedder::local_is_fetched();
+        let started = std::time::Instant::now();
+        if fetching {
+            println!(
+                "fetching the local embedding model BAAI/bge-small-en-v1.5 (about 130 MB, once) \
+                 into the Hugging Face cache; --embedder lexical skips it"
+            );
+        }
+        let loaded = adk_harness::RagEmbedder::local();
+        if fetching && loaded.is_ok() {
+            println!("fetched the local embedding model in {}s", started.elapsed().as_secs());
+        }
+        match loaded {
             Ok(embedder) => Ok(Some((Arc::new(embedder), LOCAL.to_string()))),
             Err(error) => {
                 println!(
@@ -163,6 +177,19 @@ mod tests {
                 choose(Some(Provider::Model(ModelProvider::Anthropic)), Some(explicit)),
                 explicit
             );
+        }
+    }
+
+    /// The default build leaves the ONNX runtime out, so it builds offline: the local model
+    /// chosen by default falls back to lexical recall, and chosen explicitly it names the
+    /// feature to reinstall with.
+    #[cfg(not(feature = "memory-local"))]
+    #[test]
+    fn without_memory_local_the_local_embedder_falls_back_or_names_the_feature() {
+        assert!(matches!(local(false), Ok(None)), "an implicit choice falls back to lexical");
+        match local(true) {
+            Err(error) => assert!(error.to_string().contains("--features memory-local"), "{error}"),
+            Ok(_) => panic!("an explicit --embedder local must be refused without the feature"),
         }
     }
 }

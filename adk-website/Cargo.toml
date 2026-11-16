@@ -12,7 +12,7 @@ documentation = "https://docs.rs/adk-website"
 readme = "README.md"
 keywords = ["adk", "awp", "website", "agent", "cms"]
 categories = ["web-programming", "asynchronous"]
-include = ["src/**/*", "playbooks/**/*", "packs/**/*", "Cargo.toml", "README.md"]
+include = ["src/**/*", "playbooks/**/*", "packs/**/*", "Cargo.toml", "README.md", "LICENSE"]
 
 # Spec 3.5 §7.1, D-14: the product is the default build. It holds no framework code (D-1):
 # everything it runs comes from the harness, the kernel, the site pipeline and the wallet.

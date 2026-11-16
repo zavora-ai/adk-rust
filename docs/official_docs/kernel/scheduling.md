@@ -85,7 +85,11 @@ Spend and usage come from the kernel's own daily totals per process and partitio
 `adk-rust ps` shows, so admission needs no `SpendLedger`. The kernel attributes them from the
 hosted agent's `RunUsage`, which the harness reads from each run's `BudgetTracker`, so media
 calls metered in a run ([Calls billed in units](../security/spend-ledger.md#calls-billed-in-units))
-count. A proposal is refused while any cap of the daily proactive budget is reached.
+count. A hosted agent with no `ProgressSource` usage — any `Arc<Runner>` given to
+`KernelBuilder::agent` — is attributed from the usage its turn's model responses report
+(`usage_metadata`: cost, tokens, input and output tokens), counted as the worker reads the turn's
+events, so quotas and the daily cap hold for a kernel built from code too. A proposal is refused
+while any cap of the daily proactive budget is reached.
 
 ## Spawning past `max_queued`
 

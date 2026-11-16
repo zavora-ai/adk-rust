@@ -40,7 +40,8 @@ pub fn parse_skill_markdown(path: &Path, content: &str) -> SkillResult<ParsedSki
     }
 
     let frontmatter_raw = frontmatter_lines.join("\n");
-    let fm: SkillFrontmatter = serde_yaml::from_str(&frontmatter_raw)?;
+    let fm: SkillFrontmatter = serde_saphyr::from_str(&frontmatter_raw)
+        .map_err(|error| SkillError::Yaml { message: error.to_string() })?;
 
     let name = fm.name.trim().to_string();
     if name.is_empty() {
@@ -289,6 +290,48 @@ body
 "#;
         let err = parse_skill_markdown(Path::new(".skills/bad.md"), content).unwrap_err();
         assert!(matches!(err, SkillError::MissingField { .. }));
+    }
+
+    #[test]
+    fn invalid_yaml_is_a_yaml_error_with_the_parse_code() {
+        let content = "---\nname: broken\ndescription: [unclosed\n---\nbody\n";
+        let err = parse_skill_markdown(Path::new(".skills/broken.md"), content).unwrap_err();
+        assert!(matches!(&err, SkillError::Yaml { message } if !message.is_empty()), "{err:?}");
+        assert_eq!(adk_core::AdkError::from(err).code, "skill.yaml_parse");
+    }
+
+    #[test]
+    fn parses_quoted_block_and_typed_frontmatter_values() {
+        let content = r#"---
+name: 'release-notes'
+description: >
+  Drafts release notes:
+  one line per change.
+version: "1.0"
+license: yes
+tags: [docs, "release: notes"]
+metadata:
+  owners:
+    - docs
+  priority: 2
+  enabled: true
+---
+body
+"#;
+        let parsed = parse_skill_markdown(Path::new(".skills/release-notes.md"), content).unwrap();
+
+        assert_eq!(parsed.name, "release-notes");
+        assert_eq!(parsed.description, "Drafts release notes: one line per change.");
+        assert_eq!(parsed.version.as_deref(), Some("1.0"));
+        assert_eq!(parsed.license.as_deref(), Some("yes"), "YAML 1.2: `yes` is a string");
+        assert_eq!(parsed.tags, vec!["docs", "release: notes"]);
+        assert_eq!(
+            parsed.metadata.get("owners"),
+            Some(&serde_json::json!(["docs"])),
+            "nested metadata keeps its structure"
+        );
+        assert_eq!(parsed.metadata.get("priority"), Some(&serde_json::json!(2)));
+        assert_eq!(parsed.metadata.get("enabled"), Some(&serde_json::json!(true)));
     }
 
     #[test]

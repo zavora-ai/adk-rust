@@ -318,8 +318,8 @@ pub use queue_source::{
 };
 pub use request_context::RequestContext;
 pub use run_store::{
-    ClaimedRun, DurableRunStore, Enqueued, InMemoryRunStore, NewRun, OnConflict, RunCheckpointRef,
-    RunFilter, RunOutcome, RunRecord, RunState,
+    ClaimedRun, DurableRunStore, Enqueued, InMemoryRunStore, NewRun, OnConflict, RetryBackoff,
+    RunCheckpointRef, RunFilter, RunOutcome, RunRecord, RunState,
 };
 pub use schedule::{
     FirePlan, InMemoryScheduleStore, MissedFirePolicy, Schedule, ScheduleSpec, ScheduleStore,

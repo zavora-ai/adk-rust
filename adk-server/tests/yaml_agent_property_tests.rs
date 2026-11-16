@@ -147,11 +147,11 @@ proptest! {
     #[test]
     fn prop_yaml_agent_definition_round_trip(def in arb_yaml_agent_definition()) {
         // Serialize to YAML
-        let yaml_str = serde_yaml::to_string(&def)
+        let yaml_str = serde_saphyr::to_string(&def)
             .expect("serialization to YAML should succeed");
 
         // Deserialize back
-        let round_tripped: YamlAgentDefinition = serde_yaml::from_str(&yaml_str)
+        let round_tripped: YamlAgentDefinition = serde_saphyr::from_str(&yaml_str)
             .expect("deserialization from YAML should succeed");
 
         // Assert equality
@@ -191,7 +191,7 @@ proptest! {
             "name:\n  - item1\n  - item2\nmodel:\n  provider: {provider}\n  model_id: {model_id}\n"
         );
 
-        let result: Result<YamlAgentDefinition, _> = serde_yaml::from_str(&yaml_str_invalid);
+        let result: Result<YamlAgentDefinition, _> = serde_saphyr::from_str(&yaml_str_invalid);
         prop_assert!(
             result.is_err(),
             "Parsing should fail when `name` is a sequence"
@@ -213,7 +213,7 @@ proptest! {
         // Replace `model` (a struct/map) with a bare string
         let yaml_str = format!("name: {name}\nmodel: {bad_model_value}\n");
 
-        let result: Result<YamlAgentDefinition, _> = serde_yaml::from_str(&yaml_str);
+        let result: Result<YamlAgentDefinition, _> = serde_saphyr::from_str(&yaml_str);
         prop_assert!(
             result.is_err(),
             "Parsing should fail when `model` is a bare string instead of a map"
@@ -237,7 +237,7 @@ proptest! {
             "name: {name}\nmodel:\n  provider:\n    - a\n    - b\n  model_id: {model_id}\n"
         );
 
-        let result: Result<YamlAgentDefinition, _> = serde_yaml::from_str(&yaml_str);
+        let result: Result<YamlAgentDefinition, _> = serde_saphyr::from_str(&yaml_str);
         prop_assert!(
             result.is_err(),
             "Parsing should fail when `provider` is a sequence"
@@ -261,7 +261,7 @@ proptest! {
             "name: {name}\nmodel:\n  provider: {provider}\n  model_id:\n    nested: value\n"
         );
 
-        let result: Result<YamlAgentDefinition, _> = serde_yaml::from_str(&yaml_str);
+        let result: Result<YamlAgentDefinition, _> = serde_saphyr::from_str(&yaml_str);
         prop_assert!(
             result.is_err(),
             "Parsing should fail when `model_id` is a map"
@@ -282,7 +282,7 @@ proptest! {
         // Omit the required `model` field
         let yaml_str = format!("name: {name}\n");
 
-        let result: Result<YamlAgentDefinition, _> = serde_yaml::from_str(&yaml_str);
+        let result: Result<YamlAgentDefinition, _> = serde_saphyr::from_str(&yaml_str);
         prop_assert!(
             result.is_err(),
             "Parsing should fail when `model` is missing"

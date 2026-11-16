@@ -24,7 +24,7 @@ use super::schema::YamlAgentDefinition;
 ///
 /// Returns an error if serialization fails (unlikely for well-formed definitions).
 pub fn serialize_definition(def: &YamlAgentDefinition) -> Result<String, adk_core::AdkError> {
-    serde_yaml::to_string(def).map_err(|e| {
+    serde_saphyr::to_string(def).map_err(|e| {
         adk_core::AdkError::config(format!("failed to serialize YAML agent definition: {e}"))
     })
 }
@@ -72,7 +72,7 @@ mod tests {
     fn test_round_trip_minimal() {
         let original = minimal_definition();
         let yaml = serialize_definition(&original).unwrap();
-        let parsed: YamlAgentDefinition = serde_yaml::from_str(&yaml).unwrap();
+        let parsed: YamlAgentDefinition = serde_saphyr::from_str(&yaml).unwrap();
         assert_eq!(original, parsed);
     }
 
@@ -123,7 +123,7 @@ mod tests {
         };
 
         let yaml = serialize_definition(&original).unwrap();
-        let parsed: YamlAgentDefinition = serde_yaml::from_str(&yaml).unwrap();
+        let parsed: YamlAgentDefinition = serde_saphyr::from_str(&yaml).unwrap();
         assert_eq!(original, parsed);
     }
 
@@ -141,7 +141,7 @@ mod tests {
         };
 
         let yaml = serialize_definition(&original).unwrap();
-        let parsed: YamlAgentDefinition = serde_yaml::from_str(&yaml).unwrap();
+        let parsed: YamlAgentDefinition = serde_saphyr::from_str(&yaml).unwrap();
         assert_eq!(original, parsed);
     }
 }

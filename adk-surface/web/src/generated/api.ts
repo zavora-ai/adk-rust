@@ -550,6 +550,38 @@ export interface CatalogView {
   leftOut: string[];
 }
 
+/** What a chart's horizontal axis holds. */
+export type ChartAxis = {
+  /** The categories' names, in order. */
+  labels: string[];
+  type: "category";
+} | {
+  type: "number";
+} | {
+  type: "time";
+};
+
+/** How a chart is drawn. */
+export type ChartKind = "line" | "area" | "bar" | "scatter" | "pie" | "sparkline";
+
+/** One series of a chart. */
+export interface ChartSeries {
+  /** Its name, in the legend. */
+  name: string;
+  /** Its horizontal values on a number or time axis; empty on a category axis. */
+  x?: number[];
+  /** Its values. */
+  y: number[];
+}
+
+/** A labelled point on a number or time axis. */
+export interface ChartTick {
+  /** Where, in the axis's values. */
+  at: number;
+  /** What it reads. */
+  text: string;
+}
+
 /** One claim of a protocol. */
 export interface Claim {
   /** Its key, such as `version_0_9_1`. */
@@ -1000,6 +1032,31 @@ export interface DrawnArg {
 }
 
 /**
+ * A chart a component of an extension catalog shows in the home (spec 3.3 §6.1 `genui`,
+ * extension catalogs): numbers and words the server already checked by rule 5, never
+ * colours, links or markup. The home draws it in its own chart colours.
+ */
+export interface DrawnChart {
+  /** How it is drawn. */
+  kind: ChartKind;
+  /** The series, at most eight: one per chart colour. */
+  series: ChartSeries[];
+  /**
+   * One sentence that says what the chart shows, for screen readers and the terminal,
+   * written by the server: "Line chart of Revenue, 12 points, from 3100 to 9800".
+   */
+  summary: string;
+  /** Labelled points on a number or time axis, such as "10:00" at its epoch milliseconds. */
+  ticks?: ChartTick[];
+  /** What the horizontal axis holds. */
+  x: ChartAxis;
+  /** The horizontal axis's name. */
+  xLabel?: string | null;
+  /** The vertical axis's name. */
+  yLabel?: string | null;
+}
+
+/**
  * A check a drawn field makes: the catalog's `required`, `regex`, `length`, `numeric`,
  * `email`, `and`, `or` and `not` functions, and the message shown when it fails.
  */
@@ -1008,6 +1065,26 @@ export interface DrawnCheck {
   condition: unknown;
   /** "Enter an email address". */
   message: string;
+}
+
+/**
+ * A component of an extension catalog as a host renderer reads it (spec 3.3 §6.1 `genui`,
+ * extension catalogs): its properties with every binding and text function resolved and
+ * every string already checked by rule 5. A renderer draws it from these and nothing else,
+ * and draws no control: the component only shows.
+ */
+export interface DrawnExtension {
+  /** The catalog's id. */
+  catalog: string;
+  /**
+   * The keys of the nodes its slots hold, in slot order: each is in the subtree of the
+   * node's child.
+   */
+  children?: string[];
+  /** The component's type, such as `Metric`. */
+  component: string;
+  /** Its properties, resolved and checked. */
+  props: unknown;
 }
 
 /** A field of a drawing: where its value goes, what it takes and what it checks. */
@@ -1053,14 +1130,23 @@ export type DrawnKind = "form" | "card" | "table" | "screen";
  * | `Divider` | — | `axis` | — |
  * | `Button` | Its label | `primary`, `default`, `borderless` | `action` |
  * | `TextField`, `DateTimeInput`, `CheckBox`, `ChoicePicker`, `Slider` | The label | the catalog's variant | `field` |
+ * | `Chart` | — | — | `chart`: a chart an extension component's home view draws |
+ * | An extension component, such as `Metric` | — | — | `extension`, and one child: what the home shows for it |
  */
 export interface DrawnNode {
   /** The declared action a button asks for. */
   action?: string | null;
+  /** A chart the home draws natively, from an extension component's home view. */
+  chart?: DrawnChart | null;
   /** Its children, in order. */
   children?: DrawnNode[];
   /** The catalog component. */
   component: string;
+  /**
+   * The extension component this node draws, for a host that draws it with its own
+   * renderer; every other surface draws its one child, what the home shows for it.
+   */
+  extension?: DrawnExtension | null;
   /** A field the person fills in. */
   field?: DrawnField | null;
   /**

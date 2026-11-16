@@ -128,7 +128,7 @@ jobs:
       timeout-minutes: 10
       uses: ./.github/actions/apt-install
       with:
-        packages: protobuf-compiler libdbus-1-dev
+        packages: protobuf-compiler
 
     - name: Generate the receipt
       run: node scripts/generate-computer-use-v8-evidence.mjs --subject-version "${COMPUTER_USE_MCP_V8_VERSION}" --output adk-computer-use-v8-evidence.json --compact

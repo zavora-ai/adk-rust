@@ -655,7 +655,8 @@ step.
    entry as the release notes.
 7. Publish with `cargo xtask publish`. If crates.io indexing interrupts the
    workspace publish, resume safely with `cargo xtask publish --resume`; it uses
-   the computed dependency order and skips versions that already exist. Then
+   the computed dependency order, skips versions that already exist, and stops at
+   the first crate that fails, so a rerun continues from that crate. Then
    confirm every crate's new version on crates.io and its docs.rs build.
 
 ## Getting Help
