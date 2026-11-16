@@ -15,6 +15,11 @@ adk-rust --ui repl             # the harness REPL
 > **Note:** the harness refuses to start in your home directory or `/` unless `--dir` names
 > them explicitly, since the agent could read and change everything under them.
 
+> **Note:** on Linux the OS keychain is the desktop's Secret Service (GNOME Keyring, KWallet)
+> over D-Bus, reached in pure Rust, so `cargo install adk-cli` needs no `libdbus-1-dev`. A host
+> without a Secret Service (a server, a container) keeps API keys in the environment and the
+> store key in `--store-key env:<VAR>` or a secret provider.
+
 ## Commands
 
 | Invocation | Behaviour |

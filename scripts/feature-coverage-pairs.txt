@@ -107,8 +107,7 @@
 # Agent surfaces (spec 3.3 §6.1): `adk_rust::surface`, in no tier.
 1 adk-rust surface
 
-# adk-server (shard 3), adk-kernel (2), adk-cli (5, 8 and 10; it links libdbus through
-# keyring) and adk-surface (9).
+# adk-server (shard 3), adk-kernel (2), adk-cli (5, 8 and 10) and adk-surface (9).
 # The background run store and its persistence are behind `background`; nothing compiled
 # them when durable run records were added.
 3 adk-server background
