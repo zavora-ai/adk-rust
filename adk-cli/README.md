@@ -69,6 +69,7 @@ See [The harness in your terminal](../docs/official_docs/harness/cli.md),
 | `audit` | yes | `adk-rust audit verify` and `audit keygen` (through `adk-auth`'s `signed-audit`) |
 | `persist` | yes | Sessions, held calls, durable runs, modes and standing rules in SQLite at `adk-rust/harness.db` (through `adk-session`'s and `adk-harness`'s `sqlite`) |
 | `surface` | yes | The web home of `adk-surface` at `/ui/` on `serve` and `up`, over the harness (spec 3.3 §5.1, §10 S1), with `harness` |
+| `memory-local` | no | The in-process ONNX embedder (`BAAI/bge-small-en-v1.5`) for long-term memory, the default embedder of every provider but Gemini and OpenAI; without it those recall facts by shared words. `ort` downloads the ONNX Runtime binary while building, so it is off by default and `cargo install adk-cli` builds offline |
 | `harness` | yes | The harness: `adk-rust` REPL, `code`, `goal`, `ultracode` and `serve` on `adk-harness`, `sessions`, `rules`, `approvals`, and the `adk_cli::harness` module; the agent kernel's `up`, `attach`, `ps`, `top`, `kill`, `suspend`, `resume`, `freeze`, `unfreeze`, `events`, `proc` and `partitions` on `adk-kernel`, with its daily baselines (`proc-baselines`) |
 | `deepseek`, `groq`, `ollama`, `muse`, `openrouter`, `opencode`, `bedrock`, `azure-ai` | no | The other providers; `opencode` compiles `--provider opencode` (Zen) and `--provider opencode-go` |
 | `all-providers` | no | Every provider |

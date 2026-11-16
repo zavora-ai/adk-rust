@@ -67,7 +67,7 @@ The REPL, `code`, `goal`, `ultracode` and `serve` take the same harness flags.
 | `--member NAME=explore\|general` | Adds a team member |
 | `--no-memory` | Turns long-term memory off: nothing is recalled or learned |
 | `--no-consolidation` | Turns the kernel's consolidation tick off under `adk-rust up` ([Long-term memory](memory.md#consolidation)) |
-| `--embedder local\|gemini\|openai\|lexical` | What embeds long-term facts (spec 3.1 §7.32); without it `[memory] embedder`, else the chat provider's own embedder for Gemini and OpenAI and the local ONNX model for every other provider. See [Long-term memory](#long-term-memory) |
+| `--embedder local\|gemini\|openai\|lexical` | What embeds long-term facts (spec 3.1 §7.32); without it `[memory] embedder`, else the chat provider's own embedder for Gemini and OpenAI and the local ONNX model (feature `memory-local`) for every other provider. See [Long-term memory](#long-term-memory) |
 | `--effort low\|medium\|high` | The reasoning effort of every model call in this session, whatever the mode or role (spec 3.1 §7.23); without it the `[effort]` policy applies per mode: plan high, members low, everything else medium |
 | `--store-key keychain:<entry>\|secret:<provider>/<name>\|env:<VAR>` | Where the key sealing `harness.db` is kept (spec 3.1 §7.12); without it `[store] key` in the user config, else the store is plaintext |
 | `--no-hooks` | Runs no hooks, the workspace's included (spec 3.1 §7.22); `/hooks` lists the effective set |
@@ -377,6 +377,12 @@ once into the Hugging Face hub cache, feature `memory-local`), never another pro
 so with `--sandbox` and `--store-key` nothing leaves the machine but the local model
 endpoint.
 
+> **Note:** `memory-local` is off in the default build, since `ort` downloads the ONNX Runtime
+> binary while compiling and a default `cargo install adk-cli` builds offline.
+> `cargo install adk-cli --features memory-local` adds it. Without it, the harness (the REPL,
+> `code`, `goal`, `ultracode`, `up`) recalls long-term facts by shared words for every
+> provider except Gemini and OpenAI, and `--embedder local` is refused with the reinstall hint.
+
 ```bash
 adk-rust --provider ollama --model qwen3.5 --sandbox --store-key keychain:adk-rust
 ```
@@ -420,10 +426,10 @@ stay on this machine, unless you choose another provider (spec 3.1 §7.32, §13 
 
 | Chat provider | Embedder |
 |---|---|
-| Ollama, mistral.rs | The local ONNX model (`BAAI/bge-small-en-v1.5`) |
+| Ollama, mistral.rs | The local ONNX model (`BAAI/bge-small-en-v1.5`, feature `memory-local`) |
 | Gemini, OpenAI | That provider's: `gemini-embedding-2`, `text-embedding-3-small` |
-| Anthropic, DeepSeek, Groq, Meta Muse, OpenRouter, OpenCode, Bedrock, Azure AI | The local ONNX model, whatever other keys are in the environment |
-| The local model unavailable | None: facts are found by shared words, never by another provider |
+| Anthropic, DeepSeek, Groq, Meta Muse, OpenRouter, OpenCode, Bedrock, Azure AI | The local ONNX model (feature `memory-local`), whatever other keys are in the environment |
+| The local model not compiled in (the default build) or unavailable | None: facts are found by shared words, never by another provider |
 | `--embedder local\|gemini\|openai\|lexical`, or `[memory] embedder` in the user config | As chosen; a second provider sees your facts only this way |
 
 `.adk/harness.toml` may set `[memory] embedder` to `local` or `lexical` only, and only to

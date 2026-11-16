@@ -139,6 +139,9 @@
 8 adk-cli audit-sql
 # `serve --store postgres://…|redis://…` (spec 3.1 §8.2, §13 Q2).
 8 adk-cli postgres,redis
+# The in-process ONNX embedder for long-term memory, off by default so the default build
+# needs no network (spec 3.1 §7.15.2).
+8 adk-cli memory-local
 # The `chat` end-to-end tests in a pseudo-terminal: held calls, Ctrl-C, sessions; with
 # `audit-sql`, "Hire a helper" (spec 3.3 §12 phase 4) checks the kernel's record with `audit verify`.
 10 adk-cli scripted-model,audit-sql solo
