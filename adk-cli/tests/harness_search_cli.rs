@@ -154,7 +154,8 @@ fn the_banner_names_the_search_filter_never_the_fetch_allowlist() {
 
 /// spec 3.1 §7.32, §13 Q9: an Anthropic session embeds facts with the local model or not at
 /// all, whatever other providers' keys are in the environment; another provider only when
-/// chosen. The hub endpoint is unreachable, so the local model is unavailable here.
+/// chosen. With `memory-local` the hub endpoint is unreachable, so the local model fails to
+/// load; without it (the default build) there is no local model to try.
 #[test]
 fn an_anthropic_session_never_embeds_with_another_providers_key() {
     let home = tempfile::tempdir().unwrap();
@@ -183,7 +184,9 @@ fn an_anthropic_session_never_embeds_with_another_providers_key() {
     };
 
     let mut terminal = anthropic(&[]);
-    terminal.expect("the local embedding model is unavailable");
+    if cfg!(feature = "memory-local") {
+        terminal.expect("the local embedding model is unavailable");
+    }
     terminal
         .expect("Embedder  : none: facts are found by shared words; nothing leaves this machine");
     terminal.expect("You >");
