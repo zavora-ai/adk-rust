@@ -22,6 +22,12 @@ Three rules shape it:
 | **Every wake is a governed run** | A wake enqueues a run or wakes a parked one; the run passes modes, standing rules, guardrails, confirmation, the action ledger and audit like an interactive turn |
 | **The kernel owns state, surfaces attach** | The CLI, the web and phones are terminals on one control plane; closing a laptop changes nothing |
 
+> **Note:** an agent your own program runs on each event of a cron schedule, a file change or
+> a webhook — with no process table, approvals inbox or control plane — is an
+> [ambient agent](../agents/ambient-agents.md#ambient-agent-or-the-agent-kernel).
+> [Build an autonomous agent](../autonomy/index.md) compares the mechanisms for running an
+> agent unattended.
+
 ## What `adk-rust up` runs
 
 `up` builds what [`adk-rust serve`](../harness/serving.md) builds — the approval inbox with
@@ -224,6 +230,11 @@ not forward `ApprovalService::route_unrouted` and `add_notifier`, is named in th
 
 - [Kernel commands](cli.md): `up`, `attach`, `ps`, `top`, `kill`, `suspend`, `resume`,
   `freeze`, `unfreeze`, `events`, and `goal` on a running kernel
+- [Scheduling, attention and resources](scheduling.md): priority queues, quotas per
+  partition, preemption, quiet hours, cost-aware admission, and how a cron wake's
+  `MissedFirePolicy` treats occurrences missed while the kernel was down
+- [Proactivity: the agenda](proactivity.md): follow-ups an agent proposes with
+  `propose_followup`, who approves them, the proactive budget and the daily review
 - [The control plane](control-plane.md): transports, authentication, routes and audit records
 - [The event bus and outbound webhooks](events.md): event types, sinks, and `WebhookSink`'s
   signed deliveries, retries and dead letters

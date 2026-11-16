@@ -85,9 +85,12 @@ The always-on form of the harness (`adk-kernel`, spec 3.2): durable processes th
 
 - [Overview](kernel/index.md) - What `adk-rust up` runs: workers per queue, the process table, the event bus, freezing, using the kernel from code
 - [Kernel Commands](kernel/cli.md) - `up`, `attach`, `ps`, `top`, `kill`, `suspend`, `resume`, `freeze`, `unfreeze`, `events`, `goal` on a running kernel, `[kernel]` in `harness.toml`
+- [Scheduling, Attention and Resources](kernel/scheduling.md) - Priority queues, quotas per partition, preemption, quiet hours, cost-aware admission, and `MissedFirePolicy` for cron occurrences missed while no kernel ran
+- [Proactivity: the Agenda](kernel/proactivity.md) - Follow-ups proposed with `propose_followup`, approval per mode under `ProactivityPolicy`, limits, the daily review, the agenda over the control plane
 - [The Control Plane](kernel/control-plane.md) - The socket, named-pipe and HTTP transports, the auth matrix, routes, `kernel.control` audit records, `ControlClient`
 - [The Event Bus and Outbound Webhooks](kernel/events.md) - Event types, subscribers and sinks, `WebhookSink`: Standard Webhooks signatures, event filters, bounded retry, dead letters, back-pressure that never blocks a process
 - [Pairing Devices and Chat Channels](kernel/pairing.md) - `adk-rust pair`, scoped and revocable device tokens stored hashed, the chat channel gateway and its adapter contract suite
+- [Settings, While You Were Away, Memory and Record](kernel/today-and-memory.md) - The control-plane routes behind the web home's Today and Agent Memory and Rules screens: quiet time, the daily spending limit and the mode per partition, the digest with a cursor per device, memory and record
 - [Drivers](kernel/drivers.md) - MCP servers the kernel supervises under approved manifests: effect classes, the OS sandbox, brokered secrets, re-approval of changed tools, parked calls across a restart
 - [Driver classes](kernel/driver-classes.md) - DNS and registrar, email, analytics and search console, social and advertising drivers: their tools, manifests for any MCP server, autonomy caps, outbound rules and reference adapters
 - [Running the Kernel as a Service](kernel/service.md) - `adk-rust up --install`, `--uninstall` and `--print`: a launchd agent, a systemd user unit or a Windows service that runs as you

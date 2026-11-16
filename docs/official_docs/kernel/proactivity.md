@@ -35,7 +35,8 @@ With the `kernel` feature, the harness declares one more tool:
 ```
 
 It is class `Todo`, so every mode allows it, and its only effect is an agenda item in state
-`proposed`. `when` is any wake the kernel knows — `{"at": …}`, `{"cron": {…}}`,
+`proposed`. `when` is any wake the kernel knows — `{"at": …}`,
+`{"cron": {"expr": …, "missed": "skip"}}` ([missed occurrences](scheduling.md#cron-wakes-and-missed-occurrences)),
 `{"fileChange": {…}}`, `{"runFinished": {"pid": …}}` — and is optional. The follow-up's
 session starts in the proposing session's mode, so its process never runs above the mode of
 the run that proposed it (K-I7). Without a kernel hosting the harness, the tool answers that

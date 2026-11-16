@@ -292,7 +292,8 @@ fn tenant(stores: ManagedStores) -> adk_kernel::Result<TenantKernel> {
 Each cron expression of a tenant's wake sets has one cron source, which keeps its cursor in the
 tenant's own `CronWatermarkStore` (`TenantKernelBuilder::watermark_store` or `stores`; in memory by
 default, which keeps nothing across a restart). When a replica of the tenant starts after an outage, the
-ticks no replica watched fire once each, as the wake set's `missed` policy picks them (spec 3.2
+ticks no replica watched fire once each, as the wake set's `missed` policy, a
+[`MissedFirePolicy`](scheduling.md#cron-wakes-and-missed-occurrences), picks them (spec 3.2
 §7.4):
 
 | `missed` | Missed ticks that fire |

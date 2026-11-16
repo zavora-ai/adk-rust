@@ -251,12 +251,15 @@ adk-rust = "3.0.0"
 # auth, server, eval, guardrail, plugin, artifacts, tools, memory, telemetry, computer-use
 adk-rust = { version = "3.0.0", features = ["standard"] }
 
-# Enterprise — standard + realtime, browser, rag, payments, awp
+# Enterprise — standard + realtime, browser, rag, payments, awp, and autonomy: the
+# harness, its kernel, durable and background runs, approvals and signed audit
 adk-rust = { version = "3.0.0", features = ["enterprise"] }
 
-# Full — enterprise + audio, code, sandbox, code-tools, the harness and its kernel, the AWP
-# website, and the graph-functional, graph-node-cache, graph-delta, and graph-time-travel
-# capabilities
+# Autonomy alone — an agent that runs unattended, on any tier
+adk-rust = { version = "3.0.0", features = ["minimal", "anthropic", "autonomy", "cli"] }
+
+# Full — enterprise + audio, code, sandbox, code-tools, the AWP website, and the
+# graph-functional, graph-node-cache, graph-delta, and graph-time-travel capabilities
 adk-rust = { version = "3.0.0", features = ["full"] }
 
 # Gemini Enterprise Agent Platform — every Vertex/EAP integration except realtime

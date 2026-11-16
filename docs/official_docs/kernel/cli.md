@@ -394,7 +394,8 @@ occurrence across replicas) and, when a run completes or fails, starts its succe
 with the finished run as its parent; `adk-rust kill` on the sleeper ends the series. The
 expression's cursor is kept in `harness.db` (or the `--store` backend), so after the kernel was
 down it fires the missed occurrence once if it is no more than a minute late, the sleeper's
-`skip` policy, and never one that already fired. A new series replays nothing from before it
+`skip` policy ([missed occurrences](scheduling.md#cron-wakes-and-missed-occurrences)), and
+never one that already fired. A new series replays nothing from before it
 began.
 
 The woken turn reads why it woke, after its task: the source, the event's key, the time and

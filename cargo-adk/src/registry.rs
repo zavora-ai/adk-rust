@@ -700,47 +700,52 @@ pub async fn greet(args: GreetArgs) -> std::result::Result<Value, AdkError> {
             description: "Governed harness agent: modes, approvals, shell, todos, AGENTS.md and skills, at the console or served",
             category: TemplateCategory::AgentType,
             default_provider: "gemini",
-            required_features: vec!["minimal", "harness", "cli"],
+            required_features: vec!["minimal", "autonomy", "cli"],
             // The launcher serves the harness itself (`cargo run -- serve`). A container
             // would serve it beyond loopback, which the launcher refuses without an
             // authenticating extractor, so `docker` is left out until it can pass one.
             incompatible_addons: vec!["server", "docker"],
-            additional_deps: vec![
-                DependencySpec {
-                    crate_name: "adk-session",
-                    version: ADK_VERSION,
-                    features: vec!["sqlite"],
-                },
-                DependencySpec {
-                    crate_name: "adk-devtools",
-                    version: ADK_VERSION,
-                    features: vec![],
-                },
-            ],
+            additional_deps: vec![],
             code_fragments: AgentCodeFragments {
                 // `Arc` and `HarnessAgent` come from the prelude.
                 imports: vec![
-                    "use adk_rust::harness::{ConsoleIo, ConsolePrompter, HarnessConfig, HarnessLauncher};",
-                    "use adk_session::SqliteSessionService;",
+                    "use adk_rust::StoreApprovalService;",
+                    "use adk_rust::harness::{",
+                    "    ConsoleIo, ConsolePrompter, HarnessConfig, HarnessLauncher, SqliteStandingRuleStore, Workspace,",
+                    "};",
+                    "use adk_rust::kernel::stores::KernelStores;",
+                    "use adk_rust::session::SqliteSessionService;",
                 ],
-                agent_construction: r#"// Conversations survive restarts in .adk/state.db.
+                agent_construction: r#"// Conversations, held calls and their decisions, the action ledger, standing rules and
+    // the kernel's processes, schedules and kill switch survive restarts in .adk/state.db.
     let sessions = Arc::new(SqliteSessionService::new("sqlite://.adk/state.db?mode=rwc").await?);
     sessions.migrate().await?;
+    let stores = KernelStores::from_sqlite_pool(sessions.pool().clone()).await?;
+    let rules = Arc::new(SqliteStandingRuleStore::new(sessions.pool().clone()));
+    rules.migrate().await?;
+    let approvals = Arc::new(
+        StoreApprovalService::new(stores.approvals.clone()).with_run_store(stores.runs.clone()),
+    );
 
     // One terminal reader serves the REPL and the approval prompts.
     let console = ConsoleIo::terminal()?;
     let harness = HarnessAgent::builder("{name}")
         .model(Arc::new(model))
-        .workspace(adk_devtools::Workspace::new(".").allow_bash(true))
+        .workspace(Workspace::new(".").allow_bash(true))
         .prompter(Arc::new(ConsolePrompter::new(console.clone())))
+        .approval_service(approvals)
+        .action_ledger(stores.actions.clone())
+        .standing_rules(rules)
         .config(HarnessConfig::discover(".")?) // .adk/harness.toml
         .build()?;
 
     // `cargo run` is the REPL; `cargo run -- serve` serves the harness on 127.0.0.1:8080;
-    // `cargo run -- up` runs it as the agent kernel there.
+    // `cargo run -- up` runs it as the agent kernel there, with its home under your config
+    // directory; `cargo run -- goal "…" --until "…"` works toward a goal.
     HarnessLauncher::new(harness)
         .with_session_service(sessions)
         .with_console(console)
+        .with_kernel_stores(stores)
         .run()
         .await?;"#,
                 additional_files: vec![
@@ -757,6 +762,8 @@ pub async fn greet(args: GreetArgs) -> std::result::Result<Value, AdkError> {
                 ],
             },
         },
+        // An agent that runs unattended on the agent kernel (docs/official_docs/autonomy).
+        crate::autonomous_template::template(),
         // An AWP 2.0 website project (spec 3.5 §7.17, §8.2).
         crate::website_template::template(),
     ]
@@ -831,7 +838,7 @@ const HARNESS_SMOKE_TEST: &str = r##"//! The harness refuses a write in Plan mod
 use std::sync::Arc;
 
 use adk_rust::futures::StreamExt;
-use adk_rust::harness::{HarnessAgent, HarnessMode, InstructionsConfig};
+use adk_rust::harness::{HarnessAgent, HarnessMode, InstructionsConfig, Workspace};
 use adk_rust::model::{ScriptedLlm, ScriptedResponse};
 use adk_rust::serde_json::json;
 use adk_rust::session::InMemorySessionService;
@@ -853,7 +860,7 @@ async fn plan_mode_refuses_a_scripted_write() -> anyhow::Result<()> {
     );
     let harness = HarnessAgent::builder("{name}")
         .model(Arc::new(model))
-        .workspace(adk_devtools::Workspace::new(&dir))
+        .workspace(Workspace::new(&dir))
         .project_instructions(InstructionsConfig { user_file: None, ..InstructionsConfig::default() })
         .mode(HarnessMode::Plan)
         .build()?
@@ -887,7 +894,7 @@ const HARNESS_GITIGNORE: &str = r##"/target
 *.swo
 *~
 .DS_Store
-# Sessions of the harness (src/main.rs)
+# Sessions and durable state of the harness (src/main.rs)
 .adk/state.db*
 "##;
 
@@ -957,9 +964,20 @@ cargo run -- up --port 8080
 runs the harness as the agent kernel (spec 3.2): each turn a durable process the kernel's
 workers run, a control plane on a socket under your config directory and on
 `127.0.0.1:8080/api/kernel`, and `POST /api/admin/freeze` parking what runs. Processes,
-schedules and the kill switch are kept in memory here; `adk-rust up` keeps them in
-`harness.db`. Reach the kernel with `adk-rust ps --server http://127.0.0.1:8080` and the
-other kernel commands.
+schedules, held calls, the action ledger and the kill switch are kept in `.adk/state.db`, so
+they survive a restart. Reach the kernel with `adk-rust ps --server http://127.0.0.1:8080` and
+the other kernel commands.
+
+## Goals
+
+```bash
+cargo run -- goal "make the tests pass" --until "cargo test"
+```
+
+works toward the goal until the check exits 0: on the kernel when `cargo run -- up` runs,
+else in this terminal. `--mode auto`, `--sandbox`, `--yes` and `--resume` work as they do for
+`adk-rust goal`. [Build an autonomous agent](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/autonomy/index.md)
+covers running unattended.
 
 ## Resources
 
@@ -1553,15 +1571,15 @@ mod tests {
         let registry = TemplateRegistry::builtin();
         let template = registry.resolve_template("harness").expect("harness template registered");
 
-        assert_eq!(template.required_features, vec!["minimal", "harness", "cli"]);
+        // `autonomy` brings the SQLite stores, the kernel and `Workspace` through `adk-rust`.
+        assert_eq!(template.required_features, vec!["minimal", "autonomy", "cli"]);
         // The launcher serves the harness; a container cannot authenticate it yet.
         assert_eq!(template.incompatible_addons, vec!["server", "docker"]);
-        let deps: Vec<(&str, Vec<&str>)> = template
-            .additional_deps
-            .iter()
-            .map(|dep| (dep.crate_name, dep.features.clone()))
-            .collect();
-        assert_eq!(deps, vec![("adk-session", vec!["sqlite"]), ("adk-devtools", vec![])]);
+        assert!(template.additional_deps.is_empty());
+        // The kernel `up` runs keeps its state in .adk/state.db, not in memory (G-05).
+        let main = template.code_fragments.agent_construction;
+        assert!(main.contains(".with_kernel_stores(stores)"), "{main}");
+        assert!(!main.contains("InMemory"), "{main}");
 
         let paths: Vec<&str> =
             template.code_fragments.additional_files.iter().map(|f| f.path).collect();
@@ -1584,6 +1602,57 @@ mod tests {
         assert_eq!(config["mode"].as_str(), Some("ask"));
         // The skill has the frontmatter `adk-rust skills validate` requires.
         assert!(HARNESS_EXAMPLE_SKILL.starts_with("---\nname: example\ndescription: "));
+    }
+
+    #[test]
+    fn autonomous_template_runs_on_durable_stores_with_a_gated_side_effect() {
+        let registry = TemplateRegistry::builtin();
+        let template =
+            registry.resolve_template("autonomous").expect("autonomous template registered");
+
+        assert_eq!(template.required_features, vec!["minimal", "autonomy", "cli"]);
+        assert_eq!(template.incompatible_addons, vec!["server", "docker"]);
+        assert!(template.additional_deps.is_empty());
+        let main = template.code_fragments.agent_construction;
+        for wiring in [
+            "KernelStores::from_sqlite_pool",
+            ".approval_service(approvals)",
+            ".action_ledger(stores.actions.clone())",
+            ".standing_rules(rules)",
+            ".goal_store(goals)",
+            ".spend_ledger(stores.spend.clone())",
+            ".budget(RunBudget::new()",
+            ".audit_log(",
+            "Wake::Cron",
+            ".with_daily_spend_cap(",
+            ".with_kernel_stores(stores)",
+            ".with_trigger(",
+        ] {
+            assert!(main.contains(wiring), "src/main.rs lacks {wiring}");
+        }
+        assert!(!main.contains("InMemory"), "{main}");
+
+        let paths: Vec<&str> =
+            template.code_fragments.additional_files.iter().map(|f| f.path).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "src/publish.rs",
+                "src/audit.rs",
+                ".adk/harness.toml",
+                "notes/example.md",
+                ".gitignore",
+                "README.md",
+            ]
+        );
+        let config: toml::Value = template.code_fragments.additional_files[2]
+            .content
+            .parse()
+            .expect(".adk/harness.toml parses");
+        assert_eq!(config["sandbox"].as_bool(), Some(true));
+        // The side effect is a governed external tool whose repeat a crash must not cause.
+        let publish = template.code_fragments.additional_files[0].content;
+        assert!(publish.contains("ToolEffect::NonIdempotent"));
     }
 
     #[test]

@@ -239,7 +239,8 @@ pub fn generate_main_rs_with_registry(
     // When nothing serves (no server addon, template doesn't start its own
     // server), run the agent in the interactive console so `cargo run` does
     // something useful out of the box.
-    const SELF_SERVING_TEMPLATES: &[&str] = &["api", "agent-engine", "realtime", "harness"];
+    const SELF_SERVING_TEMPLATES: &[&str] =
+        &["api", "agent-engine", "realtime", "harness", "autonomous"];
     let has_server_addon = manifest.addons.iter().any(|a| a == "server");
     let interactive =
         !has_server_addon && !SELF_SERVING_TEMPLATES.contains(&manifest.template_name.as_str());

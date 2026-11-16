@@ -5,6 +5,7 @@
 //! Composition Pipeline, and Interactive Wizard for `cargo adk new`.
 
 pub mod addon;
+pub mod autonomous_template;
 pub mod cli;
 pub mod codegen;
 pub mod composition;
