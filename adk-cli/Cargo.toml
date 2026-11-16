@@ -15,7 +15,9 @@ readme = "README.md"
 exclude = ["tests/"]
 
 [package.metadata.docs.rs]
-all-features = true
+# The library's public modules need only the default features and `optimize`; the other
+# features change the binary, and `mistralrs` alone adds about 180 crates (mistral.rs, candle).
+features = ["optimize"]
 
 [lib]
 name = "adk_cli"

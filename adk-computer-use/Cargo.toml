@@ -8,6 +8,7 @@ authors.workspace = true
 description = "ADK-Rust graph, auth, and wire contracts for computer-use-mcp"
 homepage.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/adk-computer-use"
 keywords = ["ai", "agent", "computer-use", "mcp", "automation"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"

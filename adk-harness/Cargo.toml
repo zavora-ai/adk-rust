@@ -228,4 +228,10 @@ name = "integration"
 path = "tests/integration.rs"
 
 [package.metadata.docs.rs]
-all-features = true
+# Every feature but two: `memory-embeddings-local` builds ONNX Runtime and the tokenizers C
+# libraries and is documented on adk-rag (`onnx`), and `web-fixture` is a test fixture.
+features = ["acp-server", "ambient", "auth", "browser", "computer-use", "docker", "encrypted",
+    "firestore", "graph", "hooks", "kernel", "managed", "mcp", "memory", "memory-embeddings",
+    "memory-graph", "mongodb", "neo4j", "observe", "payments", "postgres", "redis", "runner",
+    "sandbox", "skills", "skills-registry", "sqlite", "team", "team-a2a", "team-acp", "voice",
+    "web", "website"]
