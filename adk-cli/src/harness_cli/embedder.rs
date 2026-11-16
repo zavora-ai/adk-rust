@@ -179,4 +179,17 @@ mod tests {
             );
         }
     }
+
+    /// The default build leaves the ONNX runtime out, so it builds offline: the local model
+    /// chosen by default falls back to lexical recall, and chosen explicitly it names the
+    /// feature to reinstall with.
+    #[cfg(not(feature = "memory-local"))]
+    #[test]
+    fn without_memory_local_the_local_embedder_falls_back_or_names_the_feature() {
+        assert!(matches!(local(false), Ok(None)), "an implicit choice falls back to lexical");
+        match local(true) {
+            Err(error) => assert!(error.to_string().contains("--features memory-local"), "{error}"),
+            Ok(_) => panic!("an explicit --embedder local must be refused without the feature"),
+        }
+    }
 }
