@@ -497,8 +497,8 @@ return 'ok'
 "#;
 
 /// ARGV: run id, epoch, now (µs), outcome (`completed`, `failed`, `cancelled`), result
-/// JSON or error text, retryable flag. Returns `{'missing'}`, `{'stale'}`, or
-/// `{'ok', fields}`.
+/// JSON or error text, retryable flag, the end of a retry's backoff (µs) or ''. Returns
+/// `{'missing'}`, `{'stale'}`, or `{'ok', fields}`.
 const RUN_FINISH_BODY: &str = r#"
 local id, now, kind = ARGV[1], ARGV[3], ARGV[4]
 local key = run_key(id)
@@ -521,7 +521,10 @@ redis.call('HSET', key, 'state', state, 'wake_pending', '0')
 redis.call('HDEL', key, 'lease_owner', 'lease_expires')
 bump(key, now)
 redis.call('ZREM', PFX .. 'timers:' .. h[4], id)
-if state == 'queued' then
+if state == 'queued' and ARGV[7] ~= '' then
+  redis.call('HSET', key, 'not_before', ARGV[7])
+  redis.call('ZADD', PFX .. 'timers:' .. h[4], ARGV[7], id)
+elseif state == 'queued' then
   redis.call('ZADD', PFX .. 'ready:' .. h[4], h[5], id)
 else
   settle(id, key, now)
@@ -918,6 +921,8 @@ impl DurableRunStore for RedisRunStore {
     }
 
     async fn finish(&self, run_id: &str, epoch: u64, outcome: RunOutcome) -> Result<RunRecord> {
+        let now = self.now();
+        let mut retry_at = None;
         let (kind, payload, retryable) = match outcome {
             RunOutcome::Completed(result) => (
                 "completed",
@@ -925,16 +930,20 @@ impl DurableRunStore for RedisRunStore {
                     .map_err(|e| run_error(format!("result serialize failed: {e}")))?,
                 false,
             ),
-            RunOutcome::Failed { error, retryable } => ("failed", error, retryable),
+            RunOutcome::Failed { error, retryable, backoff } => {
+                retry_at = backoff.map(|backoff| micros(stored_now(now + backoff)));
+                ("failed", error, retryable)
+            }
             RunOutcome::Cancelled => ("cancelled", String::new(), false),
         };
         let args = vec![
             run_id.to_string(),
             epoch.to_string(),
-            micros(self.now()),
+            micros(now),
             kind.to_string(),
             payload,
             if retryable { "1" } else { "0" }.to_string(),
+            retry_at.unwrap_or_default(),
         ];
         let (status, fields) =
             status_reply(self.eval(&RUN_SCRIPTS.finish, args).await?, RUN_STORAGE)?;

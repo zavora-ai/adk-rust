@@ -7,6 +7,7 @@ import { Avatar } from "../components/Avatar";
 import { visible } from "../safe";
 import type { Values } from "./bindings";
 import { firstFailure } from "./bindings";
+import { ChartView } from "./ChartView";
 import { fieldsOf, initialValues } from "./store";
 import "./genui.css";
 
@@ -15,6 +16,30 @@ export const SHOWN_ROWS = 10;
 
 /** What sending a form asks of the page: the action and the values, by data path. */
 export type SendForm = (actionId: string, values: Values) => Promise<void>;
+
+/**
+ * What a host renderer of an extension component gets (spec 3.3 §6.1 `genui`, extension
+ * catalogs): the node, the component's properties as the server resolved and checked them, the
+ * nodes its slots hold, and a way to draw one as the home does. It gets no way to send or to
+ * change a value: an extension component only shows, and the fields and buttons it holds are
+ * drawn by the home's own code through `renderChild`.
+ */
+export interface ExtensionRendererProps {
+  /** The extension component's node; its one child is what the home shows for it. */
+  node: DrawnNode;
+  /** Its properties, resolved and checked on the server. Draw from these and nothing else. */
+  props: Record<string, unknown>;
+  /** The nodes its slots hold, in slot order. */
+  children: DrawnNode[];
+  /** Draws a held node as the home draws it, its fields and buttons included. */
+  renderChild: (node: DrawnNode) => ReactNode;
+}
+
+/** A host's renderer of one extension component. */
+export type ExtensionRenderer = (props: ExtensionRendererProps) => ReactNode;
+
+/** Host renderers by catalog id, then component type. */
+export type ExtensionRenderers = Record<string, Record<string, ExtensionRenderer>>;
 
 /**
  * Something an agent drew (spec 3.3 §6.1 `genui`, §7.4 rule 5): a form, card, table or screen
@@ -33,6 +58,7 @@ export function DrawnView({
   onSend,
   below,
   sent,
+  renderers,
 }: {
   surface: DrawnSurface;
   /** A newer version replaces this one: it is drawn collapsed under "Earlier version · 10:02". */
@@ -47,6 +73,11 @@ export function DrawnView({
   below?: ReactNode;
   /** The call its Send asked for, as the decision shows it: the values the person sent. */
   sent?: { actionId: string; args: Record<string, unknown> };
+  /**
+   * A host's renderers of extension components; a component without one is drawn as the home
+   * draws it. The web home sets none.
+   */
+  renderers?: ExtensionRenderers;
 }) {
   if (surface.deleted) {
     return <p className="drawn-changed">{visible(surface.changedText)}</p>;
@@ -55,14 +86,14 @@ export function DrawnView({
     return (
       <details className="drawn-earlier">
         <summary>{visible(surface.earlierText)}</summary>
-        <DrawnCard surface={surface} state={state} readOnly />
+        <DrawnCard surface={surface} state={state} renderers={renderers} readOnly />
       </details>
     );
   }
   return (
     <div className="drawn-place">
       {changed && <p className="drawn-changed">{visible(surface.changedText)}</p>}
-      <DrawnCard surface={surface} state={state} onSend={onSend} sent={sent} />
+      <DrawnCard surface={surface} state={state} onSend={onSend} sent={sent} renderers={renderers} />
       {below}
     </div>
   );
@@ -73,12 +104,14 @@ function DrawnCard({
   state,
   onSend,
   sent,
+  renderers,
   readOnly = false,
 }: {
   surface: DrawnSurface;
   state?: FormState;
   onSend?: SendForm;
   sent?: { actionId: string; args: Record<string, unknown> };
+  renderers?: ExtensionRenderers;
   readOnly?: boolean;
 }) {
   const [typedHere, setValues] = useState<Values>(() => initialValues(surface.root));
@@ -142,7 +175,7 @@ function DrawnCard({
   const refused = state?.status === "refused";
   const failing = Object.keys(errors).length > 0;
   const inline = refused ? state?.text : touched && !sending && !failing && !problem ? NOT_SENT_YET : undefined;
-  const context: RenderContext = { values, errors, locked, sending, change, send, surface, inline };
+  const context: RenderContext = { values, errors, locked, sending, change, send, surface, inline, renderers };
   return (
     <section className="drawn" aria-label={surface.title ?? surface.drawnText}>
       <header className="drawn-by">
@@ -229,6 +262,8 @@ interface RenderContext {
   surface: DrawnSurface;
   /** Beside the buttons: "Not sent yet", or why the agent cannot use the tool. */
   inline?: string;
+  /** A host's renderers of extension components. */
+  renderers?: ExtensionRenderers;
 }
 
 /** Numbers, dates and codes such as `[CLIENT]` read in mono (spec 3.3 §9). */
@@ -253,7 +288,39 @@ function asTable(nodes: DrawnNode[], at: number): { header: DrawnNode; list: Dra
   return rows.every((row) => row.component === "Row") ? { header, list } : undefined;
 }
 
+/** The node keyed `key` in `nodes` or below them. */
+function byKey(nodes: DrawnNode[], key: string): DrawnNode | undefined {
+  for (const node of nodes) {
+    if (node.key === key) return node;
+    const found = byKey(node.children ?? [], key);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/** An extension component: the host's renderer of it, or what the home shows for it. */
+function ExtensionNode({ node, context, root }: { node: DrawnNode; context: RenderContext; root: boolean }) {
+  const extension = node.extension;
+  const renderer = extension ? context.renderers?.[extension.catalog]?.[extension.component] : undefined;
+  const view = node.children ?? [];
+  if (extension && renderer) {
+    const held = (extension.children ?? []).flatMap((key) => {
+      const found = byKey(view, key);
+      return found ? [found] : [];
+    });
+    const props = extension.props && typeof extension.props === "object" ? (extension.props as Record<string, unknown>) : {};
+    return (
+      <div className="drawn-extension" data-component={extension.component}>
+        {renderer({ node, props, children: held, renderChild: (child) => render(child, context) })}
+      </div>
+    );
+  }
+  return <>{view.map((child) => render(child, context, root))}</>;
+}
+
 function render(node: DrawnNode, context: RenderContext, root = false): ReactNode {
+  if (node.extension) return <ExtensionNode key={node.key} node={node} context={context} root={root} />;
+  if (node.chart) return <ChartView key={node.key} chart={node.chart} />;
   switch (node.component) {
     case "Text":
       return <DrawnText key={node.key} node={node} />;

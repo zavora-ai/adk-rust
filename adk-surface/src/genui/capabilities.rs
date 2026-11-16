@@ -5,7 +5,7 @@
 use super::capabilities_wire::{
     CatalogView, Claim, ClaimScope, ClaimStatus, GenuiCapabilities, ProtocolClaims,
 };
-use super::catalog::Catalog;
+use super::catalog::{Catalog, Catalogs, LEFT_OUT};
 
 /// The note of a claim this build supports that the server did not wire.
 const NOT_WIRED: &str = "Not set on this server";
@@ -59,9 +59,6 @@ fn mcp_apps(mounted: bool) -> Vec<Claim> {
     ]
 }
 
-/// The upstream basic catalog's components `forms` 1.0 leaves out.
-const LEFT_OUT: &[&str] = &["Image", "Icon", "Modal", "Video", "AudioPlayer"];
-
 fn claim(id: &str, label: &str, status: ClaimStatus, scope: ClaimScope) -> Claim {
     Claim { id: id.to_string(), label: label.to_string(), status, scope, note: None }
 }
@@ -101,11 +98,24 @@ pub fn capabilities() -> GenuiCapabilities {
 /// assert_eq!(ag_ui(wired), ClaimStatus::Supported);
 /// ```
 pub fn capabilities_wired(wiring: GenuiWiring) -> GenuiCapabilities {
+    capabilities_with(wiring, &Catalogs::forms())
+}
+
+/// What this home claims with `wiring`, showing drawings in `catalogs`: `forms` and every
+/// extension catalog the engine registers (spec 3.3 §6.1 `genui`, extension catalogs).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::genui::{Catalogs, GenuiWiring, capabilities_with};
+///
+/// let claims = capabilities_with(GenuiWiring::default(), &Catalogs::forms());
+/// assert_eq!(claims.catalogs.len(), 1);
+/// assert_eq!(claims.catalogs[0].left_out, ["Image", "Icon", "Modal", "Video", "AudioPlayer"]);
+/// ```
+pub fn capabilities_with(wiring: GenuiWiring, catalogs: &Catalogs) -> GenuiCapabilities {
     use ClaimScope::{Runtime, Security, Transport};
     use ClaimStatus::{Candidate, Supported};
-    let forms = Catalog::forms();
-    let mut components: Vec<String> = forms.components().map(str::to_string).collect();
-    components.sort();
     GenuiCapabilities {
         protocols: vec![
             ProtocolClaims {
@@ -153,12 +163,20 @@ pub fn capabilities_wired(wiring: GenuiWiring) -> GenuiCapabilities {
                 claims: mcp_apps(wiring.mcp_apps),
             },
         ],
-        catalogs: vec![CatalogView {
-            id: forms.id().to_string(),
-            label: forms.label(),
-            components,
-            left_out: LEFT_OUT.iter().map(|name| (*name).to_string()).collect(),
-        }],
+        catalogs: catalogs.iter().map(catalog_view).collect(),
+    }
+}
+
+/// What the developer panel shows of `catalog`: every component it renders, and what the
+/// upstream basic catalog has that it leaves out, which an extension never brings back.
+fn catalog_view(catalog: &Catalog) -> CatalogView {
+    let mut components: Vec<String> = catalog.components().map(str::to_string).collect();
+    components.sort();
+    CatalogView {
+        id: catalog.id().to_string(),
+        label: catalog.label(),
+        components,
+        left_out: LEFT_OUT.iter().map(|name| (*name).to_string()).collect(),
     }
 }
 

@@ -95,6 +95,10 @@ pub(crate) struct Projector {
     /// The engine's cancel window for a spoken "allow once", in whole seconds, which a voice
     /// card advertises.
     pub(crate) voice_window_secs: u32,
+    /// The catalogs drawings are shown in: `forms` and every registered extension catalog
+    /// (spec 3.3 §6.1 `genui`).
+    #[cfg(feature = "genui")]
+    pub(crate) catalogs: crate::genui::Catalogs,
 }
 
 impl fmt::Debug for Projector {
@@ -119,6 +123,8 @@ impl Projector {
             rates_high: Arc::new(|_| false),
             reversibility: Arc::new(reversibility),
             voice_window_secs: rules::VOICE_CANCEL_WINDOW_SECS,
+            #[cfg(feature = "genui")]
+            catalogs: crate::genui::Catalogs::forms(),
         }
     }
 

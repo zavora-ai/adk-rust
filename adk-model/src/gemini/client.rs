@@ -670,8 +670,9 @@ impl GeminiModel {
 
     /// Create an API-key model with explicit connect and byte-idle timeouts.
     ///
-    /// Existing constructors keep the standalone SDK's defaults. This constructor
-    /// uses the same SDK builder and adds no response-level or total-request timer.
+    /// The other API-key constructors apply [`HttpTimeouts::default`](crate::HttpTimeouts),
+    /// the SDK's own defaults. This constructor uses the same SDK builder and adds no
+    /// response-level or total-request timer.
     ///
     /// # Example
     ///
