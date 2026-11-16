@@ -8,7 +8,7 @@ description = "Server and A2A exposure: loopback bind, cross-origin and DNS-rebi
 [workspace]
 
 [dependencies]
-a2a-protocol-types = "0.12.1"
+a2a-protocol-types = "0.15"
 adk-agent = { path = "../../adk-agent" }
 adk-cli = { path = "../../adk-cli", default-features = false, features = ["gemini"] }
 adk-core = { path = "../../adk-core" }
