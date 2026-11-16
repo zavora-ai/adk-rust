@@ -1044,9 +1044,9 @@ pub mod yaml_agent {
 /// - [`InMemoryAgentRegistryStore`](server::registry::InMemoryAgentRegistryStore) - In-memory storage
 /// - [`registry_router`](server::registry::registry_router) - Axum router for registry endpoints
 ///
-/// Available with feature: `agent-registry`
-#[cfg(feature = "agent-registry")]
-#[cfg_attr(docsrs, doc(cfg(feature = "agent-registry")))]
+/// Available with feature: `server`
+#[cfg(feature = "server")]
+#[cfg_attr(docsrs, doc(cfg(feature = "server")))]
 pub mod registry {
     pub use adk_server::registry::*;
 }
@@ -1115,9 +1115,9 @@ pub mod spanner {
 /// - [`UserSimulator`](eval::personas::UserSimulator) - Generate persona-driven messages
 /// - [`PersonaRegistry`](eval::personas::PersonaRegistry) - Load personas from directory
 ///
-/// Available with feature: `personas`
-#[cfg(feature = "personas")]
-#[cfg_attr(docsrs, doc(cfg(feature = "personas")))]
+/// Available with feature: `eval`
+#[cfg(feature = "eval")]
+#[cfg_attr(docsrs, doc(cfg(feature = "eval")))]
 pub mod personas {
     pub use adk_eval::personas::*;
 }

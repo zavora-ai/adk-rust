@@ -1,7 +1,7 @@
 # The `adk-rust` feature surface
 
 `adk-rust` is both a re-export facade and a dependency menu. Every new capability
-arrives as a new top-level feature, so the menu has grown to **157 features**
+arrives as a new top-level feature, so the menu has grown to **149 features**
 across 44 crates. This records what the surface currently is, which parts of it
 are load-bearing, and the rule that keeps it from growing further.
 
@@ -24,14 +24,9 @@ everyone.
 
 | Bucket | Count | Disposition |
 |---|---:|---|
-| Advertised | 101 | What the docs tell users to write. Unchanged. |
-| Unadvertised members | 41 | Keep working and keep their feature key. Folded into a bundle; documented as reachable through it. |
-| Deprecated no-ops | 19 | Kept for semver, scheduled for removal at the next major. |
-| **Total** | **157** | |
-
-The four ONNX checkpoint features (`whisper-onnx`, `distil-whisper`, `moonshine`,
-`chatterbox`) are both unadvertised members of `audio-onnx` and deprecated, so the rows
-sum to four more than the total.
+| Features | 149 | What `--report` lists by axis. Unadvertised members of a bundle keep working and keep their feature key. |
+| Deprecated no-ops | 0 | The 19 aliases were folded into their siblings in 3.0.0; see [below](#the-19-aliases-removed-in-300). |
+| **Total** | **149** | |
 
 Nothing is removed in a minor release. `STABILITY.md` (Deprecation Policy)
 requires an `#[deprecated]` announcement and an N+2 minor grace period before a
@@ -53,39 +48,43 @@ achievable reduction is the advertised surface, not the feature count.
 | Axis | Members | Bundle | Note |
 |---|---:|---|---|
 | tier | 7 | — | `minimal` (default), `standard`, `enterprise`, `full`, `gemini-agent-platform{,-full}` |
-| capability | 45 | — | `agents`, `models`, `tools`, `server`, `runner`, `eval`, … |
-| choose-one | 24 | — | providers, database backends, realtime transports; `mistralrs` links `adk-mistralrs`, in-process local inference (spec 3.1 §8.4) |
-| cli | 4 | `cli` | 2 more collapse, 2 stay; `cli-mistralrs` links `adk-mistralrs` through the CLI (spec 3.1 §8.1) |
-| action | 3 | `action` / `action-full` | 5 collapse into `action-full` |
-| media | 2 | `audio` / `audio-onnx` | 9 demoted |
-| graph | 1 | `graph` | 6 demoted to members |
-| mcp | 1 | `mcp` / `mcp-http` | 2 demoted |
-| harness | 1 | `harness` | the `harness-*` packs and add-ons are members (spec 3.1 §8.4); `harness-encrypted` links `adk-session`'s envelope and the OS keychain, `harness-memory-local` links the `ort` runtime (spec 3.1 §7.12, §7.15.2); `harness-kernel` links `adk-kernel`, the agent kernel (spec 3.2 §8.2) |
+| capability | 54 | — | `agents`, `models`, `tools`, `server`, `runner`, `eval`, … |
+| choose-one | 26 | — | providers, database backends, realtime transports; `mistralrs` links `adk-mistralrs`, in-process local inference (spec 3.1 §8.4) |
+| cli | 7 | `cli` | `cli` compiles DeepSeek and Groq, which share its reqwest stack; `cli-mistralrs` links `adk-mistralrs` through the CLI (spec 3.1 §8.1) |
+| action | 4 | `action` / `action-full` | `action` includes the database and email placeholders, `action-http` the RSS node |
+| media | 10 | `audio` / `audio-onnx` | `audio-onnx` compiles every ONNX speech model on one `ort` runtime |
+| graph | 12 | `graph` | 6 demoted to members |
+| mcp | 3 | `mcp` / `mcp-http` | 2 demoted |
+| harness | 12 | `harness` | the `harness-*` packs and add-ons are members (spec 3.1 §8.4); `harness-encrypted` links `adk-session`'s envelope and the OS keychain, `harness-memory-local` links the `ort` runtime (spec 3.1 §7.12, §7.15.2); `harness-kernel` links `adk-kernel`, the agent kernel (spec 3.2 §8.2) |
 | surface | 1 | `surface` | links `adk-surface`, the engine and web home every agent surface runs on (spec 3.3 §6.1), and with `cli` the launcher's web home; opt-in, in no tier. One feature per surface (`web`, `tui`, `channels`, `mobile`, …) stays on `adk-surface`, so the umbrella grows by this one key |
 | website | 1 | `website` | links `adk-website`, the AWP 2.0 website product, and `adk-site`, its pipeline (spec 3.5 §7.1, D-14); turns on the edge (`adk-server/awp`), AWP signing and the kernel, and with `cli` the `adk-rust site` and `awp` commands. In `full`. Hosts, generators and backends stay features of `adk-site` and `adk-kernel`, so the umbrella grows by this one key |
-| gcp | 0 | `gemini-agent-platform` | all 11 demoted; already bundled |
+| gcp | 12 | `gemini-agent-platform` | all demoted; already bundled |
 | code | — | `code-tools` | 3 demoted |
 
-## The 19 deprecated no-ops
+## The 19 aliases removed in 3.0.0
 
-Each activates the same dependencies as a sibling. None is removed before the
-next major; each keeps its feature key so no existing manifest breaks.
+Each activated the same dependencies as a sibling. 3.0.0 removed them and folded what they
+compiled into that sibling, so no capability is lost; the
+[migration guide](official_docs/migration/2.x-to-3.0.md#adk-rust-features) maps each one.
 
 | Feature | Replacement | Why |
 |---|---|---|
-| `cerebras`, `fireworks`, `mistral`, `perplexity`, `sambanova`, `together` | `OpenAICompatibleConfig::<provider>()` | One OpenAI client; the provider is a base URL |
-| `whisper-onnx`, `distil-whisper`, `moonshine`, `chatterbox` | `audio-onnx` | One `ort` runtime; the model is a checkpoint path |
-| `action-code`, `action-db`, `action-email` | `action` | No dependency beyond `action` itself |
-| `action-rss` | `action-http` | An HTTP node reading a feed |
-| `a2a`, `agent-registry` | `server` | No dependency beyond `adk-server` |
-| `cli-deepseek`, `cli-groq` | `cli` | The CLI reads the provider from the environment |
-| `personas` | `eval` | Persona fixtures link `adk-eval` only |
+| `cerebras`, `fireworks`, `mistral`, `perplexity`, `sambanova`, `together` | `openai` with `OpenAICompatibleConfig::<provider>()` | One OpenAI client; the provider is a base URL |
+| `whisper-onnx`, `distil-whisper`, `moonshine`, `chatterbox` | `audio-onnx`, which now compiles all four | One `ort` runtime; the model is a checkpoint path |
+| `action-code`, `action-db`, `action-email` | `action`, which now compiles the database and email placeholders | No dependency beyond `action` itself |
+| `action-rss` | `action-http`, which now compiles the RSS node | An HTTP node reading a feed |
+| `a2a`, `agent-registry` | `server`, which now compiles `adk_rust::registry` | No dependency beyond `adk-server` |
+| `cli-deepseek`, `cli-groq` | `cli`, which now compiles both providers | No dependency beyond the CLI's reqwest stack |
+| `personas` | `eval`, which now compiles `adk_rust::personas` | Persona fixtures link `adk-eval` only |
 
-The six OpenAI-compatible aliases are the clearest case. `AGENTS.md` already
-documents them as backward-compat aliases over one 1,261-line client, so the
-feature keys carry nothing but a spelling of a base URL.
+The member crates keep a feature only where it gates code: `adk-audio`'s checkpoint
+features, `adk-graph`'s `action-db`, `action-email` and `action-rss`, `adk-server`'s
+`agent-registry`, `adk-eval`'s `personas` and `adk-cli`'s `deepseek` and `groq` remain.
+`adk-model`'s seven preset aliases (`cerebras`, `fireworks`, `mistral`, `perplexity`,
+`sambanova`, `together`, `xai`), `adk-audio`'s `streaming`, `adk-auth`'s `adk-server`,
+`adk-gemini`'s `studio` and `adk-telemetry`'s `metrics` compiled nothing and are removed.
 
-## The 20 that stay despite sharing dependencies
+## The 23 that stay despite sharing dependencies
 
 Shared dependency effect is not automatically a defect. These are recorded as
 `kind="keep"` with the reason, so a future reader does not "fix" them:
@@ -96,7 +95,9 @@ Shared dependency effect is not automatically a defect. These are recorded as
 - `example-store` / `vertex-agent-registry` — distinct registries.
 - `vertex-rag` / `agent-retrieval` — RAG Engine versus managed VectorStore.
 - `codeact`, `record-payloads`, `mcp-sampling`, `graph-time-travel`,
-  `audio-fx`, `optimize`, `video-avatar` — capability that adds no new crate.
+  `audio-fx`, `optimize`, `video-avatar`, `harness-hooks` — capability that adds no new crate.
+- `graph-sqlite` / `graph-postgres` / `postgres-session` — distinct stores over one sqlx crate.
+- `memory`, `sessions` — the trait surfaces, which link their default backends.
 
 ## The growth rule
 

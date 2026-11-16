@@ -36,7 +36,6 @@ tonic = { version = "0.14", optional = true, default-features = false, features 
 default = ["genai-semconv"]
 genai-semconv = []
 otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
-metrics = ["otlp"]
 json = ["tracing-subscriber/json"]
 # Telemetry to Google Cloud: OTLP trace export to telemetry.googleapis.com with
 # ADC-minted auth headers, GCP resource detection, and Cloud Logging JSON output.

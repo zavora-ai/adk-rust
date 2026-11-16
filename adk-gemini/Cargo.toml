@@ -30,8 +30,7 @@ authors.workspace = true
 features = ["vertex", "interactions"]
 
 [features]
-default = ["studio"]
-studio = []
+default = []
 interactions = []
 vertex = ["dep:google-cloud-aiplatform-v1", "dep:google-cloud-auth", "dep:google-cloud-gax"]
 backtrace = ["snafu/backtraces-impl-backtrace-crate"]

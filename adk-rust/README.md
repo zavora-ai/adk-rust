@@ -275,16 +275,16 @@ Features outside the tiers, composable with any of them:
 | Group | Features |
 |-------|----------|
 | Providers | `deepseek`, `groq`, `ollama`, `openrouter`, `opencode`, `bedrock`, `azure-ai`, `gemini-vertex`, `gemini-interactions` |
-| CLI | `cli`, `cli-openai`, `cli-anthropic`, `cli-deepseek`, `cli-groq`, `cli-ollama`, `cli-all-providers`, `cli-telemetry-otlp`, `optimize` |
+| CLI | `cli` (with DeepSeek and Groq), `cli-openai`, `cli-anthropic`, `cli-ollama`, `cli-all-providers`, `cli-telemetry-otlp`, `optimize` |
 | Production backends (need infrastructure) | `postgres-session`, `redis-session`, `mongodb-session`, `firestore-session`, `neo4j-session`, `vertex-session`, `sqlite-memory`, `database-memory`, `redis-memory`, `mongodb-memory`, `neo4j-memory`, `vertex-memory`, `auth-bridge` |
 | Managed agents | `managed-runtime` (with the `gemini`, `openai`, `anthropic`, and `ollama` features for its model resolver), `enterprise-client` |
-| Server | `a2a`, `yaml-agent`, `agent-registry`, `agent-engine`, `vertex-remote-engine` |
+| Server | `yaml-agent`, `agent-engine`, `vertex-remote-engine`; `server` (in `standard`) includes A2A and the agent registry |
 | Tools | `mcp`, `mcp-http`, `mcp-sampling`, `memory-tools`, `slack`, `bigquery`, `spanner`, `example-store`, `vertex-agent-registry`, `code-tools`, `code-embedded-js`, `code-embedded-python`, `code-docker`, `codeact`, `codeact-monty` |
 | Telemetry | `telemetry-otlp`, `telemetry-sqlite`, `gcp-telemetry`, `record-payloads` |
-| Realtime and audio | `openai-realtime`, `gemini-live`, `vertex-live`, `livekit`, `openai-webrtc`, `video-avatar`, `audio-*`, `whisper-onnx`, `distil-whisper`, `moonshine`, `kokoro`, `chatterbox`, `qwen3-tts`, `all-onnx` |
+| Realtime and audio | `openai-realtime`, `gemini-live`, `vertex-live`, `livekit`, `openai-webrtc`, `video-avatar`, `audio-*` (`audio-onnx` covers Whisper, Distil-Whisper, Moonshine and Chatterbox), `kokoro`, `qwen3-tts`, `all-onnx` |
 | Harness packs | `harness-browser`, `harness-computer-use`, `harness-payments`, `harness-voice`, `harness-managed` |
-| Graph actions | `action`, `action-http`, `action-trigger`, `action-db`, `action-code`, `action-email`, `action-rss`, `action-full` |
-| Other | `acp`, `skills-progressive-disclosure`, `personas`, `sandbox-workspace`, `sandbox-docker`, `aws-secrets`, `azure-keyvault`, `gcp-secrets`, `gcs-artifacts`, `vertex-sandbox`, `vertex-eval`, `vertex-rag`, `agent-retrieval`, `vertex-skill-registry`, `gcp-deploy` |
+| Graph actions | `action`, `action-http` (with RSS), `action-trigger`, `action-full` |
+| Other | `acp`, `skills-progressive-disclosure`, `sandbox-workspace`, `sandbox-docker`, `aws-secrets`, `azure-keyvault`, `gcp-secrets`, `gcs-artifacts`, `vertex-sandbox`, `vertex-eval`, `vertex-rag`, `agent-retrieval`, `vertex-skill-registry`, `gcp-deploy` |
 
 `adk-rust/Cargo.toml` is the authoritative list.
 

@@ -36,7 +36,6 @@ adk-gemini = "3.0.0"
 
 | Feature | Enables |
 |---------|---------|
-| `studio` (default) | Marker only; the AI Studio backend is always compiled |
 | `vertex` | Vertex AI constructors and `VertexBackend` |
 | `interactions` | The Interactions API module and client methods |
 | `backtrace` | `snafu`'s `backtraces-impl-backtrace-crate` feature |
