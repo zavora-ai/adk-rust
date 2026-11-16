@@ -349,7 +349,7 @@ impl IntraInvocationCompactor {
             "history compacted"
         );
         let history = std::iter::once(summary).chain(without_thinking(&history[cut..])).collect();
-        Outcome::Compacted(CompactedHistory { history, event })
+        Outcome::Compacted(Box::new(CompactedHistory { history, event }))
     }
 
     /// Shortens `history` with a compaction strategy, keeping a held call and everything
@@ -410,7 +410,7 @@ impl IntraInvocationCompactor {
         {
             return Outcome::Kept;
         }
-        Outcome::Compacted(CompactedHistory { history: shortened, event: None })
+        Outcome::Compacted(Box::new(CompactedHistory { history: shortened, event: None }))
     }
 }
 
@@ -435,13 +435,13 @@ enum Outcome {
     /// A summary or strategy ran but failed or would not have shrunk the history.
     Kept,
     /// The history was compacted.
-    Compacted(CompactedHistory),
+    Compacted(Box<CompactedHistory>),
 }
 
 impl Outcome {
     fn compacted(self) -> Option<CompactedHistory> {
         match self {
-            Self::Compacted(compacted) => Some(compacted),
+            Self::Compacted(compacted) => Some(*compacted),
             Self::BelowThreshold | Self::NothingToCompact | Self::Kept => None,
         }
     }
