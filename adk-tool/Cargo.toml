@@ -25,7 +25,7 @@ mcp = ["dep:rmcp"]
 http-transport = [
     "mcp",
     "rmcp/transport-streamable-http-client-reqwest",
-    "reqwest",
+    "dep:reqwest",
     "dep:reqwest-mcp",
 ]
 # Enable code execution tools (CodeTool, etc.)
@@ -37,7 +37,7 @@ code-embedded-python = ["code", "adk-code/embedded-python"]
 # Enable Docker SDK-based persistent container execution
 code-docker = ["code", "adk-code/docker"]
 # Enable native Slack toolset (send messages, read channels, reactions, threads)
-slack = ["reqwest"]
+slack = ["dep:reqwest"]
 # Enable native BigQuery toolset (execute SQL, schemas, datasets)
 bigquery = ["dep:gcp-bigquery-client"]
 # Enable native Spanner toolset (execute SQL, schemas, tables)
@@ -58,9 +58,9 @@ mcp-server = [
     "dep:sha2",
 ]
 # Enable the Vertex AI Example Store client and few-shot retrieval provider
-example-store = ["adk-gcp", "google-cloud-auth", "reqwest"]
+example-store = ["dep:adk-gcp", "dep:google-cloud-auth", "dep:reqwest"]
 # Enable the Google Agent Registry client and the agent discovery tool
-vertex-agent-registry = ["adk-gcp", "google-cloud-auth", "reqwest"]
+vertex-agent-registry = ["dep:adk-gcp", "dep:google-cloud-auth", "dep:reqwest"]
 
 [dependencies]
 adk-core.workspace = true

@@ -47,7 +47,7 @@ tempfile = { version = "3", optional = true }
 
 [features]
 default = ["skills"]
-guardrails = ["adk-guardrail"]
+guardrails = ["dep:adk-guardrail"]
 enhanced-plugins = ["dep:adk-plugin"]
 skills = ["dep:adk-skill"]
 # Google ADK-style L1/L2/L3 skill tools. Existing `skills` continues to use

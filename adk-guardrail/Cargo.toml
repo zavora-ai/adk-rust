@@ -32,7 +32,7 @@ jsonschema = { workspace = true, optional = true }
 
 [features]
 default = ["schema"]
-schema = ["jsonschema"]
+schema = ["dep:jsonschema"]
 
 [dev-dependencies]
 tempfile = "3"
