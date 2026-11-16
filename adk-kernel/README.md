@@ -191,7 +191,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `ProcessView` carries the age, spend today and over seven days, the burn rate and the
 projection to the end of the day, model and tool calls from the transcript, the loop guard's
 verdict, and a goal's progress (iteration of max, spend, duration, last check). Spend comes
-from the kernel's own per-process daily totals, fed by a `ProgressSource`.
+from the kernel's own per-process daily totals, fed by a `ProgressSource` or, for a hosted
+`Runner` without one, by the usage its turn's model responses report.
 
 ## Wake sources
 
