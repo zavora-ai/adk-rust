@@ -273,7 +273,7 @@ impl SkillDraft {
     pub fn to_markdown(&self) -> SkillResult<String> {
         self.validate()?;
 
-        let frontmatter = serde_yaml::to_string(&FrontmatterOut {
+        let frontmatter = serde_saphyr::to_string(&FrontmatterOut {
             name: &self.name,
             description: &self.description,
             version: &self.version,
@@ -286,7 +286,8 @@ impl SkillDraft {
             hint: &self.hint,
             metadata: &self.metadata,
             triggers: &self.triggers,
-        })?;
+        })
+        .map_err(|error| SkillError::Yaml { message: error.to_string() })?;
 
         Ok(format!("---\n{}---\n\n{}\n", frontmatter, self.body.trim()))
     }
@@ -472,6 +473,38 @@ mod tests {
         assert_eq!(parsed.triggers, vec!["*.log"]);
         assert_eq!(parsed.metadata.get("incident"), Some(&Value::from("INC-42")));
         assert_eq!(parsed.body, "1. Check largest directories.\n2. Report growth rate.");
+    }
+
+    #[test]
+    fn yaml_significant_text_round_trips_through_the_parser() {
+        let draft = SkillDraft::new("yaml-hostile", "Fix: \"quoted\" text, # not a comment")
+            .with_body("Body.")
+            .with_version("1.0")
+            .with_license("no")
+            .with_tags(["- dash", "key: value", "null", "üñíçødé"])
+            .with_hint("[brackets] and {braces}")
+            .with_metadata_entry(
+                "nested",
+                serde_json::json!({ "list": [1, "two"], "flag": false }),
+            );
+
+        let rendered = draft.to_markdown().expect("renders");
+        let parsed =
+            parse_skill_markdown(Path::new("yaml-hostile.md"), &rendered).expect("parses back");
+
+        assert_eq!(parsed.description, "Fix: \"quoted\" text, # not a comment");
+        assert_eq!(
+            parsed.version.as_deref(),
+            Some("1.0"),
+            "a numeric-looking string stays a string"
+        );
+        assert_eq!(parsed.license.as_deref(), Some("no"));
+        assert_eq!(parsed.tags, vec!["- dash", "key: value", "null", "üñíçødé"]);
+        assert_eq!(parsed.hint.as_deref(), Some("[brackets] and {braces}"));
+        assert_eq!(
+            parsed.metadata.get("nested"),
+            Some(&serde_json::json!({ "list": [1, "two"], "flag": false }))
+        );
     }
 
     #[test]

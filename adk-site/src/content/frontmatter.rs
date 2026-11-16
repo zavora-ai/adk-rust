@@ -83,7 +83,7 @@ pub(crate) fn parse_item(origin: &str, text: &str, defaults: ItemDefaults) -> Re
             let value: Value = if front.trim().is_empty() {
                 Value::Object(serde_json::Map::new())
             } else {
-                serde_yaml::from_str(front)
+                serde_saphyr::from_str(front)
                     .map_err(|e| invalid(format!("front matter is not YAML: {e}")))?
             };
             match value {
@@ -145,7 +145,7 @@ pub(crate) fn render_item(item: &ContentItem) -> Result<String> {
         media: item.media.clone(),
         fields: item.fields.clone(),
     };
-    let yaml = serde_yaml::to_string(&keys).map_err(|e| SiteError::serde("front matter", e))?;
+    let yaml = serde_saphyr::to_string(&keys).map_err(|e| SiteError::serde("front matter", e))?;
     let mut text = format!("---\n{yaml}---\n");
     if let Some(Markdown(body)) = &item.body {
         text.push('\n');

@@ -14,8 +14,8 @@ fn load_json(path: &str) -> Value {
     serde_json::from_str(&fs::read_to_string(fixture(path)).unwrap()).unwrap()
 }
 
-fn load_yaml(path: &str) -> serde_yaml::Value {
-    serde_yaml::from_str(&fs::read_to_string(fixture(path)).unwrap()).unwrap()
+fn load_yaml(path: &str) -> Value {
+    serde_saphyr::from_str(&fs::read_to_string(fixture(path)).unwrap()).unwrap()
 }
 
 fn assert_valid(schema_path: &str, definition: &str, instance: &Value) {
@@ -35,20 +35,16 @@ fn experimental_openapi_documents_expose_expected_paths() {
     let webhook = load_yaml("openapi/openapi.agentic_checkout_webhook.yaml");
     let delegate = load_yaml("openapi/openapi.delegate_authentication.yaml");
 
-    let webhook_paths = webhook["paths"].as_mapping().unwrap();
-    assert!(
-        webhook_paths
-            .contains_key(serde_yaml::Value::from("/agentic_checkout/webhooks/order_events"))
-    );
+    let webhook_paths = webhook["paths"].as_object().unwrap();
+    assert!(webhook_paths.contains_key("/agentic_checkout/webhooks/order_events"));
 
-    let delegate_paths = delegate["paths"].as_mapping().unwrap();
-    assert!(delegate_paths.contains_key(serde_yaml::Value::from("/delegate_authentication")));
-    assert!(delegate_paths.contains_key(serde_yaml::Value::from(
-        "/delegate_authentication/{authentication_session_id}/authenticate"
-    )));
-    assert!(delegate_paths.contains_key(serde_yaml::Value::from(
-        "/delegate_authentication/{authentication_session_id}"
-    )));
+    let delegate_paths = delegate["paths"].as_object().unwrap();
+    assert!(delegate_paths.contains_key("/delegate_authentication"));
+    assert!(
+        delegate_paths
+            .contains_key("/delegate_authentication/{authentication_session_id}/authenticate")
+    );
+    assert!(delegate_paths.contains_key("/delegate_authentication/{authentication_session_id}"));
 }
 
 #[test]
@@ -111,12 +107,11 @@ fn webhook_examples_use_the_full_order_schema() {
     let webhook = load_yaml("openapi/openapi.agentic_checkout_webhook.yaml");
     let examples = webhook["paths"]["/agentic_checkout/webhooks/order_events"]["post"]["requestBody"]
         ["content"]["application/json"]["examples"]
-        .as_mapping()
+        .as_object()
         .unwrap();
 
     for example_name in ["order_created", "order_shipped", "order_with_refund"] {
-        let yaml_value = &examples[serde_yaml::Value::from(example_name)]["value"];
-        let value = serde_json::to_value(yaml_value).unwrap();
+        let value = &examples[example_name]["value"];
         assert_eq!(value["data"]["type"], "order");
         assert_valid("json-schema/schema.agentic_checkout.json", "Order", &value["data"]);
     }

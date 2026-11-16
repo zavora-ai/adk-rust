@@ -217,7 +217,7 @@ pub(crate) fn write_starter(root: &Path, relative: &str, contents: &str) -> Resu
 /// YAML front matter followed by an empty body.
 #[cfg(feature = "gen-zola")]
 pub(crate) fn front_matter(value: &Value) -> Result<Vec<u8>> {
-    let yaml = serde_yaml::to_string(value).map_err(|e| SiteError::serde("front matter", e))?;
+    let yaml = serde_saphyr::to_string(value).map_err(|e| SiteError::serde("front matter", e))?;
     Ok(format!("---\n{yaml}---\n").into_bytes())
 }
 
