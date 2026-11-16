@@ -10,7 +10,7 @@ repository.workspace = true
 documentation = "https://docs.rs/adk-surface"
 readme = "README.md"
 # The web home's built assets ship in the crate; its TypeScript source does not.
-include = ["src/**/*", "assets/**/*", "Cargo.toml", "README.md"]
+include = ["src/**/*", "assets/**/*", "Cargo.toml", "README.md", "LICENSE"]
 keywords = ["adk", "agent", "approvals", "ui", "kernel"]
 categories = ["asynchronous", "web-programming"]
 

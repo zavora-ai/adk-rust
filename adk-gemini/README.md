@@ -6,7 +6,7 @@ files, the Interactions API (Beta), and Vertex AI.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-gemini.svg)](https://crates.io/crates/adk-gemini)
 [![Documentation](https://docs.rs/adk-gemini/badge.svg)](https://docs.rs/adk-gemini)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT AND Apache-2.0](https://img.shields.io/badge/License-MIT%20AND%20Apache--2.0-blue.svg)](#license)
 
 ## Overview
 
@@ -598,7 +598,15 @@ cargo run -p adk-gemini --features interactions --example interactions_basic
 
 ## License
 
-MIT
+`MIT AND Apache-2.0` — both licences apply to the crate:
+
+| Licence | File | Covers |
+|---------|------|--------|
+| MIT | [`LICENSE-MIT`](LICENSE-MIT) | The code forked from [gemini-rust](https://github.com/flachesis/gemini-rust), under its original notice (Copyright (c) 2025 Michael Yang) |
+| Apache-2.0 | [`LICENSE-APACHE`](LICENSE-APACHE) | Changes and additions made in ADK-Rust, licensed like the rest of the workspace |
+
+The fork keeps the MIT notice because the MIT licence requires it in every copy; ADK-Rust's own
+work is Apache-2.0. Redistributing the crate means keeping both files.
 
 Original work Copyright (c) 2024 [@flachesis](https://github.com/flachesis)
 Modifications Copyright (c) 2024 Zavora AI

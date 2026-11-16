@@ -12,7 +12,7 @@ documentation = "https://docs.rs/adk-awp"
 readme = "README.md"
 keywords = ["awp", "agent", "adk", "protocol", "agentic"]
 categories = ["web-programming::http-server", "api-bindings"]
-include = ["src/**/*", "Cargo.toml", "README.md"]
+include = ["src/**/*", "Cargo.toml", "README.md", "LICENSE"]
 
 [dependencies]
 awp-types = { workspace = true }
