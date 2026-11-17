@@ -6,8 +6,8 @@
 //!
 //! | Provider | Feature | Isolation | API |
 //! |----------|---------|-----------|-----|
-//! | [`E2bClient`] | `remote-e2b` | Firecracker microVM | REST control plane plus the in-VM `envd` daemon (Connect protocol over HTTP) |
-//! | [`DaytonaClient`] | `remote-daytona` | Container or Linux VM, per sandbox class | REST control plane plus the toolbox API |
+//! | `E2bClient` | `remote-e2b` | Firecracker microVM | REST control plane plus the in-VM `envd` daemon (Connect protocol over HTTP) |
+//! | `DaytonaClient` | `remote-daytona` | Container or Linux VM, per sandbox class | REST control plane plus the toolbox API |
 //!
 //! Modal is not here: its only API is gRPC, spoken by its Python, JavaScript and Go SDKs.
 //!
@@ -15,7 +15,7 @@
 //!
 //! | Bound | How |
 //! |-------|-----|
-//! | Lifetime | Every environment is created with a provider-side lifetime ([`E2bConfig::timeout`], [`DaytonaConfig::ttl`]), so the provider destroys it even when this process dies |
+//! | Lifetime | Every environment is created with a provider-side lifetime (`E2bConfig::with_timeout`, `DaytonaConfig::with_ttl`), so the provider destroys it even when this process dies |
 //! | Release | `stop` destroys the environment; dropping the client destroys every environment it created and did not stop |
 //! | Requests | Each HTTP call has a deadline: the command's timeout plus a grace period for a command, [`REQUEST_TIMEOUT`] otherwise |
 //! | Output | stdout and stderr are capped at 1 MiB each, with a truncation notice; a file read is capped at [`MAX_FILE_BYTES`] |
