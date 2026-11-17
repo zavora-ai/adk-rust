@@ -80,6 +80,66 @@ fn code_exits_1_when_the_run_fails() {
     assert!(shown.contains("\nthe run failed: "), "{shown}");
 }
 
+/// A model that declines ends the run as a failure, not as an answer: `code` exits `1` with
+/// the refusal, and the write the turn asked for never runs.
+#[test]
+fn code_exits_1_when_the_model_refuses() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let script = r#"[{"refusal": "I can't help with that request."}]"#;
+    let output = run(
+        &[
+            "code",
+            "write a note",
+            "--yes",
+            "--no-memory",
+            "--dir",
+            &dir_arg(ws.path()),
+            "--model-script",
+            script,
+        ],
+        home.path(),
+        ws.path(),
+    );
+    let shown = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{shown}");
+    assert!(shown.contains("\nthe run failed: "), "{shown}");
+    assert!(
+        shown.contains("the model declined the request: I can't help with that request."),
+        "{shown}"
+    );
+}
+
+/// A goal whose turn the model declines stops at that iteration with the refusal instead of
+/// running the check as though the turn had worked.
+#[test]
+fn a_refused_goal_iteration_fails_the_goal() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let output = run(
+        &[
+            "goal",
+            "create done.txt",
+            "--until",
+            "test -f done.txt",
+            "--dir",
+            &dir_arg(ws.path()),
+            "--max-iters",
+            "3",
+            "--yes",
+            "--model-script",
+            r#"[{"refusal": "I can't help with that request."}]"#,
+        ],
+        home.path(),
+        ws.path(),
+    );
+    let shown = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{shown}");
+    assert!(shown.contains("the model declined the request"), "{shown}");
+    assert!(!shown.contains("goal met"), "{shown}");
+    assert!(!ws.path().join("done.txt").exists(), "{shown}");
+}
+
 #[test]
 fn the_read_only_alias_is_read_only_mode() {
     let home = tempfile::tempdir().unwrap();

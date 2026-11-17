@@ -1863,14 +1863,30 @@ async fn next_script(
     if content.is_none() {
         let mut stream = hooks.scope.generate(model, request, false).await?;
         let mut text = String::new();
+        let mut finish_reason = None;
+        let mut provider_error = (None, None);
         while let Some(chunk) = stream.next().await {
-            if let Some(c) = chunk?.content {
+            let chunk = chunk?;
+            finish_reason = chunk.finish_reason.or(finish_reason);
+            if chunk.error_code.is_some() {
+                provider_error = (chunk.error_code, chunk.error_message);
+            }
+            if let Some(c) = chunk.content {
                 for part in &c.parts {
                     if let Part::Text { text: t } = part {
                         text.push_str(t);
                     }
                 }
             }
+        }
+        // A refusal is not a script to run, and a malformed tool call is not one either.
+        let (provider_code, provider_message) = provider_error;
+        if let Some(error) = crate::llm_agent::finish_error(
+            finish_reason,
+            provider_message.as_deref().or(Some(text.as_str())),
+            provider_code.as_deref(),
+        ) {
+            return Err(error);
         }
         content = Some(Content::new("model").with_text(text));
     }
@@ -3541,6 +3557,87 @@ mod tests {
             .state_delta
             .get(PENDING_STATE_KEY)
             .and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+
+    /// A model that ends its turn with `finish_reason`, `text`, and an optional provider error.
+    struct FinishingLlm {
+        finish_reason: adk_core::FinishReason,
+        text: &'static str,
+        error: Option<(&'static str, &'static str)>,
+    }
+
+    #[async_trait]
+    impl Llm for FinishingLlm {
+        fn name(&self) -> &str {
+            "finishing"
+        }
+        async fn generate_content(
+            &self,
+            _req: LlmRequest,
+            _stream: bool,
+        ) -> adk_core::Result<adk_core::LlmResponseStream> {
+            let mut response =
+                adk_core::model::LlmResponse::new(Content::new("model").with_text(self.text));
+            response.finish_reason = Some(self.finish_reason);
+            response.error_code = self.error.map(|(code, _)| code.to_string());
+            response.error_message = self.error.map(|(_, message)| message.to_string());
+            Ok(Box::pin(futures::stream::once(async move { Ok(response) })))
+        }
+    }
+
+    /// The first error the loop yields, and how many planned programs no script started.
+    async fn first_error(model: FinishingLlm) -> (AdkError, usize) {
+        let runtime = Arc::new(ScriptedRuntime::new(vec![vec![Planned::Complete(
+            json!({"type": "final_result", "value": "ran anyway"}),
+        )]]));
+        let input = base_inputs(Arc::new(model), runtime.clone(), user("go"));
+        let mut stream = Box::pin(run_codeact(input));
+        let error = loop {
+            match stream.next().await.expect("the loop ends with an error") {
+                Ok(_) => continue,
+                Err(error) => break error,
+            }
+        };
+        (error, runtime.programs_left())
+    }
+
+    #[tokio::test]
+    async fn a_refusal_ends_the_run_without_running_a_script() {
+        let (error, programs_left) = first_error(FinishingLlm {
+            finish_reason: adk_core::FinishReason::Refusal,
+            text: "I can't help with that.",
+            error: None,
+        })
+        .await;
+        assert_eq!(
+            (error.code, error.category, programs_left),
+            ("model.refusal", adk_core::ErrorCategory::Forbidden, 1)
+        );
+        assert!(error.message.contains("I can't help with that."), "{}", error.message);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_reported_with_an_error_code_keeps_the_provider_message() {
+        let (error, programs_left) = first_error(FinishingLlm {
+            finish_reason: adk_core::FinishReason::Refusal,
+            text: "",
+            error: Some(("refusal", "Claude declined the request (category cyber): Declined.")),
+        })
+        .await;
+        assert_eq!((error.code, programs_left), ("model.refusal", 1));
+        assert!(error.message.contains("category cyber"), "{}", error.message);
+        assert_eq!(error.details.metadata["provider_error_code"], json!("refusal"));
+    }
+
+    #[tokio::test]
+    async fn a_malformed_tool_call_ends_the_run_without_running_a_script() {
+        let (error, programs_left) = first_error(FinishingLlm {
+            finish_reason: adk_core::FinishReason::MalformedToolCall,
+            text: "",
+            error: None,
+        })
+        .await;
+        assert_eq!((error.code, programs_left), ("model.malformed_tool_call", 1));
     }
 
     #[tokio::test]
