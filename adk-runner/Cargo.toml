@@ -36,7 +36,7 @@ tracing.workspace = true
 tokio-util = { version = "0.7", features = ["rt"] }
 
 [features]
-default = ["artifacts", "plugins", "skills"]
+default = ["artifacts", "plugins"]
 artifacts = ["dep:adk-artifact"]
 plugins = ["dep:adk-plugin"]
 skills = ["dep:adk-skill"]

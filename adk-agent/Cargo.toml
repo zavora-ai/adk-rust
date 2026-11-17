@@ -46,7 +46,7 @@ tokio-util = { version = "0.7", optional = true }
 tempfile = { version = "3", optional = true }
 
 [features]
-default = ["skills"]
+default = []
 guardrails = ["dep:adk-guardrail"]
 enhanced-plugins = ["dep:adk-plugin"]
 skills = ["dep:adk-skill"]

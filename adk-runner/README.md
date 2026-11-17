@@ -40,7 +40,7 @@ adk-rust = "3.0.0"
 |---------|---------|---------|
 | `artifacts` | yes | `artifact_service` through `adk-artifact` |
 | `plugins` | yes | `plugin_manager` through `adk-plugin` |
-| `skills` | yes | `Runner::with_auto_skills` and skill injection through `adk-skill` |
+| `skills` | no | `Runner::with_skill_injector`, `Runner::with_auto_skills_mut`, and skill injection through `adk-skill` |
 | `context-compaction` | no | The `compaction` module: `CompactionStrategy`, `TruncationCompaction`, `SummarisationCompaction`, and `RunnerConfigBuilder::context_compaction`, a strategy auto-compaction applies in place of a summary |
 | `sandbox-runner` | no | The `sandbox_runner` module: `SandboxRunner` provisions an `adk-sandbox` workspace, binds its tools for the run, and stops it afterwards |
 

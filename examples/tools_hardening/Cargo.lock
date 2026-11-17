@@ -7,7 +7,6 @@ name = "adk-agent"
 version = "3.0.0"
 dependencies = [
  "adk-core",
- "adk-skill",
  "adk-telemetry",
  "async-stream",
  "async-trait",
@@ -162,7 +161,6 @@ dependencies = [
  "adk-core",
  "adk-plugin",
  "adk-session",
- "adk-skill",
  "async-stream",
  "async-trait",
  "futures",

@@ -4,10 +4,12 @@ use adk_runner::Runner;
 use adk_session::{
     Event, Events, GetRequest, InMemorySessionService, Session, SessionService, State,
 };
+#[cfg(feature = "skills")]
 use adk_skill::{SelectionPolicy, SkillInjector, SkillInjectorConfig};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
+#[cfg(feature = "skills")]
 use std::fs;
 use std::sync::{Arc, Mutex};
 
@@ -924,6 +926,7 @@ async fn test_plugin_error_propagates_from_on_user_message() {
     assert!(first.is_err());
 }
 
+#[cfg(feature = "skills")]
 #[tokio::test]
 async fn test_skill_injector_plugin_mutates_user_prompt() {
     let temp = tempfile::tempdir().unwrap();
@@ -978,6 +981,7 @@ async fn test_skill_injector_plugin_mutates_user_prompt() {
     assert!(text.contains("Use `rg --files` then `rg <pattern>`."));
 }
 
+#[cfg(feature = "skills")]
 #[tokio::test]
 async fn test_runner_with_auto_skills_mutates_user_prompt() {
     let temp = tempfile::tempdir().unwrap();
