@@ -1366,7 +1366,8 @@ Order of evaluation in `LlmAgent` and `CodeActAgent`:
    is answered with `not run` responses and the run ends with a `ResourceExhausted` error
 2. Enhanced plugins (`before_tool_call`) — may rewrite the arguments
 3. The runner's plugin `before_tool` callbacks, then the agent's `BeforeToolCallback`s — the
-   first to return content skips the tool
+   first to return content skips the tool; one that errs or panics answers the call `not run`
+   (`callback.panicked` for a panic), so a broken authorization callback fails closed
 4. Circuit breaker
 5. The governed path (`adk_core::authorize_tool_call`) on the final arguments:
    1. Kill switch — a frozen run's call is answered `not run` and the run ends with a
