@@ -430,7 +430,7 @@ jobs:
       run: >-
         cargo nextest run -p adk-session
         --features mongodb
-        --run-ignored all --no-fail-fast
+        --run-ignored all --no-fail-fast --test-threads 1
         --test mongodb_state_tests
         -E 'test(/history_contract|integrity_contract/)'
 

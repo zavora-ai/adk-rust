@@ -13,6 +13,8 @@ use adk_session::{
     Session, SessionService,
 };
 use chrono::{DateTime, Duration, SubsecRound, Utc};
+
+pub use super::integrity_contract::IdScope;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -267,15 +269,15 @@ pub async fn assert_fork_contract(service: &dyn SessionService, app_name: &str) 
 
 /// Edits replace events in place and remove them, rebuild the session's own state, keep the
 /// shared tiers, change only the named session, and honour the expected version.
-pub async fn assert_edit_contract(service: &dyn SessionService, app_name: &str) {
+pub async fn assert_edit_contract(service: &dyn SessionService, app_name: &str, scope: IdScope) {
     let at = Utc::now().trunc_subsecs(3);
     let shared = unique("edited");
     let mut seeded = HashMap::new();
     for user in ["alice", "bob"] {
-        seeded.insert(user, seed(service, app_name, user, &shared, at).await);
+        seeded.insert(user, seed(service, app_name, user, &scope.session(&shared, user), at).await);
     }
-    let alice = identity(app_name, "alice", &shared);
-    let bob = identity(app_name, "bob", &shared);
+    let alice = identity(app_name, "alice", &scope.session(&shared, "alice"));
+    let bob = identity(app_name, "bob", &scope.session(&shared, "bob"));
     let event_ids = &seeded["alice"];
 
     let history = service.history(&alice).await.expect("read history");
@@ -532,8 +534,17 @@ pub async fn assert_import_contract(service: &dyn SessionService, app_name: &str
 
 /// Every history check a backend that can delete events runs.
 pub async fn assert_history_contract(service: &dyn SessionService, app_name: &str) {
+    assert_history_contract_scoped(service, app_name, IdScope::PerUser).await;
+}
+
+/// [`assert_history_contract`] on a backend whose session IDs have `scope`.
+pub async fn assert_history_contract_scoped(
+    service: &dyn SessionService,
+    app_name: &str,
+    scope: IdScope,
+) {
     assert_fork_contract(service, app_name).await;
-    assert_edit_contract(service, app_name).await;
+    assert_edit_contract(service, app_name, scope).await;
     assert_tool_call_rules(service, app_name).await;
     assert_import_contract(service, app_name).await;
 }
