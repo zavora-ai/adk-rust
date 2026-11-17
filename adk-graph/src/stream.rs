@@ -50,14 +50,33 @@ pub enum StreamEvent {
     StepComplete { step: usize, nodes_executed: Vec<String> },
 
     /// Execution was interrupted
-    Interrupted { node: String, message: String },
+    Interrupted {
+        /// The node that paused, or the gated node.
+        node: String,
+        /// What the pause says.
+        message: String,
+        /// The pause's id, for a dynamic interrupt: answer it under this key
+        /// ([`Interrupt::id`](crate::interrupt::Interrupt::id)).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        interrupt_id: Option<String>,
+    },
 
     /// A node asked to pause, reported by `Node::execute_stream`.
     ///
     /// The streamed path yields events rather than a `NodeOutput`, so a node's own
     /// interrupt request needs a way through. The executor turns this into the
     /// pause and does not forward it, so a caller sees only `Interrupted`.
-    NodeInterrupt { node: String, message: String, data: Option<serde_json::Value> },
+    NodeInterrupt {
+        /// The node asking to pause.
+        node: String,
+        /// What the pause says.
+        message: String,
+        /// The data it attached.
+        data: Option<serde_json::Value>,
+        /// The JSON Schema its answer must satisfy.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        response_schema: Option<serde_json::Value>,
+    },
 
     /// Execution resumed from a checkpoint
     Resumed { step: usize, pending_nodes: Vec<String> },
@@ -115,7 +134,11 @@ impl StreamEvent {
 
     /// Create an interrupted event
     pub fn interrupted(node: &str, message: &str) -> Self {
-        Self::Interrupted { node: node.to_string(), message: message.to_string() }
+        Self::Interrupted {
+            node: node.to_string(),
+            message: message.to_string(),
+            interrupt_id: None,
+        }
     }
 
     /// Create a resumed event
@@ -135,7 +158,12 @@ impl StreamEvent {
 
     /// Create an event reporting that a node asked to pause.
     pub fn node_interrupt(node: &str, message: &str, data: Option<serde_json::Value>) -> Self {
-        Self::NodeInterrupt { node: node.to_string(), message: message.to_string(), data }
+        Self::NodeInterrupt {
+            node: node.to_string(),
+            message: message.to_string(),
+            data,
+            response_schema: None,
+        }
     }
 
     /// Create a route dispatched event

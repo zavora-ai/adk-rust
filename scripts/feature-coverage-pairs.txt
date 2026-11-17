@@ -130,6 +130,8 @@
 3 adk-server awp
 # The edge's SQLite stores and their conformance suite; PostgreSQL and Redis run in the postgres job.
 3 adk-server awp-sqlite
+# Agents served over MCP: durable runs as tasks, held calls as elicitations, stdio and HTTP.
+3 adk-server mcp
 8 adk-cli vertex-agent-registry
 8 adk-cli vertex-skill-registry
 # The `deploy agent-engine` subcommand: arg-parse and mock create-contract tests.

@@ -106,25 +106,64 @@ pub const BUDGET_LIMIT_KEY: &str = "adk.budget.limit";
 /// assert_eq!(budget.max_tool_calls, Some(25));
 /// assert!(!budget.allow_unpriced_models);
 /// ```
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// A budget serializes in camelCase with the wall time in milliseconds, so it travels in a
+/// durable run's input (`{"runLimits": {"budget": {"maxModelCalls": 10, "maxWallTimeMs": 120000}}}`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 #[non_exhaustive]
 pub struct RunBudget {
     /// Maximum model calls started in the run.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_model_calls: Option<u64>,
     /// Maximum input plus output tokens reported by the models.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_total_tokens: Option<u64>,
     /// Maximum cost in millionths of a US dollar.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_cost_micro_usd: Option<u64>,
     /// Maximum wall-clock time since the tracker was created.
+    #[serde(
+        rename = "maxWallTimeMs",
+        with = "optional_millis",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max_wall_time: Option<Duration>,
     /// Maximum tool calls dispatched in the run.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tool_calls: Option<u64>,
     /// Count responses with no known cost as zero cost instead of stopping.
     ///
     /// Only consulted when [`max_cost_micro_usd`](Self::max_cost_micro_usd) is
     /// set. The default `false` stops the run, because an unpriced model would
     /// otherwise spend without limit under a cost cap.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub allow_unpriced_models: bool,
+}
+
+/// `Option<Duration>` as whole milliseconds.
+mod optional_millis {
+    use std::time::Duration;
+
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(
+        value: &Option<Duration>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(duration) => {
+                serializer.serialize_u64(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+            }
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Duration>, D::Error> {
+        Ok(Option::<u64>::deserialize(deserializer)?.map(Duration::from_millis))
+    }
 }
 
 impl RunBudget {
@@ -185,6 +224,52 @@ impl RunBudget {
             && self.max_cost_micro_usd.is_none()
             && self.max_wall_time.is_none()
             && self.max_tool_calls.is_none()
+    }
+
+    /// The stricter of `self` and `other`: each limit is the smaller of the two, a limit
+    /// only one of them sets applies, and unpriced models count as free only when every
+    /// budget that caps cost allows it. A budget a run's input carries narrows the runner's this way, so it can
+    /// only take resources away.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use adk_core::RunBudget;
+    ///
+    /// let runner = RunBudget::new().max_model_calls(50).max_wall_time(Duration::from_secs(600));
+    /// let run = RunBudget::new().max_model_calls(10).max_cost_micro_usd(500_000);
+    /// let narrowed = runner.narrowed(&run);
+    /// assert_eq!(narrowed.max_model_calls, Some(10));
+    /// assert_eq!(narrowed.max_cost_micro_usd, Some(500_000));
+    /// assert_eq!(narrowed.max_wall_time, Some(Duration::from_secs(600)));
+    /// ```
+    #[must_use]
+    pub fn narrowed(&self, other: &RunBudget) -> RunBudget {
+        fn min<T: Ord + Copy>(a: Option<T>, b: Option<T>) -> Option<T> {
+            match (a, b) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            }
+        }
+        RunBudget {
+            max_model_calls: min(self.max_model_calls, other.max_model_calls),
+            max_total_tokens: min(self.max_total_tokens, other.max_total_tokens),
+            max_cost_micro_usd: min(self.max_cost_micro_usd, other.max_cost_micro_usd),
+            max_wall_time: min(self.max_wall_time, other.max_wall_time),
+            max_tool_calls: min(self.max_tool_calls, other.max_tool_calls),
+            // The flag means something only under a cost cap, so the cap's own budget sets it.
+            allow_unpriced_models: match (
+                self.max_cost_micro_usd.is_some(),
+                other.max_cost_micro_usd.is_some(),
+            ) {
+                (true, false) => self.allow_unpriced_models,
+                (false, true) => other.allow_unpriced_models,
+                (true, true) | (false, false) => {
+                    self.allow_unpriced_models && other.allow_unpriced_models
+                }
+            },
+        }
     }
 }
 
@@ -671,6 +756,159 @@ impl BudgetTracker {
             (Some(own), Some(parent)) => Some(own.min(parent)),
             (own, parent) => own.or(parent),
         }
+    }
+
+    /// What is left of each limit across this tracker and its ancestors: for every limit
+    /// the chain sets, the smallest of `max − used`; `None` where no tracker limits it.
+    /// `allow_unpriced_models` is this tracker's own.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use adk_core::{BudgetTracker, RunBudget};
+    ///
+    /// let run = Arc::new(BudgetTracker::new(RunBudget::new().max_tool_calls(10)));
+    /// let team = BudgetTracker::with_parent(RunBudget::new().max_model_calls(4), run);
+    /// team.begin_tool_calls(3).unwrap();
+    /// let left = team.remaining();
+    /// assert_eq!((left.max_tool_calls, left.max_model_calls), (Some(7), Some(4)));
+    /// assert_eq!(left.max_cost_micro_usd, None);
+    /// ```
+    pub fn remaining(&self) -> RunBudget {
+        let usage = self.usage();
+        let left = |max: Option<u64>, used: u64| max.map(|max| max.saturating_sub(used));
+        let own = RunBudget {
+            max_model_calls: left(self.budget.max_model_calls, usage.model_calls),
+            max_total_tokens: left(self.budget.max_total_tokens, usage.total_tokens),
+            max_cost_micro_usd: left(self.budget.max_cost_micro_usd, usage.cost_micro_usd),
+            max_wall_time: self.budget.max_wall_time.map(|max| max.saturating_sub(usage.elapsed)),
+            max_tool_calls: left(self.budget.max_tool_calls, usage.tool_calls),
+            allow_unpriced_models: self.budget.allow_unpriced_models,
+        };
+        match &self.parent {
+            Some(parent) => {
+                let mut chain = own.narrowed(&parent.remaining());
+                chain.allow_unpriced_models = self.budget.allow_unpriced_models;
+                chain
+            }
+            None => own,
+        }
+    }
+
+    /// Carves a budget for work that spends on counters of its own — a background
+    /// sub-agent's durable run — out of what this tracker and its ancestors have left, so
+    /// the two together never spend more than the chain allows.
+    ///
+    /// | Limit | The slice |
+    /// |-------|-----------|
+    /// | Asked for and limited by the chain | The smaller of the ask and what is left |
+    /// | Asked for, not limited by the chain | The ask |
+    /// | Not asked for, limited by the chain | Half of what is left |
+    /// | Neither | Unlimited |
+    /// | Wall time | The smaller of the ask and what is left; not reserved, since it is not spent |
+    ///
+    /// Model calls, tokens, cost and tool calls of the slice that the chain limits count as
+    /// used by this tracker and its ancestors from now on, whether the work spends them or
+    /// not. Unpriced models count as free in the slice only when the chain allows it under a
+    /// cost cap, or when no tracker in the chain caps cost and the ask allows it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the exhausted limit when the chain has nothing left of a limit it sets, or
+    /// a violation was recorded; nothing is reserved then.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_core::{BudgetTracker, RunBudget};
+    ///
+    /// let parent = BudgetTracker::new(RunBudget::new().max_model_calls(30).max_cost_micro_usd(1_000_000));
+    /// let slice = parent.carve(&RunBudget::new().max_model_calls(10)).unwrap();
+    /// assert_eq!(slice.max_model_calls, Some(10));
+    /// assert_eq!(slice.max_cost_micro_usd, Some(500_000), "half of what is left");
+    /// assert_eq!(parent.remaining().max_model_calls, Some(20));
+    /// assert_eq!(parent.remaining().max_cost_micro_usd, Some(500_000));
+    /// ```
+    pub fn carve(&self, ask: &RunBudget) -> std::result::Result<RunBudget, BudgetExceeded> {
+        self.check()?;
+        let left = self.remaining();
+        let pick = |ask: Option<u64>, left: Option<u64>| match (ask, left) {
+            (Some(ask), Some(left)) => Some(ask.min(left)),
+            (Some(ask), None) => Some(ask),
+            (None, Some(left)) => Some(left.div_ceil(2)),
+            (None, None) => None,
+        };
+        let capped = left.max_cost_micro_usd.is_some();
+        let slice = RunBudget {
+            max_model_calls: pick(ask.max_model_calls, left.max_model_calls),
+            max_total_tokens: pick(ask.max_total_tokens, left.max_total_tokens),
+            max_cost_micro_usd: pick(ask.max_cost_micro_usd, left.max_cost_micro_usd),
+            max_wall_time: match (ask.max_wall_time, left.max_wall_time) {
+                (Some(ask), Some(left)) => Some(ask.min(left)),
+                (ask, left) => ask.or(left),
+            },
+            max_tool_calls: pick(ask.max_tool_calls, left.max_tool_calls),
+            allow_unpriced_models: if capped {
+                self.unpriced_allowed_in_chain()
+            } else {
+                ask.allow_unpriced_models
+            },
+        };
+        let usage = self.usage();
+        let exhausted = |limit: BudgetLimit, slice: Option<u64>, used: u64| {
+            (slice == Some(0)).then(|| BudgetExceeded::reached(limit, used, used))
+        };
+        if let Some(violation) = exhausted(
+            BudgetLimit::ModelCalls,
+            slice.max_model_calls.filter(|_| left.max_model_calls.is_some()),
+            usage.model_calls,
+        )
+        .or_else(|| {
+            exhausted(
+                BudgetLimit::TotalTokens,
+                slice.max_total_tokens.filter(|_| left.max_total_tokens.is_some()),
+                usage.total_tokens,
+            )
+        })
+        .or_else(|| {
+            exhausted(
+                BudgetLimit::Cost,
+                slice.max_cost_micro_usd.filter(|_| left.max_cost_micro_usd.is_some()),
+                usage.cost_micro_usd,
+            )
+        })
+        .or_else(|| {
+            exhausted(
+                BudgetLimit::ToolCalls,
+                slice.max_tool_calls.filter(|_| left.max_tool_calls.is_some()),
+                usage.tool_calls,
+            )
+        })
+        .or_else(|| {
+            (slice.max_wall_time == Some(Duration::ZERO)).then(|| {
+                let elapsed = duration_ms(usage.elapsed);
+                BudgetExceeded::reached(BudgetLimit::WallTime, elapsed, elapsed)
+            })
+        }) {
+            return Err(violation);
+        }
+        let reserve = |counter: Counter, slice: Option<u64>, limited: Option<u64>| {
+            if let (Some(amount), Some(_)) = (slice, limited) {
+                self.add(counter, amount);
+            }
+        };
+        reserve(Counter::ModelCalls, slice.max_model_calls, left.max_model_calls);
+        reserve(Counter::TotalTokens, slice.max_total_tokens, left.max_total_tokens);
+        reserve(Counter::Cost, slice.max_cost_micro_usd, left.max_cost_micro_usd);
+        reserve(Counter::ToolCalls, slice.max_tool_calls, left.max_tool_calls);
+        Ok(slice)
+    }
+
+    /// Whether every tracker in the chain that caps cost counts unpriced models as free.
+    fn unpriced_allowed_in_chain(&self) -> bool {
+        let own = self.budget.max_cost_micro_usd.is_none() || self.budget.allow_unpriced_models;
+        own && self.parent.as_ref().is_none_or(|parent| parent.unpriced_allowed_in_chain())
     }
 
     /// Counts usage carried by an event that no call site metered.
@@ -1293,5 +1531,48 @@ mod tests {
         assert_eq!(collected.len(), 2);
         assert_eq!(tracker.usage().total_tokens, 10);
         assert_eq!(tracker.usage().cost_micro_usd, 1_000);
+    }
+
+    #[test]
+    fn a_carved_slice_never_takes_the_chain_past_its_limits() {
+        let run = Arc::new(BudgetTracker::new(RunBudget::new().max_model_calls(10)));
+        let team = BudgetTracker::with_parent(RunBudget::new().max_tool_calls(6), Arc::clone(&run));
+        let slice = team.carve(&RunBudget::new().max_model_calls(4).max_tool_calls(100)).unwrap();
+        assert_eq!(slice.max_model_calls, Some(4));
+        assert_eq!(slice.max_tool_calls, Some(6), "the team's tool limit caps the ask");
+        // The slice counts in every tracker of the chain.
+        assert_eq!(run.usage().model_calls, 4);
+        assert_eq!(team.remaining().max_tool_calls, Some(0));
+        assert_eq!(team.remaining().max_model_calls, Some(6));
+        // Nothing of a limited resource left: the carve fails and reserves nothing.
+        let refused = team.carve(&RunBudget::new()).unwrap_err();
+        assert_eq!(refused.limit(), BudgetLimit::ToolCalls);
+        assert_eq!(run.usage().model_calls, 4);
+    }
+
+    #[test]
+    fn a_slice_counts_unpriced_models_as_free_only_where_the_chain_does() {
+        let capped = BudgetTracker::new(RunBudget::new().max_cost_micro_usd(1_000));
+        let ask = RunBudget::new().allow_unpriced_models();
+        assert!(!capped.carve(&ask).unwrap().allow_unpriced_models);
+        let lenient =
+            BudgetTracker::new(RunBudget::new().max_cost_micro_usd(1_000).allow_unpriced_models());
+        assert!(lenient.carve(&RunBudget::new()).unwrap().allow_unpriced_models);
+        let open = BudgetTracker::new(RunBudget::new());
+        assert!(open.carve(&ask).unwrap().allow_unpriced_models);
+        assert_eq!(open.carve(&RunBudget::new()).unwrap(), RunBudget::new());
+    }
+
+    #[test]
+    fn a_budget_round_trips_with_its_wall_time_in_milliseconds() {
+        let budget =
+            RunBudget::new().max_model_calls(3).max_wall_time(Duration::from_millis(1_500));
+        let json = serde_json::to_value(&budget).unwrap();
+        assert_eq!(json, serde_json::json!({ "maxModelCalls": 3, "maxWallTimeMs": 1500 }));
+        assert_eq!(serde_json::from_value::<RunBudget>(json).unwrap(), budget);
+        assert_eq!(
+            serde_json::from_value::<RunBudget>(serde_json::json!({})).unwrap(),
+            RunBudget::new()
+        );
     }
 }

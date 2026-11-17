@@ -390,6 +390,7 @@ let _log_line = err.diagnostics().to_string(); // everything but the message
 | Policy | `ToolPolicy`, `DeclarativePolicy`, `StrictestPolicy` | Allow, deny, or require approval; `DeclarativePolicy` denies unlisted tools; `evaluate_call` also receives the tool's `ToolOrigin` and the call ID (`PolicyCall`); `StrictestPolicy` applies several policies and keeps the strictest decision |
 | Screen | `ToolCallScreen` | The agent's guardrails; a rewrite is checked against the policy again |
 | Confirmation | `ToolApproval`, `ApprovalStore`, `ToolConfirmationHandler::decide_approval` | A live handler may return edited arguments, checked against the policy again, or a denial message. Decisions bind to the call's fingerprint — acting agent, tool origin and declaration digest, tool name, arguments — so they survive a re-issued call ID and never authorize another agent's call or another server's tool |
+| Model reviewer | `ToolReviewer`, `ModelApprover`, `ReviewScope`, `ReviewVerdict` | Opt-in approver before a person (`RunConfig::tool_reviewer`): approves, denies or escalates a call the policy holds, never a denied, confirmation-policy, requested or already-held one; an isolated model request with the call and the user's recent messages as untrusted data, a confidence floor, an audited verdict filed in the inbox as `model:<id>` (`ApprovalService::record_review`), metered against the run budget |
 | Approval service | `ApprovalService`, `StoreApprovalService`, `ApprovalPolicy` | An inbox over the approval store: quorum, slots filled by distinct approvers, an approver directory, delegation, escalation, expiry, and edit / reject / respond actions with compare-and-swap decisions. `route_unrouted` files held calls under a host's router, such as a kernel's inbox, and `add_notifier` adds an `ApprovalNotifier` to a service already built; wrappers forward both |
 
 ```rust
@@ -443,6 +444,32 @@ let ledger = InMemorySpendLedger::new(
 
 Calls billed in units rather than tokens — images, audio, characters — go through `ModelCallScope::meter` or `meter_usage`: the spend hold covers `UsageCall::max_cost_micro_usd` before the call is sent, and `MeteredUsage` commits the cost in micro-USD and counts its `UsageVector` (`UsageUnit::Images`, `AudioMillis`, `Characters`, …) in `BudgetTracker::units`. A unit call with no known price is refused under a cost cap. Agents make the run's scope current around every tool call (`ModelCallScope::within_tool`), so media calls in tools count against the run. `UnitRate` prices a unit in integer micro-USD.
 
+## Typed Decisions
+
+`decide::<T>(model, input)` has a model pick one value of a `Choice` type, such as an enum of
+routes, and returns a `Decision` with the option's name, the model's rationale and its
+confidence. The request carries a JSON response schema whose `choice` enumerates the options,
+declares no tool and forces no `tool_choice`; a reply that names no option fails with
+`decision.invalid_choice`. `Decider` adds an instruction, an explicit `ModelCallScope` and
+`decide_among` for options known only at run time; without an explicit scope the call is
+metered against the current one. `adk-agent`'s `DecisionAgent` and `adk-graph`'s
+`DecisionNode` route on it, and `adk-rust-macros` derives `Choice` for an enum.
+
+```rust,no_run
+use std::sync::Arc;
+
+use adk_core::{ChoiceOption, Decider, Llm};
+
+async fn triage(model: Arc<dyn Llm>, ticket: &str) -> adk_core::Result<String> {
+    let options = [
+        ChoiceOption::new("urgent", "Production is down or data is at risk"),
+        ChoiceOption::new("normal", "Everything else"),
+    ];
+    let decision = Decider::new(model).decide_among(&options, ticket).await?;
+    Ok(decision.option)
+}
+```
+
 ## Audit Records
 
 `AuditRecorder` (module `audit_log`) receives a record for every governed tool decision, approval decision, kill-switch change, and `outcome_unknown` answer; `InMemoryAuditRecorder` keeps them in memory and `FileAuditRecorder` appends them to a JSON Lines file that survives a restart. Each record names the acting agent and the subject it acts for and carries an argument digest, never the arguments. Under `AuditFailureMode::Block` (the default) an action whose record cannot be written does not happen. `AuditLogStore` and `InMemoryAuditLogStore` hold append-only logs with a compare-and-swap on the log size; `adk-auth`'s `signed_audit::AuditLog` signs them. `AuditLogStore::redact` drops chosen record bodies and keeps their hashes; `subject::PseudonymousRecorder` names visitors (or every subject) by registry pseudonym, and `subject::AuditLogSubjectData` redacts the records that name a subject being erased.
@@ -450,6 +477,19 @@ Calls billed in units rather than tokens — images, audio, characters — go th
 ## Subject Rights
 
 Module `subject` holds what a deployment needs to know whom it holds data about and to act on that person's data across stores. `SubjectKind::Visitor` names a person known only by a random `VisitorId`; a visitor's run is never authenticated and a visitor cannot decide an approval. `ConsentStore` keeps `ConsentRecord`s per subject and `ConsentPurpose`; `SubjectRegistry` keeps each subject's pseudonym, links, and erasure state. `SubjectRights` exports, erases, and links a subject over every registered `SubjectDataStore` adapter and reports each store's outcome — `erased`, `scheduled`, `unsupported`, `unreachable`, or `failed` — so no store is skipped silently. `InMemorySubjectRegistry` and `InMemoryConsentStore` are the reference implementations, and `subject_registry_conformance_tests!`, `consent_store_conformance_tests!`, and `subject_data_store_conformance_tests!` (feature `conformance`) prove other backends. See [Subject Rights](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/security/subject-rights.md).
+
+## Background Sub-Agents
+
+`adk_core::subagent` is the contract for sub-agents a parent starts and does not wait for:
+`SubagentHost` (start, get, list, send, cancel, scoped to the parent's session by
+`SubagentScope`), `SubagentStatus` (`queued`, `running`, `waitingForHuman`, `parked`,
+`completed`, `failed`, `cancelled`), `SubagentLaunch` (what a sub-agent's runs carry), the
+notice a parent receives (`subagent_notice`), and `ToolCeiling`, the policy that keeps a
+sub-agent to its parent's tools. `BudgetTracker::carve` takes a sub-agent's budget slice out
+of what the parent's run has left; `RunBudget` serializes, `RunBudget::narrowed` combines two
+budgets into the stricter, and `RunLimits` is what an agent run's input narrows its runner by. `adk-server` (`DurableSubagents`) and `adk-kernel`
+(`Kernel::subagents`) host them; see
+[Background sub-agents](../docs/official_docs/agents/background-subagents.md).
 
 ## Durable Runtime Contracts
 
@@ -603,7 +643,7 @@ Set per agent with `LlmAgentBuilder::tool_execution_strategy()`.
 | `ToolConfirmationRequest::fingerprint()` names the acting agent and the tool's `ToolOrigin` | Take fingerprints from the held call's request or `ToolConfirmationRequest::for_tool` |
 | `ErrorCategory` gains `Conflict` (409) and `ResourceExhausted` (429); a provider account out of quota or credit is `ResourceExhausted`, not `RateLimited` | Add match arms |
 | `RetryBudget` gains `max_delay`; only `ReadOnly` and `Idempotent` tools are retried | `RetryBudget::new(..).with_max_delay(..)`; declare `ToolEffect::Idempotent` where a retry is safe |
-| `RunConfig` gains `acting`, `action_ledger`, `approval_service`, `approval_store`, `audit`, `budget`, `budget_tracker`, `consent_gate`, `deny_on_confirmation_timeout`, `durable_run_id`, `egress_policy`, `governance`, `history_compactor`, `intra_compaction`, `invocation_hooks`, `llm_spend_estimate`, `request_context`, `request_metadata`, `requested_call`, `spend_ledger`, `tool_approvals`, `tool_confirmation_timeout`, `tool_policy`, and `transfer_target_descriptions` | End struct literals with `..Default::default()` |
+| `RunConfig` gains `acting`, `action_ledger`, `approval_service`, `approval_store`, `audit`, `budget`, `budget_tracker`, `consent_gate`, `deny_on_confirmation_timeout`, `durable_run_id`, `egress_policy`, `governance`, `history_compactor`, `intra_compaction`, `invocation_hooks`, `llm_spend_estimate`, `request_context`, `request_metadata`, `requested_call`, `spend_ledger`, `tool_approvals`, `tool_confirmation_timeout`, `tool_policy`, `tool_reviewer`, and `transfer_target_descriptions` | End struct literals with `..Default::default()` |
 | `IntraCompactionConfig` gains `enabled` and `context_window_fraction`; `token_threshold` is `Option<u64>`; auto-compaction runs before every model call and is on by default | `IntraCompactionConfig::at_tokens(n)` replaces a literal; `IntraCompactionConfig::disabled()` turns it off |
 | `Tool` gains `effect()`, `timeout_override()`, `origin()`, `annotations()`, and `egress()`; `Llm` gains `context_window()`; `ReadonlyContext` gains `acting_context()`; `Agent` gains `close()`, `screen_user_input()`, and transfer flags | Wrappers forward them |
 | `LlmResponse` gains `model` and `provider`; `UsageMetadata` gains `builtin_tool_uses` | End struct literals with `..Default::default()` |

@@ -70,6 +70,19 @@ struct Watchdog {
 
 impl Watchdog {
     async fn start(runs: Arc<dyn DurableRunStore>, approvals: Arc<dyn ApprovalService>) -> Self {
+        Self::start_reviewed(runs, approvals, None).await
+    }
+
+    /// As [`start`](Self::start), with `reviewer` deciding the held call before a person.
+    async fn start_reviewed(
+        runs: Arc<dyn DurableRunStore>,
+        approvals: Arc<dyn ApprovalService>,
+        reviewer: Option<Arc<dyn adk_core::ToolReviewer>>,
+    ) -> Self {
+        let mut run_config = RunConfig::builder().approval_service(approvals.clone());
+        if let Some(reviewer) = reviewer {
+            run_config = run_config.tool_reviewer(reviewer);
+        }
         let sessions = Arc::new(InMemorySessionService::new());
         let model = Arc::new(ScriptedLlm::new(
             "scripted",
@@ -89,7 +102,7 @@ impl Watchdog {
             .app_name(APP)
             .agent(Arc::new(agent))
             .session_service(sessions.clone() as Arc<dyn SessionService>)
-            .run_config(RunConfig::builder().approval_service(approvals.clone()).build())
+            .run_config(run_config.build())
             .action_ledger(Arc::new(InMemoryActionLedger::new()))
             .tool_policy(Arc::new(
                 DeclarativePolicy::builder()
@@ -221,6 +234,65 @@ async fn a_kernel_files_and_publishes_the_calls_of_a_service_built_without_a_rou
     assert_eq!(held, vec![(pid.clone(), "file_report".to_string())]);
     assert_eq!(verdicts.len(), 1);
     assert_eq!((&verdicts[0].0, verdicts[0].1), (&pid, ToolConfirmationDecision::Approve));
+    watchdog.stop().await;
+}
+
+/// Autonomy parity item 2: a model reviewer on the kernel's agent decides the held call in
+/// the run; the call runs once without parking, the kernel's inbox records the request as
+/// decided by `model:<id>`, and the bus publishes `decided` naming it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_model_reviewer_decides_in_the_run_and_the_kernel_records_who_decided() {
+    let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+    let approvals: Arc<dyn ApprovalService> = Arc::new(
+        StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+            .with_run_store(runs.clone()),
+    );
+    let reviewer_model = Arc::new(ScriptedLlm::new(
+        "claude-haiku-5-5",
+        vec![ScriptedResponse::text(
+            r#"{"verdict":"approve","confidence":0.97,"rationale":"filing the report is the task"}"#,
+        )],
+    ));
+    let reviewer = Arc::new(adk_core::ModelApprover::new(reviewer_model));
+    let watchdog = Watchdog::start_reviewed(runs, approvals.clone(), Some(reviewer)).await;
+    let mut events = watchdog.kernel.bus().subscribe();
+    let operator = watchdog.operator();
+    let pid = operator
+        .spawn(&SpawnRequest::new(APP, json!({ "text": "file the report" })))
+        .await
+        .unwrap()
+        .meta
+        .pid;
+
+    eventually("the process to finish", || async {
+        let run = watchdog.runs.get(&pid).await.unwrap()?;
+        (run.state == RunState::Completed).then_some(())
+    })
+    .await;
+    assert_eq!(watchdog.calls.load(Ordering::SeqCst), 1, "the call runs once");
+    let filed = approvals
+        .inbox(adk_core::InboxQuery::default().with_states(ApprovalState::ALL))
+        .await
+        .unwrap()
+        .items;
+    assert_eq!(filed.len(), 1);
+    assert_eq!(
+        (filed[0].state, filed[0].decisions[0].approver.id.as_str(), filed[0].run_id.as_deref()),
+        (ApprovalState::Approved, "model:claude-haiku-5-5", Some(pid.as_str()))
+    );
+    let decided = loop {
+        let record = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("a decided event")
+            .expect("the bus stays open");
+        if let KernelEvent::Decided { pid, decision, by, .. } = record.event {
+            break (pid, decision, by.id);
+        }
+    };
+    assert_eq!(
+        decided,
+        (pid.clone(), ToolConfirmationDecision::Approve, "model:claude-haiku-5-5".to_string())
+    );
     watchdog.stop().await;
 }
 

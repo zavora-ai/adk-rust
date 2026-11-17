@@ -117,6 +117,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "jsonschema",
  "regex",
  "reqwest",
  "serde",

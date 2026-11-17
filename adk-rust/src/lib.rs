@@ -1569,16 +1569,17 @@ pub async fn run(instructions: &str, input: &str) -> Result<String> {
 pub mod prelude {
     // Core types (always available)
     pub use crate::{
-        AdkError, Agent, BeforeModelResult, Content, Event, EventStream, InvocationContext, Llm,
-        LlmRequest, LlmResponse, Part, Result, RunConfig, RunConfigBuilder, Session, State, Tool,
-        ToolContext, Toolset,
+        AdkError, Agent, BeforeModelResult, Choice, ChoiceOption, Content, Decider, Decision,
+        Event, EventStream, InvocationContext, Llm, LlmRequest, LlmResponse, Part, Result,
+        RunConfig, RunConfigBuilder, Session, State, Tool, ToolContext, Toolset, decide,
     };
 
     // Agents
     #[cfg(feature = "agents")]
     pub use crate::agent::{
-        ConditionalAgent, CustomAgent, CustomAgentBuilder, LlmAgent, LlmAgentBuilder,
-        LlmConditionalAgent, LlmConditionalAgentBuilder, LoopAgent, ParallelAgent, SequentialAgent,
+        ConditionalAgent, CustomAgent, CustomAgentBuilder, DecisionAgent, DecisionAgentBuilder,
+        LlmAgent, LlmAgentBuilder, LlmConditionalAgent, LlmConditionalAgentBuilder, LoopAgent,
+        ParallelAgent, SequentialAgent,
     };
 
     // Models

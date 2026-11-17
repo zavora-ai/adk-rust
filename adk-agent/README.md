@@ -19,6 +19,7 @@ Agent implementations for ADK-Rust (LLM, Custom, Workflow agents).
 | `LoopAgent` | Repeats sub-agents until one escalates or the iteration limit is reached |
 | `ConditionalAgent` | Branches on a function of the invocation context |
 | `LlmConditionalAgent` | Routes to one of several sub-agents by a model classification |
+| `DecisionAgent` | Routes by a typed decision made with structured output: a route, a rationale and a confidence, with a confidence floor and a fallback route; the call counts against the run budget |
 | `TeamSpec` / `CompiledTeam` | A portable, validated team topology compiled from existing agents |
 | `CodeActAgent` | (feature `codeact`) Acts by writing and running code; see [CodeAct Agent](#codeact-agent-feature-codeact) |
 | `CodingAgent` | (feature `coding`) A coding harness over `LlmAgent` with the [`adk-devtools`](https://crates.io/crates/adk-devtools) toolset and a `write_todos` planning tool; see the [Coding Agent guide](../docs/official_docs/coding-agent/index.md) |
@@ -351,6 +352,14 @@ fn routers(
 ```
 
 `LlmConditionalAgent` lowercases route labels and the model's trimmed classification, and picks the first label the classification contains, so the model does not need to produce an exact match.
+
+### Background Sub-Agents
+
+`subagents::SubagentTools::new(host).tools()` gives a model `start_subagent`,
+`subagent_status`, `message_subagent` and `cancel_subagent` over any
+`adk_core::SubagentHost`. A start carves the sub-agent's budget from the calling run's, limits
+it to the caller's tools, and is keyed by the call's idempotency key. Each tool goes through
+the governed path. See [Background sub-agents](../docs/official_docs/agents/background-subagents.md).
 
 ### Multi-Agent Systems
 

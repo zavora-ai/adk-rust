@@ -5,6 +5,7 @@ Two paths publish an MCP server:
 | You have | Use | Feature |
 |---|---|---|
 | ADK-Rust `Tool`s, such as `FunctionTool`, `#[tool]` functions or AWP capabilities | `adk_tool::mcp::server::McpServer` with `McpRouterBuilder` | `mcp-server` (experimental) |
+| A whole agent, each call a durable run followed as an MCP task | `adk_server::mcp::McpAgentHost` ([Serve an agent over MCP](agent-server.md)) | `adk-server` `mcp` (experimental) |
 | A hand-written server with resources, prompts or custom handlers | The official `rmcp` SDK, re-exported as `adk_tool::mcp::rmcp` | `mcp` |
 
 ## Publish ADK-Rust tools (`mcp-server`)
@@ -73,6 +74,16 @@ can correct them, and never reach the tool.
 | `McpCallerResolver` | `AnonymousCallers` | Runs for every request to the endpoint and returns the `McpCaller` (an id, whether it authenticated, typed extensions); an error refuses the request with its HTTP status, and `401` carries `WWW-Authenticate: Bearer` |
 | `McpCallExecutor::execute` | `DirectExecutor`: `Tool::execute` with a `SimpleToolContext` | Receives every call to a visible tool with valid arguments, with its caller, JSON-RPC request id and session; returns `Completed(value)`, `Failed(error)` or a refusal |
 | `McpCallExecutor::is_visible` | Every tool | Filters `tools/list` per caller; a call to a hidden tool is answered as a call to an unknown tool |
+| `McpTaskHost` | None | Set with `task_host`: declares the tasks extension (SEP-2663) and answers `tasks/get`, `tasks/update` and `tasks/cancel` with the resolved caller |
+| `local_caller` | `McpCaller::anonymous()` | The caller of requests without an HTTP request, such as over stdio |
+
+An executor may also answer `Task(task)` to a call whose `accepts_task` is set (the client
+declared the tasks extension), and `InputRequired { input_requests, request_state }` to one
+whose `accepts_input_required` is set (MCP `2026-07-28` or later); the retried call carries
+`input_responses` and the echoed `request_state`, which the executor treats as untrusted. Any
+other client receives JSON-RPC `-32603` for such an answer. `McpToolCall::peer` sends
+`notifications/progress` when the request carried a `progressToken`, and asks a client before
+`2026-07-28` with `elicitation/create`.
 
 An executor is where calls enter a governed path, such as `adk_core::authorize_tool_call`
 and the action ledger. The JSON-RPC request id is unique only within its session, so an

@@ -10,6 +10,7 @@ Agent evaluation in ADK-Rust supports multiple evaluation strategies:
 - **Response Similarity**: Compare agent responses using various algorithms (Jaccard, Levenshtein, ROUGE)
 - **LLM-Judged Evaluation**: Use another LLM to assess semantic similarity and quality
 - **Rubric-Based Scoring**: Evaluate against custom criteria with weighted scoring
+- **Rubric-Graded Outcomes**: Grade a deliverable per criterion at run time, and loop an agent until the rubric passes
 
 ## Quick Start
 
@@ -385,6 +386,70 @@ println!("Reasoning: {}", verdict.reasoning);
 The judge attempts function-calling (response schema) first, then falls back to prompting for JSON with a lenient parser that handles raw JSON, markdown fences, and embedded JSON in prose.
 
 `Evaluator::set_structured_judge` runs the judge on the last turn's expected and actual responses. A `fail` verdict, a judge error, or a missing agent response fails the case; `pass` and `partial` verdicts record the score without failing it.
+
+### Rubric-Graded Outcomes
+
+`OutcomeGrader` grades one deliverable against a rubric of independently gradeable criteria at
+run time, in a context of its own: its single request holds the task, the numbered criteria and
+the deliverable, never the history of the agent that produced it. It returns an `OutcomeGrade`
+with a `CriterionGrade` (pass or fail, with feedback) per criterion.
+
+```rust,no_run
+use std::sync::Arc;
+
+use adk_eval::{OutcomeGrader, RubricConfig};
+
+async fn grade(model: Arc<dyn adk_core::Llm>) -> adk_core::Result<()> {
+    let rubric = RubricConfig::from_markdown(
+        "- Names the product, Ferris Notes\n- States the monthly price\n- At most 60 words",
+    );
+    let grade = OutcomeGrader::new(model)
+        .grade("Write a launch blurb", "Ferris Notes keeps your notes in sync.", &rubric)
+        .await?;
+    println!("{} of {} pass", grade.passed(), grade.criteria.len());
+    if !grade.satisfied() {
+        println!("{}", grade.feedback()); // "- FAILED: States the monthly price\n  Feedback: …"
+    }
+    Ok(())
+}
+```
+
+`RubricCheckAgent` turns the grader into a loop condition: placed after the agent that produces
+the deliverable in a `LoopAgent`, it grades each attempt, yields the failed criteria and their
+feedback for the next attempt, and escalates once every criterion passes or its cap is reached.
+
+```rust,no_run
+use std::sync::Arc;
+
+use adk_agent::{LlmAgentBuilder, LoopAgent};
+use adk_eval::{RubricCheckAgent, RubricConfig};
+
+fn blurb_loop(model: Arc<dyn adk_core::Llm>) -> adk_core::Result<LoopAgent> {
+    let writer = LlmAgentBuilder::new("writer")
+        .instruction("Write the product blurb the user asks for.")
+        .model(model.clone())
+        .output_key("draft")
+        .build()?;
+    let rubric = RubricConfig::from_criteria(["Names the product", "States the monthly price"]);
+    let check = RubricCheckAgent::new("rubric_check", model, rubric)
+        .with_deliverable_key("draft")
+        .with_max_iterations(3);
+    Ok(LoopAgent::new("blurb", vec![Arc::new(writer), Arc::new(check)]))
+}
+```
+
+| Behaviour | Detail |
+|---|---|
+| Deliverable | session state `with_deliverable_key(key)` (the writer's `output_key`), else the latest model reply |
+| Task | `with_task(text)`, else the invocation's user message |
+| Cap | `with_max_iterations(n)`: default 3 (`DEFAULT_OUTCOME_ITERATIONS`), at most 20 (`MAX_OUTCOME_ITERATIONS`); attempts count within one invocation; any other value fails the run with `eval.outcome.invalid_cap` |
+| Result | `{invocationId, iteration, maxIterations, outcome, grade}` in state key `rubric_check` (`with_output_key`); `outcome` is `satisfied`, `needs_revision` or `max_iterations_reached` |
+| Budget | The grading call runs in the run's `ModelCallScope`, so it counts against the run budget and spend ledger |
+| Fail closed | A criterion without a verdict fails; a reply with no readable JSON fails every criterion; no deliverable fails every criterion without a model call |
+
+`Rubric`'s `weight` and `levels` apply to scored rubric evaluation, not to pass/fail grading.
+The harness grades goals with the same grader; see
+[Rubric-graded goals](../harness/plan-and-goals.md#rubric-graded-goals).
 
 ### Cost and Latency Tracking
 

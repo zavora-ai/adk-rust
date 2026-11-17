@@ -75,6 +75,12 @@ pub struct HarnessArgs {
     #[arg(long)]
     pub allow_unsandboxed: bool,
 
+    /// In auto mode, have the session's model review each call the mode holds (a host
+    /// command, an external tool) and approve, deny or escalate it to you; never decides a
+    /// denied or non-waivable call
+    #[arg(long)]
+    pub auto_review: bool,
+
     /// Refuse to start when the sandbox is unavailable instead of running bash on the
     /// host behind approvals (requires --sandbox)
     #[arg(long, requires = "sandbox")]
@@ -443,6 +449,8 @@ struct ConfigFile {
     yes: Option<bool>,
     sandbox: Option<bool>,
     allow_unsandboxed: Option<bool>,
+    /// `auto_review = true`: the model reviews what auto mode holds; the user config only.
+    auto_review: Option<bool>,
     fail_if_unavailable: Option<bool>,
     trust: Option<bool>,
     packs: Option<Vec<String>>,
@@ -482,6 +490,11 @@ struct ConfigFile {
     #[serde(default)]
     #[allow(dead_code)]
     kernel: Option<toml::Value>,
+    /// `[goal]` (spec 3.1 §7.11): the rubric `adk-rust goal` grades against, read through
+    /// `RubricArgs::resolve`, so it is neither applied here nor reported as unknown.
+    #[serde(default)]
+    #[allow(dead_code)]
+    goal: Option<toml::Value>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
 }
@@ -731,6 +744,9 @@ pub struct ResolvedHarnessArgs {
     pub sandbox: bool,
     /// `--allow-unsandboxed`.
     pub allow_unsandboxed: bool,
+    /// `--auto-review` or `auto_review = true` in the user config: in auto mode, the
+    /// session's model reviews each call the mode holds before you are asked.
+    pub auto_review: bool,
     /// `--fail-if-unavailable`.
     pub fail_if_unavailable: bool,
     /// `--trust`.
@@ -853,6 +869,7 @@ impl HarnessArgs {
         let mut yes = false;
         let mut sandbox = false;
         let mut allow_unsandboxed = false;
+        let mut auto_review = false;
         let mut fail_if_unavailable = false;
         let mut trust = false;
         let mut packs = Vec::new();
@@ -879,6 +896,7 @@ impl HarnessArgs {
             yes = user.yes.unwrap_or(false);
             sandbox = user.sandbox.unwrap_or(false);
             allow_unsandboxed = user.allow_unsandboxed.unwrap_or(false);
+            auto_review = user.auto_review.unwrap_or(false);
             fail_if_unavailable = user.fail_if_unavailable.unwrap_or(false);
             trust = user.trust.unwrap_or(false);
             for pack in user.packs.iter().flatten() {
@@ -1043,6 +1061,7 @@ impl HarnessArgs {
             for (key, set) in [
                 ("yes", project.yes == Some(true)),
                 ("allow_unsandboxed", project.allow_unsandboxed == Some(true)),
+                ("auto_review", project.auto_review == Some(true)),
                 ("trust", project.trust == Some(true)),
                 ("packs", project.packs.as_ref().is_some_and(|packs| !packs.is_empty())),
                 ("members", project.members.as_ref().is_some_and(|members| !members.is_empty())),
@@ -1068,6 +1087,7 @@ impl HarnessArgs {
         yes |= self.yes;
         sandbox |= self.sandbox;
         allow_unsandboxed |= self.allow_unsandboxed;
+        auto_review |= self.auto_review;
         fail_if_unavailable |= self.fail_if_unavailable;
         trust |= self.trust;
         packs.extend(self.packs.iter().copied());
@@ -1110,6 +1130,7 @@ impl HarnessArgs {
             yes,
             sandbox,
             allow_unsandboxed,
+            auto_review,
             fail_if_unavailable,
             trust,
             packs,
@@ -1179,6 +1200,7 @@ mod tests {
                 yes: false,
                 sandbox: false,
                 allow_unsandboxed: false,
+                auto_review: false,
                 fail_if_unavailable: false,
                 trust: false,
                 packs: vec![],
@@ -1250,6 +1272,25 @@ mod tests {
         assert_eq!(unattended.lifetime(), Some(std::time::Duration::from_secs(600)));
         let attended = resolved.shells.apply(adk_harness::BackgroundShellConfig::attended());
         assert_eq!(attended.lifetime(), None, "the REPL sets no lifetime");
+    }
+
+    /// Auto review is off unless the user config or `--auto-review` turns it on; the
+    /// workspace file cannot (autonomy parity item 2).
+    #[test]
+    fn auto_review_comes_from_the_user_config_or_the_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!args_in(dir.path()).resolve(HarnessMode::Auto, None).unwrap().auto_review);
+
+        let flagged = HarnessArgs { auto_review: true, ..args_in(dir.path()) }
+            .resolve(HarnessMode::Auto, None)
+            .unwrap();
+        assert!(flagged.auto_review);
+
+        let user = dir.path().join("user.toml");
+        write(&user, "auto_review = true\n");
+        let configured = args_in(dir.path()).resolve(HarnessMode::Auto, Some(&user)).unwrap();
+        assert!(configured.auto_review);
+        assert!(configured.notes.is_empty(), "{:?}", configured.notes);
     }
 
     /// Snapshots are on unless the user config or the flag turns them off; the workspace
@@ -1404,14 +1445,25 @@ enabled = false
         write(
             &dir.path().join(PROJECT_CONFIG_FILE),
             "mode = \"auto\"\nyes = true\ntrust = true\nallow_unsandboxed = true\n\
-             members = [\"x=acp:evil\"]\npacks = [\"payments\"]\nsurprise = 1\n",
+             auto_review = true\nmembers = [\"x=acp:evil\"]\npacks = [\"payments\"]\n\
+             surprise = 1\n",
         );
         let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, None).unwrap();
         assert_eq!(resolved.mode, HarnessMode::Ask);
         assert!(!resolved.mode_explicit);
         assert!(!resolved.yes && !resolved.trust && !resolved.allow_unsandboxed);
+        assert!(!resolved.auto_review, "a workspace cannot let a model approve");
         assert!(resolved.members.is_empty() && resolved.packs.is_empty());
-        for key in ["mode", "yes", "trust", "allow_unsandboxed", "members", "packs", "surprise"] {
+        for key in [
+            "mode",
+            "yes",
+            "trust",
+            "allow_unsandboxed",
+            "auto_review",
+            "members",
+            "packs",
+            "surprise",
+        ] {
             assert!(
                 resolved.notes.iter().any(|note| note.contains(&format!("`{key}`"))),
                 "{key}: {:?}",

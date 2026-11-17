@@ -845,6 +845,24 @@ impl Runner {
         &self.governance
     }
 
+    /// The tool policy every run whose own config sets none is governed by.
+    ///
+    /// A host that layers a run-specific policy under it — a sub-agent's tool ceiling —
+    /// composes the two with [`StrictestPolicy`](adk_core::StrictestPolicy), so the runner's
+    /// decisions still apply.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut config = runner.run_config().clone();
+    /// let mut layers: Vec<Arc<dyn ToolPolicy>> = config.tool_policy.clone().or_else(|| runner.tool_policy().cloned()).into_iter().collect();
+    /// layers.push(Arc::new(ToolCeiling::new(["read_file"])));
+    /// config.tool_policy = Some(Arc::new(StrictestPolicy::new(layers)));
+    /// ```
+    pub fn tool_policy(&self) -> Option<&Arc<dyn adk_core::ToolPolicy>> {
+        self.tool_policy.as_ref()
+    }
+
     /// Releases what the runner's agents and plugins hold: every agent's toolsets, through
     /// [`Agent::close`] on the root agent, then the plugins' close hooks.
     ///
