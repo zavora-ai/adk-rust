@@ -161,7 +161,13 @@ which needs the `gemini-vertex` feature; otherwise it uses `GOOGLE_API_KEY` or `
 
 A Gemini error object inside a successful response fails the call, a stream that ends without a
 `finishReason` fails with `model.gemini.unfinished_stream`, and a blocked prompt ends the turn
-with `FinishReason::Safety`, instead of reading as an empty answer.
+with `FinishReason::Safety`, instead of reading as an empty answer. `MALFORMED_FUNCTION_CALL` and
+`UNEXPECTED_TOOL_CALL` finish with `FinishReason::MalformedToolCall`.
+
+Every adapter reports a model that declined — an Anthropic `refusal` stop reason, an OpenAI or
+OpenRouter `refusal` — as `FinishReason::Refusal`, with the refusal as the response's text, and a
+tool call the provider reports as invalid as `FinishReason::MalformedToolCall`. `LlmAgent` and
+`CodeActAgent` end the run on either, with `model.refusal` or `model.malformed_tool_call`.
 
 ### OpenAI
 

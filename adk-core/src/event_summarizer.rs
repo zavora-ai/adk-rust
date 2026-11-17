@@ -140,14 +140,9 @@ impl BaseEventsSummarizer for LlmEventSummarizer {
             finish_reason = chunk.finish_reason.or(finish_reason);
         }
 
-        // A summary the model cut short would replace history with part of what it said.
-        if let Some(
-            reason @ (FinishReason::MaxTokens
-            | FinishReason::Safety
-            | FinishReason::Recitation
-            | FinishReason::Other),
-        ) = finish_reason
-        {
+        // A summary the model cut short, or declined, would replace history with part of what
+        // it said or with a refusal.
+        if let Some(reason) = finish_reason.filter(|reason| *reason != FinishReason::Stop) {
             return Err(AdkError::new(
                 ErrorComponent::Model,
                 ErrorCategory::Internal,

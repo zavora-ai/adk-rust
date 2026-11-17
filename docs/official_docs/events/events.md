@@ -88,6 +88,15 @@ if let Some(content) = &event.llm_response.content {
 
   Truncation is **not** reported this way: a response cut short by a token limit carries `finish_reason: FinishReason::MaxTokens` and no error code.
 
+- **llm_response.finish_reason**: Why the model stopped. `FinishReason` is `#[non_exhaustive]`, so a `match` on it needs a wildcard arm. Two reasons end the run even without an error code — the event is emitted and persisted first, then `LlmAgent` and `CodeActAgent` fail the run, and no tool call of that turn runs:
+
+  | Finish reason | Reported by | Run error |
+  |---|---|---|
+  | `FinishReason::Refusal` | Anthropic `stop_reason: "refusal"`, an OpenAI Chat Completions `refusal`, a Responses `refusal` content part, an OpenRouter `native_finish_reason` of `refusal` | `model.refusal`, `ErrorCategory::Forbidden`; the message carries the provider's explanation or the refusal text |
+  | `FinishReason::MalformedToolCall` | Gemini `MALFORMED_FUNCTION_CALL` and `UNEXPECTED_TOOL_CALL`, Bedrock `malformed_tool_use` | `model.malformed_tool_call`, `ErrorCategory::Internal` |
+
+  The event keeps the refusal text, so a chat surface still shows what the model said. `FinishReason::Safety` stays the content-filter block, and its outcome depends on the content and the error code as before.
+
 - **llm_response.interrupted**: The generation was interrupted (for example a realtime turn cut off by the user, or a tool confirmation pausing the turn). This is recorded on the event but is **not** a terminal error on its own, so the run does not fail.
 
 ```rust

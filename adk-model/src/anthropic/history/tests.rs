@@ -94,7 +94,7 @@ fn marks_a_paused_turn_for_continuation() {
 #[test]
 fn preserves_refusal_and_context_limit_reasons() {
     for (stop, reason) in [
-        (StopReason::Refusal, adk_core::FinishReason::Safety),
+        (StopReason::Refusal, adk_core::FinishReason::Refusal),
         (StopReason::ModelContextWindowExceeded, adk_core::FinishReason::MaxTokens),
     ] {
         let mut message = message();

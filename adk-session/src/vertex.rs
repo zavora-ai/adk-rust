@@ -3508,6 +3508,10 @@ fn apply_google_adk_raw_event(event: &mut Event, raw_event: &Map<String, Value>)
             "MAX_TOKENS" | "MaxTokens" => FinishReason::MaxTokens,
             "SAFETY" | "Safety" => FinishReason::Safety,
             "RECITATION" | "Recitation" => FinishReason::Recitation,
+            "MALFORMED_FUNCTION_CALL" | "UNEXPECTED_TOOL_CALL" | "MalformedToolCall" => {
+                FinishReason::MalformedToolCall
+            }
+            "Refusal" => FinishReason::Refusal,
             _ => FinishReason::Other,
         });
     }
@@ -4220,7 +4224,10 @@ fn build_google_adk_raw_event(
             FinishReason::MaxTokens => Some("MAX_TOKENS"),
             FinishReason::Safety => Some("SAFETY"),
             FinishReason::Recitation => Some("RECITATION"),
-            FinishReason::Other => None,
+            FinishReason::MalformedToolCall => Some("MALFORMED_FUNCTION_CALL"),
+            // Gemini has no refusal finish reason; the event itself keeps `Refusal`.
+            FinishReason::Refusal | FinishReason::Other => None,
+            _ => None,
         };
         if let Some(finish_reason) = finish_reason {
             raw_event.insert("finishReason".to_string(), Value::String(finish_reason.to_string()));
@@ -5897,6 +5904,31 @@ mod tests {
         .expect("direct raw JSON");
         assert_eq!(preserved["output"]["future"], true);
         assert_eq!(preserved["usageMetadata"]["vendorExtension"]["future"], true);
+    }
+
+    #[test]
+    fn finish_reasons_reach_google_adk_by_their_gemini_names() {
+        for (reason, raw) in [
+            (FinishReason::MalformedToolCall, "MALFORMED_FUNCTION_CALL"),
+            (FinishReason::Refusal, "OTHER"),
+            (FinishReason::Safety, "SAFETY"),
+        ] {
+            let mut event = Event::new("inv-finish");
+            event.author = "agent".to_string();
+            event.llm_response.finish_reason = Some(reason);
+            let payload = build_append_event_payload(&event).expect("append payload");
+            assert_eq!(payload["rawEvent"]["finishReason"], raw, "{reason:?}");
+            let embedded: Event = serde_json::from_str(
+                payload["rawEvent"][RUST_RAW_EVENT_ENVELOPE_KEY]["adkEvent"].as_str().unwrap(),
+            )
+            .expect("embedded event");
+            assert_eq!(embedded.llm_response.finish_reason, Some(reason));
+        }
+
+        let mut event = Event::new("inv-python");
+        let raw = serde_json::json!({"finishReason": "UNEXPECTED_TOOL_CALL"});
+        apply_google_adk_raw_event(&mut event, raw.as_object().unwrap()).expect("apply raw event");
+        assert_eq!(event.llm_response.finish_reason, Some(FinishReason::MalformedToolCall));
     }
 
     #[test]

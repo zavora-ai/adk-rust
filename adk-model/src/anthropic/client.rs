@@ -49,8 +49,15 @@ pub struct AnthropicClient {
     latest_rate_limit: Arc<RwLock<RateLimitInfo>>,
 }
 
+/// The identifier from `claude-` on, so a platform ID such as `anthropic.claude-sonnet-5-5`
+/// or `us.anthropic.claude-opus-4-7-v1` follows the first-party model's contract.
+fn claude_id(model: &str) -> &str {
+    model.find("claude-").map_or(model, |start| &model[start..])
+}
+
 impl AnthropicClient {
     fn rejects_sampling(model: &str) -> bool {
+        let model = claude_id(model);
         [
             "claude-fable-5",
             "claude-mythos-5",
@@ -66,7 +73,10 @@ impl AnthropicClient {
     }
 
     fn supports_fast_mode(model: &str) -> bool {
-        model.starts_with("claude-opus-5") || model.starts_with("claude-opus-4-8")
+        let model = claude_id(model);
+        ["claude-opus-5", "claude-opus-4-8", "claude-fable-5-2", "claude-mythos-5-2"]
+            .iter()
+            .any(|prefix| model.starts_with(prefix))
     }
 
     /// The effort control `model` has (spec 3.1 §7.23): Claude 4.6 and later take
@@ -351,7 +361,7 @@ impl AnthropicClient {
                 ErrorCategory::InvalidInput,
                 "model.anthropic.fast_mode_unsupported",
                 format!(
-                    "model '{model}' does not support Anthropic fast mode; use claude-opus-5-5, claude-opus-5, or claude-opus-4-8, or disable fast_mode"
+                    "model '{model}' does not support Anthropic fast mode; use claude-opus-5-5, claude-fable-5-2, claude-mythos-5-2, claude-opus-5, or claude-opus-4-8, or disable fast_mode"
                 ),
             )
             .with_provider("anthropic"));
@@ -507,7 +517,10 @@ impl AnthropicClient {
                 | Some(adk_anthropic::ThinkingConfig::Adaptive { display: slot }) => {
                     *slot = Some(display);
                 }
-                Some(adk_anthropic::ThinkingConfig::Disabled) | None => {}
+                // `between_tools` takes no other field.
+                Some(adk_anthropic::ThinkingConfig::Disabled)
+                | Some(adk_anthropic::ThinkingConfig::BetweenTools)
+                | None => {}
             }
         }
         if let Some(config) = config
@@ -1081,6 +1094,56 @@ mod tests {
     }
 
     #[test]
+    fn between_tools_turns_thinking_off_with_no_other_field() {
+        let mut request = make_request(vec![Content::new("user").with_text("hello")]);
+        request.config = Some(GenerateContentConfig {
+            effort: Some(adk_core::Effort::High),
+            ..Default::default()
+        });
+        let config = AnthropicConfig::new("test", "claude-sonnet-5-5")
+            .with_thinking_mode(super::super::config::ThinkingMode::BetweenTools)
+            .with_thinking_display(adk_anthropic::ThinkingDisplay::Summarized);
+        let params =
+            AnthropicClient::build_message_params("claude-sonnet-5-5", 4096, &request, &config)
+                .expect("request should build");
+        assert_eq!(
+            serde_json::to_value(params.thinking).unwrap(),
+            json!({"type": "between_tools"})
+        );
+        assert_eq!(params.temperature, None);
+    }
+
+    /// Claude Fable 5.1 and later, Mythos 5.1 and later, Opus 5.5 and Sonnet 5.5 reject a
+    /// forced `tool_choice`; tools and an output schema leave the choice to the model.
+    #[test]
+    fn tools_and_output_schema_never_force_a_tool_choice() {
+        let mut request = make_request(vec![Content::new("user").with_text("weather?")]);
+        request.tools.insert(
+            "get_weather".to_string(),
+            json!({"description": "Weather", "parameters": {"type": "object", "properties": {}}}),
+        );
+        request.config = Some(GenerateContentConfig {
+            response_schema: Some(
+                json!({"type": "object", "properties": {"answer": {"type": "string"}}}),
+            ),
+            ..Default::default()
+        });
+        for model in
+            ["claude-fable-5-2", "claude-mythos-5-2", "claude-opus-5-5", "claude-sonnet-5-5"]
+        {
+            let params = AnthropicClient::build_message_params(
+                model,
+                4096,
+                &request,
+                &AnthropicConfig::new("test", model),
+            )
+            .expect("request should build");
+            assert_eq!(params.tool_choice, None, "{model}");
+            assert_eq!(params.tools.as_ref().map(Vec::len), Some(1), "{model}");
+        }
+    }
+
+    #[test]
     fn blank_turns_and_text_are_left_out() {
         let request = make_request(vec![
             Content::new("user").with_text("hello"),
@@ -1199,11 +1262,39 @@ mod tests {
             assert_eq!(error.code, "model.anthropic.fast_mode_unsupported");
         }
 
-        for model in ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"] {
+        for model in [
+            "claude-opus-5-5",
+            "claude-opus-5",
+            "claude-opus-4-8",
+            "claude-fable-5-2",
+            "claude-mythos-5-2",
+            "anthropic.claude-opus-5-5",
+        ] {
             let config = AnthropicConfig::new("test", model).with_fast_mode(true);
             let params = AnthropicClient::build_message_params(model, 4096, &request, &config)
-                .expect("supported Opus fast mode should be accepted");
-            assert_eq!(params.speed, Some(adk_anthropic::SpeedMode::Fast));
+                .expect("supported fast mode should be accepted");
+            assert_eq!(params.speed, Some(adk_anthropic::SpeedMode::Fast), "{model}");
+        }
+    }
+
+    #[test]
+    fn platform_model_ids_follow_the_first_party_sampling_contract() {
+        let mut request = make_request(vec![Content::new("user").with_text("hello")]);
+        request.config = Some(GenerateContentConfig { top_p: Some(0.9), ..Default::default() });
+
+        for model in [
+            "anthropic.claude-sonnet-5-5",
+            "global.anthropic.claude-fable-5-2",
+            "us.anthropic.claude-opus-4-7-v1",
+        ] {
+            let error = AnthropicClient::build_message_params(
+                model,
+                4096,
+                &request,
+                &AnthropicConfig::default(),
+            )
+            .expect_err("restricted sampling should be rejected locally");
+            assert_eq!(error.code, "model.anthropic.claude5_sampling_unsupported", "{model}");
         }
     }
 

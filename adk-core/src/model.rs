@@ -865,17 +865,57 @@ pub struct CitationSource {
 }
 
 /// Reason the model stopped generating content.
+///
+/// The enum is `#[non_exhaustive]`: providers add stop reasons, so a `match` outside
+/// `adk-core` needs a wildcard arm. Each variant serializes as its name (`"Stop"`,
+/// `"Refusal"`, ...), and a name this version does not know deserializes as
+/// [`Other`](Self::Other), so an event written by a newer release still loads.
+///
+/// `LlmAgent` and `CodeActAgent` end the run with an error on [`Refusal`](Self::Refusal)
+/// (`model.refusal`) and [`MalformedToolCall`](Self::MalformedToolCall)
+/// (`model.malformed_tool_call`); the other reasons leave the outcome to the content.
+///
+/// # Example
+///
+/// ```
+/// use adk_core::FinishReason;
+///
+/// fn succeeded(reason: Option<FinishReason>) -> bool {
+///     match reason {
+///         Some(FinishReason::Stop) | None => true,
+///         Some(FinishReason::Refusal | FinishReason::MalformedToolCall) => false,
+///         Some(_) => false,
+///     }
+/// }
+///
+/// assert!(!succeeded(Some(FinishReason::Refusal)));
+/// assert_eq!(serde_json::to_string(&FinishReason::Refusal).unwrap(), "\"Refusal\"");
+/// assert_eq!(
+///     serde_json::from_str::<FinishReason>("\"SomeLaterReason\"").unwrap(),
+///     FinishReason::Other
+/// );
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FinishReason {
     /// Natural stop (end of response).
     Stop,
     /// Hit the maximum token limit.
     MaxTokens,
-    /// Content filtered for safety.
+    /// A content filter blocked or cut the response, such as Gemini `SAFETY`, OpenAI
+    /// `content_filter`, or a Bedrock guardrail.
     Safety,
     /// Content blocked due to recitation/copyright.
     Recitation,
-    /// Other/unknown reason.
+    /// The model declined the request: Anthropic `stop_reason: "refusal"`, an OpenAI Chat
+    /// Completions `refusal`, or a Responses `refusal` content part. The response's text, when
+    /// present, is the refusal, not an answer.
+    Refusal,
+    /// The provider reports a tool call the model generated as invalid: Gemini
+    /// `MALFORMED_FUNCTION_CALL` or `UNEXPECTED_TOOL_CALL`, Bedrock `malformed_tool_use`.
+    MalformedToolCall,
+    /// Other/unknown reason, including a name a newer release wrote.
+    #[serde(other)]
     Other,
 }
 
@@ -1193,5 +1233,48 @@ mod tests {
     fn test_finish_reason() {
         assert_eq!(FinishReason::Stop, FinishReason::Stop);
         assert_ne!(FinishReason::Stop, FinishReason::MaxTokens);
+    }
+
+    /// Events and sessions store the finish reason by name, so the names are a wire format.
+    #[test]
+    fn finish_reason_wire_names_are_stable() {
+        let names = [
+            (FinishReason::Stop, "Stop"),
+            (FinishReason::MaxTokens, "MaxTokens"),
+            (FinishReason::Safety, "Safety"),
+            (FinishReason::Recitation, "Recitation"),
+            (FinishReason::Refusal, "Refusal"),
+            (FinishReason::MalformedToolCall, "MalformedToolCall"),
+            (FinishReason::Other, "Other"),
+        ];
+        for (reason, name) in names {
+            assert_eq!(serde_json::to_value(reason).unwrap(), serde_json::json!(name));
+            assert_eq!(
+                serde_json::from_value::<FinishReason>(serde_json::json!(name)).unwrap(),
+                reason
+            );
+        }
+        assert_eq!(
+            serde_json::from_value::<FinishReason>(serde_json::json!("ReasonFromALaterRelease"))
+                .unwrap(),
+            FinishReason::Other
+        );
+    }
+
+    /// A response persisted before 3.0 still loads.
+    #[test]
+    fn a_persisted_response_still_loads() {
+        let stored = serde_json::json!({
+            "content": null,
+            "usage_metadata": null,
+            "finish_reason": "Safety",
+            "partial": false,
+            "turn_complete": true,
+            "interrupted": false,
+            "error_code": null,
+            "error_message": null
+        });
+        let response: LlmResponse = serde_json::from_value(stored).unwrap();
+        assert_eq!(response.finish_reason, Some(FinishReason::Safety));
     }
 }

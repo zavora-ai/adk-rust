@@ -363,6 +363,15 @@ async fn a_summary_cut_short_fails_instead_of_replacing_history() {
 }
 
 #[tokio::test]
+async fn a_declined_summary_fails_instead_of_replacing_history() {
+    let mut refused = LlmResponse::new(Content::new("model").with_text("I can't help."));
+    refused.finish_reason = Some(adk_core::FinishReason::Refusal);
+    let llm = Arc::new(adk_model::ScriptedLlm::new("summarizer", [refused]));
+    let error = LlmEventSummarizer::new(llm).summarize_events(&window()).await.unwrap_err();
+    assert_eq!(error.code, "model.summary_incomplete");
+}
+
+#[tokio::test]
 async fn a_stream_error_fails_the_summary() {
     let llm = Arc::new(adk_model::ScriptedLlm::new(
         "summarizer",

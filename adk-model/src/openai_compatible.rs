@@ -1047,7 +1047,7 @@ impl Llm for OpenAICompatible {
                 // A finish reason or `[DONE]` marks a complete response; without one the
                 // answer or a tool call may be truncated.
                 let mut finished = false;
-                // The model declined in `delta.refusal`, so the turn finishes with `Safety`.
+                // The model declined in `delta.refusal`, so the turn finishes with `Refusal`.
                 let mut refused = false;
                 let mut ended = false;
 
@@ -1228,7 +1228,7 @@ impl Llm for OpenAICompatible {
                                 }
                                 finished = true;
                                 let finish_reason = Some(if refused {
-                                    FinishReason::Safety
+                                    FinishReason::Refusal
                                 } else {
                                     parse_finish_reason(fr)
                                 });

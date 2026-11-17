@@ -546,6 +546,9 @@ instead of decoding it as an empty response. Through `adk_model::GeminiModel`, a
 before any chunk carries `finishReason` fails with `model.gemini.unfinished_stream`, and a blocked
 prompt (`promptFeedback.blockReason`) ends the turn with `FinishReason::Safety`.
 
+`FinishReason` is `#[non_exhaustive]`, so a `match` on it needs a wildcard arm; a value this
+version does not know deserializes as `FinishReason::Other`.
+
 ## API modules
 
 | Module | Contents |

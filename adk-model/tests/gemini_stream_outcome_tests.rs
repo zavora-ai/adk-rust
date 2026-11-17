@@ -157,7 +157,10 @@ async fn block_type_finish_reasons_are_safety() {
         ("MODEL_ARMOR", FinishReason::Safety),
         ("RECITATION", FinishReason::Recitation),
         ("LANGUAGE", FinishReason::Other),
-        ("MALFORMED_FUNCTION_CALL", FinishReason::Other),
+        ("MALFORMED_FUNCTION_CALL", FinishReason::MalformedToolCall),
+        ("UNEXPECTED_TOOL_CALL", FinishReason::MalformedToolCall),
+        ("TOO_MANY_TOOL_CALLS", FinishReason::Other),
+        ("A_REASON_FROM_A_LATER_RELEASE", FinishReason::Other),
     ] {
         let reply = ResponseTemplate::new(200).set_body_json(chunk(None, Some(reason)));
         let (responses, error) = generate(reply, false).await;

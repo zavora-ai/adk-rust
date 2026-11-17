@@ -497,7 +497,10 @@ pub fn llm_response_to_sampling_response(
         Some(FinishReason::MaxTokens) => "maxTokens".to_string(),
         Some(FinishReason::Safety) => "safety".to_string(),
         Some(FinishReason::Recitation) => "recitation".to_string(),
+        Some(FinishReason::Refusal) => "refusal".to_string(),
+        Some(FinishReason::MalformedToolCall) => "malformedToolCall".to_string(),
         Some(FinishReason::Other) => "other".to_string(),
+        Some(_) => "other".to_string(),
         None => "endTurn".to_string(),
     };
 
@@ -809,6 +812,8 @@ mod tests {
             (Some(FinishReason::MaxTokens), "maxTokens"),
             (Some(FinishReason::Safety), "safety"),
             (Some(FinishReason::Recitation), "recitation"),
+            (Some(FinishReason::Refusal), "refusal"),
+            (Some(FinishReason::MalformedToolCall), "malformedToolCall"),
             (Some(FinishReason::Other), "other"),
             (None, "endTurn"),
         ];

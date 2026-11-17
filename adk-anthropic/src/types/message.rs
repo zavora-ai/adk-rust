@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::types::{ContentBlock, MessageRole, Model, StopReason, Usage};
+use crate::types::{ContentBlock, MessageRole, Model, RefusalDetails, StopReason, Usage};
 
 /// Container information returned in message responses.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -51,6 +51,11 @@ pub struct Message {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_sequence: Option<String>,
 
+    /// Why a classifier declined the request: present when `stop_reason` is
+    /// [`StopReason::Refusal`], with the refusal category and explanation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_details: Option<RefusalDetails>,
+
     /// Object type, which is always "message".
     pub r#type: String,
 
@@ -69,6 +74,7 @@ impl Message {
             role: MessageRole::Assistant,
             stop_reason: None,
             stop_sequence: None,
+            stop_details: None,
             r#type: "message".to_string(),
             usage,
         }

@@ -297,13 +297,9 @@ impl CompactionStrategy for SummarisationCompaction {
             }
             finish_reason = response.finish_reason.or(finish_reason);
         }
-        // A summary the model cut short would replace history with part of what it said.
-        if let Some(
-            reason @ (adk_core::FinishReason::MaxTokens
-            | adk_core::FinishReason::Safety
-            | adk_core::FinishReason::Recitation
-            | adk_core::FinishReason::Other),
-        ) = finish_reason
+        // A summary the model cut short, or declined, would replace history with part of what
+        // it said or with a refusal.
+        if let Some(reason) = finish_reason.filter(|reason| *reason != adk_core::FinishReason::Stop)
         {
             return Err(AdkError::new(
                 ErrorComponent::Model,
@@ -810,6 +806,17 @@ mod tests {
     #[tokio::test]
     async fn summarisation_fails_when_the_summary_was_cut_short() {
         let model = ScriptedSummary::new("Summary: the cust", adk_core::FinishReason::MaxTokens);
+        let error = SummarisationCompaction { model, turns_to_summarise: 3 }
+            .compact(make_events(6), 4096)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "model.summary_incomplete");
+    }
+
+    #[tokio::test]
+    async fn summarisation_fails_when_the_model_declines() {
+        let model =
+            ScriptedSummary::new("I can't summarise that.", adk_core::FinishReason::Refusal);
         let error = SummarisationCompaction { model, turns_to_summarise: 3 }
             .compact(make_events(6), 4096)
             .await

@@ -614,14 +614,18 @@ fn bedrock_image_format_to_mime(format: &BedrockImageFormat) -> &'static str {
 }
 
 /// Map Bedrock `StopReason` to ADK `FinishReason`.
+///
+/// Values: <https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html#API_runtime_Converse_ResponseSyntax>.
 fn bedrock_stop_reason_to_adk(stop_reason: &StopReason) -> FinishReason {
     match stop_reason {
         StopReason::EndTurn => FinishReason::Stop,
-        StopReason::MaxTokens => FinishReason::MaxTokens,
+        StopReason::MaxTokens | StopReason::ModelContextWindowExceeded => FinishReason::MaxTokens,
         StopReason::ToolUse => FinishReason::Stop,
         StopReason::StopSequence => FinishReason::Stop,
         StopReason::ContentFiltered => FinishReason::Safety,
         StopReason::GuardrailIntervened => FinishReason::Safety,
+        StopReason::MalformedToolUse => FinishReason::MalformedToolCall,
+        StopReason::MalformedModelOutput => FinishReason::Other,
         _ => FinishReason::Other,
     }
 }
@@ -1135,6 +1139,22 @@ mod tests {
         assert_eq!(
             bedrock_stop_reason_to_adk(&StopReason::GuardrailIntervened),
             FinishReason::Safety
+        );
+        assert_eq!(
+            bedrock_stop_reason_to_adk(&StopReason::MalformedToolUse),
+            FinishReason::MalformedToolCall
+        );
+        assert_eq!(
+            bedrock_stop_reason_to_adk(&StopReason::ModelContextWindowExceeded),
+            FinishReason::MaxTokens
+        );
+        assert_eq!(
+            bedrock_stop_reason_to_adk(&StopReason::MalformedModelOutput),
+            FinishReason::Other
+        );
+        assert_eq!(
+            bedrock_stop_reason_to_adk(&StopReason::from("a_reason_from_a_later_release")),
+            FinishReason::Other
         );
     }
 

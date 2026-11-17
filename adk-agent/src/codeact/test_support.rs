@@ -95,6 +95,11 @@ impl ScriptedRuntime {
         }
     }
 
+    /// How many planned programs no script has started yet.
+    pub(crate) fn programs_left(&self) -> usize {
+        self.programs.lock().unwrap().len()
+    }
+
     /// The message of the most recent resume-with-error, if any.
     pub(crate) fn last_raise(&self) -> Option<String> {
         self.log.raise.lock().unwrap().clone()
