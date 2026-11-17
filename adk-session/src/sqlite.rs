@@ -1,7 +1,9 @@
+use crate::history::{
+    HistoryOperation, HistoryOutcome, ImportSessionRequest, RewriteHistoryRequest, SessionHistory,
+};
 use crate::service::{
-    ambiguous_session_id, identity_not_found, rewind_event_not_found, rewind_steps_exceed,
-    session_already_exists, session_id_not_found, session_not_found_for, validate_scope,
-    validate_session_id,
+    ambiguous_session_id, identity_not_found, session_already_exists, session_id_not_found,
+    session_not_found_for, validate_scope, validate_session_id,
 };
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
@@ -429,6 +431,17 @@ async fn apply_event(
         .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
     }
 
+    insert_event(conn, app_name, user_id, session_id, event).await
+}
+
+/// Inserts `event` into the session's events without touching any state.
+async fn insert_event(
+    conn: &mut SqliteConnection,
+    app_name: &str,
+    user_id: &str,
+    session_id: &str,
+    event: &Event,
+) -> Result<()> {
     let llm_response_json = serde_json::to_string(&event.llm_response)
         .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
     let actions_json = serde_json::to_string(&event.actions)
@@ -457,6 +470,50 @@ async fn apply_event(
     .map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
 
     Ok(())
+}
+
+/// Reads the history of `identity` in read order, with the row ID of each decoded event.
+async fn load_history(
+    conn: &mut SqliteConnection,
+    identity: &AdkIdentity,
+) -> Result<(SessionHistory, Vec<i64>)> {
+    let (app_name, user_id, session_id) =
+        (identity.app_name.as_ref(), identity.user_id.as_ref(), identity.session_id.as_ref());
+    let row = sqlx::query(
+        "SELECT state, initial_state FROM sessions \
+         WHERE app_name = ? AND user_id = ? AND session_id = ?",
+    )
+    .bind(app_name)
+    .bind(user_id)
+    .bind(session_id)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
+    .ok_or_else(|| identity_not_found(identity))?;
+    // Rows written by earlier releases also hold a copy of the app and user tiers.
+    let (_, _, stored) = state_utils::extract_state_deltas(&decode_state(Some(row.get("state")))?);
+    let initial: Option<String> = row.get("initial_state");
+    let initial = initial.as_deref().map(|json| decode_state(Some(json))).transpose()?;
+
+    let rows = sqlx::query(
+        "SELECT *, rowid AS seq FROM events \
+         WHERE app_name = ? AND user_id = ? AND session_id = ? ORDER BY timestamp, rowid",
+    )
+    .bind(app_name)
+    .bind(user_id)
+    .bind(session_id)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
+    let mut events = Vec::with_capacity(rows.len());
+    let mut seqs = Vec::with_capacity(rows.len());
+    for row in &rows {
+        if let Some(event) = decode_event_row(row, session_id) {
+            seqs.push(row.get::<i64, _>("seq"));
+            events.push(event);
+        }
+    }
+    Ok((SessionHistory::new(events, stored, initial), seqs))
 }
 
 #[async_trait]
@@ -761,44 +818,79 @@ impl SessionService for SqliteSessionService {
         Ok(())
     }
 
-    async fn rewind(
-        &self,
-        identity: &AdkIdentity,
-        target_event_id: &str,
-    ) -> Result<Box<dyn Session>> {
-        self.truncate(identity, |events| {
-            events
-                .iter()
-                .position(|event| event.id == target_event_id)
-                .map(|index| index + 1)
-                .ok_or_else(|| rewind_event_not_found(identity, target_event_id))
-        })
-        .await
+    async fn history(&self, identity: &AdkIdentity) -> Result<SessionHistory> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("connection failed: {e}")))?;
+        Ok(load_history(&mut conn, identity).await?.0)
     }
 
-    async fn rewind_steps(&self, identity: &AdkIdentity, steps: usize) -> Result<Box<dyn Session>> {
-        if steps == 0 {
-            return self.get_for_identity(identity).await;
-        }
-        self.truncate(identity, |events| {
-            events
-                .len()
-                .checked_sub(steps)
-                .ok_or_else(|| rewind_steps_exceed(identity, steps, events.len()))
-        })
+    async fn rewrite_history(&self, req: RewriteHistoryRequest) -> Result<HistoryOutcome> {
+        self.rewrite(req).await
+    }
+
+    async fn import_session(&self, req: ImportSessionRequest) -> Result<Box<dyn Session>> {
+        let (app_name, user_id, session_id) = (
+            req.identity.app_name.as_ref(),
+            req.identity.user_id.as_ref(),
+            req.identity.session_id.as_ref(),
+        );
+        let (_, _, state) = state_utils::extract_state_deltas(&req.state);
+        let (_, _, initial_state) = state_utils::extract_state_deltas(&req.initial_state);
+        let updated_at = req.events.last().map_or_else(Utc::now, |event| event.timestamp);
+
+        let mut tx = self
+            .pool
+            .begin_with(BEGIN_WRITE)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
+        sqlx::query(
+            "INSERT INTO sessions \
+             (app_name, user_id, session_id, state, initial_state, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(app_name)
+        .bind(user_id)
+        .bind(session_id)
+        .bind(encode_state(&state)?)
+        .bind(encode_state(&initial_state)?)
+        .bind(Utc::now().to_rfc3339())
+        .bind(updated_at.to_rfc3339())
+        .execute(&mut *tx)
         .await
+        .map_err(|e| match e {
+            sqlx::Error::Database(db) if db.is_unique_violation() => {
+                session_already_exists(app_name, user_id, session_id)
+            }
+            other => adk_core::AdkError::session(format!("insert failed: {other}")),
+        })?;
+        for event in &req.events {
+            insert_event(&mut tx, app_name, user_id, session_id, event).await?;
+        }
+        let (app_state, user_state) = read_tiers(&mut tx, app_name, user_id).await?;
+        tx.commit()
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
+
+        Ok(Box::new(DatabaseSession {
+            app_name: app_name.to_string(),
+            user_id: user_id.to_string(),
+            session_id: session_id.to_string(),
+            state: state_utils::merge_states(&app_state, &user_state, &state),
+            events: req.events,
+            updated_at,
+        }))
     }
 }
 
 impl SqliteSessionService {
-    /// Keeps the first `keep(events)` events of `identity`, in read order, and rebuilds its
-    /// session tier from the state it was created with and their deltas, in one
-    /// [`BEGIN_WRITE`] transaction.
-    async fn truncate(
-        &self,
-        identity: &AdkIdentity,
-        keep: impl FnOnce(&[Event]) -> Result<usize> + Send,
-    ) -> Result<Box<dyn Session>> {
+    /// Applies a history rewrite in one [`BEGIN_WRITE`] transaction: reads the history, checks
+    /// and plans the rewrite, then deletes the removed rows, updates the replaced ones in
+    /// place, and writes the rebuilt session state.
+    async fn rewrite(&self, req: RewriteHistoryRequest) -> Result<HistoryOutcome> {
+        let identity = &req.identity;
         let (app_name, user_id, session_id) =
             (identity.app_name.as_ref(), identity.user_id.as_ref(), identity.session_id.as_ref());
         let mut tx = self
@@ -807,76 +899,89 @@ impl SqliteSessionService {
             .await
             .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
 
-        let row = sqlx::query(
-            "SELECT state, initial_state FROM sessions \
-             WHERE app_name = ? AND user_id = ? AND session_id = ?",
-        )
-        .bind(app_name)
-        .bind(user_id)
-        .bind(session_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
-        .ok_or_else(|| identity_not_found(identity))?;
-        let stored = decode_state(Some(row.get("state")))?;
-        let initial: Option<String> = row.get("initial_state");
+        let (history, seqs) = load_history(&mut tx, identity).await?;
+        let rewritten = history.rewrite(identity, &req.rewrite, req.expected_version.as_deref())?;
+        let change = &rewritten.change;
 
-        let rows = sqlx::query(
-            "SELECT *, rowid AS seq FROM events \
-             WHERE app_name = ? AND user_id = ? AND session_id = ? ORDER BY timestamp, rowid",
-        )
-        .bind(app_name)
-        .bind(user_id)
-        .bind(session_id)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
-        let mut events = Vec::with_capacity(rows.len());
-        let mut seqs = Vec::with_capacity(rows.len());
-        for row in &rows {
-            if let Some(event) = decode_event_row(row, session_id) {
-                seqs.push(row.get::<i64, _>("seq"));
-                events.push(event);
+        if change.operation == HistoryOperation::Rewind {
+            // Read order is (timestamp, rowid), so the kept events are those up to the last
+            // kept row; every later row goes, including rows that no longer decode.
+            let keep = rewritten.events.len();
+            match keep.checked_sub(1).map(|last| (&history.events[last], seqs[last])) {
+                Some((last, seq)) => sqlx::query(
+                    "DELETE FROM events WHERE app_name = ? AND user_id = ? AND session_id = ? \
+                     AND (timestamp > ? OR (timestamp = ? AND rowid > ?))",
+                )
+                .bind(app_name)
+                .bind(user_id)
+                .bind(session_id)
+                .bind(last.timestamp.to_rfc3339())
+                .bind(last.timestamp.to_rfc3339())
+                .bind(seq),
+                None => sqlx::query(
+                    "DELETE FROM events WHERE app_name = ? AND user_id = ? AND session_id = ?",
+                )
+                .bind(app_name)
+                .bind(user_id)
+                .bind(session_id),
+            }
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("delete events failed: {e}")))?;
+        } else {
+            for event_id in &change.removed {
+                sqlx::query(
+                    "DELETE FROM events \
+                     WHERE app_name = ? AND user_id = ? AND session_id = ? AND id = ?",
+                )
+                .bind(app_name)
+                .bind(user_id)
+                .bind(session_id)
+                .bind(event_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| adk_core::AdkError::session(format!("delete event failed: {e}")))?;
+            }
+            for event in rewritten.events.iter().filter(|e| change.replaced.contains(&e.id)) {
+                sqlx::query(
+                    "UPDATE events SET invocation_id = ?, branch = ?, author = ?, \
+                     llm_response = ?, actions = ?, long_running_tool_ids = ? \
+                     WHERE app_name = ? AND user_id = ? AND session_id = ? AND id = ?",
+                )
+                .bind(&event.invocation_id)
+                .bind(&event.branch)
+                .bind(&event.author)
+                .bind(
+                    serde_json::to_string(&event.llm_response).map_err(|e| {
+                        adk_core::AdkError::session(format!("serialize failed: {e}"))
+                    })?,
+                )
+                .bind(
+                    serde_json::to_string(&event.actions).map_err(|e| {
+                        adk_core::AdkError::session(format!("serialize failed: {e}"))
+                    })?,
+                )
+                .bind(
+                    serde_json::to_string(&event.long_running_tool_ids).map_err(|e| {
+                        adk_core::AdkError::session(format!("serialize failed: {e}"))
+                    })?,
+                )
+                .bind(app_name)
+                .bind(user_id)
+                .bind(session_id)
+                .bind(&event.id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| adk_core::AdkError::session(format!("update event failed: {e}")))?;
             }
         }
 
-        let initial = match initial {
-            Some(initial) => decode_state(Some(&initial))?,
-            None => legacy_initial_state(&stored, &events),
-        };
-        let keep = keep(&events)?;
-        // Read order is (timestamp, rowid), so the kept events are those up to the last kept
-        // row; every later row goes, including rows that no longer decode.
-        match keep.checked_sub(1).map(|last| (&events[last], seqs[last])) {
-            Some((last, seq)) => sqlx::query(
-                "DELETE FROM events WHERE app_name = ? AND user_id = ? AND session_id = ? \
-                     AND (timestamp > ? OR (timestamp = ? AND rowid > ?))",
-            )
-            .bind(app_name)
-            .bind(user_id)
-            .bind(session_id)
-            .bind(last.timestamp.to_rfc3339())
-            .bind(last.timestamp.to_rfc3339())
-            .bind(seq),
-            None => sqlx::query(
-                "DELETE FROM events WHERE app_name = ? AND user_id = ? AND session_id = ?",
-            )
-            .bind(app_name)
-            .bind(user_id)
-            .bind(session_id),
-        }
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| adk_core::AdkError::session(format!("delete events failed: {e}")))?;
-        events.truncate(keep);
-
-        let session_state = state_utils::rebuild_session_state(&initial, &events);
         let now = Utc::now();
         sqlx::query(
             "UPDATE sessions SET state = ?, updated_at = ? \
              WHERE app_name = ? AND user_id = ? AND session_id = ?",
         )
-        .bind(encode_state(&session_state)?)
+        .bind(encode_state(&rewritten.state)?)
         .bind(now.to_rfc3339())
         .bind(app_name)
         .bind(user_id)
@@ -890,28 +995,16 @@ impl SqliteSessionService {
             .await
             .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
 
-        Ok(Box::new(DatabaseSession {
+        let session = Box::new(DatabaseSession {
             app_name: app_name.to_string(),
             user_id: user_id.to_string(),
             session_id: session_id.to_string(),
-            state: state_utils::merge_states(&app_state, &user_state, &session_state),
-            events,
+            state: state_utils::merge_states(&app_state, &user_state, &rewritten.state),
+            events: rewritten.events,
             updated_at: now,
-        }))
+        });
+        Ok(HistoryOutcome::new(session, rewritten.change))
     }
-}
-
-/// The best reconstruction of the creation state of a session created before
-/// `initial_state` was recorded: its session-tier keys that no event has written, whose values
-/// cannot have changed since `create`.
-fn legacy_initial_state(stored: &StateMap, events: &[Event]) -> StateMap {
-    let (_, _, mut state) = state_utils::extract_state_deltas(stored);
-    for event in events {
-        for key in event.actions.state_delta.keys() {
-            state.remove(key);
-        }
-    }
-    state
 }
 
 struct DatabaseSession {

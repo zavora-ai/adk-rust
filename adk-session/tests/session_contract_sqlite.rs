@@ -103,6 +103,12 @@ async fn test_sqlite_rewind_contract() {
 }
 
 #[tokio::test]
+async fn test_sqlite_history_contract() {
+    let service = in_memory().await;
+    common::history_contract::assert_history_contract(&service, "history_app").await;
+}
+
+#[tokio::test]
 async fn test_sqlite_delete_all_sessions_erases_the_user_tier() {
     let service = in_memory().await;
     common::state_contract::assert_delete_all_sessions_contract(
