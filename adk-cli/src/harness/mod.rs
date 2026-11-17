@@ -55,6 +55,7 @@ pub use args::{
 };
 pub use catch_up::distill_unsaved_sessions;
 pub use commands::slash_command_entries;
+pub use goal::{RubricArgs, exhausted_hint, goal_banner};
 pub use kernel::KernelSettings;
 pub use launcher::{
     HarnessCommands, HarnessEffortRebuild, HarnessLauncher, HarnessRebuild, TurnOutcome,

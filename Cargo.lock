@@ -683,6 +683,7 @@ dependencies = [
  "fred",
  "futures",
  "gcloud-sdk",
+ "jsonschema",
  "mongodb",
  "neo4rs",
  "proptest",

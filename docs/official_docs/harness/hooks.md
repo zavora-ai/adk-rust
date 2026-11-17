@@ -37,8 +37,22 @@ including `{"decision": "allow"}`, plain text or no output, is `continue`.
 | `{"decision": "allow"}`, `"approve"`, `"permit"` | `continue`; the attempt is recorded as `outcome: ignored_grant` |
 | anything else | `continue` |
 
-A hook that exits non-zero, crashes or times out is `continue`, recorded as
-`outcome: error`. With `fail_closed = true`, a `pre_tool` hook's failure is `Deny`.
+### When a hook fails
+
+A hook fails when it exits non-zero, crashes (ends on a signal), times out, cannot be
+launched — a `host` hook refused in Auto, for one — or its `harness.hook.ran` record cannot be
+written. Its standard output is then ignored and its `on_failure` applies; the counterpart of
+the Claude Agent SDK's `on_failure`:
+
+| Event | Default | `on_failure = "block"` | `on_failure = "continue"` |
+|---|---|---|---|
+| `pre_tool` | `block` | The call is denied: `the pre_tool hook failed (exited with status 7), and a failed pre_tool hook blocks`; recorded `outcome: deny` | The call is decided as if the hook said nothing; recorded `outcome: error` |
+| `post_tool`, `post_edit` | `continue` | The result becomes `{"error": …}` naming the failure; recorded `outcome: fail` | The result is kept; recorded `outcome: error` |
+| `on_hold`, `on_stop`, `on_session_start` | `continue` | No effect: they only annotate | No effect |
+
+A `pre_tool` hook decides whether a call is authorized, so a broken one blocks rather than
+silently letting every call through; an advisory check that may break opts out with
+`on_failure = "continue"`.
 
 ## Configuration
 
@@ -53,7 +67,7 @@ matcher = "write_*"         # glob on the tool name: bash, write_*, mcp:*; omit 
 command = "./scripts/deny-migrations.sh"   # run as `sh -c` through the launcher
 timeout_secs = 5            # default 30; 5 for pre_tool; never more than the workspace's bash timeout
 isolation = "inherit"       # inherit (as the shell) | host
-fail_closed = false         # true: a crashed or timed-out pre_tool hook denies
+on_failure = "block"        # block | continue; default block for pre_tool, continue otherwise
 
 [[hooks]]
 event = "post_edit"
@@ -67,7 +81,7 @@ command = "cargo fmt"
 | `command` | required | The command, run as `sh -c` |
 | `timeout_secs` | 30; 5 for `pre_tool` | Capped by the workspace's bash timeout |
 | `isolation` | `inherit` | `inherit` runs as the shell does — inside the OS sandbox when `bash` is sandboxed; `host` runs on the host even then. A workspace hook needs the workspace's trust for `host`; in Auto only an operator hook may run on the host |
-| `fail_closed` | `false` | A failed `pre_tool` hook denies instead of continuing |
+| `on_failure` | `block` for `pre_tool`, else `continue` | What the hook's failure does; see [When a hook fails](#when-a-hook-fails) |
 
 A table with an unknown field, an unknown event or an empty command fails the build with
 `harness.hooks.config`, naming the entry. `HookSet::max_per_event` (8) bounds the hooks of
@@ -82,14 +96,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use adk_harness::HarnessAgent;
-use adk_harness::hooks::{HookEvent, HookIsolation, HookSet, HookSpec};
+use adk_harness::hooks::{HookEvent, HookFailure, HookIsolation, HookSet, HookSpec};
 
 # async fn build(model: Arc<dyn adk_core::Llm>) -> adk_core::Result<()> {
 let hooks = HookSet::new()
     .with(
-        HookSpec::new(HookEvent::PreTool, "./scripts/check-call.sh")
-            .matching("bash")
-            .fail_closed(true),
+        // Blocks the call when the check itself fails: the default for pre_tool.
+        HookSpec::new(HookEvent::PreTool, "./scripts/check-call.sh").matching("bash"),
+    )
+    .with(
+        // An advisory check that may break opts out.
+        HookSpec::new(HookEvent::PreTool, "./scripts/lint-call.sh")
+            .matching("write_*")
+            .on_failure(HookFailure::Continue),
     )
     .with(
         HookSpec::new(HookEvent::PostEdit, "cargo fmt")
@@ -116,12 +135,12 @@ flag of spec 3.1 §8.1). `HarnessRuntime::hooks` returns the merged set.
 | `[[hooks]]` in `.adk/harness.toml` | Workspace hooks; they run once the workspace is trusted, and the trust prompt lists each with its command (spec 3.1 §9.2 I54) |
 | `[[hooks]]` in `<config dir>/adk-rust/harness.toml` | User hooks, run before the workspace's; an invalid table stops the command with the entry number |
 | `--no-hooks` | Runs none, the workspace's included; the banner shows `Hooks : off (--no-hooks)` |
-| `/hooks` | The effective set: each hook's event, matcher and command, its source, isolation, timeout, `fail-closed`, and whether it runs; then the bounds of one turn |
+| `/hooks` | The effective set: each hook's event, matcher and command, its source, isolation, timeout, `blocks on failure`, and whether it runs; then the bounds of one turn |
 | `[hook:source] text` | A note from an `on_hold` or `on_stop` hook, shown after the call or the turn; the model never sees it |
 
 ```text
 You > /hooks
-  pre_tool [bash]: ./scripts/check-call.sh — workspace · inherit · 5 s · fail-closed · runs
+  pre_tool [bash]: ./scripts/check-call.sh — workspace · inherit · 5 s · blocks on failure · runs
   post_edit: cargo fmt — user · inherit · 30 s · runs
   bounds: 8 per event, 60 s per turn
 ```

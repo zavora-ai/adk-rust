@@ -17,7 +17,120 @@ pub enum Interrupt {
         message: String,
         /// Optional data for the interrupt
         data: Option<Value>,
+        /// The pause's id, set by the executor when the node pauses: stable for one
+        /// pause and bound to its thread, step, node and question ([`interrupt_id`]).
+        /// Answer it with
+        /// [`ExecutionConfig::with_resume_value`](crate::node::ExecutionConfig::with_resume_value)
+        /// under this id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// JSON Schema the answer must satisfy; an answer that does not is refused
+        /// when the run resumes, before any node runs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        response_schema: Option<Value>,
     },
+}
+
+impl Interrupt {
+    /// The pause's id, for a dynamic interrupt the executor reported.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::interrupt::interrupt;
+    ///
+    /// assert_eq!(interrupt("approve?").id(), None, "the executor assigns it");
+    /// ```
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Self::Dynamic { id, .. } => id.as_deref(),
+            Self::Before(_) | Self::After(_) => None,
+        }
+    }
+
+    /// The JSON Schema the answer must satisfy, when the interrupt declares one.
+    pub fn response_schema(&self) -> Option<&Value> {
+        match self {
+            Self::Dynamic { response_schema, .. } => response_schema.as_ref(),
+            Self::Before(_) | Self::After(_) => None,
+        }
+    }
+
+    /// Declares the JSON Schema the answer to this dynamic interrupt must satisfy; a
+    /// static gate is returned unchanged.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::interrupt::interrupt;
+    /// use serde_json::json;
+    ///
+    /// let pause = interrupt("approve the refund?").with_response_schema(json!({
+    ///     "type": "object",
+    ///     "properties": { "approved": { "type": "boolean" } },
+    ///     "required": ["approved"]
+    /// }));
+    /// assert!(pause.response_schema().is_some());
+    /// ```
+    #[must_use]
+    pub fn with_response_schema(mut self, schema: Value) -> Self {
+        if let Self::Dynamic { response_schema, .. } = &mut self {
+            *response_schema = Some(schema);
+        }
+        self
+    }
+
+    /// Gives a dynamic interrupt raised by `node` at `step` of `thread_id` its id, unless
+    /// it has one.
+    pub(crate) fn identify(&mut self, thread_id: &str, step: usize, node: &str) {
+        if let Self::Dynamic { message, data, id, response_schema } = self
+            && id.is_none()
+        {
+            *id = Some(interrupt_id(
+                thread_id,
+                step,
+                node,
+                message,
+                data.as_ref(),
+                response_schema.as_ref(),
+            ));
+        }
+    }
+}
+
+/// The id of the pause `node` raised at `step` of `thread_id` with `message`, `data` and
+/// `response_schema`: `int_` and 32 hex characters of a SHA-256 over all of them.
+///
+/// The same pause, re-raised because the run resumed without an answer, gets the same id;
+/// a later pause — the node's next pass through a loop, or the same step asking about
+/// other data — gets another, so an answer given to one pause never answers another. This
+/// is how an approval binds to its call's fingerprint.
+///
+/// # Example
+///
+/// ```
+/// use adk_graph::interrupt::interrupt_id;
+/// use serde_json::json;
+///
+/// let first = interrupt_id("t1", 3, "review", "approve?", Some(&json!({ "amount": 40 })), None);
+/// assert!(first.starts_with("int_"));
+/// assert_eq!(first, interrupt_id("t1", 3, "review", "approve?", Some(&json!({ "amount": 40 })), None));
+/// assert_ne!(first, interrupt_id("t1", 3, "review", "approve?", Some(&json!({ "amount": 900 })), None));
+/// assert_ne!(first, interrupt_id("t1", 7, "review", "approve?", Some(&json!({ "amount": 40 })), None));
+/// ```
+pub fn interrupt_id(
+    thread_id: &str,
+    step: usize,
+    node: &str,
+    message: &str,
+    data: Option<&Value>,
+    response_schema: Option<&Value>,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let canonical = serde_json::json!([thread_id, step, node, message, data, response_schema]);
+    let digest = Sha256::digest(canonical.to_string().as_bytes());
+    let hex: String = digest.iter().take(16).map(|byte| format!("{byte:02x}")).collect();
+    format!("int_{hex}")
 }
 
 impl std::fmt::Display for Interrupt {
@@ -32,12 +145,17 @@ impl std::fmt::Display for Interrupt {
 
 /// Helper to create a dynamic interrupt from within a node
 pub fn interrupt(message: &str) -> Interrupt {
-    Interrupt::Dynamic { message: message.to_string(), data: None }
+    Interrupt::Dynamic { message: message.to_string(), data: None, id: None, response_schema: None }
 }
 
 /// Helper to create a dynamic interrupt with data
 pub fn interrupt_with_data(message: &str, data: Value) -> Interrupt {
-    Interrupt::Dynamic { message: message.to_string(), data: Some(data) }
+    Interrupt::Dynamic {
+        message: message.to_string(),
+        data: Some(data),
+        id: None,
+        response_schema: None,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,6 +242,8 @@ impl GraphToolConfirmationPause {
         Interrupt::Dynamic {
             message: Self::KIND.to_string(),
             data: Some(Self::pending_data(node, request)),
+            id: None,
+            response_schema: None,
         }
     }
 
@@ -133,7 +253,7 @@ impl GraphToolConfirmationPause {
 }
 
 fn pending_from_interrupt(interrupt: &Interrupt) -> Option<(String, ToolConfirmationRequest)> {
-    let Interrupt::Dynamic { message, data } = interrupt else { return None };
+    let Interrupt::Dynamic { message, data, .. } = interrupt else { return None };
     if message != GraphToolConfirmationPause::KIND {
         return None;
     }
@@ -182,6 +302,12 @@ pub struct GraphInterruptPayload {
     /// The data a node attached with `NodeOutput::interrupt_with_data`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
+    /// The pause's id, for a dynamic interrupt: answer it under this key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interrupt_id: Option<String>,
+    /// The JSON Schema the answer must satisfy, when the node declared one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<Value>,
     /// The thread to resume.
     pub thread_id: String,
     /// The checkpoint the run stopped at.
@@ -194,7 +320,7 @@ impl GraphInterruptPayload {
         let (kind, node, message, data) = match interrupt {
             Interrupt::Before(node) => ("before", Some(node.clone()), None, None),
             Interrupt::After(node) => ("after", Some(node.clone()), None, None),
-            Interrupt::Dynamic { message, data } => {
+            Interrupt::Dynamic { message, data, .. } => {
                 ("dynamic", None, Some(message.clone()), data.clone())
             }
         };
@@ -203,6 +329,8 @@ impl GraphInterruptPayload {
             node,
             message,
             data,
+            interrupt_id: interrupt.id().map(str::to_string),
+            response_schema: interrupt.response_schema().cloned(),
             thread_id: thread_id.to_string(),
             checkpoint_id: checkpoint_id.to_string(),
         }
@@ -224,6 +352,8 @@ impl GraphInterruptPayload {
             node: Some(pause.node.clone()),
             message: None,
             data: serde_json::to_value(pause).ok(),
+            interrupt_id: None,
+            response_schema: None,
             thread_id,
             checkpoint_id,
         }

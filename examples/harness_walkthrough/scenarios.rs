@@ -478,15 +478,14 @@ async fn durable_goal(models: &Models) -> Result<Checks> {
     let ws = dir.path().join("ws");
     write_crate(&ws, true)?;
     let (user, session) = ids("alice", "s1")?;
-    let spec = GoalSpec {
-        goal: "Make the failing test in src/lib.rs pass: read the file, then rewrite the whole file with \
+    let spec = GoalSpec::new(
+        "Make the failing test in src/lib.rs pass: read the file, then rewrite the whole file with \
                write_file so that `add` returns `a + b` (keep the test as it is), then run exactly \
-               `cargo test --quiet` with bash."
-            .into(),
-        until: "cargo test --quiet".into(),
-        max_iterations: 3,
-        check_timeout: Duration::from_secs(300),
-    };
+               `cargo test --quiet` with bash.",
+    )
+    .with_until("cargo test --quiet")
+    .with_max_iterations(3)
+    .with_check_timeout(Duration::from_secs(300));
     let first = models.model(vec![
         call("read_file", json!({ "path": "src/lib.rs" })),
         call("write_file", json!({ "path": "src/lib.rs", "content": FIXED_LIB })),

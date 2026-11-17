@@ -1655,6 +1655,11 @@ pub struct RunConfig {
     /// Optional live decision source for confirmations that have no static
     /// entry in [`tool_confirmation_decisions`](Self::tool_confirmation_decisions).
     pub tool_confirmation_handler: Option<Arc<dyn ToolConfirmationHandler>>,
+    /// The reviewer asked about a call the [`tool_policy`](Self::tool_policy) holds for
+    /// approval, before the confirmation handler and the approval inbox: it approves,
+    /// denies, or escalates the call to a person. `None` (the default) asks a person about
+    /// every held call. See [`ToolReviewer`](crate::ToolReviewer).
+    pub tool_reviewer: Option<Arc<dyn crate::ToolReviewer>>,
     /// Toolsets made available only for this invocation.
     pub runtime_toolsets: Vec<RuntimeToolset>,
     /// Optional cached content name for automatic prompt caching.
@@ -1891,6 +1896,7 @@ impl Default for RunConfig {
             tool_confirmation_decisions: HashMap::new(),
             tool_confirmation_fingerprints: HashMap::new(),
             tool_confirmation_handler: None,
+            tool_reviewer: None,
             runtime_toolsets: Vec::new(),
             cached_content: None,
             transfer_targets: Vec::new(),
@@ -2088,6 +2094,37 @@ impl RunConfigBuilder {
     /// Sets an asynchronous tool confirmation handler for the current run.
     pub fn tool_confirmation_handler(mut self, handler: Arc<dyn ToolConfirmationHandler>) -> Self {
         self.config.tool_confirmation_handler = Some(handler);
+        self
+    }
+
+    /// Sets the reviewer that decides held calls before a person is asked. See
+    /// [`RunConfig::tool_reviewer`].
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::principal::SubjectRef;
+    /// use adk_core::{Result, ReviewVerdict, RunConfig, ToolReview, ToolReviewer, async_trait};
+    ///
+    /// #[derive(Debug)]
+    /// struct Escalates;
+    ///
+    /// #[async_trait]
+    /// impl ToolReviewer for Escalates {
+    ///     fn reviewer(&self) -> SubjectRef {
+    ///         SubjectRef::service("rules:escalate")
+    ///     }
+    ///     async fn review(&self, _review: &ToolReview) -> Result<ReviewVerdict> {
+    ///         Ok(ReviewVerdict::escalate("a person decides"))
+    ///     }
+    /// }
+    ///
+    /// let config = RunConfig::builder().tool_reviewer(Arc::new(Escalates)).build();
+    /// assert!(config.tool_reviewer.is_some());
+    /// ```
+    pub fn tool_reviewer(mut self, reviewer: Arc<dyn crate::ToolReviewer>) -> Self {
+        self.config.tool_reviewer = Some(reviewer);
         self
     }
 

@@ -10,8 +10,8 @@ use adk_core::{
     EventStream, NewRun, OnConflict, Part, Result, RunCheckpointRef, RunFilter, RunState,
 };
 use adk_harness::{
-    GOAL_QUEUE, GOAL_STATE_KEY, GOAL_TARGET, GoalSpec, GoalState, GoalStatus, HarnessMode,
-    IsolationStatus,
+    GOAL_QUEUE, GOAL_STATE_KEY, GOAL_TARGET, GoalRubric, GoalSpec, GoalState, GoalStatus,
+    HarnessMode, IsolationStatus,
 };
 use adk_kernel::control::ControlClient;
 use adk_kernel::control::api::{ApprovalItem, AttachRequest, ProcessesQuery};
@@ -42,16 +42,143 @@ const EXIT_HELD: i32 = 3;
 /// The exit code of a goal interrupted with Ctrl-C.
 const EXIT_INTERRUPTED: i32 = 130;
 
-/// `goal` of [`HarnessLauncher::run`]: work toward a goal until a check passes
+/// The `[goal]` table of a workspace's `.adk/harness.toml`: the rubric a goal in it is
+/// graded against when the command line names none.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct GoalTable {
+    /// The rubric file, relative to the workspace and inside it.
+    rubric: Option<String>,
+    deliverables: Vec<String>,
+    max_evaluations: Option<u32>,
+    hidden: Option<bool>,
+}
+
+/// The project file's `[goal]` table, if it has one.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+struct ProjectGoal {
+    goal: Option<GoalTable>,
+}
+
+/// The rubric flags of `adk-rust goal` and of a launcher's `goal` (spec 3.1 §7.11): the
+/// criteria a separate grader checks each iteration against.
+///
+/// # Example
+///
+/// ```rust
+/// use clap::Parser;
+///
+/// #[derive(Parser)]
+/// struct Command {
+///     #[command(flatten)]
+///     rubric: adk_cli::harness::RubricArgs,
+/// }
+///
+/// let command = Command::parse_from(["goal", "--rubric", "rubric.md", "--deliverable", "blurb.md"]);
+/// assert_eq!(command.rubric.deliverables, ["blurb.md"]);
+/// ```
+#[derive(clap::Args, Clone, Debug, Default)]
+pub struct RubricArgs {
+    /// Grade each iteration against the criteria in this Markdown file, one list item per
+    /// criterion; the goal is met when every criterion passes (and --until, if given)
+    #[arg(long, value_name = "FILE")]
+    pub rubric: Option<std::path::PathBuf>,
+    /// Grade each iteration against the criteria the goal text lists (or the goal itself)
+    #[arg(long, conflicts_with = "rubric")]
+    pub rubric_from_goal: bool,
+    /// A workspace file the grader reads besides the iteration's final message (repeatable)
+    #[arg(long = "deliverable", value_name = "PATH")]
+    pub deliverables: Vec<String>,
+    /// Grading rounds before the goal counts as exhausted, 1 to 20 (default 3)
+    #[arg(long, value_name = "N")]
+    pub max_evaluations: Option<u32>,
+    /// Show the criteria to the grader only; the agent learns the failed ones from feedback
+    #[arg(long)]
+    pub rubric_hidden: bool,
+}
+
+impl RubricArgs {
+    /// The rubric of `goal`: `--rubric FILE` or `--rubric-from-goal`, else the `[goal]` table
+    /// of `workspace`'s `.adk/harness.toml`, whose rubric file must lie inside the workspace.
+    /// `None` when neither names one.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error when a rubric file cannot be read, lies outside the
+    /// workspace, or holds no criteria, or when the project file's `[goal]` table does not
+    /// parse.
+    pub fn resolve(&self, goal: &str, workspace: &std::path::Path) -> Result<Option<GoalRubric>> {
+        let table = if self.rubric.is_none() && !self.rubric_from_goal {
+            project_goal_table(workspace)?
+        } else {
+            None
+        };
+        let mut rubric = if let Some(path) = &self.rubric {
+            let text = std::fs::read_to_string(path).map_err(|error| {
+                AdkError::config(format!("--rubric {}: {error}", path.display()))
+            })?;
+            GoalRubric::from_markdown(&text).map_err(|error| {
+                AdkError::config(format!("--rubric {}: {error}", path.display()))
+            })?
+        } else if self.rubric_from_goal {
+            GoalRubric::from_goal(goal)
+        } else if let Some(file) = table.as_ref().and_then(|table| table.rubric.as_deref()) {
+            // The project file is the workspace's, so its rubric is read as the agent's file
+            // tools would: never from outside the workspace.
+            let contained = adk_devtools::Workspace::read_only(workspace);
+            let resolved = contained
+                .resolve(file)
+                .map_err(|error| AdkError::config(format!("[goal] rubric = {file:?}: {error}")))?;
+            let text = std::fs::read_to_string(&resolved)
+                .map_err(|error| AdkError::config(format!("[goal] rubric = {file:?}: {error}")))?;
+            GoalRubric::from_markdown(&text)
+                .map_err(|error| AdkError::config(format!("[goal] rubric = {file:?}: {error}")))?
+        } else {
+            return Ok(None);
+        };
+        let table = table.unwrap_or_default();
+        let deliverables = if self.deliverables.is_empty() {
+            table.deliverables
+        } else {
+            self.deliverables.clone()
+        };
+        rubric = rubric.with_deliverables(deliverables);
+        if let Some(max) = self.max_evaluations.or(table.max_evaluations) {
+            rubric = rubric.with_max_evaluations(max);
+        }
+        Ok(Some(rubric.hidden(self.rubric_hidden || table.hidden.unwrap_or(false))))
+    }
+}
+
+/// The `[goal]` table of `workspace`'s `.adk/harness.toml`, if the file has one.
+fn project_goal_table(workspace: &std::path::Path) -> Result<Option<GoalTable>> {
+    let path = workspace.join(adk_harness::HARNESS_CONFIG_FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(AdkError::config(format!("failed to read {}: {error}", path.display())));
+        }
+    };
+    let project: ProjectGoal = toml::from_str(&text)
+        .map_err(|error| AdkError::config(format!("{}: [goal]: {error}", path.display())))?;
+    Ok(project.goal)
+}
+
+/// `goal` of [`HarnessLauncher::run`]: work toward a goal until its checks pass
 /// (spec 3.1 §7.11, §8.1).
 #[derive(clap::Args, Debug)]
 pub(super) struct GoalCommand {
     /// What to achieve
     #[arg(required_unless_present = "resume")]
     goal: Option<String>,
-    /// The check: the goal is met when this shell command exits 0
-    #[arg(long, required_unless_present = "resume")]
+    /// The check: the goal is met when this shell command exits 0 (and the rubric passes,
+    /// if one is given)
+    #[arg(long)]
     until: Option<String>,
+    #[command(flatten)]
+    rubric: RubricArgs,
     /// Iterations toward the goal before it counts as exhausted
     #[arg(long, default_value_t = 8)]
     max_iters: u32,
@@ -120,13 +247,27 @@ impl HarnessLauncher {
         if self.run_store.is_none() {
             self.run_store = self.kernel_stores.as_ref().map(|stores| stores.runs.clone());
         }
-        let spec = match (&command.goal, &command.until) {
-            (Some(goal), Some(until)) => Some(GoalSpec {
-                goal: goal.clone(),
-                until: until.clone(),
-                max_iterations: command.max_iters,
-                check_timeout: Duration::from_secs(command.check_timeout),
-            }),
+        let spec = match &command.goal {
+            Some(goal) if !command.resume => {
+                let rubric =
+                    command.rubric.resolve(goal, self.agent.runtime().workspace().root())?;
+                if command.until.is_none() && rubric.is_none() {
+                    return Err(AdkError::config(
+                        "a goal needs a check: --until CMD, --rubric FILE, --rubric-from-goal, \
+                         or a [goal] rubric in .adk/harness.toml",
+                    ));
+                }
+                let mut spec = GoalSpec::new(goal.clone())
+                    .with_max_iterations(command.max_iters)
+                    .with_check_timeout(Duration::from_secs(command.check_timeout));
+                if let Some(until) = &command.until {
+                    spec = spec.with_until(until.clone());
+                }
+                if let Some(rubric) = rubric {
+                    spec = spec.with_rubric(rubric);
+                }
+                Some(spec)
+            }
             _ => None,
         };
         let home = self.kernel_home();
@@ -144,12 +285,7 @@ impl HarnessLauncher {
         }
         let outcome = match spec {
             Some(spec) if !command.resume => {
-                console.print(&format!(
-                    "goal:  {}\nuntil: {}  (budget: {} iterations)\n\n",
-                    terminal_safe(&spec.goal),
-                    terminal_safe(&spec.until),
-                    spec.max_iterations
-                ));
+                console.print(&format!("{}\n", goal_banner(&spec)));
                 self.run_goal(spec).await?
             }
             _ => {
@@ -269,22 +405,19 @@ impl HarnessLauncher {
         let home = self.kernel_home();
         self.goal_queue = Some(adk_kernel::QueueClass::BACKGROUND.to_string());
         self.goals_authenticated = true;
-        let (goal, until, iterations) =
-            (spec.goal.clone(), spec.until.clone(), spec.max_iterations);
+        let banner = goal_banner(&spec);
         let pid = self.enqueue_goal(spec).await?;
         let session = self.session_id().unwrap_or_default().to_string();
         let mode = self.mode().await?;
         console.print(&format!(
-            "goal on the kernel at {} · mode {mode}{}\ngoal:  {}\nuntil: {}  (budget: {iterations} \
-             iterations)\nprocess {pid} · session {}\nCtrl-C detaches; the goal keeps running.\n\n",
+            "goal on the kernel at {} · mode {mode}{}\n{banner}process {pid} · session {}\n\
+             Ctrl-C detaches; the goal keeps running.\n\n",
             home.display(),
             if unattended.is_some() {
                 " · --yes approves held calls while this follows"
             } else {
                 ""
             },
-            terminal_safe(&goal),
-            terminal_safe(&until),
             terminal_safe(&session),
         ));
         let followed = follow_on_kernel(&client, console, &session, &pid, unattended).await?;
@@ -337,12 +470,10 @@ impl HarnessLauncher {
     /// use std::time::Duration;
     /// use adk_harness::GoalSpec;
     ///
-    /// let spec = GoalSpec {
-    ///     goal: "make the tests pass".into(),
-    ///     until: "cargo test".into(),
-    ///     max_iterations: 8,
-    ///     check_timeout: Duration::from_secs(120),
-    /// };
+    /// let spec = GoalSpec::new("make the tests pass")
+    ///     .with_until("cargo test")
+    ///     .with_max_iterations(8)
+    ///     .with_check_timeout(Duration::from_secs(120));
     /// let outcome = launcher.run_goal(spec).await?;
     /// let state = launcher.goal().await?;
     /// ```
@@ -718,18 +849,10 @@ fn tail(
 /// Prints how a goal stands and returns the exit code: `0` met, `1` otherwise.
 fn goal_exit(console: &ConsoleIo, state: Option<&GoalState>) -> i32 {
     let (line, code) = match state {
-        Some(state) if state.status == GoalStatus::Done => (
-            format!("goal met after {} iteration(s): `{}` passed.", state.iteration, state.until),
-            0,
-        ),
-        Some(state) if state.status == GoalStatus::Exhausted => (
-            format!(
-                "budget exhausted after {} iteration(s); `{}` still fails. Resume with --resume \
-                 and a higher --max-iters.",
-                state.iteration, state.until
-            ),
-            1,
-        ),
+        Some(state) if state.status == GoalStatus::Done => (state.outcome().unwrap_or_default(), 0),
+        Some(state) if state.status == GoalStatus::Exhausted => {
+            (format!("{}\n{}", state.outcome().unwrap_or_default(), exhausted_hint(state)), 1)
+        }
         Some(state) => (
             format!(
                 "the goal is {:?} at iteration {}; continue with --resume.",
@@ -741,6 +864,59 @@ fn goal_exit(console: &ConsoleIo, state: Option<&GoalState>) -> i32 {
     };
     console.print(&format!("\n{}\n", terminal_safe(&line)));
     code
+}
+
+/// What to do about an exhausted goal: more iterations, or, when its rubric's grading rounds
+/// ran out first, a new start with more of them.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_harness::{GoalRecord, GoalSpec};
+///
+/// let record = GoalRecord::start(GoalSpec::new("g").with_until("true"));
+/// assert!(adk_cli::harness::exhausted_hint(&record.state).contains("--max-evaluations"));
+/// ```
+pub fn exhausted_hint(state: &GoalState) -> &'static str {
+    if state.iteration < state.max_iterations {
+        "Its rubric's grading rounds are used up: start it again with a higher --max-evaluations."
+    } else {
+        "Resume with --resume and a higher --max-iters."
+    }
+}
+
+/// What a goal's console shows before it starts: the goal, its checks and its caps, one per
+/// line, made safe for a terminal.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_harness::{GoalRubric, GoalSpec};
+///
+/// let spec = GoalSpec::new("write blurb.md").with_rubric(GoalRubric::new(["names the price"]));
+/// let banner = adk_cli::harness::goal_banner(&spec);
+/// assert!(banner.contains("rubric: 1 criteria, graded at most 3 times"));
+/// ```
+pub fn goal_banner(spec: &GoalSpec) -> String {
+    let mut banner = format!("goal:  {}\n", terminal_safe(&spec.goal));
+    if let Some(until) = &spec.until {
+        banner.push_str(&format!("until: {}\n", terminal_safe(until)));
+    }
+    if let Some(rubric) = &spec.rubric {
+        banner.push_str(&format!(
+            "rubric: {} criteria{}, graded at most {} times{}\n",
+            rubric.criteria.len(),
+            if rubric.hidden { " (hidden from the agent)" } else { "" },
+            rubric.max_evaluations,
+            if rubric.deliverables.is_empty() {
+                String::new()
+            } else {
+                format!("; the grader reads {}", terminal_safe(&rubric.deliverables.join(", ")))
+            },
+        ));
+    }
+    banner.push_str(&format!("budget: {} iterations\n", spec.max_iterations));
+    banner
 }
 
 /// Follows the goal's process `pid` on the kernel until it finishes, printing what the agent
@@ -898,7 +1074,9 @@ mod tests {
             (Some("ship it"), Some("true"), Some(HarnessMode::Auto), true)
         );
         assert!(parse(&["--resume"]).unwrap().resume);
-        assert!(parse(&["ship it"]).is_err(), "a goal needs --until");
+        let graded = parse(&["ship it", "--rubric-from-goal", "--deliverable", "a.md"]).unwrap();
+        assert!(graded.until.is_none() && graded.rubric.rubric_from_goal);
+        assert!(parse(&["ship it", "--rubric", "r.md", "--rubric-from-goal"]).is_err());
         let refused = parse(&["ship it", "--until", "true", "--mode", "plan"]).unwrap_err();
         assert!(refused.to_string().contains("ask or auto"), "{refused}");
         assert!(parse(&["ship it", "--until", "true", "--allow-unsandboxed"]).is_err());
@@ -1071,5 +1249,51 @@ mod tests {
         kernel.stop().await.unwrap();
         assert!(met, "the goal did not resume after the approval");
         assert_eq!(runs.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_rubric_comes_from_the_flags_else_the_project_file_inside_the_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path();
+        std::fs::write(workspace.join("rubric.md"), "- names the price\n- under 60 words\n")
+            .unwrap();
+        let none = RubricArgs::default().resolve("g", workspace).unwrap();
+        assert_eq!(none, None, "no flag and no project file: no rubric");
+
+        let flagged = RubricArgs {
+            rubric: Some(workspace.join("rubric.md")),
+            deliverables: vec!["blurb.md".into()],
+            max_evaluations: Some(5),
+            ..RubricArgs::default()
+        };
+        let expected = GoalRubric::new(["names the price", "under 60 words"])
+            .with_deliverables(["blurb.md"])
+            .with_max_evaluations(5);
+        assert_eq!(flagged.resolve("g", workspace).unwrap(), Some(expected.clone()));
+
+        std::fs::create_dir_all(workspace.join(".adk")).unwrap();
+        std::fs::write(
+            workspace.join(".adk/harness.toml"),
+            "[goal]\nrubric = \"rubric.md\"\ndeliverables = [\"blurb.md\"]\nmax_evaluations = 5\nhidden = true\n",
+        )
+        .unwrap();
+        let configured = RubricArgs::default().resolve("g", workspace).unwrap();
+        assert_eq!(configured, Some(expected.hidden(true)));
+
+        // A workspace's project file may not read a rubric from outside the workspace.
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.md"), "- leaked\n").unwrap();
+        std::fs::write(
+            workspace.join(".adk/harness.toml"),
+            format!("[goal]\nrubric = {:?}\n", outside.path().join("secret.md")),
+        )
+        .unwrap();
+        let refused = RubricArgs::default().resolve("g", workspace).unwrap_err();
+        assert!(refused.message.contains("[goal] rubric"), "{refused}");
+
+        let from_goal = RubricArgs { rubric_from_goal: true, ..RubricArgs::default() }
+            .resolve("Write it:\n- one\n- two", workspace)
+            .unwrap();
+        assert_eq!(from_goal, Some(GoalRubric::new(["one", "two"])));
     }
 }

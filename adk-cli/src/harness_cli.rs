@@ -14,7 +14,7 @@ use adk_cli::harness::ultracode::{
 };
 use adk_cli::harness::{
     ConsolePrompter, HarnessArgs, HarnessLauncher, KernelSettings, OPERATOR_SCOPE,
-    ResolvedHarnessArgs, SearchArg, TurnOutcome,
+    ResolvedHarnessArgs, RubricArgs, SearchArg, TurnOutcome, exhausted_hint, goal_banner,
 };
 use adk_core::audit_log::AuditRecorder;
 use adk_core::{
@@ -466,6 +466,12 @@ impl Setup {
         // Explicit context caching for a model that supports it (spec 3.1 §7.23).
         if let Some(cache) = &model.cache_capable {
             builder = builder.cache_capable(cache.clone());
+        }
+        // Auto review: in auto mode the session's model reviews what the mode holds, in a
+        // context of its own, before the person is asked (autonomy parity item 2).
+        if self.resolved.auto_review {
+            builder =
+                builder.auto_review(Arc::new(adk_core::ModelApprover::new(model.llm.clone())));
         }
         if let Ok(trust) = FileWorkspaceTrustStore::in_home() {
             builder = builder.workspace_trust(Arc::new(trust));
@@ -1244,7 +1250,9 @@ fn persistent(setup: &Setup) -> bool {
 /// Arguments of `adk-rust goal`.
 pub struct GoalArgs {
     pub goal: String,
-    pub until: String,
+    pub until: Option<String>,
+    /// `--rubric`, `--rubric-from-goal` and their options, else the `[goal]` table.
+    pub rubric: RubricArgs,
     pub max_iters: u32,
     /// How long one run of the check may take (`--check-timeout`).
     pub check_timeout: std::time::Duration,
@@ -1252,8 +1260,8 @@ pub struct GoalArgs {
     pub resume: bool,
 }
 
-/// `adk-rust goal`: the harness goal engine, iterating until `until` passes
-/// (spec 3.1 §8.1, §7.11).
+/// `adk-rust goal`: the harness goal engine, iterating until `until` passes and the rubric's
+/// grader passes every criterion, whichever the goal has (spec 3.1 §8.1, §7.11).
 ///
 /// `Harness::start_goal` starts the goal; with `harness.db` it is a durable run that parks
 /// on a held call and continues with `--resume` once the call is decided, in the same
@@ -1326,14 +1334,8 @@ pub async fn goal(
         if goal.resume {
             println!("no unfinished goal in this workspace; starting fresh.");
         }
-        println!("goal:  {}", goal.goal);
-        println!("until: {}  (budget: {} iterations)\n", goal.until, goal.max_iters);
-        let spec = GoalSpec {
-            goal: goal.goal.clone(),
-            until: goal.until.clone(),
-            max_iterations: goal.max_iters,
-            check_timeout: goal.check_timeout,
-        };
+        let spec = goal_spec(&goal, &workspace)?;
+        println!("{}", goal_banner(&spec));
         launcher.run_goal(spec).await?
     };
     let state = launcher.goal().await?;
@@ -1382,12 +1384,8 @@ async fn goal_on_kernel(
         .with_run_store(db.runs.clone())
         .with_goal_queue(adk_kernel::QueueClass::BACKGROUND)
         .with_authenticated_goals();
-    let spec = GoalSpec {
-        goal: goal.goal.clone(),
-        until: goal.until.clone(),
-        max_iterations: goal.max_iters,
-        check_timeout: goal.check_timeout,
-    };
+    let spec = goal_spec(&goal, &setup.resolved.workspace)?;
+    let banner = goal_banner(&spec);
     let mut cursor = Some(chrono::Utc::now());
     let pid = launcher.enqueue_goal(spec).await?;
     let session = launcher.session_id().unwrap_or_default().to_string();
@@ -1403,8 +1401,7 @@ async fn goal_on_kernel(
             ""
         }
     );
-    println!("goal:  {}", goal.goal);
-    println!("until: {}  (budget: {} iterations)", goal.until, goal.max_iters);
+    print!("{banner}");
     println!("process {pid} · session {session}");
     println!(
         "Ctrl-C detaches; the goal keeps running. Follow it again with `adk-rust attach \
@@ -1438,22 +1435,36 @@ async fn goal_on_kernel(
     })
 }
 
+/// The goal `goal` asks for in `workspace`: its `--until` command and its rubric.
+fn goal_spec(goal: &GoalArgs, workspace: &Path) -> Result<GoalSpec> {
+    let rubric = goal.rubric.resolve(&goal.goal, workspace)?;
+    if goal.until.is_none() && rubric.is_none() {
+        bail!(
+            "a goal needs a check: --until CMD, --rubric FILE, --rubric-from-goal, or a [goal] \
+             rubric in .adk/harness.toml"
+        );
+    }
+    let mut spec = GoalSpec::new(goal.goal.clone())
+        .with_max_iterations(goal.max_iters)
+        .with_check_timeout(goal.check_timeout);
+    if let Some(until) = &goal.until {
+        spec = spec.with_until(until.clone());
+    }
+    if let Some(rubric) = rubric {
+        spec = spec.with_rubric(rubric);
+    }
+    Ok(spec)
+}
+
 /// Reports how a goal stands and returns the exit code: `0` met, `1` otherwise.
 fn goal_exit(state: Option<&GoalState>, outcome: &TurnOutcome) -> i32 {
     match state {
         Some(state) if state.status == GoalStatus::Done => {
-            println!(
-                "\ngoal met after {} iteration(s): `{}` passed.",
-                state.iteration, state.until
-            );
+            println!("\n{}", state.outcome().unwrap_or_default());
             0
         }
         Some(state) if state.status == GoalStatus::Exhausted => {
-            println!(
-                "\nbudget exhausted after {} iteration(s); `{}` still failing. Resume later \
-                 with --resume and a higher --max-iters.",
-                state.iteration, state.until
-            );
+            println!("\n{}\n{}", state.outcome().unwrap_or_default(), exhausted_hint(state));
             1
         }
         Some(state) => {
@@ -1506,6 +1517,8 @@ fn write_goal_mirror(mirror: &OutputFile, state: &GoalState) -> Result<()> {
         "iteration": state.iteration,
         "status": serde_json::to_value(state.status)?,
         "lastCheck": state.last_check,
+        "evaluations": state.evaluations,
+        "lastGrade": state.last_grade,
     }))?;
     mirror.write(text.as_bytes())
 }

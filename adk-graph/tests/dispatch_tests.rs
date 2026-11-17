@@ -233,7 +233,9 @@ async fn every_pause_of_a_step_reaches_a_stream_in_each_mode() {
         let pauses: Vec<(String, String)> = events
             .iter()
             .filter_map(|event| match event {
-                StreamEvent::Interrupted { node, message } => Some((node.clone(), message.clone())),
+                StreamEvent::Interrupted { node, message, .. } => {
+                    Some((node.clone(), message.clone()))
+                }
                 _ => None,
             })
             .collect();
