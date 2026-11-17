@@ -13,7 +13,7 @@ fn accept(content: Value) -> Value {
 #[test]
 fn answers_map_to_decisions() {
     assert_eq!(decision_of("k", &json!({ "action": "accept" })).unwrap(), (true, String::new()));
-    assert_eq!(decision_of("k", &accept(json!({ "approve": true }))).unwrap().0, true);
+    assert!(decision_of("k", &accept(json!({ "approve": true }))).unwrap().0);
     assert_eq!(
         decision_of("k", &accept(json!({ "approve": false, "reason": "too much" }))).unwrap(),
         (false, "too much".to_string())
