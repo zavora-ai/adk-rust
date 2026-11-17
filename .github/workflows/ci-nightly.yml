@@ -398,13 +398,14 @@ jobs:
 
     # The session history contract (fork, rewind, edit, import) and the integrity contract on
     # the backends the PR tier does not reach (PostgreSQL's run in the PR tier's postgres job);
-    # MongoDB on its replica set here and on the standalone server below.
+    # MongoDB on its replica set here and on the standalone server below. One test at a time,
+    # since parallel transactions time out on the Firestore emulator's locks.
     - name: Run the session history contract on every backend
       if: ${{ !cancelled() }}
       run: >-
         cargo nextest run -p adk-session
         --features sqlite,postgres,redis,mongodb,neo4j,firestore
-        --run-ignored all --no-fail-fast
+        --run-ignored all --no-fail-fast --test-threads 1
         --test session_contract_redis
         --test mongodb_state_tests
         --test neo4j_state_tests
