@@ -58,7 +58,7 @@ adk-rust memory accept <id>
 | Shell | Commands run on your machine behind approval, or in the OS sandbox (Seatbelt on macOS, bubblewrap on Linux, a restricted token on Windows) or a container per session |
 | Project instructions | `AGENTS.md` is read after you trust the workspace, and read again only after you trust its new content |
 | Skills | Skills in `.skills/` load when a task needs them |
-| Plans and goals | A todo list per session, approved plans run step by step from checkpoints, and goals loop until your check command passes |
+| Plans and goals | A todo list per session, approved plans run step by step from checkpoints, and goals loop until your check command passes, a separate grader passes your rubric, or both |
 | Team | Sub-tasks go to helper agents — built-in explorers, other coding agents, remote agents — under the same mode, rules and budget |
 | Memory | Working notes and long-term facts about you and your projects; you list, accept, correct, forget, export and import them |
 | Durability | Sessions, waiting approvals and completed actions survive a crash; a completed edit or command never runs twice |
@@ -121,7 +121,7 @@ agent tool — and the harness refuses to run without it.
 | Team | Members (`explore` and `general` by default, local `LlmAgent`s, ACP-compatible coding agents, remote A2A agents, any `Agent`, or discovered in a `TeamAgentRegistry`) lowered to one `TeamSpec`: isolated context, a timeout and circuit breaker on every edge, delegation depth 1, the team budget, the parent's mode and policy; ACP permission requests decided on the governed path; `harness.member.*` records |
 | Plan graph | An approved plan with `steps` runs as a checkpointed graph: one node per step, `interrupt_before` on `approve` gates (a held `plan_step_gate` call bound to the plan hash and step), a reviewer after `review` gates, rewind through `TimeTravelHandle::fork_at` |
 | Snapshots and rewind | `snapshots(SnapshotConfig)`: the whole workspace snapshotted before each user turn and plan step, shell writes included, into content-addressed objects beside the store (sealed under the store key); `Harness::rewind_plan` / `rewind` / `redo_plan` restore files, transcript and plan, with conflicts, protected paths and effects not undone shown first (spec 3.1 §7.27) |
-| Goals | `Harness::start_goal` iterates until the operator's `until` command passes (`LoopAgent` or a checkpointed graph); goal state in a `GoalStore`; durable goals as `harness.goal` runs for a `DurableWorker`; ambient goals on cron, file-watch and webhook triggers |
+| Goals | `Harness::start_goal` iterates until the operator's `until` command passes and a grader in a separate context passes every criterion of the goal's `GoalRubric`, whichever the goal has (`LoopAgent` or a checkpointed graph); the grader's feedback drives the next iteration, its call counts against the run budget, and each round is audited as `harness.goal.grade`; goal state in a `GoalStore`; durable goals as `harness.goal` runs for a `DurableWorker`; ambient goals on cron, file-watch and webhook triggers |
 | Durability | A completed call never runs twice after a crash (the turn after one answers it from the action ledger), held approvals survive process loss, resumed runs follow the current mode |
 | Long-term facts | `MemoryFact`s with provenance in a `FactStore` (in-memory, file, SQLite, PostgreSQL), found by a `FactIndex` (`LocalFactIndex` by embedding or shared words, each vector tagged with its embedder's id, `MemoryServiceIndex` over any `adk-memory` backend) and recalled into a `<memory-facts>` block on each user turn; written by `memory_remember` (assumed, or known when its quote is the user's own words in the session), by distilling a session on a cheaper model, and by a person; `Known` only from the user's own quoted words or a person's confirmation; redacted before storage; `Harness::{facts, accept_fact, forget_fact, correct_fact}` |
 | Fact consolidation | The spec 3.2 consolidation tick's work on facts: `Harness::consolidate_memory` distils the sessions the per-session distiller never reached (assumed only), supersedes `Assumed` near-duplicates and expires stale `Assumed` facts without a model call, merges similar `Assumed` facts with provenance, never touches a `Known` fact, stops at a loss cap, and keeps a record `Harness::undo_consolidation` reverts; `Harness::distilled_sessions` lists how far distillation read each session, so a host finds the sessions that ended undistilled, as `adk-rust` does at start |
@@ -261,7 +261,7 @@ See `docs/official_docs/harness/website.md`.
 | `team` | on | `adk-tool`, `adk-agent/team-tools` |
 | `graph` | on | `adk-graph`: the plan graph and the `Graph` goal engine, checkpointed in the store `plan_checkpoint_store(url)` names (`checkpointer_from_url`), in memory without one |
 | `sandbox` | on | `adk-sandbox/sandbox-native`, `adk-sandbox/egress-proxy` |
-| `observe` | on | `adk-eval` |
+| `observe` | on | spans, spend and the loop guard; `adk-eval`, which also grades rubric goals, is always linked |
 | `auth` | on | `adk-auth`, `adk-auth/signed-audit` |
 | `memory` | on | working notes and long-term facts (`adk-memory`, `adk-guardrail`) |
 | `memory-embeddings` | off | `RagEmbedder`: `adk-rag`'s OpenAI and Gemini embedders for long-term facts |

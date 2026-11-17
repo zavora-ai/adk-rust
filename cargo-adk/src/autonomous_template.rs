@@ -12,7 +12,7 @@ use crate::template::{AgentCodeFragments, AgentTemplate, FileFragment, TemplateC
 pub fn template() -> AgentTemplate {
     AgentTemplate {
         name: "autonomous",
-        description: "Autonomous agent: goals and a schedule on the agent kernel, durable SQLite stores, an approval-gated side effect, run budget and spend cap, signed audit, OS sandbox",
+        description: "Autonomous agent: rubric-graded goals and a schedule on the agent kernel, durable SQLite stores, an approval-gated side effect, run budget and spend cap, signed audit, OS sandbox",
         category: TemplateCategory::AgentType,
         default_provider: "gemini",
         required_features: vec!["minimal", "autonomy", "cli"],
@@ -38,6 +38,7 @@ pub fn template() -> AgentTemplate {
                 FileFragment { path: "src/publish.rs", content: PUBLISH_RS },
                 FileFragment { path: "src/audit.rs", content: AUDIT_RS },
                 FileFragment { path: ".adk/harness.toml", content: HARNESS_TOML },
+                FileFragment { path: "rubric.md", content: RUBRIC },
                 FileFragment { path: "notes/example.md", content: EXAMPLE_NOTE },
                 FileFragment { path: ".gitignore", content: GITIGNORE },
                 // Replaces the generic README with the autonomous agent's commands.
@@ -116,7 +117,9 @@ const AGENT_CONSTRUCTION: &str = r#"// Sessions belong to you, so `adk-rust atta
     );
 
     // `cargo run` is the REPL; `cargo run -- up` runs the agent kernel with its home in .adk;
-    // `cargo run -- goal "…" --until "…"` works toward a goal, on that kernel when it runs.
+    // `cargo run -- goal "…" --until "…"` works toward a goal, on that kernel when it runs,
+    // and a separate grader checks each iteration against rubric.md ([goal] in
+    // .adk/harness.toml).
     HarnessLauncher::new(harness)
         .with_user_id(user)
         .with_session_service(sessions)
@@ -291,6 +294,27 @@ sandbox = true
 
 # Refuse to start where the sandbox is unavailable, instead of the host behind approvals.
 # fail_if_unavailable = true
+
+# `cargo run -- goal` grades each iteration against rubric.md: a separate grader reads only
+# STATUS.md and the agent's final message, and the goal is met once every criterion passes
+# (and its --until command, when given). Its feedback drives the next iteration; after
+# `max_evaluations` failed rounds the goal stops as exhausted. The grader's calls count
+# against the run budget in src/main.rs.
+[goal]
+rubric = "rubric.md"
+deliverables = ["STATUS.md"]
+max_evaluations = 3
+"##;
+
+/// `rubric.md`: what a finished STATUS.md looks like, one gradeable criterion per item.
+const RUBRIC: &str = r##"# STATUS.md rubric
+
+Each item is graded pass or fail on its own, from STATUS.md alone.
+
+- STATUS.md starts with a level-one heading that contains the word "Status".
+- It has a section that lists open risks or problems, and names an owner for each one.
+- It has a section that lists upcoming work, and gives a day for each scheduled item.
+- It is at most 150 words long.
 "##;
 
 /// `notes/example.md`: something for the agent to report on.
@@ -324,6 +348,7 @@ itself each weekday.
 | Property | How |
 |----------|-----|
 | Durable | Sessions, runs, held calls, the action ledger, spend, rules, modes, goals, the audit log and the kernel's processes in `.adk/state.db` |
+| Graded | A separate grader checks each goal iteration against `rubric.md` and feeds its findings back |
 | Governed | `auto` mode: reads, edits and sandboxed commands run; `publish_status` waits for approval |
 | Bounded | 40 model calls or 0.50 USD per run; background work stops at 2 USD a day |
 | Sandboxed | `bash` in Seatbelt (macOS) or bubblewrap (Linux), set in `.adk/harness.toml` |
@@ -345,7 +370,7 @@ adk-rust approvals --home .adk approve ID     # the goal resumes on the kernel
 |---------|------|
 | `cargo run` | The REPL; approvals are asked in the terminal |
 | `cargo run -- up` | The agent kernel: goals, the weekday trigger and their held calls run here |
-| `cargo run -- goal TEXT --until CMD` | Works toward `TEXT` until `CMD` exits 0, on the kernel when it runs, else here |
+| `cargo run -- goal TEXT --until CMD` | Works toward `TEXT` until `CMD` exits 0 and the grader passes `rubric.md`, on the kernel when it runs, else here |
 | `cargo run -- goal --resume` | Continues the latest unfinished goal |
 | `adk-rust ps --home .adk` | The kernel's processes |
 | `adk-rust approvals --home .adk list` | Calls waiting for a decision |
@@ -361,7 +386,8 @@ adk-rust approvals --home .adk approve ID     # the goal resumes on the kernel
 | `src/main.rs` | The stores, the agent, the weekday trigger and the launcher |
 | `src/publish.rs` | `publish_status`, the side effect, and its test |
 | `src/audit.rs` | The signed audit log and its key |
-| `.adk/harness.toml` | The OS sandbox; it can only tighten `src/main.rs` |
+| `.adk/harness.toml` | The OS sandbox and the goal rubric; it can only tighten `src/main.rs` |
+| `rubric.md` | What a finished `STATUS.md` looks like; one criterion per list item |
 | `notes/` | What the agent reports on |
 | `.adk/state.db` | Everything durable, created on the first run (git-ignored) |
 

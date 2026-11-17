@@ -19,6 +19,7 @@ Agent evaluation framework for Rust Agent Development Kit (ADK-Rust).
 - **Multiple Criteria**: Ground truth, similarity-based, and configurable thresholds
 - **Detailed Reporting**: Per-case results, scores, and failure details
 - **Structured LLM Judge**: Typed verdicts (pass/fail/partial) with scores and reasoning
+- **Rubric-Graded Outcomes**: `OutcomeGrader` grades a deliverable per criterion in a context of its own; `RubricCheckAgent` loops an agent until the rubric passes (default 3 attempts, at most 20), metered against the run budget
 - **Embedding Similarity**: Cosine similarity between embedding vectors (feature: `embedding`)
 - **Cost & Latency Tracking**: Token usage extraction, dollar cost estimation, latency recording
 - **Trace Analysis**: Detect redundant tool calls, execution loops, compute efficiency scores
@@ -379,6 +380,35 @@ async fn judge(model: Arc<dyn Llm>) -> adk_eval::Result<()> {
     Ok(())
 }
 ```
+
+### Rubric-Graded Outcomes
+
+A grader in a context of its own checks a deliverable against independently gradeable
+criteria; `RubricCheckAgent` makes it the exit condition of a `LoopAgent`:
+
+```rust
+use std::sync::Arc;
+
+use adk_agent::{LlmAgentBuilder, LoopAgent};
+use adk_eval::{RubricCheckAgent, RubricConfig};
+
+fn blurb_loop(model: Arc<dyn adk_core::Llm>) -> adk_core::Result<LoopAgent> {
+    let writer = LlmAgentBuilder::new("writer")
+        .instruction("Write the product blurb the user asks for.")
+        .model(model.clone())
+        .output_key("draft")
+        .build()?;
+    let rubric = RubricConfig::from_markdown("- Names the product\n- States the monthly price");
+    let check = RubricCheckAgent::new("rubric_check", model, rubric)
+        .with_deliverable_key("draft")
+        .with_max_iterations(3);
+    Ok(LoopAgent::new("blurb", vec![Arc::new(writer), Arc::new(check)]))
+}
+```
+
+Each attempt's failed criteria and the grader's feedback reach the next attempt; the loop stops
+once every criterion passes or after `with_max_iterations` graded attempts (3 by default, at most
+20). The grading call counts against the run budget. `OutcomeGrader` grades once, outside a loop.
 
 ### Cost and Latency Tracking
 

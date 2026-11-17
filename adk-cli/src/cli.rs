@@ -425,16 +425,28 @@ pub enum Commands {
     /// Autonomous goal mode: work until a verifiable success condition passes.
     ///
     /// The agent loops plan → act → verify, self-correcting from the check's
-    /// output, until `--until` exits 0 or the iteration budget is reached. The goal and its
-    /// conversation are kept in the session, so `--resume` continues both.
+    /// output, until `--until` exits 0 or the iteration budget is reached. With `--rubric`, a
+    /// separate grader checks each iteration against the rubric's criteria and its feedback
+    /// drives the next one; with both, both must pass. The goal and its conversation are kept
+    /// in the session, so `--resume` continues both.
     /// Example: `adk-rust goal "make all tests pass" --until "cargo test"`
     Goal {
         /// The high-level goal.
         goal: String,
 
         /// Shell command whose exit code 0 means "goal met" (the success condition).
+        #[cfg(feature = "harness")]
+        #[arg(long)]
+        until: Option<String>,
+
+        /// Shell command whose exit code 0 means "goal met" (the success condition).
+        #[cfg(not(feature = "harness"))]
         #[arg(long)]
         until: String,
+
+        #[cfg(feature = "harness")]
+        #[command(flatten)]
+        rubric: adk_cli::harness::RubricArgs,
 
         #[cfg(feature = "harness")]
         #[command(flatten)]

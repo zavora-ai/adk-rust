@@ -49,6 +49,7 @@ as a Streamable HTTP server with an MCP Server Card; hand-written servers use
 | Connect one remote MCP service | `McpHttpClientBuilder` | The remote deployment owns availability |
 | Change local server definitions at runtime | `McpServerManager` | The application owns a local registry and child processes |
 | Publish ADK-Rust tools as an MCP server | `McpServer` + `McpRouterBuilder` (`mcp-server`) | Your executor owns authorization and side effects |
+| Serve an agent over MCP, with tasks and elicitation | `adk_server::mcp::McpAgentHost` (`adk-server` `mcp`) | The agent's governed path owns authorization; durable runs own the tasks |
 | Publish a hand-written MCP server | `adk_tool::mcp::rmcp` | Your service owns schemas, authorization, and side effects |
 | Keep a deprecated sampling integration working | `mcp-sampling` feature | Compatibility only under SEP-2577 |
 
@@ -67,7 +68,8 @@ as a Streamable HTTP server with an MCP Server Card; hand-written servers use
 | Streamable HTTP | `McpHttpClientBuilder` | Timeouts, headers, auth injection, expired-session recovery |
 | Dynamic local registry | `McpServerManager` | Add, update, enable, disable, remove, save, monitor, and restart |
 | Shutdown | `Toolset::close` (from `Runner::close`), `McpServerManager::shutdown` | Ends the session and waits for a stdio server to exit |
-| Publishing tools | `McpServer`, `McpRouterBuilder`, `McpCallExecutor` | Streamable HTTP server, Server Card (SEP-2127), AI Catalog entry |
+| Publishing tools | `McpServer`, `McpRouterBuilder`, `McpCallExecutor` | Streamable HTTP or stdio server, Server Card (SEP-2127), AI Catalog entry, tasks through `McpTaskHost` |
+| Serving agents | `McpAgentHost` | Each call a durable run followed as a task; held calls asked as elicitations; survives restarts |
 | Advanced SDK work | `adk_tool::mcp::rmcp` | Server handlers, transports, notifications, and extension types |
 
 ## Documentation path
@@ -75,6 +77,7 @@ as a Streamable HTTP server with an MCP Server Card; hand-written servers use
 - [Build an MCP client](client.md)
 - [Manage local MCP servers dynamically](manager.md)
 - [Publish an MCP server](server.md)
+- [Serve an agent over MCP](agent-server.md)
 - [Security and authorization](security.md)
 - [Testing and verification](testing.md)
 - [Provider-aware schema normalization](../tools/schema-normalization.md)

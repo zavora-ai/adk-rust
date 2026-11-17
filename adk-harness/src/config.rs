@@ -100,6 +100,11 @@ struct ConfigFile {
     #[serde(default)]
     #[allow(dead_code)]
     compaction: Option<toml::Value>,
+    /// The `[goal]` table (the rubric goals in this workspace are graded against) is read by
+    /// the `adk-rust` CLI, so it is neither applied here nor reported as unknown.
+    #[serde(default)]
+    #[allow(dead_code)]
+    goal: Option<toml::Value>,
     #[serde(flatten)]
     other: BTreeMap<String, toml::Value>,
 }

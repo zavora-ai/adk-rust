@@ -1,4 +1,4 @@
-//! A classifier refusal (`stop_reason: "refusal"`) ends the turn with `FinishReason::Safety`
+//! A classifier refusal (`stop_reason: "refusal"`) ends the turn with `FinishReason::Refusal`
 //! and an error naming the refusal category and explanation from `stop_details`, streamed
 //! and unary.
 #![cfg(feature = "anthropic")]
@@ -85,7 +85,7 @@ async fn a_refusal_ends_the_turn_with_its_category_and_explanation() {
     for stream in [false, true] {
         let responses = responses(stream).await;
         let last = responses.last().expect("final response");
-        assert_eq!(last.finish_reason, Some(FinishReason::Safety), "stream={stream}");
+        assert_eq!(last.finish_reason, Some(FinishReason::Refusal), "stream={stream}");
         assert_eq!(last.error_code.as_deref(), Some("refusal"), "stream={stream}");
         assert_eq!(
             last.error_message.as_deref(),

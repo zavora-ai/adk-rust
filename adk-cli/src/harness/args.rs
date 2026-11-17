@@ -490,6 +490,11 @@ struct ConfigFile {
     #[serde(default)]
     #[allow(dead_code)]
     kernel: Option<toml::Value>,
+    /// `[goal]` (spec 3.1 §7.11): the rubric `adk-rust goal` grades against, read through
+    /// `RubricArgs::resolve`, so it is neither applied here nor reported as unknown.
+    #[serde(default)]
+    #[allow(dead_code)]
+    goal: Option<toml::Value>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
 }
