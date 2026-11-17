@@ -204,6 +204,20 @@ fn service() -> StoreApprovalService {
 | `approval.self_approval` | 403 | Self-approval is forbidden |
 | `approval.action_not_allowed` | 400 | The request does not allow the action, or an edit or response lacks its content |
 
+### Decisions a Reviewer Made
+
+A run with a `ToolReviewer` ([Model Reviewer](tool-authorization.md#model-reviewer)) decides
+some held calls before they reach the inbox. When it approves or denies one, the governed path
+files it with `ApprovalService::record_review`: the service routes the call as it would a held
+call and stores a request already resolved — `Approved` or `Rejected`, one decision by the
+reviewer (`SubjectRef::service("model:<model id>")`) carrying its rationale, and
+`outcome_applied` set, because the run applied the verdict itself. Nothing is written to the
+store and no run is woken. Notifiers hear `Decided` and `Resolved`, so the kernel publishes
+`decided` naming the reviewer, and the service's audit trail records the decision with source
+`reviewer`. A call the reviewer escalates is submitted as a pending request like any other
+held call, with the reviewer's note in its summary. The trait's default files nothing;
+a wrapper forwards it to the service it wraps.
+
 ## Expiry and Escalation
 
 `ApprovalService::tick(now)` expires overdue requests and fires due escalation steps. The

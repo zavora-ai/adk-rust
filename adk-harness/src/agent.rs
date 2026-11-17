@@ -135,6 +135,8 @@ pub struct HarnessRuntime {
     pub(crate) ledger: Arc<dyn ShellLedger>,
     pub(crate) approval_store: Arc<dyn ApprovalStore>,
     pub(crate) approval_service: Option<Arc<dyn ApprovalService>>,
+    /// The reviewer of calls Auto mode holds, when auto review is on.
+    pub(crate) auto_review: Option<Arc<dyn adk_core::ToolReviewer>>,
     pub(crate) ledgers: crate::ledger::HarnessLedgers,
     pub(crate) handler: Option<Arc<dyn ToolConfirmationHandler>>,
     pub(crate) confirmation_timeout: Duration,
@@ -268,6 +270,12 @@ impl HarnessRuntime {
     /// The approval inbox, if configured.
     pub fn approval_service(&self) -> Option<&Arc<dyn ApprovalService>> {
         self.approval_service.as_ref()
+    }
+
+    /// The reviewer of calls Auto mode holds, when auto review is on
+    /// ([`HarnessAgentBuilder::auto_review`](crate::HarnessAgentBuilder::auto_review)).
+    pub fn auto_review(&self) -> Option<&Arc<dyn adk_core::ToolReviewer>> {
+        self.auto_review.as_ref()
     }
 
     /// Take over (spec 3.3 §8.2, §10 H2), when the harness was built with it: surfaces answer
@@ -416,6 +424,7 @@ impl HarnessRuntime {
 /// | Approvals | the approval service and store are filled only when empty or identical; otherwise the run's own are kept with a warning |
 /// | Action ledger | the harness's ledger when the run carries none; a run's own keeps the records, with resumed held calls keyed alike (spec 3.1 §7.12) |
 /// | Non-waivable | `tool_approvals` entries naming non-waivable calls are removed |
+/// | Auto review | the harness's reviewer, limited to what Auto mode holds, when the run carries none |
 /// | Run-owned fields | `durable_run_id`, the confirmation handler and call-ID decisions are never touched |
 ///
 /// # Example
@@ -523,6 +532,18 @@ impl HarnessLayer<'_> {
             config.tool_policy = Some(composed);
         }
 
+        // Auto review: the reviewer sees only what Auto mode holds and a rule could answer.
+        if config.tool_reviewer.is_none()
+            && let Some(reviewer) = &runtime.auto_review
+        {
+            config.tool_reviewer = Some(Arc::new(crate::policy::AutoReview::new(
+                reviewer.clone(),
+                runtime.policy.clone(),
+                runtime.non_waivable_tools.clone(),
+                runtime.non_waivable_prefixes.clone(),
+                runtime.workspace.root().to_path_buf(),
+            )));
+        }
         match (&config.approval_service, &runtime.approval_service) {
             (None, Some(service)) => config.approval_service = Some(service.clone()),
             (Some(own), Some(service)) if !Arc::ptr_eq(own, service) => tracing::warn!(

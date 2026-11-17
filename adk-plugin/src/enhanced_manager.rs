@@ -242,10 +242,13 @@ impl EnhancedPluginManager {
 
         for plugin in &self.plugins {
             debug!(plugin = plugin.name(), "running before_tool_call");
-            match plugin
-                .before_tool_call(tool.clone(), current_args, ctx.clone(), &plugin_ctx)
-                .await?
-            {
+            // A plugin that panics fails the call closed, as one that errs does.
+            let decided = adk_core::guard_callback(
+                "before_tool_call plugin",
+                plugin.before_tool_call(tool.clone(), current_args, ctx.clone(), &plugin_ctx),
+            )
+            .await?;
+            match decided {
                 BeforeToolCallResult::Continue(modified_args) => {
                     current_args = modified_args;
                 }
@@ -1006,6 +1009,46 @@ mod tests {
 
         assert!(result.is_err());
         // The tracking plugin should NOT have been called
+        assert!(!tracking.before_tool_called.load(Ordering::SeqCst));
+    }
+
+    /// A plugin whose before_tool_call panics.
+    struct PanickingPlugin;
+
+    #[async_trait]
+    impl EnhancedPlugin for PanickingPlugin {
+        fn name(&self) -> &str {
+            "panicking"
+        }
+
+        // Runs before the tracking plugin, so the test shows the panic stops the pipeline.
+        fn priority(&self) -> i32 {
+            10
+        }
+
+        async fn before_tool_call(
+            &self,
+            _tool: Arc<dyn Tool>,
+            _args: Value,
+            _ctx: Arc<dyn CallbackContext>,
+            _plugin_ctx: &PluginContext,
+        ) -> Result<BeforeToolCallResult> {
+            panic!("the policy client crashed")
+        }
+    }
+
+    #[tokio::test]
+    async fn a_panicking_before_tool_call_plugin_blocks_the_call() {
+        let tracking = Arc::new(TrackingPlugin::new("after_panic", 50));
+        let plugins: Vec<Arc<dyn EnhancedPlugin>> =
+            vec![Arc::new(PanickingPlugin), tracking.clone()];
+
+        let manager = EnhancedPluginManager::new(plugins);
+        let error =
+            manager.run_before_tool_call(mock_tool(), json!({}), mock_ctx()).await.unwrap_err();
+
+        assert_eq!(error.code, adk_core::CALLBACK_PANICKED_CODE);
+        assert!(error.message.contains("the policy client crashed"), "{}", error.message);
         assert!(!tracking.before_tool_called.load(Ordering::SeqCst));
     }
 

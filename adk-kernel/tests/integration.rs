@@ -75,6 +75,7 @@ mod managed_partitions;
 mod managed_signals;
 mod managed_tenant_property_tests;
 mod managed_tenants;
+mod mcp_agent_host;
 mod pairing_property_tests;
 mod pairing_scenarios;
 mod partition_progress;

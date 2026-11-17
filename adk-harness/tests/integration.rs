@@ -16,6 +16,7 @@ mod agent_engine_tests;
 mod agents_harness;
 mod apply_patch_policy_tests;
 mod approvals_property_tests;
+mod auto_review_tests;
 mod background_shell_tests;
 mod budget_tests;
 mod change_set_tests;

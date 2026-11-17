@@ -375,3 +375,45 @@ async fn test_before_tool_callback_error_aborts_tool_execution() {
     assert!(saw_error_response, "callback error should be captured as error response");
     assert_eq!(tool_calls.load(Ordering::SeqCst), 0, "tool should not execute on callback error");
 }
+
+/// A before-tool callback that panics fails the call closed with a reason, as an error does,
+/// instead of unwinding through the agent (autonomy parity item 26).
+#[tokio::test]
+async fn a_panicking_before_tool_callback_blocks_the_call_and_the_turn_goes_on() {
+    let model = Arc::new(SequencedModel::new(vec![
+        SequencedModel::function_call_response("test_tool", json!({}), "call-4"),
+        SequencedModel::text_response("the tool was blocked"),
+    ]));
+    let tool = Arc::new(CountingTool::new());
+    let tool_calls = tool.calls.clone();
+
+    let agent = LlmAgentBuilder::new("test-agent")
+        .model(model)
+        .tool(tool)
+        .before_tool_callback(Box::new(|_ctx| {
+            Box::pin(async move { panic!("policy service client crashed") })
+        }))
+        .build()
+        .unwrap();
+
+    let mut stream = agent.run(Arc::new(MockContext::new())).await.unwrap();
+    let mut refusal = None;
+    let mut final_text = String::new();
+    while let Some(result) = stream.next().await {
+        let event = result.expect("the turn does not fail");
+        for part in event.llm_response.content.iter().flat_map(|content| content.parts.iter()) {
+            match part {
+                Part::FunctionResponse { function_response, .. } => {
+                    refusal = function_response.response.get("error").cloned();
+                }
+                Part::Text { text } => final_text.push_str(text),
+                _ => {}
+            }
+        }
+    }
+
+    let refusal = refusal.expect("the call is answered with a refusal").to_string();
+    assert!(refusal.contains("not run"), "{refusal}");
+    assert_eq!(tool_calls.load(Ordering::SeqCst), 0, "the tool did not run");
+    assert!(final_text.contains("blocked"), "the model answered after the refusal");
+}
