@@ -2446,6 +2446,10 @@ impl Tool for BoundedDelegateTool {
         self.inner.egress(args)
     }
 
+    fn batch_group(&self) -> Option<adk_core::BatchGroup> {
+        self.inner.batch_group()
+    }
+
     fn origin(&self) -> &str {
         self.inner.origin()
     }

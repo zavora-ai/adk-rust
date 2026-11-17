@@ -160,6 +160,7 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 - [Vertex AI RAG Engine](rag/vertex-rag-engine.md) - Retrieval from managed RAG Engine corpora
 - [Agent Retrieval](rag/agent-retrieval.md) - The Agent Retrieval (Vector Search 2.0) vector store
 - [Governed Desktop Automation](computer-use/index.md) - `adk-computer-use` over the `computer-use-mcp` server
+- [Governed Computer Use and Browser Use](computer-use/toolsets.md) - Claude's computer use and browser use toolsets, every action on the governed tool path
 - [ACP Tools](tools/acp-tools.md) - Use an ACP coding agent as a typed ADK-Rust tool
 - [Retry & Reflect](tools/retry-reflect.md) - Tool failure recovery with reflection prompts
 - [Advisor Tool](tools/advisor.md) - Let an agent consult a stronger model mid-task, under the run's budget and kill switch

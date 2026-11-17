@@ -463,6 +463,8 @@ Every page of these docs that imports a member crate has the same item under `ad
 - [Tool authorization](../security/tool-authorization.md): policy, approvals and the kill switch
 - [Remote sandbox providers](../sandbox/remote-providers.md): `bash` and agent code in E2B or
   Daytona microVMs, under the same kill switch and run budget
+- [Governed computer use and browser use](../computer-use/toolsets.md): Claude's toolsets with
+  each click, keystroke and navigation on the governed path
 - [Spend ledger](../security/spend-ledger.md) and [audit log](../security/audit-log.md)
 - [Model fallback](../models/fallback.md): keep an unattended run going through a provider
   outage, with every attempt counted against its budget
