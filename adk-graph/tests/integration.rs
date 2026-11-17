@@ -71,5 +71,6 @@ mod time_travel_property_tests;
 mod timeout_property_tests;
 mod tool_confirmation_graph_tests;
 mod trio_composition_tests;
+mod typed_interrupt_tests;
 mod upgrade_from_sqlx_0_8;
 mod workflow_schema_property_tests;

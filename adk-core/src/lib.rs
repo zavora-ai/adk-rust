@@ -187,6 +187,8 @@ pub mod principal;
 pub mod queue_source;
 /// HTTP request context extracted by auth middleware.
 pub mod request_context;
+/// Model-evaluated tool approval: a reviewer that decides held calls before a person.
+pub mod review;
 /// Durable runs: a queue of runs that workers claim under fenced leases.
 pub mod run_store;
 /// Schedules that enqueue durable runs, and the firing rule.
@@ -204,6 +206,9 @@ pub mod spend;
 /// User messages that reach a run while it runs: the run's inbox, the receipt and the
 /// event marker.
 pub mod steering;
+/// Background sub-agents: the host contract, their status, the budget slice and tool
+/// ceiling they run under, and the notice a parent receives.
+pub mod subagent;
 pub mod subject;
 /// Tool trait, toolset, execution strategy, and registry.
 pub mod tool;
@@ -251,8 +256,8 @@ pub use budget::{
 pub use callbacks::{
     AfterAgentCallback, AfterModelCallback, AfterToolCallback, AfterToolCallbackFull,
     BaseEventsSummarizer, BeforeAgentCallback, BeforeModelCallback, BeforeModelResult,
-    BeforeToolCallback, EventsCompactionConfig, GlobalInstructionProvider, HistoryProcessor,
-    InstructionProvider, InvocationHooks, OnToolErrorCallback,
+    BeforeToolCallback, CALLBACK_PANICKED_CODE, EventsCompactionConfig, GlobalInstructionProvider,
+    HistoryProcessor, InstructionProvider, InvocationHooks, OnToolErrorCallback, guard_callback,
 };
 pub use clock::{Clock, ManualClock, SystemClock};
 pub use context::{
@@ -327,6 +332,10 @@ pub use queue_source::{
     InMemoryQueueSource, IngressReport, QueueIngress, QueueMessage, QueueSource,
 };
 pub use request_context::RequestContext;
+pub use review::{
+    DEFAULT_REVIEW_TIMEOUT, MODEL_REVIEWER_PREFIX, ModelApprover, REVIEW_SOURCE, ReviewScope,
+    ReviewVerdict, ToolReview, ToolReviewer,
+};
 pub use run_store::{
     ClaimedRun, DurableRunStore, Enqueued, InMemoryRunStore, NewRun, OnConflict, RetryBackoff,
     RunCheckpointRef, RunFilter, RunOutcome, RunRecord, RunState,
@@ -345,6 +354,11 @@ pub use spend::{
 pub use steering::{
     STEER_INVALID_MESSAGE_CODE, STEER_NO_ACTIVE_RUN_CODE, SteerOutcome, SteerReceipt,
     SteeringInbox, SteeringMarker, SteeringMessage, validate_steering_message,
+};
+pub use subagent::{
+    FollowUp, RunLimits, SubagentHost, SubagentLaunch, SubagentMode, SubagentParent,
+    SubagentRecord, SubagentRequest, SubagentScope, SubagentStart, SubagentStatus, SubagentTarget,
+    ToolCeiling,
 };
 pub use tool::{
     DUPLICATE_TOOL_NAME_CODE, RetryBudget, Tool, ToolContext, ToolEffect, ToolExecutionStrategy,

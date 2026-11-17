@@ -161,6 +161,11 @@ error's component, category, and code but not its message, except for a rejectio
 | `before_tool` (and runner plugin `before_tool`, enhanced `before_tool_call`) | The tool is not run: `{"error": "tool 'x' was not run: a before-tool callback failed with ..."}` |
 | `after_tool`, `after_tool_full` (and runner plugin `after_tool`, enhanced `after_tool_call`) | The tool already ran, so its result is withheld and the model is told not to call it again: `{"status": "result_withheld", "error": "tool 'x' ran, but its after-tool pipeline failed with ..."}`. The remaining after-tool stages do not run |
 
+A before-tool callback or an enhanced `before_tool_call` plugin that panics fails the call
+closed, as an error does: `adk_core::guard_callback` turns the panic into a `callback.panicked`
+error (`CALLBACK_PANICKED_CODE`), the tool is not run, and the turn goes on. `LlmAgent`,
+`CodeActAgent` and `EnhancedPluginManager` all guard their before-tool stage this way.
+
 ### Model Callbacks
 
 **BeforeModelCallback** uses `BeforeModelResult`:

@@ -12,6 +12,7 @@
 //! |---|---|
 //! | [`HookSpec`], [`HookSet`] | A hook and the set of hooks the harness runs |
 //! | [`HookEvent`], [`HookIsolation`], [`HookSource`] | When it runs, where it runs, who configured it |
+//! | [`HookFailure`] | What a hook that fails, crashes or times out does: `Block` (the default for `PreTool`) or `Continue` |
 //! | [`HookOutcome`] | What a hook's stdout says; anything else is `Continue` |
 //! | [`PreToolVerdict`], [`PostToolVerdict`], [`HookNote`] | What each event may do with the outcome |
 //! | [`HookRunner`] | Runs hooks through a `CommandLauncher` and records `harness.hook.ran` |
@@ -154,6 +155,29 @@ impl HookEvent {
         }
     }
 
+    /// What a hook on this event that sets no [`HookFailure`] does when it fails: `Block`
+    /// for `PreTool`, which decides whether a call is authorized; `Continue` for the others,
+    /// which observe.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_harness::hooks::{HookEvent, HookFailure};
+    ///
+    /// assert_eq!(HookEvent::PreTool.default_failure(), HookFailure::Block);
+    /// assert_eq!(HookEvent::PostTool.default_failure(), HookFailure::Continue);
+    /// ```
+    pub fn default_failure(self) -> HookFailure {
+        match self {
+            Self::PreTool => HookFailure::Block,
+            Self::PostTool
+            | Self::PostEdit
+            | Self::OnHold
+            | Self::OnStop
+            | Self::OnSessionStart => HookFailure::Continue,
+        }
+    }
+
     /// Whether `outcome` is one this event may produce (spec 3.1 §7.22 "Allowed
     /// outcomes"); `Continue` always is.
     pub fn allows(self, outcome: &HookOutcome) -> bool {
@@ -181,6 +205,47 @@ impl HookEvent {
 impl std::fmt::Display for HookEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// What a hook that fails does — one that exits non-zero, crashes, times out, cannot be
+/// launched, or whose audit record cannot be written — the counterpart of the Claude Agent
+/// SDK's `on_failure`.
+///
+/// | Event | `Block` | `Continue` |
+/// |---|---|---|
+/// | `PreTool` (default `Block`) | The call is denied, with the failure as the reason | The call is decided as if the hook said nothing |
+/// | `PostTool`, `PostEdit` (default `Continue`) | The result becomes `{"error": …}` naming the failure | The result is kept |
+/// | `OnHold`, `OnStop`, `OnSessionStart` (default `Continue`) | Nothing: they only annotate | Nothing |
+///
+/// # Example
+///
+/// ```rust
+/// use adk_harness::hooks::{HookEvent, HookFailure, HookSpec};
+///
+/// // An advisory pre_tool check opts out of blocking when it breaks.
+/// let advisory = HookSpec::new(HookEvent::PreTool, "./lint-call.sh").on_failure(HookFailure::Continue);
+/// assert_eq!(advisory.failure(), HookFailure::Continue);
+/// assert_eq!(HookSpec::new(HookEvent::PreTool, "./check.sh").failure(), HookFailure::Block);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum HookFailure {
+    /// The failure blocks: a `PreTool` hook denies the call, a `PostTool` or `PostEdit` hook
+    /// fails its result.
+    Block,
+    /// The failure is ignored and the hook counts as having said nothing.
+    Continue,
+}
+
+impl HookFailure {
+    /// `block` or `continue`, as `harness.toml` and the audit record write it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Block => "block",
+            Self::Continue => "continue",
+        }
     }
 }
 
@@ -258,7 +323,7 @@ impl HookSource {
 /// assert!(hook.matches("bash"));
 /// assert!(!hook.matches("write_file"));
 /// assert_eq!(hook.timeout, Duration::from_secs(5));
-/// assert!(!hook.fail_closed);
+/// assert_eq!(hook.failure(), adk_harness::hooks::HookFailure::Block, "pre_tool fails closed");
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -279,9 +344,10 @@ pub struct HookSpec {
     pub isolation: HookIsolation,
     /// Who configured it.
     pub source: HookSource,
-    /// `false`: a crashed or timed-out `PreTool` hook is `Continue`; `true`: it is `Deny`.
-    #[serde(default)]
-    pub fail_closed: bool,
+    /// What the hook's failure does; `None` is the event's
+    /// [`default_failure`](HookEvent::default_failure): `Block` for `PreTool`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_failure: Option<HookFailure>,
 }
 
 impl HookSpec {
@@ -295,7 +361,7 @@ impl HookSpec {
             timeout: event.default_timeout(),
             isolation: HookIsolation::Inherit,
             source: HookSource::Operator,
-            fail_closed: false,
+            on_failure: None,
         }
     }
 
@@ -327,11 +393,16 @@ impl HookSpec {
         self
     }
 
-    /// Makes a crashed or timed-out `PreTool` hook a `Deny`.
+    /// Sets what the hook's failure does; see [`HookFailure`].
     #[must_use]
-    pub fn fail_closed(mut self, yes: bool) -> Self {
-        self.fail_closed = yes;
+    pub fn on_failure(mut self, failure: HookFailure) -> Self {
+        self.on_failure = Some(failure);
         self
+    }
+
+    /// What the hook's failure does: its own setting, or the event's default.
+    pub fn failure(&self) -> HookFailure {
+        self.on_failure.unwrap_or_else(|| self.event.default_failure())
     }
 
     /// Whether the hook runs for a call to `tool_name`.
@@ -421,7 +492,7 @@ pub fn glob_matches(glob: &str, name: &str) -> bool {
 ///     event = "pre_tool"
 ///     matcher = "bash"
 ///     command = "./deny-rm.sh"
-///     fail_closed = true
+///     on_failure = "block"
 ///
 ///     [[hooks]]
 ///     event = "post_edit"
@@ -471,7 +542,7 @@ struct HookTable {
     #[serde(default)]
     isolation: Option<HookIsolation>,
     #[serde(default)]
-    fail_closed: Option<bool>,
+    on_failure: Option<HookFailure>,
 }
 
 /// The tables of `harness.toml` the hook loader reads; everything else belongs to the CLI.
@@ -523,7 +594,8 @@ impl HookSet {
             let table: HookTable = table.try_into().map_err(|error| {
                 config_error(format!(
                     "[[hooks]] entry {} is not a valid hook: {error}; a hook has event, \
-                     command and optionally matcher, timeout_secs, isolation and fail_closed",
+                     command and optionally matcher, timeout_secs, isolation and on_failure \
+                     (\"block\" or \"continue\")",
                     index + 1
                 ))
             })?;
@@ -541,9 +613,7 @@ impl HookSet {
             if let Some(isolation) = table.isolation {
                 hook.isolation = isolation;
             }
-            if let Some(fail_closed) = table.fail_closed {
-                hook.fail_closed = fail_closed;
-            }
+            hook.on_failure = table.on_failure;
             set.hooks.push(hook);
         }
         Ok(set)

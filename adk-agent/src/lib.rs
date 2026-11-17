@@ -101,6 +101,7 @@ mod invocation_hooks;
 mod llm_agent;
 mod requested_call;
 mod skill_shim;
+pub mod subagents;
 pub mod team;
 pub mod tool_call_markup;
 mod tool_ledger;

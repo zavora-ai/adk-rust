@@ -1160,8 +1160,28 @@ fn row(process: &Process) -> String {
 /// What `ps` says about a process beyond its columns: suspension, sleep, goal, loop guard.
 fn note(process: &Process) -> String {
     let mut notes = Vec::new();
+    if process.meta.kind == adk_kernel::ProcessKind::Subagent {
+        let name = process
+            .meta
+            .labels
+            .get(adk_kernel::SUBAGENT_NAME_LABEL)
+            .or_else(|| process.meta.labels.get(adk_kernel::SUBAGENT_LABEL))
+            .map_or("sub-agent", String::as_str);
+        match &process.meta.parent {
+            Some(parent) => notes
+                .push(format!("{name}, started by {}", parent.chars().take(8).collect::<String>())),
+            None => notes.push(name.to_string()),
+        }
+    }
     if let Some(suspension) = &process.meta.suspended_by {
         notes.push(format!("suspended: {suspension}"));
+    } else if process.run.state == RunState::Waiting
+        && matches!(
+            process.run.checkpoint,
+            Some(adk_core::RunCheckpointRef::AwaitingApproval { .. })
+        )
+    {
+        notes.push("waiting for a human".to_string());
     } else if let Some(wake) = &process.meta.wake
         && process.run.state == RunState::Waiting
     {
@@ -1236,6 +1256,10 @@ fn event_line(record: &EventRecord) -> String {
             "{id} {}{}",
             state.as_str(),
             reason.as_deref().map(|reason| format!(" ({reason})")).unwrap_or_default()
+        ),
+        KernelEvent::Subagent { pid, id, name, parent, status } => format!(
+            "sub-agent {name} ({id}) {status} · run {pid}{}",
+            parent.as_deref().map(|parent| format!(" · started by {parent}")).unwrap_or_default()
         ),
         other => other.name().to_string(),
     };

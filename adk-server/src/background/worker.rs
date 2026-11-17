@@ -28,6 +28,23 @@
 //!
 //! [`RunConfig::requested_call`]: adk_core::RunConfig::requested_call
 //!
+//! # Run limits
+//!
+//! An agent run's input can narrow what the runner allows under `runLimits`
+//! ([`RunLimits`](adk_core::RunLimits)); it can never widen it, so any caller that may enqueue
+//! a run may set them:
+//!
+//! | `runLimits` field | Effect |
+//! |-------------------|--------|
+//! | `budget` ([`RunBudget`](adk_core::RunBudget) in camelCase, wall time in `maxWallTimeMs`) | The run's budget is the stricter of the runner's and this one ([`RunBudget::narrowed`](adk_core::RunBudget::narrowed)) |
+//! | `allowedTools` (tool names) | [`ToolCeiling`](adk_core::ToolCeiling) layered under the run's or the runner's tool policy with [`StrictestPolicy`](adk_core::StrictestPolicy): a call to any other tool is denied |
+//!
+//! A background sub-agent's run ([`DurableSubagents`](super::DurableSubagents)) also carries
+//! `subagent`: its budget tracker resumes from what the sub-agent's session shows it spent
+//! ([`spent_in_session`](adk_core::subagent::spent_in_session)), so the slice covers all its
+//! runs and every recovered attempt. An input whose `runLimits` cannot be read fails the run
+//! without retry.
+//!
 //! # Fencing a stalled worker
 //!
 //! A worker that stalls (a long pause, a partition) can wake after its lease expired and
@@ -1479,6 +1496,14 @@ impl DurableWorker {
         };
         let mut config = runner.run_config().clone();
         config.acting = acting;
+        // A budget or tool list in the input only narrows what the runner allows; one that
+        // cannot be read refuses the run rather than running it without its limits.
+        let limits = match adk_core::RunLimits::of_input(&record.input) {
+            Ok(limits) => limits.unwrap_or_default(),
+            Err(error) => return Ok(Err(Failure::fatal(error))),
+        };
+        apply_limits(runner, &limits, &mut config);
+        let subagent = record.input.get(adk_core::subagent::SUBAGENT_INPUT_KEY).is_some();
         // A run an authenticated caller enqueued runs as that authenticated user (I6).
         if record.authenticated {
             config.request_context = Some(adk_core::RequestContext {
@@ -1617,6 +1642,19 @@ impl DurableWorker {
             Err(error) => return Ok(Err(error.into())),
         };
 
+        // A sub-agent's slice covers all its runs, so each run, and each attempt that
+        // recovers one, resumes from what its session shows it has spent.
+        if let Some(budget) = limits.budget.as_ref().filter(|_| subagent) {
+            let spent = match ensure_session(runner, user_id, &session_id).await {
+                Ok(session) => adk_core::subagent::spent_in_session(&session.events().all()),
+                Err(error) => return Ok(Err(error.into())),
+            };
+            let narrowed = config.budget.clone().unwrap_or_default().narrowed(budget);
+            let parent = config.budget_tracker.take();
+            config.budget_tracker =
+                Some(Arc::new(adk_core::BudgetTracker::resume(narrowed.clone(), spent, parent)));
+            config.budget = Some(narrowed);
+        }
         let (user, session) =
             match (UserId::try_from(user_id), SessionId::try_from(session_id.as_str())) {
                 (Ok(user), Ok(session)) => (user, session),
@@ -2273,6 +2311,27 @@ fn agent_result(text: &str, session_id: &str, invocation_id: Option<&str>) -> Va
         result["invocationId"] = Value::String(invocation_id.to_string());
     }
     result
+}
+
+/// Narrows `config` by `limits`: the budget to the stricter of the two, and a ceiling layered
+/// under the run's or the runner's tool policy, so the runner's decisions still apply.
+fn apply_limits(runner: &Runner, limits: &adk_core::RunLimits, config: &mut adk_core::RunConfig) {
+    if let Some(budget) = &limits.budget {
+        config.budget = Some(match config.budget.take() {
+            Some(own) => own.narrowed(budget),
+            None => budget.clone(),
+        });
+    }
+    if let Some(tools) = &limits.allowed_tools {
+        let mut layers: Vec<Arc<dyn adk_core::ToolPolicy>> = config
+            .tool_policy
+            .clone()
+            .or_else(|| runner.tool_policy().cloned())
+            .into_iter()
+            .collect();
+        layers.push(Arc::new(adk_core::ToolCeiling::new(tools.iter().cloned())));
+        config.tool_policy = Some(Arc::new(adk_core::StrictestPolicy::new(layers)));
+    }
 }
 
 /// The user turn an agent run starts from: a string, `{"text": ...}`, or

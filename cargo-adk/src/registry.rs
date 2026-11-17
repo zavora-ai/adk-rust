@@ -1640,6 +1640,7 @@ mod tests {
                 "src/publish.rs",
                 "src/audit.rs",
                 ".adk/harness.toml",
+                "rubric.md",
                 "notes/example.md",
                 ".gitignore",
                 "README.md",
@@ -1650,6 +1651,9 @@ mod tests {
             .parse()
             .expect(".adk/harness.toml parses");
         assert_eq!(config["sandbox"].as_bool(), Some(true));
+        // Goals are graded against rubric.md, a separate grader reading STATUS.md.
+        assert_eq!(config["goal"]["rubric"].as_str(), Some("rubric.md"));
+        assert_eq!(config["goal"]["deliverables"][0].as_str(), Some("STATUS.md"));
         // The side effect is a governed external tool whose repeat a crash must not cause.
         let publish = template.code_fragments.additional_files[0].content;
         assert!(publish.contains("ToolEffect::NonIdempotent"));

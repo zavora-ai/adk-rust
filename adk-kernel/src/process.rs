@@ -343,6 +343,10 @@ pub enum ProcessKind {
     Proposed,
     /// The kernel's own work.
     Maintenance,
+    /// A background sub-agent's run, started by the process its
+    /// [`parent`](ProcessMeta::parent) names; its labels `subagent` and `subagent.name` carry
+    /// the sub-agent's id and name.
+    Subagent,
 }
 
 impl fmt::Display for ProcessKind {
@@ -354,6 +358,7 @@ impl fmt::Display for ProcessKind {
             Self::Triggered { source } => write!(f, "triggered:{source}"),
             Self::Proposed => f.write_str("proposed"),
             Self::Maintenance => f.write_str("maintenance"),
+            Self::Subagent => f.write_str("subagent"),
         }
     }
 }

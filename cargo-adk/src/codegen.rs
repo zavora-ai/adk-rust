@@ -985,6 +985,10 @@ mod tests {
         assert!(file("src/audit.rs").contains("--log-id ops-agent"));
         assert!(file(".gitignore").contains(".adk/audit.key"));
         assert!(file("README.md").starts_with("# ops-agent\n"));
+        // Goals are graded against rubric.md, which the project file names.
+        let harness_toml = file(".adk/harness.toml");
+        assert!(harness_toml.contains("[goal]\nrubric = \"rubric.md\""), "{harness_toml}");
+        assert!(file("rubric.md").lines().filter(|line| line.starts_with("- ")).count() >= 3);
     }
 
     #[test]

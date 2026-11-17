@@ -9,8 +9,11 @@
     create a rule or answer a call: `PreToolVerdict` has no `Allow`, `{"decision":"allow"}`
     is `continue` and audited as `ignored_grant`, and a hook's text reaches the model only
     inside a delimited `<hook-note>` block.
-  - A crashed or timed-out hook is `continue` (`fail_closed` makes a `pre_tool` failure a
-    `Deny`); `max_per_event` and `max_time_per_turn` bound a turn; every run is recorded as
+  - A hook that fails — a non-zero exit, a crash, a timeout, a refused launch, an audit
+    record that cannot be written — applies its `on_failure` (`HookFailure`): a `pre_tool`
+    hook blocks the call by default, `on_failure = "continue"` opts it out, and
+    `on_failure = "block"` makes a `post_tool` or `post_edit` failure fail the result;
+    `max_per_event` and `max_time_per_turn` bound a turn; every run is recorded as
     `harness.hook.ran` with the command digest, source, isolation, exit code, duration and
     outcome.
   - `HarnessAgentBuilder::without_hooks` runs none; `HarnessRuntime::hooks` returns the

@@ -876,10 +876,13 @@ async fn decide_here(held: &Held, action: ApprovalAction, reason: Option<String>
     match parked_goal(&db, scope, fingerprint).await? {
         Some(goal) => println!(
             "approved {tool} once; the goal in session {} waits for it. Continue it in its \
-             workspace: `adk-rust goal {} --until {} --resume`",
+             workspace: `adk-rust goal {}{} --resume`",
             safe(&scope.session_id),
             safe(&shell_quote(&goal.goal)),
-            safe(&shell_quote(&goal.until))
+            goal.until
+                .as_deref()
+                .map(|until| format!(" --until {}", safe(&shell_quote(until))))
+                .unwrap_or_default()
         ),
         None => println!(
             "approved {tool} once; it runs when session {} continues: `adk-rust --session {}`",

@@ -83,6 +83,9 @@ webhook-ingress = ["adk-core/webhooks", "dep:hmac", "dep:sha2", "dep:hex"]
 background = ["adk-core/cron"]
 # Approval inbox endpoints, the approval ticker, and the signed approval webhook notifier
 approvals = ["adk-core/webhook-delivery"]
+# Agents served over MCP: each call a durable run followed as an MCP task, held calls asked as
+# elicitations (stdio and Streamable HTTP)
+mcp = ["background", "dep:adk-tool", "adk-tool/mcp-server"]
 # Enable the Gemini Enterprise Agent Platform (ReasoningEngine) dispatch surface
 # and the turnkey serve_agent_engine entrypoint (tokio/net for the listener)
 agent-engine = ["dep:adk-memory", "tokio/net"]
@@ -138,5 +141,8 @@ tempfile = "3"
 tokio-test = "0.4"
 # The edge's chat socket tests (`awp`).
 tokio-tungstenite = "0.29"
+# The MCP client of the agent-over-MCP tests (`mcp`), and the live run's `.env`.
+adk-tool = { path = "../adk-tool", features = ["mcp-server", "http-transport"] }
+dotenvy = "0.15"
 # The edge store conformance suite runs on a multi-threaded runtime.
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

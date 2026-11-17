@@ -170,7 +170,7 @@ async fn the_hooks_file_joins_the_instruction_digest_and_is_protected() {
 }
 
 #[tokio::test]
-async fn a_pre_tool_hook_denies_rm_rf_and_fail_closed_denies_on_crash() {
+async fn a_pre_tool_hook_denies_rm_rf_and_a_failed_one_blocks_unless_it_opts_out() {
     let hooks = r#"
 [[hooks]]
 event = "pre_tool"
@@ -181,7 +181,12 @@ command = "grep -q 'rm -rf' && echo '{\"decision\":\"deny\",\"reason\":\"rm -rf 
 event = "pre_tool"
 matcher = "glob"
 command = "exit 7"
-fail_closed = true
+
+[[hooks]]
+event = "pre_tool"
+matcher = "grep"
+command = "exit 7"
+on_failure = "continue"
 "#;
     let dir = workspace_with_hooks(hooks);
     let f = fixture_in(
@@ -202,9 +207,15 @@ fail_closed = true
     assert_eq!(outcome(&bash), Outcome::Denied, "{bash}");
     assert!(bash["error"].as_str().unwrap().contains("rm -rf is refused"));
     let glob = response_of(&events, "glob");
-    assert_eq!(outcome(&glob), Outcome::Denied, "a crashed fail-closed hook denies: {glob}");
-    assert!(glob["error"].as_str().unwrap().contains("fail-closed"));
-    assert_eq!(outcome(&response_of(&events, "grep")), Outcome::Executed, "no hook matches grep");
+    assert_eq!(outcome(&glob), Outcome::Denied, "a failed pre_tool hook blocks: {glob}");
+    assert!(
+        glob["error"].as_str().unwrap().contains("the pre_tool hook failed (exited with status 7)")
+    );
+    assert_eq!(
+        outcome(&response_of(&events, "grep")),
+        Outcome::Executed,
+        "on_failure = \"continue\" opts out"
+    );
     let ran = f.records("harness.hook.ran");
     let glob_record = ran.iter().find(|record| record.ext["tool"] == "glob").unwrap();
     assert_eq!(glob_record.ext["outcome"], "deny");
@@ -409,4 +420,79 @@ async fn hooks_run_in_order_operator_user_workspace_and_too_many_refuse_the_buil
         .build()
         .unwrap();
     assert!(ok.runtime().hooks().is_none(), "--no-hooks reads no hooks file");
+}
+
+/// The key `name` from the environment or the workspace `.env`, never printed.
+fn env_key(name: &str) -> Option<String> {
+    if let Some(value) = std::env::var(name).ok().filter(|value| !value.is_empty()) {
+        return Some(value);
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(".env");
+    let text = std::fs::read_to_string(path).ok()?;
+    text.lines().find_map(|line| {
+        let line = line.trim();
+        let (key, value) = line.strip_prefix("export ").unwrap_or(line).split_once('=')?;
+        let value = value.trim().trim_matches('"').trim_matches('\'');
+        (key.trim() == name && !value.is_empty()).then(|| value.to_string())
+    })
+}
+
+/// Autonomy parity item 26 on `claude-sonnet-5-5`: the model's `bash` call meets an operator
+/// `pre_tool` hook that crashes, and the call is blocked with the failure as the reason; the
+/// same hook set to `continue` lets the call through.
+#[tokio::test]
+#[ignore = "calls the Anthropic API with ANTHROPIC_API_KEY"]
+async fn live_a_crashing_pre_tool_hook_blocks_the_call() {
+    use std::sync::Arc;
+    let Some(key) = env_key("ANTHROPIC_API_KEY") else {
+        println!("skipped: no ANTHROPIC_API_KEY");
+        return;
+    };
+    for (failure, expected) in [
+        (adk_harness::hooks::HookFailure::Block, Outcome::Denied),
+        (adk_harness::hooks::HookFailure::Continue, Outcome::Executed),
+    ] {
+        let model: Arc<dyn adk_core::Llm> = Arc::new(
+            adk_model::anthropic::AnthropicClient::new(adk_model::anthropic::AnthropicConfig::new(
+                key.clone(),
+                "claude-sonnet-5-5",
+            ))
+            .unwrap(),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let hook =
+            HookSpec::new(HookEvent::PreTool, "kill -9 $$").matching("bash").on_failure(failure);
+        let agent = Arc::new(
+            adk_harness::HarnessAgent::builder("harness")
+                .model(model)
+                .workspace(adk_devtools::Workspace::new(dir.path()).allow_bash(true))
+                .project_instructions(common::no_user_file())
+                .mode(HarnessMode::Auto)
+                .allow_host_shell_in_auto()
+                .hooks(HookSet::new().with(hook))
+                .build()
+                .unwrap(),
+        );
+        let sessions: Arc<dyn adk_session::SessionService> =
+            Arc::new(adk_session::InMemorySessionService::new());
+        let runner = agent
+            .configure_runner(
+                adk_runner::Runner::builder()
+                    .app_name(common::APP)
+                    .agent(agent.clone())
+                    .session_service(sessions),
+            )
+            .build()
+            .unwrap();
+        let harness = adk_harness::Harness::with_runner(agent, runner).unwrap();
+        let user = common::user("alice");
+        let session = harness.open_session(&user, Some(&common::session_id("s1"))).await.unwrap();
+        let task = "Use the bash tool to run exactly this command once: echo live > live.txt \
+                    Then reply with one word: done.";
+        let events = common::collect(harness.send(&user, &session, task).await.unwrap()).await;
+        let bash = response_of(&events, "bash");
+        println!("on_failure = {}: {bash}", failure.as_str());
+        assert_eq!(outcome(&bash), expected, "{bash}");
+        assert_eq!(dir.path().join("live.txt").exists(), expected == Outcome::Executed);
+    }
 }

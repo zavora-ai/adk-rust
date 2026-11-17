@@ -893,6 +893,23 @@ a fresh stack, so agent tools nest to any depth within a runtime worker thread's
 Dropping the run, or the call's timeout, aborts the task; a panic in it fails the call as
 `tool.panicked`, as it does for any tool.
 
+## Background Sub-Agents
+
+Every pattern above waits: a transfer hands the turn over, and an `AgentTool` or a `TeamSpec`
+delegation returns the member's answer in the same turn. A
+[background sub-agent](background-subagents.md) does not: `start_subagent` runs another agent
+as a durable run and returns at once, the parent keeps working, and it is told when the
+sub-agent finishes — in its running turn, or by a new turn. The parent can check on it with
+`subagent_status`, send it follow-ups with `message_subagent`, and stop it with
+`cancel_subagent`. A sub-agent runs on a budget slice carved from the parent's run, can call
+only tools its parent has, and survives a crash of its host.
+
+| Choose | When |
+|---|---|
+| Transfer | Another agent should own the conversation from here |
+| `AgentTool`, `TeamSpec` delegation | The parent needs the answer before its next step |
+| Background sub-agent | The work is long, independent, or many-at-once, and the parent has other work meanwhile |
+
 ## Running Multi-Agent Systems
 
 ### Using the Launcher

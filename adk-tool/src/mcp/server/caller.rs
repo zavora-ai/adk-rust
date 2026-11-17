@@ -109,6 +109,12 @@ impl<'a> McpHttpRequest<'a> {
         Self { parts }
     }
 
+    /// The whole request head, for an identity layer that reads it as one, such as a
+    /// `RequestContextExtractor`.
+    pub fn parts(&self) -> &'a Parts {
+        self.parts
+    }
+
     /// The request method.
     pub fn method(&self) -> &'a Method {
         &self.parts.method

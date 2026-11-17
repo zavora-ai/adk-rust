@@ -6,6 +6,11 @@ The coordinator — the harness `LlmAgent` — and its members compile to one `T
 `Delegate` edge per member, so every delegation gets a timeout, a circuit breaker, the team
 budget and the same policy as the coordinator's own tool calls.
 
+> **Note:** a member's delegation waits for its answer within the coordinator's turn. For work
+> the coordinator should not wait for, an agent hosted in the agent kernel can start
+> [background sub-agents](../agents/background-subagents.md), which run as their own processes
+> and report back when they finish.
+
 ## Members
 
 | Kind | Agent | Its tool calls are decided by |

@@ -711,12 +711,12 @@ pub mod encrypted_store {
     }
 
     fn goal() -> GoalRecord {
-        GoalRecord::start(GoalSpec {
-            goal: "sentinel-goal-text".into(),
-            until: "sentinel-goal-until".into(),
-            max_iterations: 3,
-            check_timeout: Duration::from_secs(5),
-        })
+        GoalRecord::start(
+            GoalSpec::new("sentinel-goal-text")
+                .with_until("sentinel-goal-until")
+                .with_max_iterations(3)
+                .with_check_timeout(Duration::from_secs(5)),
+        )
     }
 
     fn fact() -> MemoryFact {

@@ -10,6 +10,7 @@ pub type Result<T> = std::result::Result<T, GraphError>;
 
 /// Errors that can occur during graph operations
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum GraphError {
     /// Graph structure is invalid
     #[error("Invalid graph structure: {0}")]
@@ -154,6 +155,19 @@ pub enum GraphError {
         message: String,
     },
 
+    /// A resume answer was refused before any node ran: it does not satisfy the
+    /// pause's `response_schema`, or, under
+    /// [`ExecutionConfig::strict_resume`](crate::node::ExecutionConfig::strict_resume),
+    /// its key is not the id of a pause pending in the thread. The checkpoint is
+    /// unchanged, so the run can be resumed again with a valid answer.
+    #[error("resume answer '{key}' refused: {reason}")]
+    ResumeRejected {
+        /// The key the answer was supplied under: an interrupt id or a node name.
+        key: String,
+        /// Why it was refused.
+        reason: String,
+    },
+
     /// The caller cancelled a functional-API run.
     ///
     /// Raised when the run's
@@ -263,6 +277,9 @@ impl From<GraphError> for adk_core::AdkError {
                 (ErrorCategory::NotFound, "graph.unknown_route_target")
             }
             GraphError::Suspended { .. } => (ErrorCategory::Cancelled, "graph.suspended"),
+            GraphError::ResumeRejected { .. } => {
+                (ErrorCategory::InvalidInput, "graph.resume_rejected")
+            }
             GraphError::Cancelled => (ErrorCategory::Cancelled, "graph.cancelled"),
             GraphError::IoError(_) => (ErrorCategory::Internal, "graph.io"),
             GraphError::JsonError(_) => (ErrorCategory::Internal, "graph.json"),
