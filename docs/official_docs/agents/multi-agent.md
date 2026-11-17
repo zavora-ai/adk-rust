@@ -222,7 +222,7 @@ use std::sync::Arc;
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?);
 
     // Specialist: Billing Agent
     let billing_agent = LlmAgentBuilder::new("billing_agent")
@@ -469,7 +469,7 @@ use std::sync::Arc;
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?);
 
     // Level 3: Leaf specialists
     let researcher = LlmAgentBuilder::new("researcher")

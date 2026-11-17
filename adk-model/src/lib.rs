@@ -36,9 +36,9 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let model = GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?;
+//! let model = GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.8-flash")?;
 //! let request = LlmRequest::new(
-//!     "gemini-3.7-flash",
+//!     "gemini-3.8-flash",
 //!     vec![Content::new("user").with_text("Name one planet in a short sentence.")],
 //! );
 //!
@@ -68,11 +68,11 @@
 //! use adk_model::openai::{OpenAIClient, OpenAIConfig, OpenAIResponsesClient, OpenAIResponsesConfig};
 //! use adk_model::{OpenAICompatible, OpenAICompatibleConfig};
 //!
-//! let chat = OpenAIClient::new(OpenAIConfig::new("sk-...", "gpt-5.6-terra"))?;
-//! let responses = OpenAIResponsesClient::new(OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra"))?;
-//! let claude = AnthropicClient::new(AnthropicConfig::new("sk-ant-...", "claude-sonnet-5"))?;
+//! let chat = OpenAIClient::new(OpenAIConfig::new("sk-...", "gpt-6.1-sol"))?;
+//! let responses = OpenAIResponsesClient::new(OpenAIResponsesConfig::new("sk-...", "gpt-6.1-sol"))?;
+//! let claude = AnthropicClient::new(AnthropicConfig::new("sk-ant-...", "claude-sonnet-5-5"))?;
 //! let deepseek = DeepSeekClient::v4_flash("sk-...")?;
-//! let grok = OpenAICompatible::new(OpenAICompatibleConfig::xai("xai-...", "grok-4.6"))?;
+//! let grok = OpenAICompatible::new(OpenAICompatibleConfig::xai("xai-...", "grok-4.7"))?;
 //! # let _ = (chat, responses, claude, deepseek, grok);
 //! # Ok(())
 //! # }

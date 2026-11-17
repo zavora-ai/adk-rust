@@ -1,8 +1,9 @@
 //! DeepSeek client implementation.
 //!
 //! Supports the current DeepSeek models (`deepseek-flash`, `deepseek-v4-pro`).
-//! `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `deepseek-chat` and
-//! `deepseek-reasoner` aliases were retired on 2026-07-24.
+//! `deepseek-chat` and `deepseek-reasoner` were retired on 2026-07-24. The
+//! `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` models were retired on 2026-09-10;
+//! their names are still accepted and served by `deepseek-flash`.
 
 use super::config::{DeepSeekConfig, ThinkingMode};
 use super::convert::{

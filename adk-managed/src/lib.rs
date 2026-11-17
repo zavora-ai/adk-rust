@@ -25,7 +25,7 @@
 //! use adk_managed::types::{ManagedAgentDef, ModelRef};
 //!
 //! // Define an agent declaratively
-//! let def = ManagedAgentDef::new("my-agent", ModelRef::Shorthand("gemini-3.7-flash".into()))
+//! let def = ManagedAgentDef::new("my-agent", ModelRef::Shorthand("gemini-3.8-flash".into()))
 //!     .with_system("You are a helpful assistant.");
 //! assert_eq!(def.name, "my-agent");
 //! ```

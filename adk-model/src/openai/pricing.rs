@@ -2,7 +2,7 @@
 //!
 //! Provides per-model cost calculation based on token counts. Rates are the
 //! published standard-tier list prices, last verified against
-//! <https://developers.openai.com/api/docs/pricing> on 2026-08-23.
+//! <https://developers.openai.com/api/docs/pricing> on 2026-11-17.
 //!
 //! Prompt caching is automatic, and the discount on cached input reads varies
 //! by family: 90% for GPT-5.x, 75% for GPT-4.1, o3 and o4-mini, and 50% for
@@ -15,7 +15,7 @@
 //!   as a separate category; [`OpenAIPricing`] carries only read rates.
 //! - **Long context is a separate constant, not a computed tier.** Where OpenAI
 //!   publishes a long-context price, it is a `*_LONG` constant; callers pick the
-//!   tier. Thresholds differ per model (272K for GPT-5.4 and GPT-5.5).
+//!   tier. Long-context rates apply above 272K input tokens.
 //! - **Fast mode is not modelled.** Its multiplier over standard is not uniform
 //!   (roughly 1.75×–2.5× depending on the model), so it cannot be derived.
 //!   [`OpenAIPricing::GPT_53_CODEX_FAST`] is the one published exception.
@@ -47,6 +47,46 @@ pub struct OpenAIPricing {
 }
 
 impl OpenAIPricing {
+    // ── GPT-6 family ──
+    //
+    // Standard tier. `*_LONG` constants carry the rates above 272K input tokens.
+
+    /// GPT-6 Astra — flagship capability.
+    pub const GPT_6_ASTRA: Self = Self { input: 10.00, cached_input: 1.00, output: 50.00 };
+
+    /// GPT-6 Astra — long-context tier.
+    pub const GPT_6_ASTRA_LONG: Self = Self { input: 20.00, cached_input: 2.00, output: 75.00 };
+
+    /// GPT-6.1 Sol — balances capability and cost.
+    pub const GPT_61_SOL: Self = Self { input: 2.00, cached_input: 0.10, output: 10.00 };
+
+    /// GPT-6.1 Sol — long-context tier.
+    pub const GPT_61_SOL_LONG: Self = Self { input: 4.00, cached_input: 0.20, output: 15.00 };
+
+    /// GPT-6.1 Terra.
+    pub const GPT_61_TERRA: Self = Self { input: 1.00, cached_input: 0.05, output: 5.00 };
+
+    /// GPT-6.1 Terra — long-context tier.
+    pub const GPT_61_TERRA_LONG: Self = Self { input: 2.00, cached_input: 0.10, output: 7.50 };
+
+    /// GPT-6 Sol — superseded by GPT-6.1 Sol.
+    pub const GPT_6_SOL: Self = Self { input: 2.00, cached_input: 0.20, output: 10.00 };
+
+    /// GPT-6 Sol — long-context tier.
+    pub const GPT_6_SOL_LONG: Self = Self { input: 4.00, cached_input: 0.40, output: 15.00 };
+
+    /// GPT-6 Luna — cost-sensitive, high-volume workloads.
+    pub const GPT_6_LUNA: Self = Self { input: 0.10, cached_input: 0.01, output: 0.50 };
+
+    /// GPT-6 Luna — long-context tier.
+    pub const GPT_6_LUNA_LONG: Self = Self { input: 0.20, cached_input: 0.02, output: 0.75 };
+
+    /// GPT-6 Cyber — requires Daybreak Red access.
+    pub const GPT_6_CYBER: Self = Self { input: 20.00, cached_input: 2.00, output: 100.00 };
+
+    /// GPT-6 Cyber — long-context tier.
+    pub const GPT_6_CYBER_LONG: Self = Self { input: 40.00, cached_input: 4.00, output: 150.00 };
+
     // ── GPT-5.6 family ──
     //
     // Standard tier. `*_LONG` constants carry the long-context rates OpenAI
@@ -54,7 +94,7 @@ impl OpenAIPricing {
 
     /// GPT-5.6 Sol — flagship capability.
     ///
-    /// Promotional pricing, available at least through 2026-11-21.
+    /// Promotional pricing, available until 2026-11-30.
     pub const GPT_56_SOL: Self = Self { input: 4.00, cached_input: 0.40, output: 20.00 };
 
     /// GPT-5.6 Sol — long-context tier.
@@ -354,14 +394,14 @@ pub fn estimate_batch_cost(
 ///
 /// # Arguments
 ///
-/// * `model_name` - The model identifier (e.g., "gpt-5.6-terra", "gpt-4.1")
+/// * `model_name` - The model identifier (e.g., "gpt-6.1-sol", "gpt-4.1")
 ///
 /// # Example
 ///
 /// ```rust
 /// use adk_model::openai::pricing::lookup_pricing;
 ///
-/// let pricing = lookup_pricing("gpt-5.6-terra");
+/// let pricing = lookup_pricing("gpt-6.1-sol");
 /// assert!(pricing.is_some());
 ///
 /// let unknown = lookup_pricing("unknown-model");
@@ -369,6 +409,12 @@ pub fn estimate_batch_cost(
 /// ```
 pub fn lookup_pricing(model_name: &str) -> Option<&'static OpenAIPricing> {
     match model_name {
+        "gpt-6-astra" => Some(&OpenAIPricing::GPT_6_ASTRA),
+        "gpt-6.1-sol" => Some(&OpenAIPricing::GPT_61_SOL),
+        "gpt-6.1-terra" => Some(&OpenAIPricing::GPT_61_TERRA),
+        "gpt-6-sol" => Some(&OpenAIPricing::GPT_6_SOL),
+        "gpt-6-luna" => Some(&OpenAIPricing::GPT_6_LUNA),
+        "gpt-6-cyber" => Some(&OpenAIPricing::GPT_6_CYBER),
         // GPT-5.6 family. The family alias resolves to Sol, as does the
         // Daybreak blue alias; the red alias resolves to Cyber.
         "gpt-5.6" | "gpt-5.6-sol" | "daybreak-blue-latest" => Some(&OpenAIPricing::GPT_56_SOL),
@@ -597,6 +643,12 @@ mod tests {
             ("gpt-5.6-terra", 2.00, 0.20, 12.00),
             ("gpt-5.6-luna", 0.20, 0.02, 1.20),
             ("gpt-5.6-cyber", 12.50, 1.25, 75.00),
+            ("gpt-6-astra", 10.00, 1.00, 50.00),
+            ("gpt-6.1-sol", 2.00, 0.10, 10.00),
+            ("gpt-6.1-terra", 1.00, 0.05, 5.00),
+            ("gpt-6-sol", 2.00, 0.20, 10.00),
+            ("gpt-6-luna", 0.10, 0.01, 0.50),
+            ("gpt-6-cyber", 20.00, 2.00, 100.00),
             ("gpt-5.5", 5.00, 0.50, 30.00),
             ("gpt-5.5-pro", 30.00, 30.00, 180.00),
             ("gpt-5.4", 2.50, 0.25, 15.00),

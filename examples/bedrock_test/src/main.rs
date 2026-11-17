@@ -100,7 +100,7 @@ async fn main() -> anyhow::Result<()> {
         .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
         .unwrap_or_else(|_| "us-east-1".into());
     let model_id = std::env::var("BEDROCK_MODEL_ID")
-        .unwrap_or_else(|_| "us.anthropic.claude-sonnet-4-6".into());
+        .unwrap_or_else(|_| "us.anthropic.claude-sonnet-5-5".into());
 
     let mut config = BedrockConfig::new(&region, &model_id);
     if std::env::var("BEDROCK_PROMPT_CACHING").as_deref() != Ok("1") {

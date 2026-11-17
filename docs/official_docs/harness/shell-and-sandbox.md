@@ -43,7 +43,7 @@ use adk_harness::{HarnessAgent, HarnessMode, IsolationStatus, OsSandboxConfig, S
 use adk_model::gemini::GeminiModel;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.8-flash")?);
     let harness = HarnessAgent::builder("harness")
         .model(model)
         .workspace(adk_devtools::Workspace::new(".").allow_bash(true))
@@ -209,7 +209,7 @@ use adk_harness::{ContainerConfig, HarnessAgent, HarnessMode, IsolationStatus, S
 use adk_model::gemini::GeminiModel;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.8-flash")?);
     let harness = HarnessAgent::builder("harness")
         .model(model)
         .workspace(adk_devtools::Workspace::new(".").allow_bash(true))
@@ -444,7 +444,7 @@ use adk_harness::{BackgroundShellConfig, HarnessAgent, HarnessMode};
 use adk_model::gemini::GeminiModel;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.8-flash")?);
     let harness = HarnessAgent::builder("harness")
         .model(model)
         .workspace(adk_devtools::Workspace::new(".").allow_bash(true))

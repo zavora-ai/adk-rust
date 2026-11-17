@@ -179,7 +179,7 @@ use adk_eval::{Evaluator, EvaluationConfig, EvaluationCriteria, LlmJudge};
 use adk_model::GeminiModel;
 
 // Create evaluator with LLM judge
-let judge_model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
+let judge_model = Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?);
 let config = EvaluationConfig::with_criteria(
     EvaluationCriteria::semantic_match(0.85)
 );
@@ -668,7 +668,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 async fn main() -> anyhow::Result<()> {
     let api_key = std::env::var("GOOGLE_API_KEY")?;
     let agent = LlmAgentBuilder::new("weather_agent")
-        .model(Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?))
+        .model(Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?))
         .instruction("You answer weather questions.")
         .build()?;
     let sessions = Arc::new(InMemorySessionService::new());

@@ -259,7 +259,7 @@ async fn main() -> anyhow::Result<()> {
     // 1. Build a Gemini model and toggle the Interactions transport.
     //    `use_interactions_api` validates the model id against the allowlist and
     //    returns `Result<Self>`, so it is fallible (`?`).
-    let model = GeminiModel::new(std::env::var("GEMINI_API_KEY")?, "gemini-3.7-flash")?
+    let model = GeminiModel::new(std::env::var("GEMINI_API_KEY")?, "gemini-3.8-flash")?
         .use_interactions_api(true)?;
 
     // 2. Wrap it in a normal LlmAgent — unchanged agent API.
@@ -336,7 +336,7 @@ use adk_model::gemini::{BackgroundMode, InteractionOptions};
 use std::time::Duration;
 
 fn build(api_key: &str) -> adk_core::Result<GeminiModel> {
-    Ok(GeminiModel::new(api_key, "gemini-3.7-flash")?.use_interactions_api(true)?.interaction_options(
+    Ok(GeminiModel::new(api_key, "gemini-3.8-flash")?.use_interactions_api(true)?.interaction_options(
         InteractionOptions {
             store: true,
             stateful: true,
@@ -403,7 +403,7 @@ A **model** target sets the request `model` field; an **agent** target sets the
 - `lyria-3-pro-preview`
 
 This is the transport's compatibility allowlist, not a recommendation list.
-New applications should start with `gemini-3.7-flash`. The Gemini 2.5 models, which
+New applications should start with `gemini-3.8-flash`. The Gemini 2.5 models, which
 the endpoint no longer serves to new projects, and the deprecated
 `gemini-3-flash-preview` are rejected.
 
@@ -464,7 +464,7 @@ fn build(api_key: &str) -> anyhow::Result<LlmAgent> {
     let search_agent = Arc::new(
         LlmAgentBuilder::new("grounded-search")
             .instruction("Answer the query using Google Search. Be factual and concise.")
-            .model(Arc::new(GeminiModel::new(api_key, "gemini-3.7-flash")?))
+            .model(Arc::new(GeminiModel::new(api_key, "gemini-3.8-flash")?))
             .tool(Arc::new(GoogleSearchTool::new()))
             .build()?,
     );
@@ -482,7 +482,7 @@ fn build(api_key: &str) -> anyhow::Result<LlmAgent> {
 
     // The tool set is now uniform (all function tools), which the Interactions
     // transport accepts.
-    let model = GeminiModel::new(api_key, "gemini-3.7-flash")?.use_interactions_api(true)?;
+    let model = GeminiModel::new(api_key, "gemini-3.8-flash")?.use_interactions_api(true)?;
     Ok(LlmAgentBuilder::new("assistant")
         .model(Arc::new(model))
         .tool(search_tool)

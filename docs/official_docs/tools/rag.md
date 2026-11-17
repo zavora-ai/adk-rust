@@ -175,7 +175,7 @@ async fn main() -> anyhow::Result<()> {
     // Wrap pipeline as a tool and attach to an agent
     let agent = LlmAgentBuilder::new("support")
         .instruction("Answer questions using the rag_search tool. Cite your sources.")
-        .model(Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?))
+        .model(Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?))
         .tool(Arc::new(RagTool::new(pipeline, "kb")))
         .build()?;
 

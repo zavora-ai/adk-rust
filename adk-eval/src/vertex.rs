@@ -187,7 +187,7 @@ impl VertexEvalConfig {
 /// use adk_eval::AutoraterConfig;
 ///
 /// let config = AutoraterConfig::new()
-///     .with_autorater_model("projects/p/locations/l/publishers/google/models/gemini-3.7-flash")
+///     .with_autorater_model("projects/p/locations/l/publishers/google/models/gemini-3.8-flash")
 ///     .with_sampling_count(1);
 /// ```
 #[derive(Debug, Clone, Default, Serialize)]

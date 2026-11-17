@@ -5,9 +5,9 @@ set -euo pipefail
 # layout independently of their model lifecycle. Runtime validation remains
 # driven by adk-model/src/catalog.rs and accepts unknown/private identifiers.
 checks=(
-  "OpenAI|https://developers.openai.com/api/docs/models|gpt-5.6-terra"
-  "Anthropic|https://platform.claude.com/docs/en/about-claude/models/overview|claude-sonnet-5"
-  "Gemini|https://ai.google.dev/gemini-api/docs/models|gemini-3.7-flash"
+  "OpenAI|https://developers.openai.com/api/docs/models|gpt-6.1-sol"
+  "Anthropic|https://platform.claude.com/docs/en/about-claude/models/overview|claude-sonnet-5-5"
+  "Gemini|https://aistudio.google.com/docs/models|gemini-3.8-flash"
   "Groq|https://console.groq.com/docs/models|openai/gpt-oss-120b"
 )
 

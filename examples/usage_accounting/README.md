@@ -41,4 +41,4 @@ cargo run --manifest-path examples/usage_accounting/Cargo.toml -- --scenario gro
 Each scenario prints `PASS`, `FAIL`, or `SKIP` with its evidence; the process exits non-zero on
 any `FAIL`. Set `ADK_ENV_FILE` to read keys from another dotenv file; its values override keys
 already exported in the shell. `OPENAI_MODEL`, `ANTHROPIC_MODEL` and `GEMINI_MODEL` override
-the live models (defaults `gpt-5.6-terra`, `claude-sonnet-4-6`, `gemini-3.7-flash`).
+the live models (defaults `gpt-5.6-terra`, `claude-sonnet-4-6`, `gemini-3.8-flash`).

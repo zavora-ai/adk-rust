@@ -24,7 +24,7 @@
 //! # }
 //! ```
 //!
-//! [`Gemini::new`] uses `gemini-3.7-flash`; [`Gemini::with_model`] takes any [`Model`].
+//! [`Gemini::new`] uses `gemini-3.8-flash`; [`Gemini::with_model`] takes any [`Model`].
 //!
 //! ## Crate organization
 //!

@@ -227,7 +227,7 @@ async fn writer(harnesses: Arc<dyn AgentResolver>, signal: Signal) -> Result<(),
     );
     let def = KernelDef::new()
         .with_wake_set(gaps)
-        .apply_to(ManagedAgentDef::new("writer", ModelRef::Shorthand("gemini-3.7-flash".into())));
+        .apply_to(ManagedAgentDef::new("writer", ModelRef::Shorthand("gemini-3.8-flash".into())));
     runtime.create(def).await?;
     tenant.start().await?;
     // A content gap the public partition saw starts one run of `writer`.

@@ -339,7 +339,7 @@ let _enter = span.enter();
 ```rust
 use adk_telemetry::model_call_span;
 
-let span = model_call_span("gemini-3.7-flash");
+let span = model_call_span("gemini-3.8-flash");
 let _enter = span.enter();
 
 // Model API call here
@@ -499,7 +499,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     init_telemetry("my-agent-app")?;
     
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?);
     
     let agent = LlmAgentBuilder::new("support_agent")
         .model(model)

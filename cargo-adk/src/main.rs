@@ -256,8 +256,8 @@ enum AdkCommand {
 
     /// Run performance benchmarks against real LLM APIs
     Bench {
-        /// LLM model identifier (e.g., "gemini-3.7-flash")
-        #[arg(long, default_value = "gemini-3.7-flash")]
+        /// LLM model identifier (e.g., "gemini-3.8-flash")
+        #[arg(long, default_value = "gemini-3.8-flash")]
         model: String,
 
         /// Number of measurement iterations per workload
@@ -1428,7 +1428,7 @@ fn get_builtin_templates() -> Vec<TemplateInfo> {
         },
         TemplateInfo {
             name: "openai",
-            description: "OpenAI-powered agent (gpt-5.6-terra)",
+            description: "OpenAI-powered agent (gpt-6.1-sol)",
             default_provider: "openai",
             features: vec!["agents", "models", "openai", "runner", "sessions"],
         },
@@ -1866,24 +1866,24 @@ fn generate_yaml_definition(
     let model_id = model_override.unwrap_or(match provider {
         "openai" => adk_model::catalog::OPENAI_DEFAULT,
         "anthropic" => adk_model::catalog::ANTHROPIC_DEFAULT,
-        "deepseek" => "deepseek-v4-flash",
+        "deepseek" => adk_model::catalog::DEEPSEEK_DEFAULT,
         "ollama" => adk_model::catalog::OLLAMA_DEFAULT,
         "groq" => adk_model::catalog::GROQ_DEFAULT,
-        "openrouter" => "qwen/qwen3.7-max",
+        "openrouter" => adk_model::catalog::OPENROUTER_DEFAULT,
         "fireworks" => adk_model::catalog::FIREWORKS_DEFAULT,
         "together" => adk_model::catalog::TOGETHER_DEFAULT,
         "cerebras" => adk_model::catalog::CEREBRAS_DEFAULT,
         "sambanova" => adk_model::catalog::SAMBANOVA_DEFAULT,
-        "bedrock" => "anthropic.claude-opus-4-6-v1",
+        "bedrock" => "global.anthropic.claude-sonnet-5-5",
         "azure-ai" => "gpt-5.5",
         "xai" => adk_model::catalog::XAI_DEFAULT,
         "mistral" => adk_model::catalog::MISTRAL_DEFAULT,
-        "perplexity" => "sonar-pro",
+        "perplexity" => adk_model::catalog::PERPLEXITY_DEFAULT,
         "minimax" => adk_model::catalog::MINIMAX_DEFAULT,
         "bytedance" => "doubao-1-5-pro-256k",
         "zhipu" => adk_model::catalog::ZHIPU_DEFAULT,
         "baidu" => adk_model::catalog::BAIDU_DEFAULT,
-        "cohere" => "command-a-plus-05-2026",
+        "cohere" => adk_model::catalog::COHERE_DEFAULT,
         _ => adk_model::catalog::GEMINI_DEFAULT,
     });
 
@@ -1936,20 +1936,20 @@ fn provider_dep(provider: &str) -> (String, &str, &str) {
         "openai" => (
             adk_rust_dep(&provider_features(provider)),
             r#"let model = adk_rust::model::openai::OpenAIClient::new(
-        adk_rust::model::openai::OpenAIConfig::new(&api_key, "gpt-5.6-terra"),
+        adk_rust::model::openai::OpenAIConfig::new(&api_key, "gpt-6.1-sol"),
     )?;"#,
             "OPENAI_API_KEY",
         ),
         "anthropic" => (
             adk_rust_dep(&provider_features(provider)),
             r#"let model = adk_rust::model::anthropic::AnthropicClient::new(
-        adk_rust::model::anthropic::AnthropicConfig::new(&api_key, "claude-sonnet-5"),
+        adk_rust::model::anthropic::AnthropicConfig::new(&api_key, "claude-sonnet-5-5"),
     )?;"#,
             "ANTHROPIC_API_KEY",
         ),
         _ => (
             adk_rust_dep(&provider_features("gemini")),
-            r#"let model = adk_rust::model::GeminiModel::new(&api_key, "gemini-3.7-flash")?;"#,
+            r#"let model = adk_rust::model::GeminiModel::new(&api_key, "gemini-3.8-flash")?;"#,
             "GOOGLE_API_KEY",
         ),
     }
@@ -2367,7 +2367,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {{
     let agent = client
         .create_agent(CreateAgentParams {{
             name: "{name}".to_string(),
-            model: serde_json::json!("claude-sonnet-5"),
+            model: serde_json::json!("claude-sonnet-5-5"),
             system: Some("You are a helpful assistant. Be concise.".to_string()),
             description: None,
             tools: vec![ToolConfig::agent_toolset()],
@@ -2540,7 +2540,7 @@ mod tests {
             fs::read_to_string(tmp.join("yaml-agent/agents/yaml-agent.yaml")).unwrap();
         assert!(yaml_content.contains("name: yaml-agent"));
         assert!(yaml_content.contains("provider: gemini"));
-        assert!(yaml_content.contains("model_id: gemini-3.7-flash"));
+        assert!(yaml_content.contains("model_id: gemini-3.8-flash"));
         assert!(yaml_content.contains("- name: greet"));
 
         let _ = fs::remove_dir_all(&tmp);
@@ -2587,13 +2587,13 @@ mod tests {
     #[test]
     fn yaml_generation_providers() {
         let gemini_yaml = generate_yaml_definition("test", "gemini", "basic", None);
-        assert!(gemini_yaml.contains("model_id: gemini-3.7-flash"));
+        assert!(gemini_yaml.contains("model_id: gemini-3.8-flash"));
 
         let openai_yaml = generate_yaml_definition("test", "openai", "basic", None);
-        assert!(openai_yaml.contains("model_id: gpt-5.6-terra"));
+        assert!(openai_yaml.contains("model_id: gpt-6.1-sol"));
 
         let anthropic_yaml = generate_yaml_definition("test", "anthropic", "basic", None);
-        assert!(anthropic_yaml.contains("model_id: claude-sonnet-5"));
+        assert!(anthropic_yaml.contains("model_id: claude-sonnet-5-5"));
     }
 
     #[test]

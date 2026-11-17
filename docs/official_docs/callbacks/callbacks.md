@@ -273,7 +273,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?);
 
     let agent = LlmAgentBuilder::new("my_agent")
         .model(model)

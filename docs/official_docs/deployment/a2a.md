@@ -110,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("GOOGLE_API_KEY")?;
 
     // 1. Create your agent
-    let model = adk_model::GeminiModel::new(&api_key, "gemini-3.7-flash")?;
+    let model = adk_model::GeminiModel::new(&api_key, "gemini-3.8-flash")?;
     let agent = LlmAgentBuilder::new("my-agent")
         .description("A helpful agent")
         .model(Arc::new(model))
@@ -461,7 +461,7 @@ runs, with HTTP `400` and the REST error body, on the JSON-RPC route as well:
 ## Running the Examples
 
 Two complete A2A v1.0.0 example agents, `a2a-research-agent` and `a2a-writing-agent`, live in
-[adk-playground](https://github.com/zavora-ai/adk-playground). Each uses `gemini-3.7-flash` when
+[adk-playground](https://github.com/zavora-ai/adk-playground). Each uses `gemini-3.8-flash` when
 `GOOGLE_API_KEY` is set, and OpenAI when only `OPENAI_API_KEY` is set. The research agent listens
 on port 3001 and the writing agent on 3002 (`PORT` overrides either). The writing agent's crate
 also holds a `client` binary.

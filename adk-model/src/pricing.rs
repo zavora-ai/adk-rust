@@ -45,7 +45,6 @@
 //!   regional uplifts are not applied.
 //! - Image, audio and realtime output rates are not modelled; models whose
 //!   output is billed by modality are left out, so they resolve to `None`.
-//! - GPT-5.6 long-context rates are not applied: the threshold is unpublished.
 //! - Cache storage (Gemini per-hour storage) is not a per-request cost.
 //! - Built-in tool fees ([`BuiltinToolFee`])
 //!   apply on the vendor's own API only, ignore free allowances, and leave
@@ -53,9 +52,8 @@
 //! - DeepSeek's off-peak discount ([`OffPeak`]) applies outside the published
 //!   UTC peak hours on weekdays; Chinese public holidays, which are off-peak in
 //!   full, are billed at the peak rate, which over-estimates.
-//! - Models a vendor prices only on request ("Contact Sales") or at a
-//!   temporary sale price are left out: Groq's Llama and MiniMax models, and
-//!   Mistral Large 4.
+//! - Models a vendor prices only on request ("Contact Sales") are left out:
+//!   Groq's Llama models.
 //!
 //! `None` from [`PricingCatalog::cost_usd`] means the cost is unknown, never
 //! that the request was free.
@@ -101,7 +99,7 @@ use std::sync::LazyLock;
 
 /// Date the standard catalog's rates were last verified against the vendors'
 /// published price lists.
-pub const PRICING_EFFECTIVE_DATE: &str = "2026-10-11";
+pub const PRICING_EFFECTIVE_DATE: &str = "2026-11-17";
 
 /// The vendor whose published list price a [`ModelPrice`] carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -185,7 +183,7 @@ pub enum FeeUnit {
 ///
 /// let fee = BuiltinToolFee::per_use(PriceVendor::Google, "google_search", 0.014)
 ///     .for_models(["gemini-3*"]);
-/// assert!(fee.applies_to("gemini-3.7-flash"));
+/// assert!(fee.applies_to("gemini-3.8-flash"));
 /// assert!(!fee.applies_to("gemma-4-31b-it"));
 /// assert!((fee.cost_usd(3) - 0.042).abs() < 1e-12);
 /// ```
@@ -1061,8 +1059,8 @@ fn standard_catalog() -> PricingCatalog {
     };
     // Gemini's long-context rates apply to prompts over 200K tokens.
     const GEMINI_LONG: u64 = 200_001;
-    // OpenAI's long-context rates apply from 272K tokens.
-    const OPENAI_LONG: u64 = 272_000;
+    // OpenAI's long-context rates apply above 272K input tokens.
+    const OPENAI_LONG: u64 = 272_001;
     // xAI bills every token of a request at the long-context rate once the prompt
     // reaches 200K tokens.
     const XAI_LONG: u64 = 200_000;
@@ -1079,15 +1077,21 @@ fn standard_catalog() -> PricingCatalog {
     let grok_45 = ((2.00, 0.30, 6.00), (4.00, 0.60, 12.00));
     let grok_420 = ((1.25, 0.20, 2.50), (2.50, 0.40, 5.00));
     let grok_build = ((1.00, 0.20, 2.00), (2.00, 0.40, 4.00));
-    // Gemini 3.7 and 3.6 Flash introductory rates end on 2026-12-31.
+    // Gemini 3.8, 3.7 and 3.6 Flash introductory rates end on 2026-12-31.
     let flash_2027 = NaiveDate::from_ymd_opt(2027, 1, 1).unwrap_or(NaiveDate::MAX);
     let flash_2027_rates = ModelRates::new(1.50, 7.50).with_cache_read(0.15);
+    // Gemini 4 Carbon and Argon introductory rates end on 2026-11-30.
+    let gemini_4_december = NaiveDate::from_ymd_opt(2026, 12, 1).unwrap_or(NaiveDate::MAX);
+    let gemini_4_rates = ModelRates::new(4.00, 20.00).with_cache_read(0.20);
 
     let prices = vec![
         // ── Google Gemini ──
-        // https://ai.google.dev/gemini-api/docs/pricing, retrieved 2026-10-11: Gemini 3.8
-        // Flash at the 3.6 Flash rates. `gemini-3.7-flash` is not listed there; requests for
-        // it are routed to and reported as `gemini-3.8-flash`.
+        // https://aistudio.google.com/docs/pricing, retrieved 2026-11-17. `gemini-3.7-flash`
+        // is deprecated and not listed there; requests for it are routed to and reported as
+        // `gemini-3.8-flash` (https://aistudio.google.com/docs/deprecations).
+        gemini("gemini-4-hydrogen", 1.50, 7.50, 0.075),
+        gemini("gemini-4-carbon", 2.00, 10.00, 0.10).with_change(gemini_4_december, gemini_4_rates),
+        gemini("gemini-4-argon", 2.00, 10.00, 0.10).with_change(gemini_4_december, gemini_4_rates),
         gemini("gemini-3.8-flash", 0.75, 3.75, 0.075).with_change(flash_2027, flash_2027_rates),
         gemini("gemini-3.7-flash", 0.75, 3.75, 0.075).with_change(flash_2027, flash_2027_rates),
         gemini("gemini-3.6-flash", 0.75, 3.75, 0.075).with_change(flash_2027, flash_2027_rates),
@@ -1117,11 +1121,29 @@ fn standard_catalog() -> PricingCatalog {
         gemini("gemini-embedding-2", 0.20, 0.0, 0.20),
         gemini("gemini-embedding-001", 0.15, 0.0, 0.15),
         // ── OpenAI ──
-        openai("gpt-5.6", 4.00, 20.00, 0.40),
-        openai("gpt-5.6-sol", 4.00, 20.00, 0.40),
+        // https://developers.openai.com/api/docs/pricing, retrieved 2026-11-17: "Short
+        // context: ≤272K input tokens. Long context: >272K input tokens."
+        openai("gpt-6-astra", 10.00, 50.00, 1.00)
+            .with_long_context(OPENAI_LONG, ModelRates::new(20.00, 75.00).with_cache_read(2.00)),
+        openai("gpt-6.1-sol", 2.00, 10.00, 0.10)
+            .with_long_context(OPENAI_LONG, ModelRates::new(4.00, 15.00).with_cache_read(0.20)),
+        openai("gpt-6.1-terra", 1.00, 5.00, 0.05)
+            .with_long_context(OPENAI_LONG, ModelRates::new(2.00, 7.50).with_cache_read(0.10)),
+        openai("gpt-6-sol", 2.00, 10.00, 0.20)
+            .with_long_context(OPENAI_LONG, ModelRates::new(4.00, 15.00).with_cache_read(0.40)),
+        openai("gpt-6-luna", 0.10, 0.50, 0.01)
+            .with_long_context(OPENAI_LONG, ModelRates::new(0.20, 0.75).with_cache_read(0.02)),
+        openai("gpt-6-cyber", 20.00, 100.00, 2.00)
+            .with_long_context(OPENAI_LONG, ModelRates::new(40.00, 150.00).with_cache_read(4.00)),
+        openai("gpt-5.6", 4.00, 20.00, 0.40)
+            .with_long_context(OPENAI_LONG, ModelRates::new(8.00, 30.00).with_cache_read(0.80)),
+        openai("gpt-5.6-sol", 4.00, 20.00, 0.40)
+            .with_long_context(OPENAI_LONG, ModelRates::new(8.00, 30.00).with_cache_read(0.80)),
         openai("daybreak-blue-latest", 4.00, 20.00, 0.40),
-        openai("gpt-5.6-terra", 2.00, 12.00, 0.20),
-        openai("gpt-5.6-luna", 0.20, 1.20, 0.02),
+        openai("gpt-5.6-terra", 2.00, 12.00, 0.20)
+            .with_long_context(OPENAI_LONG, ModelRates::new(4.00, 18.00).with_cache_read(0.40)),
+        openai("gpt-5.6-luna", 0.20, 1.20, 0.02)
+            .with_long_context(OPENAI_LONG, ModelRates::new(0.40, 1.80).with_cache_read(0.04)),
         openai("gpt-5.6-cyber", 12.50, 75.00, 1.25),
         openai("daybreak-red-latest", 12.50, 75.00, 1.25),
         openai("gpt-5.5", 5.00, 30.00, 0.50)
@@ -1155,6 +1177,9 @@ fn standard_catalog() -> PricingCatalog {
         openai("gpt-4o", 2.50, 10.00, 1.25),
         openai("gpt-4o-mini", 0.15, 0.60, 0.075),
         // ── Anthropic ──
+        // https://platform.claude.com/docs/en/about-claude/pricing, retrieved 2026-11-17.
+        claude("claude-fable-5-2", 8.0, 40.0, 0.20, 10.0, 16.0),
+        claude("claude-mythos-5-2", 8.0, 40.0, 0.20, 10.0, 16.0),
         claude("claude-fable-5-1", 10.0, 50.0, 0.25, 12.5, 20.0),
         claude("claude-mythos-5-1", 10.0, 50.0, 0.25, 12.5, 20.0),
         claude("claude-fable-5", 10.0, 50.0, 1.0, 12.5, 20.0),
@@ -1193,15 +1218,14 @@ fn standard_catalog() -> PricingCatalog {
         cached(DeepSeek, "deepseek-v4-pro", 1.32, 3.96, 0.044).with_off_peak(deepseek_off_peak),
         // ── Groq ──
         // Source: https://console.groq.com/docs/models and the per-model pages under
-        // https://console.groq.com/docs/model/, retrieved 2026-10-11. Cached-input rates
-        // are listed for the GPT-OSS models; https://console.groq.com/docs/prompt-caching
-        // states a 50% cached-input discount for gpt-oss-safeguard-20b.
+        // https://console.groq.com/docs/model/, retrieved 2026-11-17. Cached-input rates
+        // are listed for the GPT-OSS models.
         cached(Groq, "gpt-oss-120b", 0.15, 0.60, 0.075),
         cached(Groq, "gpt-oss-20b", 0.075, 0.30, 0.037),
-        cached(Groq, "gpt-oss-safeguard-20b", 0.075, 0.30, 0.0375),
+        cached(Groq, "gpt-oss-safeguard-20b", 0.075, 0.30, 0.037),
         ModelPrice::new(Groq, "qwen3.8-27b", ModelRates::new(0.80, 4.00)),
         // ── Meta Muse ──
-        // Source: Meta Model API rate card via dev.meta.ai, retrieved 2026-10-28.
+        // Source: https://dev.meta.ai/docs/pricing-rate-limits, retrieved 2026-11-17.
         // Standard rates cover muse-spark-1.3/1.2/1.1; Contributor checkpoints are
         // discounted in exchange for training consent.
         cached(Meta, "muse-spark-1.3", 1.25, 4.25, 0.15),
@@ -1210,10 +1234,14 @@ fn standard_catalog() -> PricingCatalog {
         cached(Meta, "muse-spark-1.3-contributor", 0.10, 0.20, 0.002),
         cached(Meta, "muse-spark-1.2-contributor", 0.10, 0.20, 0.002),
         cached(Meta, "muse-wonder-1.0", 4.00, 20.00, 0.20),
+        // Muse Ember bills the whole request at its long-context rate once the input,
+        // cached tokens included, exceeds 200K tokens.
+        cached(Meta, "muse-ember-1.0", 0.10, 0.50, 0.004)
+            .with_long_context(200_001, ModelRates::new(0.30, 1.50).with_cache_read(0.012)),
         // muse-image-1.0, muse-voice-transcribe-1.0 and sam-3.1 bill per unit, not per
         // token; their rates are in `standard_unit_prices`.
         // ── xAI ──
-        // Source: https://docs.x.ai/docs/models, retrieved 2026-10-11. Aliases are the ones
+        // Source: https://docs.x.ai/docs/models, retrieved 2026-11-17. Aliases are the ones
         // the page lists for each model; `-latest` and dated suffixes resolve automatically.
         grok("grok-4.7", grok_47.0, grok_47.1),
         grok("grok-4.6", grok_47.0, grok_47.1),
@@ -1232,14 +1260,17 @@ fn standard_catalog() -> PricingCatalog {
         grok("grok-code-fast", grok_build.0, grok_build.1),
         // ── Mistral ──
         // Source: https://docs.mistral.ai/inference/pricing, with API ids from the model
-        // pages under https://docs.mistral.ai/models/, retrieved 2026-10-11. Only the
+        // pages under https://docs.mistral.ai/models/, retrieved 2026-11-17. Only the
         // `-latest` aliases the pages list are priced, so a retired dated id never
-        // resolves to a current model's rate.
+        // resolves to a current model's rate. `mistral-large-latest` names Mistral Large 4;
+        // Medium 3.5 and Large 3 are deprecated and keep the rates they were listed at.
+        cached(Mistral, "mistral-large-4", 0.7, 2.1, 0.07),
+        cached(Mistral, "mistral-large-4-0", 0.7, 2.1, 0.07),
+        cached(Mistral, "mistral-large-latest", 0.7, 2.1, 0.07),
         cached(Mistral, "mistral-medium-3-5", 1.5, 7.5, 0.15),
         cached(Mistral, "mistral-medium-3", 1.5, 7.5, 0.15),
         cached(Mistral, "mistral-medium-latest", 1.5, 7.5, 0.15),
         cached(Mistral, "mistral-large-2512", 0.5, 1.5, 0.05),
-        cached(Mistral, "mistral-large-latest", 0.5, 1.5, 0.05),
         cached(Mistral, "mistral-small-2603", 0.15, 0.6, 0.015),
         cached(Mistral, "mistral-small-latest", 0.15, 0.6, 0.015),
         cached(Mistral, "ministral-14b-2512", 0.2, 0.2, 0.02),
@@ -1253,18 +1284,46 @@ fn standard_catalog() -> PricingCatalog {
     ];
 
     // Maximum output tokens per request, reasoning included, used to bound requests that
-    // set no output cap. Sources, retrieved 2026-10-11:
-    // - Gemini: https://ai.google.dev/gemini-api/docs/models/<id> ("Output token limit");
-    //   https://ai.google.dev/gemini-api/docs/thinking counts thought tokens in the limit.
+    // set no output cap. Sources, retrieved 2026-11-17:
+    // - Anthropic: https://platform.claude.com/docs/en/about-claude/models/overview
+    //   ("Max output", synchronous Messages API).
+    // - Gemini: https://aistudio.google.com/docs/models/<id> ("Output token limit");
+    //   https://aistudio.google.com/docs/thinking counts thought tokens in the limit.
     // - OpenAI: https://developers.openai.com/api/docs/models/<id> ("max output tokens");
     //   https://developers.openai.com/api/docs/guides/reasoning counts reasoning tokens.
     // - DeepSeek: https://api-docs.deepseek.com/quick_start/pricing ("MAXIMUM: 384K").
     // - Groq: https://console.groq.com/docs/models ("Max Completion Tokens").
     // - Mistral: https://docs.mistral.ai/models/<slug> states only a context window, which
     //   Mistral defines as input plus output tokens, so the window bounds the output.
+    // - Meta: https://dev.meta.ai/docs/muse-ember ("Max output").
     // xAI publishes no output limit, so Grok requests bound only with an explicit cap.
     const GEMINI_MAX_OUTPUT: u64 = 65_536;
+    const CLAUDE_MAX_OUTPUT: u64 = 128_000;
     let max_output: &[(&str, u64)] = &[
+        ("claude-fable-5-2", CLAUDE_MAX_OUTPUT),
+        ("claude-mythos-5-2", CLAUDE_MAX_OUTPUT),
+        ("claude-fable-5-1", CLAUDE_MAX_OUTPUT),
+        ("claude-mythos-5-1", CLAUDE_MAX_OUTPUT),
+        ("claude-fable-5", CLAUDE_MAX_OUTPUT),
+        ("claude-mythos-5", CLAUDE_MAX_OUTPUT),
+        ("claude-opus-5-5", CLAUDE_MAX_OUTPUT),
+        ("claude-opus-5", CLAUDE_MAX_OUTPUT),
+        ("claude-sonnet-5-5", CLAUDE_MAX_OUTPUT),
+        ("claude-sonnet-5", CLAUDE_MAX_OUTPUT),
+        ("claude-haiku-5-5", CLAUDE_MAX_OUTPUT),
+        ("claude-opus-4-8", CLAUDE_MAX_OUTPUT),
+        ("claude-opus-4-7", CLAUDE_MAX_OUTPUT),
+        ("claude-opus-4-6", CLAUDE_MAX_OUTPUT),
+        ("claude-opus-4-5", 64_000),
+        ("claude-opus-4-1", 32_000),
+        ("claude-opus-4", 32_000),
+        ("claude-sonnet-4-6", CLAUDE_MAX_OUTPUT),
+        ("claude-sonnet-4-5", 64_000),
+        ("claude-sonnet-4", 64_000),
+        ("claude-haiku-4-5", 64_000),
+        ("gemini-4-hydrogen", GEMINI_MAX_OUTPUT),
+        ("gemini-4-carbon", GEMINI_MAX_OUTPUT),
+        ("gemini-4-argon", GEMINI_MAX_OUTPUT),
         ("gemini-3.8-flash", GEMINI_MAX_OUTPUT),
         ("gemini-3.7-flash", GEMINI_MAX_OUTPUT),
         ("gemini-3.6-flash", GEMINI_MAX_OUTPUT),
@@ -1276,6 +1335,12 @@ fn standard_catalog() -> PricingCatalog {
         ("gemini-2.5-pro", GEMINI_MAX_OUTPUT),
         ("gemini-2.5-flash", GEMINI_MAX_OUTPUT),
         ("gemini-2.5-flash-lite", GEMINI_MAX_OUTPUT),
+        ("gpt-6-astra", 128_000),
+        ("gpt-6.1-sol", 128_000),
+        ("gpt-6.1-terra", 128_000),
+        ("gpt-6-sol", 128_000),
+        ("gpt-6-luna", 128_000),
+        ("gpt-6-cyber", 128_000),
         ("gpt-5.6", 128_000),
         ("gpt-5.6-sol", 128_000),
         ("gpt-5.6-terra", 128_000),
@@ -1311,11 +1376,15 @@ fn standard_catalog() -> PricingCatalog {
         ("gpt-oss-20b", 65_536),
         ("gpt-oss-safeguard-20b", 65_536),
         ("qwen3.8-27b", 16_384),
+        ("chat-latest", 128_000),
+        ("muse-ember-1.0", 524_288),
+        ("mistral-large-4", 1_000_000),
+        ("mistral-large-4-0", 1_000_000),
         ("mistral-medium-3-5", 262_144),
         ("mistral-medium-3", 262_144),
         ("mistral-medium-latest", 262_144),
         ("mistral-large-2512", 262_144),
-        ("mistral-large-latest", 262_144),
+        ("mistral-large-latest", 1_000_000),
         ("mistral-small-2603", 262_144),
         ("mistral-small-latest", 262_144),
         ("ministral-14b-2512", 262_144),
@@ -1328,11 +1397,11 @@ fn standard_catalog() -> PricingCatalog {
         ("codestral-latest", 131_072),
     ];
     // The most tokens a request may carry: the page's stated maximum input where it gives
-    // one, else its context window. Sources, retrieved 2026-11-16:
+    // one, else its context window. Sources, retrieved 2026-11-17:
     // - Anthropic: https://platform.claude.com/docs/en/about-claude/models/overview
     //   ("Context").
     // - Gemini: https://aistudio.google.com/docs/models/<id> ("Input token limit", separate
-    //   from the 65,536-token output limit).
+    //   from the 65,536-token output limit; Gemini 4 shares one 1,048,576-token window).
     // - OpenAI: https://developers.openai.com/api/docs/models/<id> ("Maximum input tokens"
     //   where listed, else "context window").
     // - DeepSeek: https://api-docs.deepseek.com/quick_start/pricing ("CONTEXT LENGTH 1M");
@@ -1340,9 +1409,12 @@ fn standard_catalog() -> PricingCatalog {
     // - Groq: https://console.groq.com/docs/models ("CONTEXT WINDOW (TOKENS)").
     // - xAI: https://docs.x.ai/docs/models ("Context").
     // - Mistral: https://docs.mistral.ai/models/<slug> ("Context").
+    // - Meta: https://dev.meta.ai/docs/muse-spark, /muse-wonder and /muse-ember ("Context").
     const CLAUDE_WINDOW: u64 = 1_000_000;
     const GEMINI_INPUT: u64 = 1_048_576;
     let context_window: &[(&str, u64)] = &[
+        ("claude-fable-5-2", CLAUDE_WINDOW),
+        ("claude-mythos-5-2", CLAUDE_WINDOW),
         ("claude-fable-5-1", CLAUDE_WINDOW),
         ("claude-mythos-5-1", CLAUDE_WINDOW),
         ("claude-fable-5", CLAUDE_WINDOW),
@@ -1356,7 +1428,15 @@ fn standard_catalog() -> PricingCatalog {
         ("claude-opus-4-7", CLAUDE_WINDOW),
         ("claude-opus-4-6", CLAUDE_WINDOW),
         ("claude-sonnet-4-6", CLAUDE_WINDOW),
+        ("claude-opus-4-5", 200_000),
+        ("claude-opus-4-1", 200_000),
+        ("claude-opus-4", 200_000),
+        ("claude-sonnet-4-5", 200_000),
+        ("claude-sonnet-4", 200_000),
         ("claude-haiku-4-5", 200_000),
+        ("gemini-4-hydrogen", GEMINI_INPUT),
+        ("gemini-4-carbon", GEMINI_INPUT),
+        ("gemini-4-argon", GEMINI_INPUT),
         ("gemini-3.8-flash", GEMINI_INPUT),
         ("gemini-3.7-flash", GEMINI_INPUT),
         ("gemini-3.6-flash", GEMINI_INPUT),
@@ -1368,12 +1448,25 @@ fn standard_catalog() -> PricingCatalog {
         ("gemini-2.5-pro", GEMINI_INPUT),
         ("gemini-2.5-flash", GEMINI_INPUT),
         ("gemini-2.5-flash-lite", GEMINI_INPUT),
+        ("gpt-6-astra", 922_000),
+        ("gpt-6.1-sol", 922_000),
+        ("gpt-6.1-terra", 922_000),
+        ("gpt-6-sol", 922_000),
+        ("gpt-6-luna", 922_000),
+        ("gpt-6-cyber", 922_000),
         ("gpt-5.6", 922_000),
         ("gpt-5.6-sol", 922_000),
         ("gpt-5.6-terra", 922_000),
         ("gpt-5.6-luna", 922_000),
+        ("gpt-5.6-cyber", 272_000),
         ("gpt-5.5", 1_050_000),
+        ("gpt-5.5-pro", 1_050_000),
         ("gpt-5.4", 1_050_000),
+        ("gpt-5.4-pro", 1_050_000),
+        ("gpt-5.3-codex", 272_000),
+        ("gpt-5.2-pro", 400_000),
+        ("gpt-5-pro", 400_000),
+        ("chat-latest", 272_000),
         ("gpt-5.4-mini", 272_000),
         ("gpt-5.4-nano", 272_000),
         ("gpt-5.2", 400_000),
@@ -1392,10 +1485,15 @@ fn standard_catalog() -> PricingCatalog {
         ("deepseek-v4-pro", 1_000_000),
         ("gpt-oss-120b", 131_072),
         ("gpt-oss-20b", 131_072),
+        ("gpt-oss-safeguard-20b", 131_072),
         ("qwen3.8-27b", 131_072),
         ("grok-4.7", 500_000),
         ("grok-4.6", 500_000),
         ("grok-4.5", 500_000),
+        ("grok-build-latest", 500_000),
+        ("grok-build-0.1", 256_000),
+        ("grok-code-fast-1", 256_000),
+        ("grok-code-fast", 256_000),
         ("grok-4.3", 1_000_000),
         ("grok-4.20", 1_000_000),
         ("grok-4.20-0309-reasoning", 1_000_000),
@@ -1404,11 +1502,19 @@ fn standard_catalog() -> PricingCatalog {
         ("grok-4.20-non-reasoning", 1_000_000),
         ("grok-4.20-multi-agent-0309", 1_000_000),
         ("grok-4.20-multi-agent", 1_000_000),
+        ("mistral-large-4", 1_000_000),
+        ("mistral-large-4-0", 1_000_000),
+        ("mistral-large-latest", 1_000_000),
         ("mistral-medium-3-5", 256_000),
         ("mistral-large-2512", 256_000),
         ("mistral-small-2603", 256_000),
         ("ministral-14b-2512", 256_000),
         ("codestral-2508", 128_000),
+        ("muse-spark-1.3", 1_048_576),
+        ("muse-spark-1.2", 1_048_576),
+        ("muse-spark-1.1", 1_048_576),
+        ("muse-wonder-1.0", 1_048_576),
+        ("muse-ember-1.0", 1_048_576),
     ];
     let prices = prices
         .into_iter()
@@ -1467,9 +1573,10 @@ fn standard_fees() -> Vec<BuiltinToolFee> {
         // under-estimated, because the response does not name the tool version.
         BuiltinToolFee::per_use(OpenAI, "web_search", 0.010),
         BuiltinToolFee::per_use(OpenAI, "file_search", 0.0025),
-        // https://ai.google.dev/gemini-api/docs/pricing (fetched 2026-10-11):
-        // Gemini 3 and newer, Google Search "$14 per 1,000 requests" (search queries).
-        BuiltinToolFee::per_use(Google, "google_search", 0.014).for_models(["gemini-3*"]),
+        // https://aistudio.google.com/docs/pricing (fetched 2026-11-17): Gemini 3 and newer,
+        // Google Search "$14 per 1,000 requests" (search queries).
+        BuiltinToolFee::per_use(Google, "google_search", 0.014)
+            .for_models(["gemini-3*", "gemini-4*"]),
         // Gemini 2.5 Pro and Flash, Google Search "$35 / 1,000 grounded prompts" and
         // Google Maps "$25 / 1,000 grounded prompts".
         BuiltinToolFee::per_response(Google, "google_search", 0.035)
@@ -1615,12 +1722,15 @@ mod tests {
         assert_eq!(window("groq", "openai/gpt-oss-120b"), Some(131_072));
         // A vendor's window applies only where the provider serves that vendor's models.
         assert_eq!(window("groq", "claude-sonnet-5-5"), None);
+        assert_eq!(window("anthropic", "claude-fable-5-2"), Some(1_000_000));
+        assert_eq!(window("anthropic", "claude-opus-4-5-20251101"), Some(200_000));
+        assert_eq!(window("xai", "grok-code-fast-1"), Some(256_000));
         // Priced, but no published window was recorded.
-        assert_eq!(window("xai", "grok-code-fast-1"), None);
+        assert_eq!(window("gemini", "gemini-2.5-flash-image"), None);
         // Every model with a recorded window is priced, so none is silently dropped.
         let recorded =
             catalog.prices().iter().filter(|p| p.context_window_tokens.is_some()).count();
-        assert_eq!(recorded, 66);
+        assert_eq!(recorded, 102);
     }
 
     #[test]
@@ -1682,10 +1792,19 @@ mod tests {
     }
 
     #[test]
-    fn openai_long_context_starts_at_272k() {
-        let price = price("openai", "gpt-5.5");
-        assert_eq!(price.rates_for(271_999, today()).input, 5.00);
-        assert_eq!(price.rates_for(272_000, today()).input, 10.00);
+    fn openai_long_context_starts_above_272k() {
+        let gpt_55 = price("openai", "gpt-5.5");
+        assert_eq!(gpt_55.rates_for(272_000, today()).input, 5.00);
+        assert_eq!(gpt_55.rates_for(272_001, today()).input, 10.00);
+        let sol = price("openai", "gpt-6.1-sol");
+        assert_eq!(
+            sol.rates_for(272_000, today()),
+            ModelRates::new(2.00, 10.00).with_cache_read(0.10)
+        );
+        assert_eq!(
+            sol.rates_for(272_001, today()),
+            ModelRates::new(4.00, 15.00).with_cache_read(0.20)
+        );
     }
 
     #[test]
@@ -1710,6 +1829,10 @@ mod tests {
             ("openrouter", "x-ai/grok-4.6", "grok-4.6"),
             ("mistral", "mistral-medium-latest", "mistral-medium-latest"),
             ("mistral", "codestral-2508", "codestral-2508"),
+            ("mistral", "mistral-large-4", "mistral-large-4"),
+            ("openai", "gpt-6.1-sol", "gpt-6.1-sol"),
+            ("anthropic", "claude-fable-5-2", "claude-fable-5-2"),
+            ("bedrock", "global.anthropic.claude-fable-5-2", "claude-fable-5-2"),
         ] {
             assert_eq!(
                 catalog.lookup(Some(provider), model).map(|price| price.model.as_str()),
@@ -1727,7 +1850,6 @@ mod tests {
             ("groq", "minimaxai/minimax-m2.7"),
             ("cerebras", "gpt-oss-120b"),
             ("xai", "grok-5"),
-            ("mistral", "mistral-large-4"),
             ("mistral", "mistral-medium-2508"),
             ("together", "gpt-4.1"),
             ("deepseek", "gpt-4.1"),

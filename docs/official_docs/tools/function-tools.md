@@ -278,7 +278,7 @@ struct WeatherParams {
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
+    let model = GeminiModel::new(&api_key, "gemini-3.8-flash")?;
 
     // Weather tool with proper schema
     let weather_tool = FunctionTool::new(

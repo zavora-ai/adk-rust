@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 /// costs from token counts extracted during evaluation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ModelPricing {
-    /// Model identifier (e.g., "gemini-3.7-flash", "gpt-5.6-terra")
+    /// Model identifier (e.g., "gemini-3.8-flash", "gpt-6.1-sol")
     pub model_name: String,
     /// Cost per 1,000 input tokens in USD
     pub input_cost_per_1k: f64,
@@ -84,13 +84,17 @@ impl ModelPricing {
 /// use adk_eval::pricing::default_pricing;
 ///
 /// let pricing = default_pricing();
-/// let flash = pricing.iter().find(|p| p.model_name == "gemini-3.7-flash");
+/// let flash = pricing.iter().find(|p| p.model_name == "gemini-3.8-flash");
 /// assert!(flash.is_some());
 /// ```
 pub fn default_pricing() -> Vec<ModelPricing> {
     vec![
-        // Google Gemini. 3.7 and 3.6 Flash carry introductory rates that double
-        // on 2027-01-01.
+        // Google Gemini. 3.8, 3.7 and 3.6 Flash carry introductory rates that double
+        // on 2027-01-01; Gemini 4 Carbon and Argon rates double on 2026-12-01.
+        ModelPricing::new("gemini-4-hydrogen", 0.0015, 0.0075),
+        ModelPricing::new("gemini-4-carbon", 0.002, 0.01),
+        ModelPricing::new("gemini-4-argon", 0.002, 0.01),
+        ModelPricing::new("gemini-3.8-flash", 0.00075, 0.00375),
         ModelPricing::new("gemini-3.7-flash", 0.00075, 0.00375),
         ModelPricing::new("gemini-3.6-flash", 0.00075, 0.00375),
         ModelPricing::new("gemini-3.5-flash", 0.0015, 0.009),
@@ -102,6 +106,10 @@ pub fn default_pricing() -> Vec<ModelPricing> {
         ModelPricing::new("gemini-2.5-flash", 0.0003, 0.0025),
         ModelPricing::new("gemini-2.5-flash-lite", 0.0001, 0.0004),
         // OpenAI
+        ModelPricing::new("gpt-6-astra", 0.01, 0.05),
+        ModelPricing::new("gpt-6.1-sol", 0.002, 0.01),
+        ModelPricing::new("gpt-6.1-terra", 0.001, 0.005),
+        ModelPricing::new("gpt-6-luna", 0.0001, 0.0005),
         ModelPricing::new("gpt-5.6-sol", 0.004, 0.02),
         ModelPricing::new("gpt-5.6-terra", 0.002, 0.012),
         ModelPricing::new("gpt-5.6-luna", 0.0002, 0.0012),
@@ -120,8 +128,13 @@ pub fn default_pricing() -> Vec<ModelPricing> {
         ModelPricing::new("gpt-4o", 0.0025, 0.01),
         ModelPricing::new("gpt-4o-mini", 0.00015, 0.0006),
         ModelPricing::new("o3", 0.002, 0.008),
-        ModelPricing::new("o4-mini", 0.0011, 0.0044),
         // Anthropic Claude
+        ModelPricing::new("claude-fable-5-2", 0.008, 0.04),
+        ModelPricing::new("claude-mythos-5-2", 0.008, 0.04),
+        ModelPricing::new("claude-fable-5-1", 0.01, 0.05),
+        ModelPricing::new("claude-opus-5-5", 0.004, 0.02),
+        ModelPricing::new("claude-sonnet-5-5", 0.002, 0.01),
+        ModelPricing::new("claude-haiku-5-5", 0.0001, 0.0005),
         ModelPricing::new("claude-fable-5", 0.01, 0.05),
         ModelPricing::new("claude-mythos-5", 0.01, 0.05),
         ModelPricing::new("claude-opus-5", 0.005, 0.025),
@@ -130,9 +143,9 @@ pub fn default_pricing() -> Vec<ModelPricing> {
         ModelPricing::new("claude-sonnet-4-6", 0.003, 0.015),
         ModelPricing::new("claude-haiku-4-5", 0.001, 0.005),
         // DeepSeek. Peak (cache-miss) rates; off-peak is half.
-        ModelPricing::new("deepseek-flash", 0.00044, 0.00132),
+        ModelPricing::new("deepseek-flash", 0.0003, 0.0012),
         // Legacy alias: still accepted by the API and served as deepseek-flash.
-        ModelPricing::new("deepseek-v4-flash", 0.00044, 0.00132),
+        ModelPricing::new("deepseek-v4-flash", 0.0003, 0.0012),
         ModelPricing::new("deepseek-v4-pro", 0.00132, 0.00396),
     ]
 }
@@ -158,7 +171,7 @@ mod tests {
     #[test]
     fn test_default_pricing_includes_gemini() {
         let pricing = default_pricing();
-        let gemini = pricing.iter().find(|p| p.model_name == "gemini-3.7-flash");
+        let gemini = pricing.iter().find(|p| p.model_name == "gemini-3.8-flash");
         assert!(gemini.is_some());
         let gemini = gemini.unwrap();
         assert!(gemini.input_cost_per_1k > 0.0);
@@ -203,6 +216,10 @@ mod tests {
             "gpt-4",
             "gpt-4-turbo",
             "gpt-3.5-turbo",
+            "gpt-4.1-nano",
+            "o4-mini",
+            "o3-mini",
+            "o1",
         ] {
             assert!(
                 !pricing.iter().any(|p| p.model_name == retired),

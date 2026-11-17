@@ -130,7 +130,7 @@ pub struct OpenAIConfig {
     /// yields an empty key.
     #[serde(skip_serializing, default)]
     pub api_key: String,
-    /// Model name (e.g., "gpt-5.6-terra", "gpt-5.6-sol").
+    /// Model name (e.g., "gpt-6.1-sol", "gpt-5.6-sol").
     pub model: String,
     /// Optional organization ID.
     #[serde(skip_serializing_if = "Option::is_none")]

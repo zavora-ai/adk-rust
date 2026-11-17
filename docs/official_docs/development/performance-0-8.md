@@ -34,5 +34,5 @@ The example uses the first provider whose key is set, in this order:
 | `OPENAI_API_KEY` | `openai` | `OPENAI_MODEL` | `gpt-5-mini` |
 | `GOOGLE_API_KEY` or `GEMINI_API_KEY` | `gemini` | `GEMINI_MODEL` | `gemini-2.5-flash` |
 
-The Gemini default predates the current model line; set `GEMINI_MODEL=gemini-3.7-flash` when
+The Gemini default predates the current model line; set `GEMINI_MODEL=gemini-3.8-flash` when
 running it with a Gemini key.

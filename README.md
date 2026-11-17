@@ -105,7 +105,7 @@ use adk_rust::Launcher;
 #[tokio::main]
 async fn main() -> AnyhowResult<()> {
     dotenvy::dotenv().ok();
-    let model = GeminiModel::new(&std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?;
+    let model = GeminiModel::new(&std::env::var("GOOGLE_API_KEY")?, "gemini-3.8-flash")?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .instruction("You are a helpful assistant. Be concise and accurate.")
@@ -138,23 +138,23 @@ environment, among those you compiled in.
 
 | Provider | Model Examples | Feature Flag |
 |----------|---------------|--------------|
-| Gemini | `gemini-3.7-flash` (default), `gemini-3.6-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview` | (default) |
-| OpenAI | `gpt-5.6-terra` (default), `gpt-5.6-sol`, `gpt-5.6-luna` | `openai` |
-| OpenAI Responses API | `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.6-luna` | `openai` |
-| Anthropic | `claude-sonnet-5` (default), `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-fable-5-1` | `anthropic` |
+| Gemini | `gemini-3.8-flash` (default), `gemini-4-hydrogen`, `gemini-4-carbon`, `gemini-4-argon`, `gemini-3.5-flash-lite` | (default) |
+| OpenAI | `gpt-6.1-sol` (default), `gpt-6-astra`, `gpt-6.1-terra`, `gpt-6-luna`, `gpt-5.6-terra` | `openai` |
+| OpenAI Responses API | `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-luna`, `gpt-5.6-terra` | `openai` |
+| Anthropic | `claude-sonnet-5-5` (default), `claude-fable-5-2`, `claude-opus-5-5`, `claude-haiku-5-5` | `anthropic` |
 | DeepSeek | `deepseek-flash` (default; `deepseek-v4-flash` is accepted), `deepseek-v4-pro` | `deepseek` |
 | Groq | `openai/gpt-oss-120b`, `openai/gpt-oss-20b` | `groq` |
 | Ollama | `qwen3.6:35b-a3b`, `qwen3.5`, `llama3.2:3b` | `ollama` |
-| Fireworks AI | `accounts/fireworks/models/kimi-k2p6` | `openai` (preset) |
-| Together AI | `MiniMaxAI/MiniMax-M2.7` | `openai` (preset) |
-| Mistral AI | `mistral-medium-latest` | `openai` (preset) |
+| Fireworks AI | `accounts/fireworks/models/kimi-k3` | `openai` (preset) |
+| Together AI | `moonshotai/Kimi-K3.1-Pro` | `openai` (preset) |
+| Mistral AI | `mistral-large-latest` | `openai` (preset) |
 | Perplexity | `sonar-pro` | `openai` (preset) |
 | Cerebras | `gpt-oss-120b` | `openai` (preset) |
 | SambaNova | `gpt-oss-120b` | `openai` (preset) |
-| xAI (Grok) | `grok-4.6` | `openai` (preset) |
-| OrcaRouter | `openai/gpt-5.6-terra`, `anthropic/claude-sonnet-5` | `openai` (preset) |
+| xAI (Grok) | `grok-4.7` | `openai` (preset) |
+| OrcaRouter | `openai/gpt-5.6-terra`, `anthropic/claude-sonnet-5-5` | `openai` (preset) |
 | API Route | (listed by `GET /v1/models`) | `openai` (preset) |
-| Amazon Bedrock | `anthropic.claude-sonnet-4-20250514-v1:0` | `bedrock` |
+| Amazon Bedrock | `us.anthropic.claude-sonnet-5-5`, `global.anthropic.claude-fable-5-2` | `bedrock` |
 | Azure AI Inference | (endpoint-specific) | `azure-ai` |
 | mistral.rs | **Gemma 4**, Phi-3, Llama, Qwen 3.5, Voxtral, FLUX | `adk-mistralrs` |
 

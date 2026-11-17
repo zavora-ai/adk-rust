@@ -60,7 +60,7 @@ retry is reported next to the result.
 
 `anthropic_web_tools` and `builtin_tool_policy` use `claude-sonnet-5-5` (`ANTHROPIC_WEB_MODEL`),
 since `web_search_20260209` is not available on Haiku. `builtin_tool_policy` uses
-`gemini-3.7-flash` (`GEMINI_SEARCH_MODEL`) for Google Search grounding. `openai_tools_routing` uses `OPENAI_ROUTED_MODEL` and
+`gemini-3.8-flash` (`GEMINI_SEARCH_MODEL`) for Google Search grounding. `openai_tools_routing` uses `OPENAI_ROUTED_MODEL` and
 `anthropic_thinking_replay` uses `ANTHROPIC_THINKING_MODEL`. `both` selects `openai` and
 `anthropic`; `all` selects `openai`, `openai-chat`, `anthropic`, and `gemini`.
 

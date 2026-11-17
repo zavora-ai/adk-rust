@@ -215,7 +215,7 @@ impl OpenAIResponsesClient {
     /// ```rust,ignore
     /// use adk_model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig, WsTransport};
     ///
-    /// let config = OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra");
+    /// let config = OpenAIResponsesConfig::new("sk-...", "gpt-6.1-sol");
     /// let client = OpenAIResponsesClient::new(config.clone())?
     ///     .with_websocket(WsTransport::new(&config)?)
     ///     .with_websocket_fallback(true);
@@ -298,7 +298,7 @@ impl OpenAIResponsesClient {
     /// use adk_model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig};
     /// use adk_model::HttpTimeouts;
     ///
-    /// let client = OpenAIResponsesClient::new(OpenAIResponsesConfig::new("sk-key", "gpt-5.6-terra"))?
+    /// let client = OpenAIResponsesClient::new(OpenAIResponsesConfig::new("sk-key", "gpt-6.1-sol"))?
     ///     .with_timeouts(HttpTimeouts::new(Duration::from_secs(10), Duration::from_secs(120)))?;
     /// # let _ = client;
     /// # Ok::<(), adk_core::AdkError>(())

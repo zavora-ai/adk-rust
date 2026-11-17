@@ -9,7 +9,7 @@ use adk_core::Llm;
 /// The Anthropic live model the harness runs on.
 pub const ANTHROPIC_MODEL: &str = "claude-sonnet-5-5";
 /// The Gemini model examples default to.
-pub const GEMINI_MODEL: &str = "gemini-3.7-flash";
+pub const GEMINI_MODEL: &str = "gemini-3.8-flash";
 /// The model live runs use on Vultr Serverless Inference unless `VULTR_MODEL` names another.
 pub const VULTR_MODEL: &str = "qwen3.8-27b";
 

@@ -585,7 +585,7 @@ mod tests {
         assert!(main_rs.contains("#[tokio::main]"));
         assert!(main_rs.contains("dotenvy::dotenv().ok();"));
         assert!(main_rs.contains("tracing_subscriber::fmt()"));
-        assert!(main_rs.contains("GeminiModel::new(&api_key, \"gemini-3.7-flash\")?"));
+        assert!(main_rs.contains("GeminiModel::new(&api_key, \"gemini-3.8-flash\")?"));
         assert!(main_rs.contains("anyhow::Result<()>"));
     }
 
@@ -921,7 +921,7 @@ mod tests {
             "HarnessLauncher::new(harness)",
             ".with_session_service(sessions)",
             "`cargo run -- up` runs it as the agent kernel",
-            "GeminiModel::new(&api_key, \"gemini-3.7-flash\")?",
+            "GeminiModel::new(&api_key, \"gemini-3.8-flash\")?",
         ] {
             assert!(main_rs.contains(expected), "missing `{expected}` in:\n{main_rs}");
         }

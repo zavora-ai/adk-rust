@@ -93,7 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Use a profile to limit tools (recommended)
     let toolset = BrowserToolset::with_profile(browser.clone(), BrowserProfile::Scraping);
 
-    let model = GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?;
+    let model = GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.8-flash")?;
     let agent = LlmAgentBuilder::new("browser_agent")
         .instruction("Use the browser tools to answer. Reply with the answer only.")
         .model(Arc::new(model))

@@ -268,7 +268,7 @@ fn reply(provider: Provider, turn: usize, stream: bool) -> Reply {
                 )
             };
             let interaction = |steps: Value| {
-                json!({"id": id, "model": "gemini-3.7-flash", "status": status, "steps": steps,
+                json!({"id": id, "model": "gemini-3.8-flash", "status": status, "steps": steps,
                     "usage": usage(provider, turn)})
             };
             if stream {

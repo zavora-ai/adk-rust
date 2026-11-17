@@ -82,6 +82,7 @@ impl OpenCodeService {
             (
                 Self::Zen,
                 "gpt-6-astra"
+                | "gpt-6.1-sol"
                 | "gpt-6-sol"
                 | "gpt-6-luna"
                 | "gpt-5.6-sol"
@@ -110,19 +111,24 @@ impl OpenCodeService {
                 | "grok-build-0.1"
                 | "muse-spark-1.3"
                 | "muse-spark-1.2"
-                | "muse-spark-1.3-contributor-free",
+                | "muse-spark-1.3-contributor-free"
+                | "muse-ember-1.0"
+                | "muse-wonder-1.0",
             ) => Some(OpenCodeApi::Responses),
             (
                 Self::Zen,
-                "claude-fable-5-1" | "claude-fable-5" | "claude-opus-5-5" | "claude-opus-5"
-                | "claude-opus-4-8" | "claude-opus-4-7" | "claude-opus-4-6" | "claude-opus-4-5"
-                | "claude-sonnet-5" | "claude-sonnet-4-6" | "claude-sonnet-4-5"
-                | "claude-haiku-4-5" | "qwen3.8-flash" | "qwen3.7-max" | "qwen3.7-plus"
-                | "qwen3.6-plus" | "qwen3.5-plus",
+                "claude-fable-5-2" | "claude-fable-5-1" | "claude-fable-5" | "claude-opus-5-5"
+                | "claude-opus-5" | "claude-sonnet-5-5" | "claude-haiku-5-5" | "claude-opus-4-8"
+                | "claude-opus-4-7" | "claude-opus-4-6" | "claude-opus-4-5" | "claude-sonnet-5"
+                | "claude-sonnet-4-6" | "claude-sonnet-4-5" | "claude-haiku-4-5" | "qwen3.8-flash"
+                | "qwen3.7-max" | "qwen3.7-plus" | "qwen3.6-plus" | "qwen3.5-plus",
             ) => Some(OpenCodeApi::Messages),
             (
                 Self::Zen,
-                "gemini-3.8-flash"
+                "gemini-4-carbon"
+                | "gemini-4-argon"
+                | "gemini-4-hydrogen"
+                | "gemini-3.8-flash"
                 | "gemini-3.7-flash"
                 | "gemini-3.6-flash"
                 | "gemini-3.5-flash"
@@ -133,6 +139,7 @@ impl OpenCodeService {
             (
                 Self::Zen,
                 "qwen3.8-max"
+                | "mistral-large-4"
                 | "deepseek-v4.1-flash"
                 | "deepseek-v4-pro"
                 | "deepseek-v4-flash"

@@ -125,7 +125,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     let agent = LlmAgentBuilder::new("support_agent")
         .instruction("Answer questions using the rag_search tool.")
-        .model(Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?))
+        .model(Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?))
         .tool(Arc::new(RagTool::new(pipeline, "kb")))
         .build()?;
 

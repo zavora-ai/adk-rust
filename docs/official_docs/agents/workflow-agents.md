@@ -65,7 +65,7 @@ use std::sync::Arc;
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?);
 
     // Step 1: Research agent gathers information
     let researcher = LlmAgentBuilder::new("researcher")
@@ -193,7 +193,7 @@ use std::sync::Arc;
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?);
 
     // Three analysts with DISTINCT personas (important for parallel execution)
     let technical = LlmAgentBuilder::new("technical_analyst")
@@ -289,7 +289,7 @@ use std::sync::Arc;
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?);
 
     // Critic agent evaluates content
     let critic = LlmAgentBuilder::new("critic")
@@ -416,7 +416,7 @@ use std::sync::Arc;
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?);
 
     // Create specialist agents
     let tech_agent: Arc<dyn Agent> = Arc::new(

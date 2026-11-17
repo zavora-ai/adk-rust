@@ -55,7 +55,7 @@ static V1_BASE_URL: LazyLock<Url> = LazyLock::new(|| {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub enum Model {
     // ── Gemini 3.5 ──────────────────────────────────────────────
-    /// Gemini 3.5 Flash.
+    /// Gemini 3.5 Flash (deprecated; the Gemini API routes it to Gemini 3.6 Flash).
     #[serde(rename = "models/gemini-3.5-flash")]
     Gemini35Flash,
 
@@ -67,7 +67,8 @@ pub enum Model {
     /// [`Model::gemini_3_5_flash_lite`] instead.
     #[serde(rename = "models/gemini-3.1-flash-lite")]
     Gemini31FlashLite,
-    /// Gemini 3.1 Flash Image (Nano Banana 2) — GA native image generation.
+    /// Gemini 3.1 Flash Image (Nano Banana 2), deprecated in favour of
+    /// `gemini-nano-banana-2.1`.
     #[serde(rename = "models/gemini-3.1-flash-image")]
     Gemini31FlashImage,
 
@@ -84,7 +85,7 @@ pub enum Model {
     #[serde(rename = "models/gemini-3-pro-image-preview")]
     Gemini3ProImagePreview,
     /// Gemini 3 Flash preview (deprecated). Use [`Model::gemini_3_6_flash`] or the default
-    /// [`Model::gemini_3_7_flash`] instead.
+    /// [`Model::gemini_3_8_flash`] instead.
     #[serde(rename = "models/gemini-3-flash-preview")]
     Gemini3FlashPreview,
 
@@ -140,15 +141,23 @@ pub enum Model {
 
 impl Default for Model {
     fn default() -> Self {
-        Self::gemini_3_7_flash()
+        Self::gemini_3_8_flash()
     }
 }
 
 impl Model {
-    /// Return the current balanced Gemini default.
+    /// Return Gemini 3.8 Flash, the current balanced Gemini default.
     ///
     /// This factory avoids adding a new enum variant whenever Google releases a
     /// model while preserving exhaustive matches for existing callers.
+    pub fn gemini_3_8_flash() -> Self {
+        Self::Custom("models/gemini-3.8-flash".to_string())
+    }
+
+    /// Return Gemini 3.7 Flash.
+    ///
+    /// Deprecated by Google: the Gemini API routes it to Gemini 3.8 Flash, and Vertex AI
+    /// retires it on 2027-01-28. Use [`Model::gemini_3_8_flash`].
     pub fn gemini_3_7_flash() -> Self {
         Self::Custom("models/gemini-3.7-flash".to_string())
     }
@@ -643,7 +652,7 @@ pub(crate) fn validate_generation_config_for_model(
 
     let model = model.to_string();
     let model = model.rsplit('/').next().unwrap_or(&model);
-    if !matches!(model, "gemini-3.6-flash" | "gemini-3.7-flash") {
+    if !matches!(model, "gemini-3.6-flash" | "gemini-3.7-flash" | "gemini-3.8-flash") {
         return Ok(());
     }
 
@@ -682,7 +691,7 @@ pub(crate) fn validate_interaction_generation_config_for_model(
     let Some(model) = model.map(|model| model.rsplit('/').next().unwrap_or(model)) else {
         return Ok(());
     };
-    if matches!(model, "gemini-3.6-flash" | "gemini-3.7-flash")
+    if matches!(model, "gemini-3.6-flash" | "gemini-3.7-flash" | "gemini-3.8-flash")
         && (config.temperature.is_some() || config.top_p.is_some())
     {
         return Err(Error::InvalidGenerationConfig {
@@ -1626,13 +1635,13 @@ impl Gemini {
     /// Get metadata for a specific model by name.
     ///
     /// The name can be provided with or without the `models/` prefix
-    /// (e.g. both `"gemini-3.7-flash"` and `"models/gemini-3.7-flash"` work).
+    /// (e.g. both `"gemini-3.8-flash"` and `"models/gemini-3.8-flash"` work).
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// let gemini = Gemini::new("YOUR_API_KEY")?;
-    /// let info = gemini.get_model("gemini-3.7-flash").await?;
+    /// let info = gemini.get_model("gemini-3.8-flash").await?;
     /// println!("Input limit: {} tokens", info.input_token_limit);
     /// println!("Output limit: {} tokens", info.output_token_limit);
     /// ```

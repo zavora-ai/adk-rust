@@ -54,21 +54,27 @@ adk-anthropic = "3.0.0"
 
 | Model | API ID | Generation |
 |-------|--------|------------|
-| Claude Fable 5.1 | `claude-fable-5-1` | Most capable; demanding reasoning and long-horizon work |
+| Claude Fable 5.2 | `claude-fable-5-2` | Most capable; demanding reasoning and long-horizon work; fast mode supported |
+| Claude Mythos 5.2 | `claude-mythos-5-2` | Same model as Fable 5.2, verified organizations only |
 | Claude Opus 5.5 | `claude-opus-5-5` | Current Opus; fast mode supported |
-| Claude Sonnet 5.5 | `claude-sonnet-5-5` | Current Sonnet |
+| Claude Sonnet 5.5 | `claude-sonnet-5-5` | Current Sonnet; ADK default |
 | Claude Haiku 5.5 | `claude-haiku-5-5` | Current Haiku; economy |
-| Claude Opus 5 | `claude-opus-5` | Previous Opus; fast mode supported |
-| Claude Sonnet 5 | `claude-sonnet-5` | ADK default |
-| Claude Fable 5 | `claude-fable-5` | Creative and long-form |
-| Claude Opus 4.8 | `claude-opus-4-8` | Previous flagship; fast mode supported |
+| Claude Fable 5.1 | `claude-fable-5-1` | Previous Fable |
+| Claude Opus 5 | `claude-opus-5` | Previous Opus; fast mode (research preview) |
+| Claude Sonnet 5 | `claude-sonnet-5` | Previous Sonnet |
+| Claude Fable 5 | `claude-fable-5` | Earlier Fable |
+| Claude Opus 4.8 | `claude-opus-4-8` | Previous generation |
 | Claude Opus 4.7 | `claude-opus-4-7` | Previous generation |
 | Claude Sonnet 4.6 | `claude-sonnet-4-6` | Previous generation |
-| Claude Haiku 4.5 | `claude-haiku-4-5` | Economy |
+| Claude Haiku 4.5 | `claude-haiku-4-5` | Previous Haiku |
+
+`claude-sonnet-4-5` is deprecated and retires on 2026-11-30; Claude Opus 4.1, Opus 4, Sonnet 4
+and the Claude 3 models are retired.
 
 `KnownModel` covers the Claude 4 family. The Claude 5 identifiers come from factories that
-return `Model::Custom`: `Model::claude_fable_5_1()`, `claude_opus_5_5()`, `claude_sonnet_5_5()`,
-`claude_haiku_5_5()`, `claude_opus_5()`, `claude_sonnet_5()`, and `claude_fable_5()`. Any model
+return `Model::Custom`: `Model::claude_fable_5_2()`, `claude_mythos_5_2()`, `claude_fable_5_1()`,
+`claude_mythos_5_1()`, `claude_opus_5_5()`, `claude_sonnet_5_5()`, `claude_haiku_5_5()`,
+`claude_opus_5()`, `claude_sonnet_5()`, `claude_fable_5()`, and `claude_mythos_5()`. Any model
 string that matches no known variant deserializes as `Model::Custom(String)`.
 
 ### Current Model Request Contracts

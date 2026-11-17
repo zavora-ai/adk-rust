@@ -18,14 +18,14 @@
 use serde::{Deserialize, Serialize};
 
 /// Date on which the bundled catalog was verified against provider documentation.
-pub const CATALOG_AS_OF: &str = "2026-08-23";
+pub const CATALOG_AS_OF: &str = "2026-11-17";
 
 /// Recommended Google Gemini model for general agent workloads.
-pub const GEMINI_DEFAULT: &str = "gemini-3.7-flash";
+pub const GEMINI_DEFAULT: &str = "gemini-3.8-flash";
 /// Recommended OpenAI model balancing capability, latency, and cost.
-pub const OPENAI_DEFAULT: &str = "gpt-5.6-terra";
+pub const OPENAI_DEFAULT: &str = "gpt-6.1-sol";
 /// Recommended Anthropic model balancing capability, latency, and cost.
-pub const ANTHROPIC_DEFAULT: &str = "claude-sonnet-5";
+pub const ANTHROPIC_DEFAULT: &str = "claude-sonnet-5-5";
 /// Output-token cap ADK requests from Claude 4 and later models when the caller sets none.
 ///
 /// Thinking counts toward the cap, and Claude 5 models think on every turn, so a
@@ -36,8 +36,8 @@ pub const ANTHROPIC_DEFAULT_MAX_TOKENS: u32 = 32_000;
 pub const ANTHROPIC_LEGACY_MAX_TOKENS: u32 = 4_096;
 /// Recommended DeepSeek model for general agent workloads.
 ///
-/// This is the id the API reports back. `deepseek-v4-flash` and `deepseek-chat`
-/// are still accepted and are served by this same model.
+/// This is the id the API reports back. The legacy `deepseek-v4-flash` is still
+/// accepted and is served by this same model.
 pub const DEEPSEEK_DEFAULT: &str = "deepseek-flash";
 /// Recommended Groq production model.
 pub const GROQ_DEFAULT: &str = "openai/gpt-oss-120b";
@@ -50,11 +50,11 @@ pub const OPENROUTER_DEFAULT: &str = "qwen/qwen3.7-max";
 /// Recommended OpenCode model, routed on both Zen (`opencode`) and Go (`opencode-go`).
 pub const OPENCODE_DEFAULT: &str = "deepseek-v4.1-flash";
 /// Recommended Fireworks balanced model.
-pub const FIREWORKS_DEFAULT: &str = "accounts/fireworks/models/kimi-k2p6";
+pub const FIREWORKS_DEFAULT: &str = "accounts/fireworks/models/kimi-k3";
 /// Recommended Together AI balanced model.
-pub const TOGETHER_DEFAULT: &str = "MiniMaxAI/MiniMax-M2.7";
+pub const TOGETHER_DEFAULT: &str = "moonshotai/Kimi-K3.1-Pro";
 /// Recommended Mistral general-purpose model alias.
-pub const MISTRAL_DEFAULT: &str = "mistral-medium-latest";
+pub const MISTRAL_DEFAULT: &str = "mistral-large-latest";
 /// Recommended Perplexity Sonar model.
 pub const PERPLEXITY_DEFAULT: &str = "sonar-pro";
 /// Recommended Cerebras production model.
@@ -62,11 +62,11 @@ pub const CEREBRAS_DEFAULT: &str = "gpt-oss-120b";
 /// Recommended SambaNova production model.
 pub const SAMBANOVA_DEFAULT: &str = "gpt-oss-120b";
 /// Recommended xAI model.
-pub const XAI_DEFAULT: &str = "grok-4.6";
+pub const XAI_DEFAULT: &str = "grok-4.7";
 /// Recommended MiniMax model. Model IDs are case-sensitive.
-pub const MINIMAX_DEFAULT: &str = "MiniMax-M2.7";
+pub const MINIMAX_DEFAULT: &str = "MiniMax-M3";
 /// Recommended Zhipu model.
-pub const ZHIPU_DEFAULT: &str = "glm-5.2";
+pub const ZHIPU_DEFAULT: &str = "glm-5.3";
 /// Recommended Baidu Qianfan model.
 pub const BAIDU_DEFAULT: &str = "ernie-5.1";
 /// Recommended Cohere model.
@@ -208,6 +208,7 @@ pub const KNOWN_PROVIDERS: &[&str] = &[
     "anthropic",
     "deepseek",
     "groq",
+    "muse",
     "ollama",
     "openrouter",
     "opencode",
@@ -239,40 +240,60 @@ pub const KNOWN_PROVIDERS: &[&str] = &[
 
 /// Curated model entries bundled with ADK-Rust.
 pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
+    // Gemini: https://aistudio.google.com/docs/models and /docs/deprecations, 2026-11-17.
     ModelCatalogEntry::default("gemini", GEMINI_DEFAULT, ModelRole::Balanced),
+    ModelCatalogEntry::active("gemini", "gemini-4-hydrogen", ModelRole::Balanced),
+    ModelCatalogEntry::active("gemini", "gemini-4-carbon", ModelRole::Flagship),
+    ModelCatalogEntry::active("gemini", "gemini-4-argon", ModelRole::Flagship),
     ModelCatalogEntry::active("gemini", "gemini-3.6-flash", ModelRole::Balanced),
-    ModelCatalogEntry::active("gemini", "gemini-3.5-flash", ModelRole::Balanced),
     ModelCatalogEntry::active("gemini", "gemini-3.5-flash-lite", ModelRole::Economy),
-    ModelCatalogEntry::obsolete(
-        "gemini",
-        "gemini-3.1-flash-lite",
-        ModelLifecycle::Deprecated,
-        "gemini-3.5-flash-lite",
-        Some("2027-05-07"),
-    ),
+    ModelCatalogEntry::active("gemini", "gemini-2.5-flash-lite", ModelRole::Economy),
     ModelCatalogEntry::preview("gemini", "gemini-3.1-pro-preview", ModelRole::Flagship),
-    ModelCatalogEntry::active("gemini", "gemini-3.1-flash-image", ModelRole::Image),
+    ModelCatalogEntry::active("gemini", "gemini-nano-banana-2.1", ModelRole::Image),
+    ModelCatalogEntry::active("gemini", "gemini-3.1-flash-lite-image", ModelRole::Image),
     ModelCatalogEntry::active("gemini", "gemini-3-pro-image", ModelRole::Image),
     ModelCatalogEntry::default("gemini-embedding", GEMINI_EMBEDDING_DEFAULT, ModelRole::Embedding),
+    // OpenAI: https://developers.openai.com/api/docs/models and /docs/deprecations, 2026-11-17.
     ModelCatalogEntry::default("openai", OPENAI_DEFAULT, ModelRole::Balanced),
+    ModelCatalogEntry::active("openai", "gpt-6-astra", ModelRole::Flagship),
+    ModelCatalogEntry::active("openai", "gpt-6.1-terra", ModelRole::Balanced),
+    ModelCatalogEntry::active("openai", "gpt-6-luna", ModelRole::Economy),
+    ModelCatalogEntry::active("openai", "gpt-6-sol", ModelRole::Balanced),
+    ModelCatalogEntry::active("openai", "gpt-5.6-terra", ModelRole::Balanced),
     ModelCatalogEntry::active("openai", "gpt-5.6-sol", ModelRole::Flagship),
     ModelCatalogEntry::active("openai", "gpt-5.6-luna", ModelRole::Economy),
     ModelCatalogEntry::active("openai", "gpt-5.6", ModelRole::Flagship),
+    // Anthropic: https://platform.claude.com/docs/en/about-claude/models/overview and
+    // /model-deprecations, 2026-11-17.
     ModelCatalogEntry::default("anthropic", ANTHROPIC_DEFAULT, ModelRole::Balanced),
-    ModelCatalogEntry::active("anthropic", "claude-fable-5-1", ModelRole::Flagship),
+    ModelCatalogEntry::active("anthropic", "claude-fable-5-2", ModelRole::Flagship),
+    ModelCatalogEntry::active("anthropic", "claude-mythos-5-2", ModelRole::Flagship),
     ModelCatalogEntry::active("anthropic", "claude-opus-5-5", ModelRole::Flagship),
-    ModelCatalogEntry::active("anthropic", "claude-sonnet-5-5", ModelRole::Balanced),
     ModelCatalogEntry::active("anthropic", "claude-haiku-5-5", ModelRole::Economy),
-    ModelCatalogEntry::active("anthropic", "claude-opus-5", ModelRole::Flagship),
+    ModelCatalogEntry::active("anthropic", "claude-fable-5-1", ModelRole::Flagship),
+    ModelCatalogEntry::active("anthropic", "claude-mythos-5-1", ModelRole::Flagship),
     ModelCatalogEntry::active("anthropic", "claude-fable-5", ModelRole::Flagship),
+    ModelCatalogEntry::active("anthropic", "claude-mythos-5", ModelRole::Flagship),
+    ModelCatalogEntry::active("anthropic", "claude-opus-5", ModelRole::Flagship),
+    ModelCatalogEntry::active("anthropic", "claude-sonnet-5", ModelRole::Balanced),
+    ModelCatalogEntry::active("anthropic", "claude-opus-4-8", ModelRole::Flagship),
+    ModelCatalogEntry::active("anthropic", "claude-opus-4-7", ModelRole::Flagship),
+    ModelCatalogEntry::active("anthropic", "claude-opus-4-6", ModelRole::Flagship),
+    ModelCatalogEntry::active("anthropic", "claude-sonnet-4-6", ModelRole::Balanced),
     ModelCatalogEntry::active("anthropic", "claude-haiku-4-5", ModelRole::Economy),
+    // DeepSeek: https://api-docs.deepseek.com/quick_start/pricing, 2026-11-17.
     ModelCatalogEntry::default("deepseek", DEEPSEEK_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::active("deepseek", "deepseek-v4-pro", ModelRole::Flagship),
+    // Groq: https://console.groq.com/docs/models, 2026-11-17.
     ModelCatalogEntry::default("groq", GROQ_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::active("groq", "openai/gpt-oss-20b", ModelRole::Economy),
+    ModelCatalogEntry::preview("groq", "openai/gpt-oss-safeguard-20b", ModelRole::Economy),
+    ModelCatalogEntry::preview("groq", "qwen/qwen3.8-27b", ModelRole::Balanced),
+    // Meta Muse: https://dev.meta.ai/docs/pricing-rate-limits, 2026-11-17.
     ModelCatalogEntry::default("muse", MUSE_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::active("muse", "muse-spark-1.2", ModelRole::Balanced),
     ModelCatalogEntry::active("muse", "muse-spark-1.1", ModelRole::Balanced),
+    ModelCatalogEntry::active("muse", "muse-ember-1.0", ModelRole::Economy),
     ModelCatalogEntry::active("muse", "muse-spark-1.3-contributor", ModelRole::Economy),
     ModelCatalogEntry::active("muse", "muse-spark-1.2-contributor", ModelRole::Economy),
     ModelCatalogEntry::preview("muse", "muse-wonder-1.0", ModelRole::Flagship),
@@ -284,19 +305,22 @@ pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
     ModelCatalogEntry::default("opencode", OPENCODE_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::default("opencode-go", OPENCODE_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::default("fireworks", FIREWORKS_DEFAULT, ModelRole::Balanced),
-    ModelCatalogEntry::active(
-        "fireworks",
-        "accounts/fireworks/models/kimi-k3",
-        ModelRole::Flagship,
-    ),
     ModelCatalogEntry::default("together", TOGETHER_DEFAULT, ModelRole::Balanced),
+    // Mistral: https://docs.mistral.ai/models/, 2026-11-17.
     ModelCatalogEntry::default("mistral", MISTRAL_DEFAULT, ModelRole::Balanced),
+    ModelCatalogEntry::active("mistral", "mistral-large-4", ModelRole::Flagship),
+    ModelCatalogEntry::active("mistral", "mistral-small-latest", ModelRole::Economy),
     ModelCatalogEntry::default("perplexity", PERPLEXITY_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::default("cerebras", CEREBRAS_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::default("sambanova", SAMBANOVA_DEFAULT, ModelRole::Balanced),
+    // xAI: https://docs.x.ai/docs/models, 2026-11-17.
     ModelCatalogEntry::default("xai", XAI_DEFAULT, ModelRole::Balanced),
+    ModelCatalogEntry::active("xai", "grok-4.6", ModelRole::Balanced),
+    ModelCatalogEntry::active("xai", "grok-4.3", ModelRole::Economy),
     ModelCatalogEntry::default("minimax", MINIMAX_DEFAULT, ModelRole::Balanced),
+    ModelCatalogEntry::active("minimax", "MiniMax-M3.1-Flash", ModelRole::Economy),
     ModelCatalogEntry::default("zhipu", ZHIPU_DEFAULT, ModelRole::Balanced),
+    ModelCatalogEntry::active("zhipu", "glm-5.2", ModelRole::Balanced),
     ModelCatalogEntry::default("baidu", BAIDU_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::default("cohere", COHERE_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::default("openai-realtime", OPENAI_REALTIME_DEFAULT, ModelRole::Realtime),
@@ -320,13 +344,32 @@ pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
     ModelCatalogEntry::default("deepgram", DEEPGRAM_DEFAULT, ModelRole::Transcription),
     ModelCatalogEntry::default("cartesia", CARTESIA_DEFAULT, ModelRole::Speech),
     ModelCatalogEntry::default_preview("gemini-tts", GEMINI_TTS_DEFAULT, ModelRole::Speech),
+    ModelCatalogEntry::active("gemini-tts", "gemini-3.8-flash-tts", ModelRole::Speech),
+    ModelCatalogEntry::active("gemini-tts", "gemini-3.8-flash-lite-tts", ModelRole::Speech),
     ModelCatalogEntry::default("openai-embedding", OPENAI_EMBEDDING_DEFAULT, ModelRole::Embedding),
+    // ── Deprecated: still served, migration recommended ──
+    // Gemini 3.7 Flash and 3.5 Flash are routed to their successors on the Gemini API;
+    // Vertex AI retires Gemini 3.7 Flash on 2027-01-28.
     ModelCatalogEntry::obsolete(
         "gemini",
-        "gemini-3.1-flash-lite-preview",
-        ModelLifecycle::Retired,
+        "gemini-3.7-flash",
+        ModelLifecycle::Deprecated,
+        GEMINI_DEFAULT,
+        None,
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
+        "gemini-3.5-flash",
+        ModelLifecycle::Deprecated,
+        "gemini-3.6-flash",
+        None,
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
         "gemini-3.1-flash-lite",
-        Some("2026-05-25"),
+        ModelLifecycle::Deprecated,
+        "gemini-3.5-flash-lite",
+        Some("2027-05-07"),
     ),
     ModelCatalogEntry::obsolete(
         "gemini",
@@ -337,60 +380,167 @@ pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
     ),
     ModelCatalogEntry::obsolete(
         "gemini",
-        "gemini-3-pro-preview",
-        ModelLifecycle::Retired,
-        "gemini-3.1-pro-preview",
-        Some("2026-03-09"),
+        "gemini-2.5-pro",
+        ModelLifecycle::Deprecated,
+        GEMINI_DEFAULT,
+        Some("2026-12-01"),
     ),
     ModelCatalogEntry::obsolete(
         "gemini",
-        "gemini-3.1-flash-image-preview",
-        ModelLifecycle::Retired,
+        "gemini-2.5-flash",
+        ModelLifecycle::Deprecated,
+        "gemini-3.5-flash-lite",
+        Some("2026-12-01"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
         "gemini-3.1-flash-image",
-        Some("2026-06-25"),
+        ModelLifecycle::Deprecated,
+        "gemini-nano-banana-2.1",
+        None,
     ),
     ModelCatalogEntry::obsolete(
         "gemini",
-        "gemini-3-pro-image-preview",
-        ModelLifecycle::Retired,
-        "gemini-3-pro-image",
-        Some("2026-06-25"),
+        "gemini-2.5-flash-image",
+        ModelLifecycle::Deprecated,
+        "gemini-3.1-flash-lite-image",
+        Some("2027-03-15"),
     ),
     ModelCatalogEntry::obsolete(
-        "gemini",
-        "gemini-2.0-flash",
-        ModelLifecycle::Retired,
-        "gemini-3.6-flash",
-        Some("2026-06-01"),
+        "gemini-tts",
+        "gemini-2.5-flash-preview-tts",
+        ModelLifecycle::Deprecated,
+        "gemini-3.8-flash-tts",
+        Some("2026-12-18"),
     ),
     ModelCatalogEntry::obsolete(
-        "gemini",
-        "gemini-2.0-flash-001",
-        ModelLifecycle::Retired,
-        "gemini-3.6-flash",
-        Some("2026-06-01"),
+        "gemini-tts",
+        "gemini-2.5-pro-preview-tts",
+        ModelLifecycle::Deprecated,
+        "gemini-3.8-flash-tts",
+        Some("2026-12-18"),
     ),
     ModelCatalogEntry::obsolete(
-        "gemini",
-        "gemini-2.0-flash-lite",
-        ModelLifecycle::Retired,
-        "gemini-3.1-flash-lite",
-        Some("2026-06-01"),
+        "gemini-embedding",
+        "gemini-embedding-001",
+        ModelLifecycle::Deprecated,
+        GEMINI_EMBEDDING_DEFAULT,
+        Some("2028-05-14"),
     ),
     ModelCatalogEntry::obsolete(
-        "gemini",
-        "gemini-2.0-flash-lite-001",
-        ModelLifecycle::Retired,
-        "gemini-3.1-flash-lite",
-        Some("2026-06-01"),
+        "openai",
+        "gpt-5",
+        ModelLifecycle::Deprecated,
+        OPENAI_DEFAULT,
+        Some("2026-12-11"),
     ),
     ModelCatalogEntry::obsolete(
-        "gemini",
-        "gemini-2.5-flash-image-preview",
-        ModelLifecycle::Retired,
-        "gemini-3.1-flash-image",
-        Some("2026-01-15"),
+        "openai",
+        "gpt-5-mini",
+        ModelLifecycle::Deprecated,
+        "gpt-6.1-terra",
+        Some("2026-12-11"),
     ),
+    ModelCatalogEntry::obsolete(
+        "openai",
+        "gpt-5-nano",
+        ModelLifecycle::Deprecated,
+        "gpt-6-luna",
+        Some("2026-12-11"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "openai",
+        "gpt-5-pro",
+        ModelLifecycle::Deprecated,
+        OPENAI_DEFAULT,
+        Some("2026-12-11"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "openai",
+        "o3",
+        ModelLifecycle::Deprecated,
+        OPENAI_DEFAULT,
+        Some("2026-12-11"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "openai",
+        "gpt-4.1",
+        ModelLifecycle::Deprecated,
+        "gpt-6-luna",
+        Some("2027-01-14"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "openai",
+        "gpt-4.1-mini",
+        ModelLifecycle::Deprecated,
+        "gpt-6-luna",
+        Some("2027-01-14"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "openai",
+        "gpt-4o",
+        ModelLifecycle::Deprecated,
+        "gpt-6-luna",
+        Some("2027-01-14"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "openai",
+        "gpt-4o-mini",
+        ModelLifecycle::Deprecated,
+        "gpt-6-luna",
+        Some("2027-01-14"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "openai",
+        "gpt-5.1",
+        ModelLifecycle::Deprecated,
+        "gpt-6-sol",
+        Some("2027-04-01"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "openai",
+        "gpt-5.3-codex",
+        ModelLifecycle::Deprecated,
+        "gpt-6-sol",
+        Some("2027-04-01"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "openai",
+        "gpt-5.4-nano",
+        ModelLifecycle::Deprecated,
+        "gpt-6-luna",
+        Some("2027-04-01"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "anthropic",
+        "claude-sonnet-4-5",
+        ModelLifecycle::Deprecated,
+        ANTHROPIC_DEFAULT,
+        Some("2026-11-30"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "anthropic",
+        "claude-sonnet-4-5-20250929",
+        ModelLifecycle::Deprecated,
+        ANTHROPIC_DEFAULT,
+        Some("2026-11-30"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "anthropic",
+        "claude-mythos-preview",
+        ModelLifecycle::Deprecated,
+        "claude-mythos-5-2",
+        None,
+    ),
+    ModelCatalogEntry::obsolete(
+        "deepseek",
+        "deepseek-v4-flash",
+        ModelLifecycle::Deprecated,
+        DEEPSEEK_DEFAULT,
+        None,
+    ),
+    // Groq shut these down for free and developer tiers on 2026-08-16; enterprise
+    // contracts still run them.
     ModelCatalogEntry::obsolete(
         "groq",
         "llama-3.3-70b-versatile",
@@ -406,38 +556,61 @@ pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
         Some("2026-08-16"),
     ),
     ModelCatalogEntry::obsolete(
-        "groq",
-        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "mistral",
+        "mistral-medium-latest",
         ModelLifecycle::Deprecated,
-        GROQ_DEFAULT,
-        Some("2026-07-17"),
+        MISTRAL_DEFAULT,
+        Some("2027-04-30"),
     ),
     ModelCatalogEntry::obsolete(
-        "groq",
-        "qwen/qwen3-32b",
+        "mistral",
+        "mistral-medium-3-5",
         ModelLifecycle::Deprecated,
-        GROQ_DEFAULT,
-        Some("2026-07-17"),
+        MISTRAL_DEFAULT,
+        Some("2027-04-30"),
     ),
     ModelCatalogEntry::obsolete(
-        "deepseek",
-        "deepseek-chat",
-        ModelLifecycle::Retired,
-        DEEPSEEK_DEFAULT,
-        Some("2026-07-24"),
+        "mistral",
+        "mistral-medium-3",
+        ModelLifecycle::Deprecated,
+        MISTRAL_DEFAULT,
+        Some("2027-04-30"),
     ),
     ModelCatalogEntry::obsolete(
-        "deepseek",
-        "deepseek-reasoner",
-        ModelLifecycle::Retired,
-        "deepseek-v4-pro",
-        Some("2026-07-24"),
+        "mistral",
+        "mistral-large-2512",
+        ModelLifecycle::Deprecated,
+        MISTRAL_DEFAULT,
+        Some("2027-04-30"),
     ),
     ModelCatalogEntry::obsolete(
-        "cerebras",
-        "llama-3.3-70b",
-        ModelLifecycle::Retired,
-        CEREBRAS_DEFAULT,
+        "xai",
+        "grok-code-fast-1",
+        ModelLifecycle::Deprecated,
+        "grok-build-0.1",
+        Some("2026-05-15"),
+    ),
+    // Fireworks stopped serving Kimi K2.6 serverless on 2026-09-25; on-demand
+    // deployments still run it.
+    ModelCatalogEntry::obsolete(
+        "fireworks",
+        "accounts/fireworks/models/kimi-k2p6",
+        ModelLifecycle::Deprecated,
+        FIREWORKS_DEFAULT,
+        Some("2026-09-25"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "together",
+        "MiniMaxAI/MiniMax-M2.7",
+        ModelLifecycle::Deprecated,
+        TOGETHER_DEFAULT,
+        None,
+    ),
+    ModelCatalogEntry::obsolete(
+        "minimax",
+        "MiniMax-M2.7",
+        ModelLifecycle::Deprecated,
+        MINIMAX_DEFAULT,
         None,
     ),
     ModelCatalogEntry::obsolete(
@@ -462,6 +635,238 @@ pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
         ModelLifecycle::Deprecated,
         "gemini-3.8-live",
         Some("2026-12-13"),
+    ),
+    // ── Retired: requests fail ──
+    ModelCatalogEntry::obsolete(
+        "gemini",
+        "gemini-3.1-flash-lite-preview",
+        ModelLifecycle::Retired,
+        "gemini-3.1-flash-lite",
+        Some("2026-05-25"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
+        "gemini-3-pro-preview",
+        ModelLifecycle::Retired,
+        "gemini-3.1-pro-preview",
+        Some("2026-03-09"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
+        "gemini-3.1-flash-image-preview",
+        ModelLifecycle::Retired,
+        "gemini-nano-banana-2.1",
+        Some("2026-06-25"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
+        "gemini-3-pro-image-preview",
+        ModelLifecycle::Retired,
+        "gemini-3-pro-image",
+        Some("2026-06-25"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
+        "gemini-2.5-computer-use-preview-10-2025",
+        ModelLifecycle::Retired,
+        GEMINI_DEFAULT,
+        Some("2026-07-28"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
+        "gemini-2.5-flash-preview-09-2025",
+        ModelLifecycle::Retired,
+        "gemini-3.6-flash",
+        Some("2026-02-17"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
+        "gemini-2.5-flash-lite-preview-09-2025",
+        ModelLifecycle::Retired,
+        "gemini-3.5-flash-lite",
+        Some("2026-03-31"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
+        "gemini-2.0-flash",
+        ModelLifecycle::Retired,
+        "gemini-3.6-flash",
+        Some("2026-06-01"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
+        "gemini-2.0-flash-001",
+        ModelLifecycle::Retired,
+        "gemini-3.6-flash",
+        Some("2026-06-01"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
+        "gemini-2.0-flash-lite",
+        ModelLifecycle::Retired,
+        "gemini-3.5-flash-lite",
+        Some("2026-06-01"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
+        "gemini-2.0-flash-lite-001",
+        ModelLifecycle::Retired,
+        "gemini-3.5-flash-lite",
+        Some("2026-06-01"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "gemini",
+        "gemini-2.5-flash-image-preview",
+        ModelLifecycle::Retired,
+        "gemini-nano-banana-2.1",
+        Some("2026-01-15"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "openai",
+        "gpt-4.1-nano",
+        ModelLifecycle::Retired,
+        "gpt-5.6-luna",
+        Some("2026-10-23"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "openai",
+        "o4-mini",
+        ModelLifecycle::Retired,
+        "gpt-5.6-terra",
+        Some("2026-10-23"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "openai",
+        "o3-mini",
+        ModelLifecycle::Retired,
+        "gpt-5.6-sol",
+        Some("2026-10-23"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "openai",
+        "o1",
+        ModelLifecycle::Retired,
+        "gpt-5.6-sol",
+        Some("2026-10-23"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "anthropic",
+        "claude-opus-4-1",
+        ModelLifecycle::Retired,
+        "claude-opus-4-8",
+        Some("2026-08-05"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "anthropic",
+        "claude-opus-4-1-20250805",
+        ModelLifecycle::Retired,
+        "claude-opus-4-8",
+        Some("2026-08-05"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "anthropic",
+        "claude-opus-4-0",
+        ModelLifecycle::Retired,
+        "claude-opus-4-8",
+        Some("2026-06-15"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "anthropic",
+        "claude-opus-4-20250514",
+        ModelLifecycle::Retired,
+        "claude-opus-4-8",
+        Some("2026-06-15"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "anthropic",
+        "claude-sonnet-4-0",
+        ModelLifecycle::Retired,
+        ANTHROPIC_DEFAULT,
+        Some("2026-06-15"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "anthropic",
+        "claude-sonnet-4-20250514",
+        ModelLifecycle::Retired,
+        ANTHROPIC_DEFAULT,
+        Some("2026-06-15"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "anthropic",
+        "claude-3-7-sonnet-20250219",
+        ModelLifecycle::Retired,
+        ANTHROPIC_DEFAULT,
+        Some("2026-02-19"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "anthropic",
+        "claude-3-5-haiku-20241022",
+        ModelLifecycle::Retired,
+        "claude-haiku-5-5",
+        Some("2026-02-19"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "anthropic",
+        "claude-3-haiku-20240307",
+        ModelLifecycle::Retired,
+        "claude-haiku-5-5",
+        Some("2026-04-20"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "anthropic",
+        "claude-3-opus-20240229",
+        ModelLifecycle::Retired,
+        "claude-opus-4-8",
+        Some("2026-01-05"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "groq",
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        ModelLifecycle::Retired,
+        GROQ_DEFAULT,
+        Some("2026-07-17"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "groq",
+        "qwen/qwen3-32b",
+        ModelLifecycle::Retired,
+        GROQ_DEFAULT,
+        Some("2026-07-17"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "deepseek",
+        "deepseek-chat",
+        ModelLifecycle::Retired,
+        DEEPSEEK_DEFAULT,
+        Some("2026-07-24"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "deepseek",
+        "deepseek-reasoner",
+        ModelLifecycle::Retired,
+        "deepseek-v4-pro",
+        Some("2026-07-24"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "mistral",
+        "mistral-medium-2508",
+        ModelLifecycle::Retired,
+        MISTRAL_DEFAULT,
+        Some("2026-08-31"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "mistral",
+        "mistral-medium-2505",
+        ModelLifecycle::Retired,
+        MISTRAL_DEFAULT,
+        Some("2026-08-31"),
+    ),
+    ModelCatalogEntry::obsolete(
+        "cerebras",
+        "llama-3.3-70b",
+        ModelLifecycle::Retired,
+        CEREBRAS_DEFAULT,
+        None,
     ),
     ModelCatalogEntry::obsolete(
         "gemini-live",
@@ -655,9 +1060,10 @@ mod tests {
     #[test]
     fn current_claude_models_are_active() {
         for (model, role) in [
+            ("claude-fable-5-2", ModelRole::Flagship),
+            ("claude-mythos-5-2", ModelRole::Flagship),
             ("claude-fable-5-1", ModelRole::Flagship),
             ("claude-opus-5-5", ModelRole::Flagship),
-            ("claude-sonnet-5-5", ModelRole::Balanced),
             ("claude-haiku-5-5", ModelRole::Economy),
         ] {
             assert_eq!(
@@ -666,6 +1072,55 @@ mod tests {
                 "{model}"
             );
             assert!(validate_model_selection("anthropic", model).is_ok());
+        }
+        assert_eq!(
+            lookup_model("anthropic", "claude-sonnet-5-5"),
+            Some(&ModelCatalogEntry::default(
+                "anthropic",
+                "claude-sonnet-5-5",
+                ModelRole::Balanced
+            ))
+        );
+    }
+
+    #[test]
+    fn superseded_models_name_a_current_replacement() {
+        for (provider, model, lifecycle, replacement) in [
+            ("gemini", "gemini-3.7-flash", ModelLifecycle::Deprecated, "gemini-3.8-flash"),
+            ("openai", "gpt-5", ModelLifecycle::Deprecated, "gpt-6.1-sol"),
+            ("openai", "o4-mini", ModelLifecycle::Retired, "gpt-5.6-terra"),
+            (
+                "anthropic",
+                "claude-sonnet-4-5-20250929",
+                ModelLifecycle::Deprecated,
+                "claude-sonnet-5-5",
+            ),
+            ("anthropic", "claude-opus-4-1-20250805", ModelLifecycle::Retired, "claude-opus-4-8"),
+            (
+                "mistral",
+                "mistral-medium-latest",
+                ModelLifecycle::Deprecated,
+                "mistral-large-latest",
+            ),
+            ("groq", "qwen/qwen3-32b", ModelLifecycle::Retired, "openai/gpt-oss-120b"),
+        ] {
+            let entry = lookup_model(provider, model).unwrap_or_else(|| panic!("{model}"));
+            assert_eq!(
+                (entry.lifecycle, entry.replacement),
+                (lifecycle, Some(replacement)),
+                "{provider}/{model}"
+            );
+        }
+        // Every replacement is itself a catalogued model that is not retired.
+        for entry in MODEL_CATALOG {
+            let Some(replacement) = entry.replacement else { continue };
+            let target = lookup_model(entry.provider, replacement);
+            assert!(
+                target.is_none_or(|target| target.lifecycle != ModelLifecycle::Retired),
+                "{} replaces {} with a retired model",
+                entry.provider,
+                entry.model
+            );
         }
     }
 

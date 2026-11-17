@@ -17,14 +17,21 @@ The `adk-anthropic` crate is a dedicated Anthropic API client for ADK-Rust. It p
 
 | Model | API ID | `Model` constructor | Catalog role |
 |-------|--------|---------------------|--------------|
-| Claude Sonnet 5 | `claude-sonnet-5` | `Model::claude_sonnet_5()` | Default, balanced |
-| Claude Fable 5.1 | `claude-fable-5-1` | `Model::claude_fable_5_1()` | Flagship |
+| Claude Sonnet 5.5 | `claude-sonnet-5-5` | `Model::claude_sonnet_5_5()` | Default, balanced |
+| Claude Fable 5.2 | `claude-fable-5-2` | `Model::claude_fable_5_2()` | Flagship |
+| Claude Mythos 5.2 | `claude-mythos-5-2` | `Model::claude_mythos_5_2()` | Flagship (verified organizations only) |
 | Claude Opus 5.5 | `claude-opus-5-5` | `Model::claude_opus_5_5()` | Flagship |
-| Claude Sonnet 5.5 | `claude-sonnet-5-5` | `Model::claude_sonnet_5_5()` | Balanced |
 | Claude Haiku 5.5 | `claude-haiku-5-5` | `Model::claude_haiku_5_5()` | Economy |
+| Claude Fable 5.1 | `claude-fable-5-1` | `Model::claude_fable_5_1()` | Flagship |
 | Claude Opus 5 | `claude-opus-5` | `Model::claude_opus_5()` | Flagship |
+| Claude Sonnet 5 | `claude-sonnet-5` | `Model::claude_sonnet_5()` | Balanced |
 | Claude Fable 5 | `claude-fable-5` | `Model::claude_fable_5()` | Flagship |
 | Claude Haiku 4.5 | `claude-haiku-4-5` | `KnownModel::ClaudeHaiku45` | Economy |
+
+Claude Fable 5.2 and Mythos 5.2 cost $8 / $40 per million input and output tokens, with cache
+reads at $0.20; Opus 5.5 $4 / $20; Sonnet 5.5 $2 / $10; Haiku 5.5 $0.10 / $0.50 for prompts up
+to 100,000 tokens. `claude-sonnet-4-5` is deprecated and retires on 2026-11-30, and
+`warn_if_obsolete` logs a warning when a client is built on it.
 
 `KnownModel` also names earlier models, such as `KnownModel::ClaudeOpus47` and
 `KnownModel::ClaudeSonnet46`, and `Model::Custom` takes any other ID.
@@ -45,7 +52,7 @@ use adk_anthropic::{Anthropic, MessageCreateParams, Model};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Anthropic::new(None)?; // reads ANTHROPIC_API_KEY
-    let params = MessageCreateParams::simple("Hello!", Model::claude_sonnet_5());
+    let params = MessageCreateParams::simple("Hello!", Model::claude_sonnet_5_5());
     let response = client.send(params).await?;
     for block in &response.content {
         if let Some(text) = block.as_text() {
@@ -63,7 +70,7 @@ use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
 
 fn build() -> Result<AnthropicClient, Box<dyn std::error::Error>> {
     let api_key = std::env::var("ANTHROPIC_API_KEY")?;
-    Ok(AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-5"))?)
+    Ok(AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-5-5"))?)
 }
 ```
 
@@ -83,7 +90,7 @@ use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
 
 fn build(api_key: String) -> Result<AnthropicClient, adk_core::AdkError> {
     AnthropicClient::new(
-        AnthropicConfig::new(api_key, "claude-sonnet-5")
+        AnthropicConfig::new(api_key, "claude-sonnet-5-5")
             .with_base_url("https://gateway.internal/anthropic"),
     )
 }
@@ -153,7 +160,7 @@ fn build(api_key: String) -> Result<(Anthropic, AnthropicClient), Box<dyn std::e
 
     // adk-model: the opt-in and the base URL can come in either order.
     let model = AnthropicClient::new(
-        AnthropicConfig::new(api_key, "claude-sonnet-5")
+        AnthropicConfig::new(api_key, "claude-sonnet-5-5")
             .allow_insecure_http()
             .with_base_url("http://10.60.1.20:8080/api/v1/llm/anthropic"),
     )?;
@@ -200,7 +207,7 @@ fn build(token: Arc<RwLock<String>>) -> Result<AnthropicClient, adk_core::AdkErr
         );
         Ok(())
     });
-    Ok(AnthropicClient::new(AnthropicConfig::new("unused", "claude-sonnet-5"))?
+    Ok(AnthropicClient::new(AnthropicConfig::new("unused", "claude-sonnet-5-5"))?
         .with_request_adapter(adapter))
 }
 ```
@@ -251,7 +258,7 @@ Claude 5 models and Opus 4.7 reject budget-based thinking (`budget_tokens`).
 use adk_anthropic::{EffortLevel, MessageCreateParams, Model, OutputConfig, ThinkingConfig};
 
 fn params() -> MessageCreateParams {
-    let mut params = MessageCreateParams::simple("Solve this...", Model::claude_sonnet_5())
+    let mut params = MessageCreateParams::simple("Solve this...", Model::claude_sonnet_5_5())
         .with_thinking(ThinkingConfig::adaptive());
     params.output_config = Some(OutputConfig::with_effort(EffortLevel::High));
     params
@@ -308,7 +315,7 @@ fn build() -> Result<AnthropicClient, Box<dyn std::error::Error>> {
 use adk_anthropic::{CacheControlEphemeral, CacheTtl, MessageCreateParams, Model};
 
 fn params() -> MessageCreateParams {
-    let mut params = MessageCreateParams::simple("Question", Model::claude_sonnet_5())
+    let mut params = MessageCreateParams::simple("Question", Model::claude_sonnet_5_5())
         .with_system("Large system prompt...");
     // A 5-minute entry (the API default) is `CacheControlEphemeral::new()`.
     params.cache_control = Some(CacheControlEphemeral::new().with_ttl(CacheTtl::one_hour()));
@@ -352,7 +359,7 @@ fn params() -> MessageCreateParams {
         "required": ["name"],
         "additionalProperties": false
     });
-    let mut params = MessageCreateParams::simple("Extract data", Model::claude_sonnet_5());
+    let mut params = MessageCreateParams::simple("Extract data", Model::claude_sonnet_5_5());
     params.output_config = Some(OutputConfig::new(OutputFormat::json_schema(schema)));
     params
 }

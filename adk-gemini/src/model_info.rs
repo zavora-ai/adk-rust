@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 pub struct ModelInfo {
     /// Resource name in `models/{model}` format.
     pub name: String,
-    /// Base model identifier (e.g. `gemini-3.7-flash`).
+    /// Base model identifier (e.g. `gemini-3.8-flash`).
     #[serde(default)]
     pub base_model_id: String,
     /// Version string (e.g. `3.7`).

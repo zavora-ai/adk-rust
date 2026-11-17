@@ -165,7 +165,7 @@ use adk_session::InMemorySessionService;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.8-flash")?);
     let harness = HarnessAgent::builder("harness")
         .model(model)
         .workspace(adk_devtools::Workspace::new(".").allow_bash(true))

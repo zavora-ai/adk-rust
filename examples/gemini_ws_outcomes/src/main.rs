@@ -51,7 +51,7 @@ const AGENT: &str = "assistant";
 const USER: &str = "user";
 const SESSION: &str = "session";
 const ANSWER: &str = "The capital of France is Paris.";
-const SCRIPTED_MODEL: &str = "gemini-3.7-flash";
+const SCRIPTED_MODEL: &str = "gemini-3.8-flash";
 
 // ---------------------------------------------------------------------------------------
 // Report

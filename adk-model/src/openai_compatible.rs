@@ -136,7 +136,7 @@ impl OpenAICompatibleConfig {
 
     /// Fireworks AI preset.
     ///
-    /// Default model: `accounts/fireworks/models/kimi-k2p6`
+    /// Default model: `accounts/fireworks/models/kimi-k3`
     pub fn fireworks(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self::new(api_key, model)
             .with_provider_name("fireworks")
@@ -145,7 +145,7 @@ impl OpenAICompatibleConfig {
 
     /// Together AI preset.
     ///
-    /// Default model: `MiniMaxAI/MiniMax-M2.7`
+    /// Default model: `moonshotai/Kimi-K3.1-Pro`
     pub fn together(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self::new(api_key, model)
             .with_provider_name("together")
@@ -154,7 +154,7 @@ impl OpenAICompatibleConfig {
 
     /// Mistral AI preset.
     ///
-    /// Default model: `mistral-medium-latest`
+    /// Default model: `mistral-large-latest`
     pub fn mistral(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self::new(api_key, model)
             .with_provider_name("mistral")
@@ -190,7 +190,7 @@ impl OpenAICompatibleConfig {
 
     /// xAI (Grok) preset.
     ///
-    /// Default model: `grok-4.6`
+    /// Default model: `grok-4.7`
     pub fn xai(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self::new(api_key, model).with_provider_name("xai").with_base_url("https://api.x.ai/v1")
     }
@@ -273,7 +273,7 @@ impl OpenAICompatibleConfig {
     /// Google Gemini (OpenAI-compatible) preset.
     ///
     /// Targets Gemini's OpenAI-compatibility endpoint, letting you use a Gemini
-    /// API key and a Gemini model (e.g. `gemini-3.7-flash`) through the OpenAI
+    /// API key and a Gemini model (e.g. `gemini-3.8-flash`) through the OpenAI
     /// Chat Completions wire format. Use a `GEMINI_API_KEY` for the `api_key`.
     ///
     /// For native Gemini features (thinking levels, server-side tools, the
@@ -281,7 +281,7 @@ impl OpenAICompatibleConfig {
     /// This preset is for callers who want a single OpenAI-compatible code path
     /// across providers.
     ///
-    /// Default model suggestion: `gemini-3.7-flash`.
+    /// Default model suggestion: `gemini-3.8-flash`.
     pub fn gemini(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self::new(api_key, model)
             .with_provider_name("gemini")
@@ -290,7 +290,7 @@ impl OpenAICompatibleConfig {
 
     /// MiniMax preset.
     ///
-    /// Default model: `MiniMax-M2.7` (case-sensitive)
+    /// Default model: `MiniMax-M3` (case-sensitive)
     pub fn minimax(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self::new(api_key, model)
             .with_provider_name("minimax")
@@ -308,7 +308,7 @@ impl OpenAICompatibleConfig {
 
     /// Zhipu AI (GLM) preset.
     ///
-    /// Default model: `glm-5.2`
+    /// Default model: `glm-5.3`
     pub fn zhipu(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self::new(api_key, model)
             .with_provider_name("zhipu")
@@ -668,7 +668,7 @@ pub(crate) fn build_request_json(
     cache: &SchemaCache,
 ) -> Result<serde_json::Value, AdkError> {
     let bare_model = model.strip_prefix("models/").unwrap_or(model);
-    if matches!(bare_model, "gemini-3.6-flash" | "gemini-3.7-flash")
+    if matches!(bare_model, "gemini-3.6-flash" | "gemini-3.7-flash" | "gemini-3.8-flash")
         && request.config.as_ref().is_some_and(|config| {
             config.temperature.is_some() || config.top_p.is_some() || config.top_k.is_some()
         })
@@ -1694,23 +1694,25 @@ mod tests {
 
     #[test]
     fn gemini_37_compatible_path_rejects_sampling_locally() {
-        let mut request = LlmRequest::new("gemini-3.7-flash", Vec::new());
-        request.config =
-            Some(adk_core::GenerateContentConfig { top_p: Some(0.9), ..Default::default() });
-        let cache = SchemaCache::for_adapter(Arc::new(GenericSchemaAdapter));
+        for model in ["gemini-3.7-flash", "gemini-3.8-flash"] {
+            let mut request = LlmRequest::new(model, Vec::new());
+            request.config =
+                Some(adk_core::GenerateContentConfig { top_p: Some(0.9), ..Default::default() });
+            let cache = SchemaCache::for_adapter(Arc::new(GenericSchemaAdapter));
 
-        let error = build_request_json(
-            "gemini-3.7-flash",
-            &request,
-            &None,
-            ChatCapabilities { parallel_tool_calls: true, native_pdf: false },
-            None,
-            &GenericSchemaAdapter,
-            &cache,
-        )
-        .expect_err("sampling should be rejected before network I/O");
+            let error = build_request_json(
+                model,
+                &request,
+                &None,
+                ChatCapabilities { parallel_tool_calls: true, native_pdf: false },
+                None,
+                &GenericSchemaAdapter,
+                &cache,
+            )
+            .expect_err("sampling should be rejected before network I/O");
 
-        assert_eq!(error.code, "model.gemini.sampling_unsupported");
+            assert_eq!(error.code, "model.gemini.sampling_unsupported", "{model}");
+        }
     }
 
     #[test]

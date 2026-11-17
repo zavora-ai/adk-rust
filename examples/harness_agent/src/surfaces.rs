@@ -302,7 +302,7 @@ async fn one_harness_every_surface() -> Result<Checks> {
         .with_stores(stores)
         .with_durable_config(adk_managed::DurableConfig::default().with_poll_interval(Duration::from_millis(50)))
         .with_agent_resolver(Arc::new(HarnessResolver::new(dir.path().join("unused")).with_harness(&harness)));
-    let agent = runtime.create(ManagedAgentDef::new(NAME, ModelRef::Shorthand("gemini-3.7-flash".into()))).await?;
+    let agent = runtime.create(ManagedAgentDef::new(NAME, ModelRef::Shorthand("gemini-3.8-flash".into()))).await?;
     let session = runtime.start_session(&agent, &ManagedOwner::new("managed-app", USER)?, None).await?;
     let mut stream = runtime.stream_events(&session, None).await?;
     runtime.send_event(&session, message("log the surface")).await?;

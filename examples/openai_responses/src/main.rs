@@ -2,13 +2,13 @@
 //! the full ADK stack: Runner → LlmAgent → InMemorySessionService.
 //!
 //! Scenarios:
-//! 1. Basic chat (gpt-4.1-nano, non-streaming)
-//! 2. Basic chat (gpt-4.1-nano, streaming)
-//! 3. Reasoning model (o4-mini, streaming, with reasoning summary)
-//! 4. Tool calling (gpt-4.1-nano, streaming, function tool)
-//! 5. Multi-turn conversation (gpt-4.1-nano, streaming)
-//! 6. System instruction (gpt-4.1-nano, streaming)
-//! 7. Temperature / top_p config (gpt-4.1-nano, streaming)
+//! 1. Basic chat (gpt-5.6-luna, non-streaming)
+//! 2. Basic chat (gpt-5.6-luna, streaming)
+//! 3. Reasoning model (gpt-5.6-terra, streaming, with reasoning summary)
+//! 4. Tool calling (gpt-5.6-luna, streaming, function tool)
+//! 5. Multi-turn conversation (gpt-5.6-luna, streaming)
+//! 6. System instruction (gpt-5.6-luna, streaming)
+//! 7. Temperature / top_p config (gpt-4.1-mini, streaming)
 //!
 //! # Running
 //!
@@ -92,8 +92,8 @@ fn api_key() -> String {
 
 /// Scenario 1: Basic non-streaming chat.
 async fn scenario_1_basic_non_streaming() -> anyhow::Result<()> {
-    println!("=== Scenario 1: Basic non-streaming (gpt-4.1-nano) ===");
-    let config = OpenAIResponsesConfig::new(api_key(), "gpt-4.1-nano");
+    println!("=== Scenario 1: Basic non-streaming (gpt-5.6-luna) ===");
+    let config = OpenAIResponsesConfig::new(api_key(), "gpt-5.6-luna");
     let model = Arc::new(OpenAIResponsesClient::new(config)?);
     let agent = Arc::new(
         LlmAgentBuilder::new("basic")
@@ -111,8 +111,8 @@ async fn scenario_1_basic_non_streaming() -> anyhow::Result<()> {
 
 /// Scenario 2: Basic streaming chat.
 async fn scenario_2_basic_streaming() -> anyhow::Result<()> {
-    println!("=== Scenario 2: Basic streaming (gpt-4.1-nano) ===");
-    let config = OpenAIResponsesConfig::new(api_key(), "gpt-4.1-nano");
+    println!("=== Scenario 2: Basic streaming (gpt-5.6-luna) ===");
+    let config = OpenAIResponsesConfig::new(api_key(), "gpt-5.6-luna");
     let model = Arc::new(OpenAIResponsesClient::new(config)?);
     let agent = Arc::new(
         LlmAgentBuilder::new("streaming")
@@ -130,8 +130,8 @@ async fn scenario_2_basic_streaming() -> anyhow::Result<()> {
 
 /// Scenario 3: Reasoning model with summary.
 async fn scenario_3_reasoning() -> anyhow::Result<()> {
-    println!("=== Scenario 3: Reasoning model (o4-mini, streaming) ===");
-    let config = OpenAIResponsesConfig::new(api_key(), "o4-mini")
+    println!("=== Scenario 3: Reasoning model (gpt-5.6-terra, streaming) ===");
+    let config = OpenAIResponsesConfig::new(api_key(), "gpt-5.6-terra")
         .with_reasoning_effort(ReasoningEffort::Low)
         .with_reasoning_summary(ReasoningSummary::Detailed);
     let model = Arc::new(OpenAIResponsesClient::new(config)?);
@@ -151,7 +151,7 @@ async fn scenario_3_reasoning() -> anyhow::Result<()> {
 
 /// Scenario 4: Tool calling.
 async fn scenario_4_tool_calling() -> anyhow::Result<()> {
-    println!("=== Scenario 4: Tool calling (gpt-4.1-nano, streaming) ===");
+    println!("=== Scenario 4: Tool calling (gpt-5.6-luna, streaming) ===");
 
     async fn get_weather(_ctx: Arc<dyn ToolContext>, args: serde_json::Value) -> Result<serde_json::Value> {
         let city = args["city"].as_str().unwrap_or("unknown");
@@ -168,7 +168,7 @@ async fn scenario_4_tool_calling() -> anyhow::Result<()> {
         get_weather,
     );
 
-    let config = OpenAIResponsesConfig::new(api_key(), "gpt-4.1-nano");
+    let config = OpenAIResponsesConfig::new(api_key(), "gpt-5.6-luna");
     let model = Arc::new(OpenAIResponsesClient::new(config)?);
     let agent = Arc::new(
         LlmAgentBuilder::new("tool_user")
@@ -187,8 +187,8 @@ async fn scenario_4_tool_calling() -> anyhow::Result<()> {
 
 /// Scenario 5: Multi-turn conversation.
 async fn scenario_5_multi_turn() -> anyhow::Result<()> {
-    println!("=== Scenario 5: Multi-turn conversation (gpt-4.1-nano) ===");
-    let config = OpenAIResponsesConfig::new(api_key(), "gpt-4.1-nano");
+    println!("=== Scenario 5: Multi-turn conversation (gpt-5.6-luna) ===");
+    let config = OpenAIResponsesConfig::new(api_key(), "gpt-5.6-luna");
     let model = Arc::new(OpenAIResponsesClient::new(config)?);
     let agent = Arc::new(
         LlmAgentBuilder::new("conversational")
@@ -210,8 +210,8 @@ async fn scenario_5_multi_turn() -> anyhow::Result<()> {
 
 /// Scenario 6: System instruction.
 async fn scenario_6_system_instruction() -> anyhow::Result<()> {
-    println!("=== Scenario 6: System instruction (gpt-4.1-nano) ===");
-    let config = OpenAIResponsesConfig::new(api_key(), "gpt-4.1-nano");
+    println!("=== Scenario 6: System instruction (gpt-5.6-luna) ===");
+    let config = OpenAIResponsesConfig::new(api_key(), "gpt-5.6-luna");
     let model = Arc::new(OpenAIResponsesClient::new(config)?);
     let agent = Arc::new(
         LlmAgentBuilder::new("pirate")
@@ -229,8 +229,8 @@ async fn scenario_6_system_instruction() -> anyhow::Result<()> {
 
 /// Scenario 7: Temperature / generation config.
 async fn scenario_7_generation_config() -> anyhow::Result<()> {
-    println!("=== Scenario 7: Temperature config (gpt-4.1-nano) ===");
-    let config = OpenAIResponsesConfig::new(api_key(), "gpt-4.1-nano");
+    println!("=== Scenario 7: Temperature config (gpt-4.1-mini) ===");
+    let config = OpenAIResponsesConfig::new(api_key(), "gpt-4.1-mini");
     let model = Arc::new(OpenAIResponsesClient::new(config)?);
     let agent = Arc::new(
         LlmAgentBuilder::new("creative")

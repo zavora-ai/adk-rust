@@ -66,7 +66,7 @@ Each `Llm` implementation returns its adapter via `schema_adapter()`, which defa
 use adk_core::Llm;
 use adk_model::GeminiModel;
 
-let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
+let model = GeminiModel::new(&api_key, "gemini-3.8-flash")?;
 let adapter = model.schema_adapter(); // &dyn SchemaAdapter: a GeminiSchemaAdapter
 ```
 

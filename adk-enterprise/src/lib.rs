@@ -24,7 +24,7 @@
 //!
 //! let agent = client.create_agent(CreateAgentParams {
 //!     name: "My Agent".into(),
-//!     model: "gemini-3.7-flash".into(),
+//!     model: "gemini-3.8-flash".into(),
 //!     ..Default::default()
 //! }).await?;
 //!

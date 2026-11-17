@@ -12,16 +12,15 @@ set -euo pipefail
 #   adk-gemini/src/pricing.rs
 #   adk-anthropic/src/pricing.rs
 checks=(
+  "OpenAI gpt-6.1-sol|https://developers.openai.com/api/docs/pricing.md|gpt-6.1-sol|\$2.00|\$0.10|\$10.00"
   "OpenAI gpt-5.6-terra|https://developers.openai.com/api/docs/pricing.md|gpt-5.6-terra|\$2.00|\$0.20|\$12.00"
-  "OpenAI gpt-5|https://developers.openai.com/api/docs/pricing.md|gpt-5|\$1.25|\$0.125|\$10.00"
-  "OpenAI gpt-5-nano|https://developers.openai.com/api/docs/pricing.md|gpt-5-nano|\$0.05|\$0.005|\$0.40"
   "OpenAI gpt-5.3-codex|https://developers.openai.com/api/docs/pricing.md|gpt-5.3-codex|\$1.75|\$0.175|\$14.00"
-  "Gemini 3.7 Flash|https://ai.google.dev/gemini-api/docs/pricing|Gemini 3.7 Flash|\$0.75|\$3.75|\$0.075"
-  "Gemini 3.5 Flash|https://ai.google.dev/gemini-api/docs/pricing|Gemini 3.5 Flash|\$1.50|\$9.00|\$0.15"
-  "Gemini 2.5 Flash-Lite cache|https://ai.google.dev/gemini-api/docs/pricing|Gemini 2.5 Flash-Lite|\$0.10|\$0.40|\$0.01"
-  "Anthropic Sonnet 5|https://docs.claude.com/en/docs/about-claude/pricing|Claude Sonnet 5|\$2 / MTok|\$10 / MTok"
-  "Anthropic Opus 5|https://docs.claude.com/en/docs/about-claude/pricing|Claude Opus 5|\$5 / MTok|\$25 / MTok"
-  "DeepSeek v4-flash|https://api-docs.deepseek.com/quick_start/pricing|deepseek-v4-flash|\$0.44|\$1.32"
+  "Gemini 3.8 Flash|https://aistudio.google.com/docs/pricing|Gemini 3.8 Flash|\$0.75|\$3.75|\$0.075"
+  "Gemini 2.5 Flash-Lite cache|https://aistudio.google.com/docs/pricing|Gemini 2.5 Flash-Lite|\$0.10|\$0.40|\$0.01"
+  "Anthropic Fable 5.2|https://platform.claude.com/docs/en/about-claude/pricing.md|Claude Fable 5.2|\$8 / MTok|\$40 / MTok|\$0.20 / MTok"
+  "Anthropic Sonnet 5.5|https://platform.claude.com/docs/en/about-claude/pricing.md|Claude Sonnet 5.5|\$2 / MTok|\$10 / MTok|\$0.10 / MTok"
+  "Anthropic Opus 5.5|https://platform.claude.com/docs/en/about-claude/pricing.md|Claude Opus 5.5|\$4 / MTok|\$20 / MTok"
+  "DeepSeek flash|https://api-docs.deepseek.com/quick_start/pricing|deepseek-flash|\$0.3|\$1.2"
 )
 
 failed=0

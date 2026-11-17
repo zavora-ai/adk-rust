@@ -22,7 +22,7 @@ adk-drivers = { path = "../../adk-drivers" }
 adk-eval = { path = "../../adk-eval", features = ["experiments"] }
 adk-harness = { path = "../../adk-harness", features = ["website"] }
 adk-kernel = { path = "../../adk-kernel", features = ["charter", "channels"] }
-# ScriptedLlm for the scripted runs; the live runs use claude-sonnet-5-5 or gemini-3.7-flash.
+# ScriptedLlm for the scripted runs; the live runs use claude-sonnet-5-5 or gemini-3.8-flash.
 adk-model = { path = "../../adk-model", default-features = false, features = ["anthropic", "gemini", "openai"] }
 adk-payments = { path = "../../adk-payments", features = ["wallet", "ap2"] }
 # S12 runs the Finance agent the product's team builds.

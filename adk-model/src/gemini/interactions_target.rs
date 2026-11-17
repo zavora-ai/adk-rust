@@ -58,8 +58,8 @@ pub const AGENT_TARGETS: &[&str] = &[
 /// ```rust,ignore
 /// use adk_model::gemini::interactions_target::InteractionTarget;
 ///
-/// let target = InteractionTarget::Model("gemini-3.7-flash".to_string());
-/// assert_eq!(target.identifier(), "gemini-3.7-flash");
+/// let target = InteractionTarget::Model("gemini-3.8-flash".to_string());
+/// assert_eq!(target.identifier(), "gemini-3.8-flash");
 /// assert!(!target.is_agent());
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,7 +102,7 @@ impl InteractionTarget {
     /// ```rust,ignore
     /// use adk_model::gemini::interactions_target::InteractionTarget;
     ///
-    /// let model = InteractionTarget::parse("gemini-3.7-flash")?;
+    /// let model = InteractionTarget::parse("gemini-3.8-flash")?;
     /// assert!(model.is_model());
     ///
     /// let agent = InteractionTarget::parse("deep-research-preview-04-2026")?;

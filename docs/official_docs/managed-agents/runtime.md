@@ -151,7 +151,7 @@ The central async trait defining the full agent lifecycle:
 Declarative agent definition with builder API:
 
 ```rust,ignore
-let def = ManagedAgentDef::new("my-agent", ModelRef::Shorthand("gemini-3.7-flash".into()))
+let def = ManagedAgentDef::new("my-agent", ModelRef::Shorthand("gemini-3.8-flash".into()))
     .with_system("You are a helpful assistant.")
     .with_description("Research agent with web search")
     .with_tools(vec![ToolConfig::WebSearch {}]);
@@ -188,7 +188,7 @@ Provider-neutral model reference supporting all providers:
 
 ```rust,ignore
 // Shorthand (provider inferred from name)
-ModelRef::Shorthand("gemini-3.7-flash".into())
+ModelRef::Shorthand("gemini-3.8-flash".into())
 ModelRef::Shorthand("gpt-5.6-terra".into())
 ModelRef::Shorthand("claude-sonnet-5".into())
 

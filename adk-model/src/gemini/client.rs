@@ -567,7 +567,7 @@ impl GeminiModel {
         }
 
         let model = self.model_name.strip_prefix("models/").unwrap_or(&self.model_name);
-        if !matches!(model, "gemini-3.6-flash" | "gemini-3.7-flash") {
+        if !matches!(model, "gemini-3.6-flash" | "gemini-3.7-flash" | "gemini-3.8-flash") {
             return Ok(());
         }
 
@@ -648,7 +648,7 @@ impl GeminiModel {
     ///
     /// let model = GeminiModel::new_with_base_url(
     ///     "api-key",
-    ///     "gemini-3.7-flash",
+    ///     "gemini-3.8-flash",
     ///     "https://gateway.example.com/v1beta/",
     /// )?;
     /// # Ok::<(), adk_core::AdkError>(())
@@ -681,7 +681,7 @@ impl GeminiModel {
     /// use std::time::Duration;
     ///
     /// let model = GeminiModel::new_with_base_url_and_timeouts(
-    ///     "api-key", "gemini-3.7-flash", "https://gateway.example.com/v1beta/",
+    ///     "api-key", "gemini-3.8-flash", "https://gateway.example.com/v1beta/",
     ///     HttpTimeouts::new(Duration::from_secs(30), Duration::from_secs(300)),
     /// )?;
     /// # Ok::<(), adk_core::AdkError>(())
@@ -748,7 +748,7 @@ impl GeminiModel {
     ///     None,
     ///     "my-project",
     ///     "us-central1",
-    ///     "gemini-3.7-flash",
+    ///     "gemini-3.8-flash",
     ///     "https://us-central1-aiplatform.googleapis.com",
     /// )?;
     /// # Ok::<(), adk_core::AdkError>(())
@@ -875,7 +875,7 @@ impl GeminiModel {
     ///
     /// # #[tokio::main]
     /// # async fn main() -> adk_core::Result<()> {
-    /// let model = GeminiModel::from_env("gemini-3.7-flash")?;
+    /// let model = GeminiModel::from_env("gemini-3.8-flash")?;
     /// # Ok(())
     /// # }
     /// ```
@@ -947,7 +947,7 @@ impl GeminiModel {
     ///     );
     ///
     /// // Gemini 2.5 — budget-based thinking
-    /// let model = GeminiModel::new(api_key, "gemini-3.7-flash")?
+    /// let model = GeminiModel::new(api_key, "gemini-3.8-flash")?
     ///     .with_thinking_config(
     ///         ThinkingConfig::new().with_thinking_budget(2048)
     ///     );
@@ -986,7 +986,7 @@ impl GeminiModel {
     /// let store = VertexRagStore::corpus("projects/p/locations/us-central1/ragCorpora/123")
     ///     .with_top_k(5);
     /// let model =
-    ///     GeminiModel::new_google_cloud("api-key", "p", "us-central1", "gemini-3.7-flash")?
+    ///     GeminiModel::new_google_cloud("api-key", "p", "us-central1", "gemini-3.8-flash")?
     ///         .with_vertex_rag_store(store);
     /// # Ok(())
     /// # }
@@ -1024,7 +1024,7 @@ impl GeminiModel {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let model = GeminiModel::new(api_key, "gemini-3.7-flash")?
+    /// let model = GeminiModel::new(api_key, "gemini-3.8-flash")?
     ///     .use_interactions_api(true)?;
     /// ```
     #[cfg(feature = "gemini-interactions")]
@@ -3452,15 +3452,17 @@ mod interactions_transport_tests {
     }
     #[test]
     fn gemini_37_rejects_sampling_before_network_io() {
-        let model = GeminiModel::new("test-key", "gemini-3.7-flash").expect("construct model");
-        let mut request = LlmRequest::new("gemini-3.7-flash", Vec::new());
-        request.config =
-            Some(GenerateContentConfig { temperature: Some(0.2), ..Default::default() });
+        for name in ["gemini-3.7-flash", "gemini-3.8-flash"] {
+            let model = GeminiModel::new("test-key", name).expect("construct model");
+            let mut request = LlmRequest::new(name, Vec::new());
+            request.config =
+                Some(GenerateContentConfig { temperature: Some(0.2), ..Default::default() });
 
-        let error = model
-            .validate_request_contract(&request)
-            .expect_err("sampling must be rejected locally");
-        assert_eq!(error.code, "model.gemini.sampling_unsupported");
+            let error = model
+                .validate_request_contract(&request)
+                .expect_err("sampling must be rejected locally");
+            assert_eq!(error.code, "model.gemini.sampling_unsupported", "{name}");
+        }
     }
 
     #[test]

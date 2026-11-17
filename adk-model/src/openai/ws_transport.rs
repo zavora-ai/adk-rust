@@ -89,10 +89,10 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(600);
 /// use async_openai::types::responses::{CreateResponseArgs, InputParam};
 /// use futures::StreamExt;
 ///
-/// let config = OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra");
+/// let config = OpenAIResponsesConfig::new("sk-...", "gpt-6.1-sol");
 /// let transport = WsTransport::connect(&config).await?;
 /// let request = CreateResponseArgs::default()
-///     .model("gpt-5.6-terra")
+///     .model("gpt-6.1-sol")
 ///     .input(InputParam::Text("Hello".into()))
 ///     .build()?;
 /// let mut stream = transport.send_request(request).await?;
@@ -205,7 +205,7 @@ impl WsTransport {
     /// use adk_model::openai::{OpenAIResponsesConfig, WsTransport};
     /// use std::time::Duration;
     ///
-    /// let config = OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra");
+    /// let config = OpenAIResponsesConfig::new("sk-...", "gpt-6.1-sol");
     /// let transport = WsTransport::new(&config)?
     ///     .with_max_connections(8)
     ///     .with_read_timeout(Duration::from_secs(300));
@@ -275,7 +275,7 @@ impl WsTransport {
     /// use adk_model::openai::{OpenAIResponsesConfig, WsTransport};
     /// use adk_model::retry::RetryConfig;
     ///
-    /// let config = OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra");
+    /// let config = OpenAIResponsesConfig::new("sk-...", "gpt-6.1-sol");
     /// let retry = RetryConfig::default().with_max_retries(5);
     /// let transport = WsTransport::connect_with_retry_config(&config, retry).await?;
     /// ```

@@ -70,7 +70,7 @@ use futures::StreamExt;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?);
 
     let agent = LlmAgentBuilder::new("assistant")
         .description("Helpful AI assistant")
@@ -215,7 +215,7 @@ fn agents(model: Arc<dyn Llm>) -> Result<(LlmAgent, LlmAgent)> {
 }
 ```
 
-Sampling controls such as `temperature`, `top_p`, and `top_k` are model-specific. `GeminiModel` refuses them for `gemini-3.6-flash` and `gemini-3.7-flash` with `model.gemini.sampling_unsupported`; a field a provider client cannot send fails with `model.unsupported_config` before the request leaves.
+Sampling controls such as `temperature`, `top_p`, and `top_k` are model-specific. `GeminiModel` refuses them for `gemini-3.6-flash` and `gemini-3.8-flash` with `model.gemini.sampling_unsupported`; a field a provider client cannot send fails with `model.unsupported_config` before the request leaves.
 
 ### Skills
 
