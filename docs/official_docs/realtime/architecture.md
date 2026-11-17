@@ -117,6 +117,7 @@ fn build(
         name: "get_weather".into(),
         description: Some("Current weather for a city.".into()),
         parameters: Some(json!({"type": "object", "properties": {"city": {"type": "string"}}})),
+        behavior: None,
     };
     IntegratedRealtimeRunner::builder()
         .model(model)

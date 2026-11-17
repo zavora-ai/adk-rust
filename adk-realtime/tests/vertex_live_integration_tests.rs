@@ -50,7 +50,7 @@ async fn test_vertex_live_text_exchange() {
 
         let backend = GeminiLiveBackend::Vertex { credentials, region, project_id };
 
-        let model = GeminiRealtimeModel::new(backend, "gemini-3.1-flash-live-preview");
+        let model = GeminiRealtimeModel::new(backend, "gemini-3.8-live");
 
         let config = RealtimeConfig::default()
             .with_instruction("You are a helpful assistant. Respond briefly.");
@@ -112,7 +112,7 @@ async fn test_vertex_live_session_id() {
 
         let backend = GeminiLiveBackend::Vertex { credentials, region, project_id };
 
-        let model = GeminiRealtimeModel::new(backend, "gemini-3.1-flash-live-preview");
+        let model = GeminiRealtimeModel::new(backend, "gemini-3.8-live");
 
         let config = RealtimeConfig::default();
 

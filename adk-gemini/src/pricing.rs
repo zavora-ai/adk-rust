@@ -176,7 +176,22 @@ impl GeminiPricing {
         cache_storage_per_hour: 0.0,
     };
 
-    /// Gemini 3.1 Flash Live Preview (realtime model).
+    /// Gemini 3.8 Live and Gemini 3.8 Live Extended Thinking (realtime models).
+    ///
+    /// Text input $0.75/MTok, audio input $3.00/MTok, image/video input $1.00/MTok.
+    /// Text output $4.50/MTok, audio output $12.00/MTok, thinking tokens included.
+    /// Rates here use text input/output; for audio use the audio-specific rates directly.
+    pub const GEMINI_38_LIVE: Self = Self {
+        input: 0.75,
+        input_long: 0.75,
+        output: 4.50,
+        output_long: 4.50,
+        cache_input: 0.0,
+        cache_input_long: 0.0,
+        cache_storage_per_hour: 0.0,
+    };
+
+    /// Gemini 3.1 Flash Live Preview (realtime model), priced in one table with Gemini 3.8 Live.
     ///
     /// Text input $0.75/MTok, audio input $3.00/MTok, image/video input $1.00/MTok.
     /// Text output $4.50/MTok, audio output $12.00/MTok.
@@ -387,6 +402,7 @@ impl GeminiPricing {
             "gemini-3.1-pro-preview" => Self::GEMINI_31_PRO_PREVIEW,
             "gemini-3.1-flash-lite" => Self::GEMINI_31_FLASH_LITE,
             "gemini-3.1-flash-image" => Self::GEMINI_31_FLASH_IMAGE,
+            "gemini-3.8-live" | "gemini-3.8-live-extended-thinking" => Self::GEMINI_38_LIVE,
             "gemini-3.1-flash-live-preview" => Self::GEMINI_31_FLASH_LIVE,
             "gemini-3-flash-preview" => Self::GEMINI_3_FLASH_PREVIEW,
             "gemini-3-pro-image" => Self::GEMINI_3_PRO_IMAGE,
@@ -578,6 +594,21 @@ mod tests {
                 "{id} cache {} != {cache}",
                 p.cache_input
             );
+        }
+    }
+
+    /// Anchor values from <https://aistudio.google.com/docs/pricing#gemini-3.8-live>
+    /// (paid tier, text rates) verified 2026-11-17: one table prices all three Live models.
+    #[test]
+    fn live_rates_match_vendor_page() {
+        for id in [
+            "gemini-3.8-live",
+            "models/gemini-3.8-live-extended-thinking",
+            "gemini-3.1-flash-live-preview",
+        ] {
+            let p = GeminiPricing::for_model_id(id).unwrap_or_else(|| panic!("{id} missing"));
+            assert_eq!((p.input, p.output, p.cache_input), (0.75, 4.50, 0.0), "{id}");
+            assert_eq!((p.input_long, p.output_long), (p.input, p.output), "{id}");
         }
     }
 

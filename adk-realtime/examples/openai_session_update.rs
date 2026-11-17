@@ -45,6 +45,7 @@ async fn main() -> anyhow::Result<()> {
             },
             "required": ["city"]
         })),
+        behavior: None,
     };
 
     let runner = RealtimeRunner::builder()
@@ -112,6 +113,7 @@ async fn main() -> anyhow::Result<()> {
             },
             "required": ["from", "to"]
         })),
+        behavior: None,
     }];
 
     let update = SessionUpdateConfig(

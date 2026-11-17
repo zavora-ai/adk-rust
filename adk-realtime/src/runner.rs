@@ -1662,7 +1662,7 @@ mod runner_tests {
     }
 
     fn tool_def(name: &str) -> ToolDefinition {
-        ToolDefinition { name: name.into(), description: None, parameters: None }
+        ToolDefinition::new(name)
     }
 
     #[test]
