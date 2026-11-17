@@ -32,10 +32,13 @@
     - Picking fills the drawing's field through the home's own field state, outlines what
       is picked, and announces it.
     - Motion pauses when the scene is off screen, under reduced motion, or with Pause.
-    - A patch eases objects that keep their ids to their new places, and the camera stays
-      where the person left it.
+    - A patch eases objects that keep their ids to their new places and fades in new ones;
+      the camera stays where the person left it.
     - At most six scenes draw at once; older ones fall back to their words.
     - Its words stand in where WebGL is missing or fails, and on "Show as text".
+    - `@zavora-ai/adk-surface-react`'s `DrawnView` draws scenes the same way in a host of your
+      own. `three` is its one dependency, pinned and kept external, so the host's bundler
+      splits it into the lazy chunk.
   - **Depth effects on the web** use CSS 3D:
     - a card tilts towards the pointer;
     - a flip card turns over with its own button, and its hidden face is inert;

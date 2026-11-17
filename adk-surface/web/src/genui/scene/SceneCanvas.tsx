@@ -96,6 +96,13 @@ interface Easing {
   bars?: { mesh: THREE.InstancedMesh; at: number[]; width: number; from: number[]; to: number[] };
 }
 
+/** A material of an object new in this version, fading in to its own opacity. */
+interface Appearing {
+  material: THREE.Material;
+  opacity: number;
+  transparent: boolean;
+}
+
 interface World {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
@@ -110,6 +117,7 @@ interface World {
   outlines: Map<string, { lines: THREE.LineSegments[]; materials: THREE.MeshStandardMaterial[] }>;
   movers: Mover[];
   easing: Easing[];
+  appearing: Appearing[];
   home: { position: THREE.Vector3; target: THREE.Vector3 };
   rest: Map<string, Remembered>;
   dispose: () => void;
@@ -522,6 +530,25 @@ function build(
     }
   }
 
+  // Objects new in this version fade in.
+  const appearing: Appearing[] = [];
+  if (!reduced && remembered && remembered.version < version) {
+    const faded = new Set<THREE.Material>([selected]);
+    for (const [id, node] of nodes) {
+      if (remembered.objects.has(id)) continue;
+      node.traverse((child) => {
+        const held = (child as THREE.Mesh).material;
+        for (const material of Array.isArray(held) ? held : held ? [held] : []) {
+          if (faded.has(material)) continue;
+          faded.add(material);
+          appearing.push({ material, opacity: material.opacity, transparent: material.transparent });
+          material.transparent = true;
+          material.opacity = 0;
+        }
+      });
+    }
+  }
+
   return {
     renderer,
     scene: world,
@@ -534,6 +561,7 @@ function build(
     outlines,
     movers,
     easing,
+    appearing,
     home: { position: new THREE.Vector3(...fitted.position), target: new THREE.Vector3(...fitted.target) },
     rest,
     dispose: () => {
@@ -685,8 +713,9 @@ export default function SceneCanvas(props: SceneCanvasProps) {
         }
       }
       let easingNow = false;
-      if (world.easing.length > 0) {
+      if (world.easing.length > 0 || world.appearing.length > 0) {
         const t = Math.min(1, (now - eased) / EASE_MS);
+        for (const fade of world.appearing) fade.material.opacity = tween(0, fade.opacity, t);
         for (const ease of world.easing) {
           ease.node.position.set(...([0, 1, 2].map((k) => tween(ease.from.position[k], ease.to.position[k], t)) as Vec3));
           ease.node.scale.set(...([0, 1, 2].map((k) => tween(ease.from.scale[k], ease.to.scale[k], t)) as Vec3));
@@ -694,7 +723,15 @@ export default function SceneCanvas(props: SceneCanvasProps) {
           if (bars) placeHeights(bars, bars.to.map((to, index) => tween(bars.from[index], to, t)));
         }
         easingNow = t < 1;
-        if (!easingNow) world.easing = [];
+        if (!easingNow) {
+          world.easing = [];
+          for (const fade of world.appearing) {
+            fade.material.opacity = fade.opacity;
+            fade.material.transparent = fade.transparent;
+            fade.material.needsUpdate = true;
+          }
+          world.appearing = [];
+        }
       }
       world.controls.autoRotate = scene.camera?.spin === true && !current.paused && !current.reducedMotion && shown;
       const turned = world.controls.update();
