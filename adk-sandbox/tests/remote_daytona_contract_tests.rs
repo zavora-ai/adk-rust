@@ -179,6 +179,21 @@ async fn exec_posts_to_the_toolbox_with_cwd_envs_and_timeout() {
 }
 
 #[tokio::test]
+async fn an_exit_code_named_code_is_read() {
+    let server = MockServer::start().await;
+    mount_create(&server, "dtn-9").await;
+    Mock::given(method("POST"))
+        .and(path("/toolbox/dtn-9/process/execute"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "code": 3, "result": "" })))
+        .mount(&server)
+        .await;
+    let client = client(&server);
+    let handle = client.provision(&Manifest::new(vec![])).await.unwrap();
+    let output = client.start(&handle).await.unwrap().exec_command("exit 3", None).await.unwrap();
+    assert_eq!(output.exit_code, 3);
+}
+
+#[tokio::test]
 async fn a_toolbox_timeout_is_a_timed_out_output() {
     let server = MockServer::start().await;
     mount_create(&server, "dtn-3").await;

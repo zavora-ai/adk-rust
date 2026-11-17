@@ -246,7 +246,8 @@ struct Sandbox {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExecuteResponse {
-    #[serde(default)]
+    // Some daemon versions name it `code`, which the Daytona SDKs also read.
+    #[serde(default, alias = "code")]
     exit_code: Option<i32>,
     #[serde(default)]
     result: String,
