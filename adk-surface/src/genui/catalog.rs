@@ -7,7 +7,8 @@
 //! superset of `forms` under its own id, and it can never loosen what `forms` refuses: its
 //! components only show (no actions, no fields), every string in them and every data model
 //! value they bind is checked by rule 5, and each one says what the home and the terminal
-//! show for it ([`ExtensionComponent::home`]) in forms components and charts only.
+//! show for it ([`ExtensionComponent::home`]) in forms components and the home's own
+//! elements only: charts, 3D scenes and depth effects.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
@@ -15,6 +16,7 @@ use std::sync::{Arc, LazyLock};
 use serde_json::{Value, json};
 
 use super::drawn::DrawnChart;
+use super::scene::{DrawnDepth, DrawnScene};
 
 /// The id of the `forms` 1.0 catalog.
 pub const FORMS_CATALOG_ID: &str = "https://adk-rust.com/a2ui/catalogs/forms/1.0/catalog.json";
@@ -112,10 +114,14 @@ impl HomeText {
     }
 }
 
-/// What the home and the terminal show for an extension component: forms components and
-/// charts, never a button or a field, so a projection only shows (spec 3.3 §7.4 rule 5).
-/// Every string in it is checked again, and every child the component's slots hold must
-/// appear exactly once, as [`HomeNode::Child`].
+/// What the home and the terminal show for an extension component: forms components, charts,
+/// 3D scenes and depth effects, never a button or a field, so a projection only shows (spec
+/// 3.3 §7.4 rule 5). Every string in it is checked again, and every child the component's
+/// slots hold must appear exactly once, as [`HomeNode::Child`].
+///
+/// A scene's panels and a wall or stage's children hold only what shows: no button or field
+/// anywhere inside them. A scene's text view holds no child. Scenes and depth effects don't
+/// nest in each other.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum HomeNode {
@@ -140,6 +146,44 @@ pub enum HomeNode {
     Child(usize),
     /// A chart the home draws natively.
     Chart(DrawnChart),
+    /// A 3D scene the home draws natively, with its panels and its text view.
+    Scene(Box<HomeScene>),
+    /// Children the home presents in depth, with CSS 3D.
+    Depth {
+        /// How.
+        depth: DrawnDepth,
+        /// What it presents.
+        children: Vec<HomeNode>,
+    },
+}
+
+/// A 3D scene in a home view.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HomeScene {
+    /// The scene; the server writes its summary, its panels' keys and its text view's key.
+    pub scene: DrawnScene,
+    /// Held components shown beside its objects.
+    pub panels: Vec<HomePanel>,
+    /// What it shows, in words: a table or a list, holding no child. It is shown by "Show as
+    /// text", where WebGL is missing, and in the terminal; without one, they list the
+    /// labelled objects.
+    pub text: Option<HomeNode>,
+}
+
+impl HomeScene {
+    /// `scene`, with no panels and no text view.
+    pub fn new(scene: DrawnScene) -> Self {
+        Self { scene, panels: Vec::new(), text: None }
+    }
+}
+
+/// A held component shown beside a scene's object.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HomePanel {
+    /// The object's id.
+    pub anchor: String,
+    /// What it shows: usually a [`HomeNode::Child`].
+    pub content: HomeNode,
 }
 
 impl HomeNode {

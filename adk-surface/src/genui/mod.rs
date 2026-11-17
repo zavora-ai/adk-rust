@@ -40,6 +40,7 @@ mod drawn;
 mod hints;
 #[cfg(feature = "genui-apps")]
 mod mcp_apps;
+mod scene;
 mod status;
 #[cfg(feature = "genui")]
 mod submit;
@@ -68,7 +69,7 @@ pub use capabilities_wire::{
 #[cfg(feature = "genui")]
 pub use catalog::{
     Catalog, CatalogError, Catalogs, ChildSlot, ExtensionComponent, ExtensionSpec,
-    FORMS_CATALOG_ID, HomeNode, HomeText, ResolvedComponent,
+    FORMS_CATALOG_ID, HomeNode, HomePanel, HomeScene, HomeText, ResolvedComponent,
 };
 #[cfg(feature = "genui")]
 pub use draw::{DRAWN_STATE_KEY, DrawToolset, DrawnEnvelope, DrawnRecord, REFUSED_STATE_KEY};
@@ -83,13 +84,22 @@ pub use mcp_apps::{
     SURFACE_AUDIT_APP_CALL_ASKED, SURFACE_AUDIT_APP_CALL_HELD, SURFACE_AUDIT_APP_CALL_REFUSED,
     SURFACE_AUDIT_APP_MESSAGE_SENT, SURFACE_AUDIT_APP_ORIGIN_REFUSED,
 };
+pub use scene::{
+    Axis, CameraPreset, DepthEffect, DrawnDepth, DrawnScene, LabelSize, LightKind, LineEnds,
+    MotionKind, SceneAxes, SceneCamera, SceneColor, SceneFinish, SceneKind, SceneLight,
+    SceneLighting, SceneLook, SceneMotion, SceneObject, ScenePanel, SceneSelect, SceneShape,
+    SceneState, SceneTick, Xyz,
+};
 pub use status::form_states;
 #[cfg(feature = "genui")]
 pub use submit::DRAWN_CHANGED_CODE;
 #[cfg(feature = "genui")]
 pub use validate::{
     ActionArg, ComponentRef, DrawRefusal, DrawnAction, FieldArg, MAX_ACTIONS, MAX_COMPONENTS,
-    MAX_DEPTH, MAX_DRAWING_BYTES, MAX_LIST_ITEMS, MAX_RESOLVED_BYTES, MAX_SHOWN, MAX_TEXT_CHARS,
+    MAX_DEPTH, MAX_DEPTH_CHILDREN, MAX_DRAWING_BYTES, MAX_LIST_ITEMS, MAX_RESOLVED_BYTES,
+    MAX_SCENE_BYTES, MAX_SCENE_GRID_SIDE, MAX_SCENE_GROUP_DEPTH, MAX_SCENE_INSTANCES,
+    MAX_SCENE_LIGHTS, MAX_SCENE_LINE_POINTS, MAX_SCENE_MOTIONS, MAX_SCENE_OBJECTS,
+    MAX_SCENE_PANELS, MAX_SCENE_TEXT_CHARS, MAX_SCENE_TEXTS, MAX_SCENES, MAX_SHOWN, MAX_TEXT_CHARS,
     RESERVED_LABELS, RESERVED_PHRASES, ResolvedText, SurfaceDraft, ValidatedSurface, Validator,
     reserved,
 };

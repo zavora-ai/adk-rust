@@ -453,6 +453,9 @@ export interface Avatar {
   monogram: string;
 }
 
+/** An axis. */
+export type Axis = "x" | "y" | "z";
+
 /** "While you were away" (spec 3.3 §5.1, §8.1). */
 export interface Briefing {
   /** One line per event, oldest first. */
@@ -503,6 +506,9 @@ export interface CallView {
   /** `text` is cut short: the call must be expanded before it can be approved. */
   truncated: boolean;
 }
+
+/** A camera view. */
+export type CameraPreset = "fit" | "front" | "top" | "side" | "iso";
 
 /**
  * A line under a decision's details that a feature adds through a
@@ -1007,6 +1013,9 @@ export interface Delivery {
   sentAt: string;
 }
 
+/** A depth effect. */
+export type DepthEffect = "tilt" | "flip" | "layers" | "carousel" | "wall" | "stage";
+
 /** A declared action of a drawing, as its button shows it. */
 export interface DrawnActionView {
   /** The call's arguments: a field's value, or a constant the drawing fixed. */
@@ -1065,6 +1074,14 @@ export interface DrawnCheck {
   condition: unknown;
   /** "Enter an email address". */
   message: string;
+}
+
+/** Components a home view holds, presented with CSS 3D (see the [module](self)). */
+export interface DrawnDepth {
+  /** How the children are presented. */
+  effect: DepthEffect;
+  /** A title for each child, for a carousel, wall or stage's controls and the terminal. */
+  titles?: string[];
 }
 
 /**
@@ -1131,6 +1148,8 @@ export type DrawnKind = "form" | "card" | "table" | "screen";
  * | `Button` | Its label | `primary`, `default`, `borderless` | `action` |
  * | `TextField`, `DateTimeInput`, `CheckBox`, `ChoicePicker`, `Slider` | The label | the catalog's variant | `field` |
  * | `Chart` | — | — | `chart`: a chart an extension component's home view draws |
+ * | `Scene` | — | — | `scene`: a 3D scene an extension component's home view draws; its children are its panels, then its text view |
+ * | `Depth` | — | — | `depth`: the children an extension component's home view holds, presented with CSS 3D |
  * | An extension component, such as `Metric` | — | — | `extension`, and one child: what the home shows for it |
  */
 export interface DrawnNode {
@@ -1143,6 +1162,11 @@ export interface DrawnNode {
   /** The catalog component. */
   component: string;
   /**
+   * How the home presents this node's children in depth, from an extension component's
+   * home view.
+   */
+  depth?: DrawnDepth | null;
+  /**
    * The extension component this node draws, for a host that draws it with its own
    * renderer; every other surface draws its one child, what the home shows for it.
    */
@@ -1154,6 +1178,8 @@ export interface DrawnNode {
    * item it was drawn for, `cell-0@/rows/3`.
    */
   key: string;
+  /** A 3D scene the home draws natively, from an extension component's home view. */
+  scene?: DrawnScene | null;
   /** A long list's "Show all 42", when a renderer cuts it. */
   showAllText?: string | null;
   /** The titles of a `Tabs`' tabs, one per child. */
@@ -1170,6 +1196,43 @@ export interface DrawnOption {
   label: string;
   /** The value sent. */
   value: string;
+}
+
+/** A 3D scene a home view draws (see the [module](self)). */
+export interface DrawnScene {
+  /** Named axes, ticks and a floor grid. */
+  axes?: SceneAxes | null;
+  /** Where it is seen from. */
+  camera: SceneCamera;
+  /** Its height in CSS pixels, 200 to 960; the home picks one when it is not given. */
+  height?: number | null;
+  /** What the scene is, for its summary and default camera. */
+  kind: SceneKind;
+  /** How it is lit: a preset whose soft light always stays, so nothing goes dark. */
+  lighting: SceneLighting;
+  /** Up to three more lights. */
+  lights?: SceneLight[];
+  /** Objects that move. */
+  motion?: SceneMotion[];
+  /** Its objects, parents before children. */
+  objects: SceneObject[];
+  /**
+   * The held components shown beside objects: written by the server, each the key of one
+   * of the node's children.
+   */
+  panels?: ScenePanel[];
+  /** Picking an object fills this field. */
+  select?: SceneSelect | null;
+  /**
+   * One sentence that says what the scene shows, for screen readers and the terminal,
+   * written by the server: "3D bar chart of Revenue, 24 bars, from 3 to 98".
+   */
+  summary: string;
+  /**
+   * The key of the node's child that says in words what the scene shows, written by the
+   * server: shown by "Show as text", where WebGL is missing, and in the terminal.
+   */
+  textView?: string | null;
 }
 
 /**
@@ -1359,6 +1422,15 @@ export interface GrantedUse {
 /** One of the three switches of "What it can see" (spec 3.3 §5.6). */
 export type InputSource = "mic" | "camera" | "screen";
 
+/** How large a label is. */
+export type LabelSize = "small" | "medium" | "large";
+
+/** A kind of light. */
+export type LightKind = "point" | "spot" | "directional";
+
+/** A line's arrowheads. */
+export type LineEnds = "none" | "end" | "both";
+
 /** How much agents act on their own (spec 3.3 §8.1). */
 export type Mode = "justLook" | "suggest" | "askFirst" | "goAhead";
 
@@ -1379,6 +1451,9 @@ export interface ModelView {
   /** The provider: `anthropic`, `openai`, `gemini`. */
   provider: string;
 }
+
+/** How an object moves. */
+export type MotionKind = "spin" | "bob" | "pulse" | "orbit" | "path";
 
 /**
  * How an input was given (spec 3.3 §6, §11): every command carries one, and it reaches the
@@ -1589,6 +1664,243 @@ export type Reversibility = "cantBeUnsent" | "cantBeUndone" | "canBeRemoved" | "
 
 /** How much harm a call can do, as approvers see it (spec 3.3 §7.1). */
 export type Risk = "low" | "medium" | "high";
+
+/** A scene's axes. */
+export interface SceneAxes {
+  /** A grid on the ground. */
+  floor?: boolean;
+  /** Labelled points along them. */
+  ticks?: SceneTick[];
+  /** The x axis's name. */
+  x?: string | null;
+  /** The y axis's name: up. */
+  y?: string | null;
+  /** The z axis's name. */
+  z?: string | null;
+}
+
+/** Where a scene is seen from. */
+export interface SceneCamera {
+  /** Where the camera is, in place of the preset's. */
+  at?: number[] | null;
+  /** The person can't turn or zoom it. */
+  fixed?: boolean;
+  /** Its vertical field of view, 15 to 90 degrees. */
+  fov?: number | null;
+  /** A view the home frames to fit the scene. */
+  preset: CameraPreset;
+  /** It turns slowly about the scene, until the person turns it. */
+  spin?: boolean;
+  /** What it looks at, in place of the scene's centre. */
+  target?: number[] | null;
+}
+
+/** A colour of the home's palette. */
+export type SceneColor = "chart1" | "chart2" | "chart3" | "chart4" | "chart5" | "chart6" | "chart7" | "chart8" | "ink" | "neutral" | "muted" | "ramp";
+
+/** An object's surface. */
+export type SceneFinish = "matte" | "glossy" | "flat";
+
+/** What a scene is. */
+export type SceneKind = "space" | "bars" | "points" | "surface" | "network" | "globe";
+
+/** A light added to the preset. */
+export interface SceneLight {
+  /** Where it is; a directional light shines from there towards the centre. */
+  at: number[];
+  /** Its colour; white when not given. */
+  color?: SceneColor | null;
+  /** How bright, 0 to 2. */
+  intensity: number;
+  /** What kind. */
+  kind: LightKind;
+}
+
+/** A lighting preset. */
+export type SceneLighting = "studio" | "soft" | "flat";
+
+/** How an object looks: the home's colours, never one the agent picks. */
+export interface SceneLook {
+  /** Its colour. */
+  color: SceneColor;
+  /** Its surface. */
+  finish: SceneFinish;
+  /** How opaque, 0.15 to 1; 1 when not given. */
+  opacity?: number | null;
+  /** Drawn as edges only. */
+  wireframe?: boolean;
+}
+
+/** An object that moves. Under reduced motion nothing moves; the person can pause any motion. */
+export interface SceneMotion {
+  /** How far it swings or how much it grows: 0 to 100 for `bob`, 0 to 1 for `pulse`. */
+  amount?: number | null;
+  /** The axis it turns or moves along. */
+  axis: Axis;
+  /** Seconds before it starts, 0 to 30. */
+  delay?: number | null;
+  /** How it moves. */
+  kind: MotionKind;
+  /** The points a `path` motion follows, `x, y, z` flat, in its parent's space. */
+  path?: number[];
+  /** How many times, 1 to 100; it goes on when not given. */
+  repeat?: number | null;
+  /** How long one turn, swing or trip takes, 0.2 to 120. */
+  seconds: number;
+  /** The object. */
+  target: string;
+}
+
+/** One object of a scene. */
+export interface SceneObject {
+  /** Where it is, in its parent's space. */
+  at: number[];
+  /** Unique within the scene: what parents, panels, motion and picking name it by. */
+  id: string;
+  /** What it is called, shown beside it as page text. */
+  label?: string | null;
+  /** How it looks. */
+  look: SceneLook;
+  /** The group it belongs to: it moves, turns and scales with it. */
+  parent?: string | null;
+  /** How it is scaled along each axis. */
+  scale?: number[] | null;
+  /** Its shape. */
+  shape: SceneShape;
+  /**
+   * A state it is in, drawn in the state's colour beside its label's word; an object with
+   * a state has a label, so colour is never the only sign.
+   */
+  state?: SceneState | null;
+  /** How it is turned about each axis, in degrees. */
+  turn?: number[] | null;
+  /**
+   * The option value picking it chooses (see `SceneSelect`); an object with one has a
+   * label, so the person sees what they pick.
+   */
+  value?: string | null;
+}
+
+/** A held component shown beside an object. */
+export interface ScenePanel {
+  /** The object it is shown beside. */
+  anchor: string;
+  /** The key of the node's child it shows. */
+  key: string;
+}
+
+/**
+ * Picking an object fills a choice field the drawing shows, with the object's `value`
+ * (spec 3.3 §7.4 rule 5: a scene's pick fills a shown choice field; it never sends). The
+ * field stays the way to choose by keyboard and screen reader, and a form's Send still asks.
+ */
+export interface SceneSelect {
+  /**
+   * What picking does, in words, written by the server: "Picking one fills Dock. Nothing
+   * is sent."
+   */
+  note: string;
+  /** The data model path of the choice field it fills, absolute. */
+  path: string;
+}
+
+/** A scene object's shape. Flat number lists hold one point after another. */
+export type SceneShape = {
+  type: "group";
+} | {
+  /** Width, height and depth. */
+  size: number[];
+  type: "box";
+} | {
+  /** Its radius. */
+  radius: number;
+  type: "sphere";
+} | {
+  /** Its height. */
+  height: number;
+  /** The bottom's radius. */
+  radiusBottom: number;
+  /** The top's radius. */
+  radiusTop: number;
+  type: "cylinder";
+} | {
+  /** From the centre to the middle of the tube. */
+  radius: number;
+  /** The tube's radius. */
+  tube: number;
+  type: "torus";
+} | {
+  /** Along z. */
+  depth: number;
+  type: "plane";
+  /** Along x. */
+  width: number;
+} | {
+  /** Arrowheads. */
+  arrow: LineEnds;
+  /** Dashed. */
+  dashed: boolean;
+  /** The points, flat. */
+  points: number[];
+  /** Separate segments, each a pair of points, rather than one line through them all. */
+  segments: boolean;
+  /** A smooth curve through the points. */
+  smooth: boolean;
+  type: "line";
+} | {
+  /** Where each bar stands, `x, z` flat. */
+  at: number[];
+  /** Each bar's height. */
+  heights: number[];
+  /** Each bar's series, 0 to 7, drawn in that chart colour; empty for the object's own. */
+  series?: number[];
+  type: "bars";
+  /** Each bar's width and depth. */
+  width: number;
+} | {
+  /** Where each point is, flat. */
+  at: number[];
+  /** Each point's series, 0 to 7, drawn in that chart colour; empty for the object's own. */
+  series?: number[];
+  /** Each point's radius. */
+  size: number;
+  type: "points";
+} | {
+  /** Points along x. */
+  columns: number;
+  /** Along z. */
+  depth: number;
+  /** One height per point, row after row. */
+  heights: number[];
+  /** Points along z. */
+  rows: number;
+  type: "grid";
+  /** Along x. */
+  width: number;
+} | {
+  /** Its radius. */
+  radius: number;
+  type: "globe";
+} | {
+  /** How large. */
+  size: LabelSize;
+  /** What it reads. */
+  text: string;
+  type: "label";
+};
+
+/** A state an object is in. */
+export type SceneState = "ok" | "warning" | "critical" | "info";
+
+/** A labelled point on an axis. */
+export interface SceneTick {
+  /** Where along it. */
+  at: number;
+  /** Which axis. */
+  axis: Axis;
+  /** What it reads. */
+  text: string;
+}
 
 /** What asked for a `DrawnSent` call (spec 3.3 §6.1 `genui`, `genui-apps`). */
 export type SentVia = "form" | "app";

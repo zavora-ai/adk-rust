@@ -19,6 +19,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::scene::{DrawnDepth, DrawnScene};
 use crate::model::AgentRef;
 
 /// What a drawing is: a form a person fills in and sends, a card or table to read, or a
@@ -121,8 +122,10 @@ pub struct DrawnSurface {
 /// | `Button` | Its label | `primary`, `default`, `borderless` | `action` |
 /// | `TextField`, `DateTimeInput`, `CheckBox`, `ChoicePicker`, `Slider` | The label | the catalog's variant | `field` |
 /// | `Chart` | — | — | `chart`: a chart an extension component's home view draws |
+/// | `Scene` | — | — | `scene`: a 3D scene an extension component's home view draws; its children are its panels, then its text view |
+/// | `Depth` | — | — | `depth`: the children an extension component's home view holds, presented with CSS 3D |
 /// | An extension component, such as `Metric` | — | — | `extension`, and one child: what the home shows for it |
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DrawnNode {
     /// Unique within the drawing: the component's id, and for a template's copy the list
@@ -154,6 +157,13 @@ pub struct DrawnNode {
     /// A chart the home draws natively, from an extension component's home view.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart: Option<DrawnChart>,
+    /// A 3D scene the home draws natively, from an extension component's home view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene: Option<DrawnScene>,
+    /// How the home presents this node's children in depth, from an extension component's
+    /// home view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<DrawnDepth>,
     /// The extension component this node draws, for a host that draws it with its own
     /// renderer; every other surface draws its one child, what the home shows for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

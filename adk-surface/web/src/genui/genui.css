@@ -703,3 +703,95 @@ textarea.drawn-input {
 .drawn-extension {
   display: contents;
 }
+
+/* A 3D scene an extension component drew (genui extension catalogs): on the card, in the
+   chart and scene colours, never a decision's; its caption is the server's sentence. */
+.drawn-scene {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.drawn-scene-summary {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.drawn-scene-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.drawn-scene-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.drawn-scene-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.drawn-scene-note {
+  margin: 0;
+  color: var(--label);
+  font-size: 12px;
+}
+
+.drawn-scene-text {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.drawn-scene-objects {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.drawn-scene-object {
+  display: grid;
+  grid-template-columns: minmax(96px, 40%) 1fr;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.drawn-scene-object dt {
+  color: var(--text);
+}
+
+.drawn-scene-object dd {
+  margin: 0;
+  color: var(--text-2);
+}
+
+.drawn-scene-anchor,
+.drawn-depth-title {
+  margin: 0 0 4px;
+  color: var(--label);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Components presented in depth: laid out flat, in order. */
+.drawn-depth {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.drawn-depth-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
