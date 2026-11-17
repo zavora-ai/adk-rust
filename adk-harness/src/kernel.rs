@@ -660,6 +660,15 @@ impl ApprovalService for NotifyingApprovals {
     fn add_notifier(&self, notifier: Arc<dyn ApprovalNotifier>) -> bool {
         self.inner.add_notifier(notifier)
     }
+
+    async fn record_review(
+        &self,
+        call: ApprovalCall,
+        decision: ApprovalDecision,
+    ) -> Result<Option<ApprovalRequest>> {
+        // Decided and applied in the run: there is nothing for a sleeper to wake on.
+        self.inner.record_review(call, decision).await
+    }
 }
 
 /// The harness's standing rules as the kernel's daily review reads them (spec 3.2 §9.1):

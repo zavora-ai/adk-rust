@@ -332,7 +332,10 @@ mode auto as ana, in the kernel's shell; --yes approves held calls while this te
 A call the goal holds waits in the kernel's inbox. A terminal asks for it; `--yes` approves it
 through the inbox while this terminal follows the goal, except an unsandboxed retry without
 `--allow-unsandboxed`; otherwise decide it with `adk-rust approvals approve ID` or from any
-surface, and the goal continues at once.
+surface, and the goal continues at once. A kernel started with `adk-rust up --auto-review` has
+the session's model review such a call first in `auto` mode: it runs or is refused at once,
+listed as decided by `model:<model id>`, and only a call the model escalates waits for you
+([Auto review](../harness/modes-and-approvals.md#auto-review)).
 
 | Outcome | Exit code |
 |---|---|

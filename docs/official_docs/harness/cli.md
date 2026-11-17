@@ -67,6 +67,7 @@ The REPL, `code`, `goal`, `ultracode` and `serve` take the same harness flags.
 | `--sandbox` | Runs `bash` in the OS sandbox (Seatbelt on macOS, bubblewrap on Linux) |
 | `--fail-if-unavailable` | With `--sandbox`: refuse to start when the sandbox is unavailable instead of running `bash` on the host |
 | `--allow-unsandboxed` | Lets `--yes` approve an unsandboxed retry of a command the sandbox refused |
+| `--auto-review` | In `auto` mode, the session's model reviews each call the mode holds — a host command, an external tool — and approves, denies, or escalates it to you; never a denied or non-waivable call ([Auto review](modes-and-approvals.md#auto-review)). Works under `adk-rust up` too |
 | `--trust` | Trusts the workspace's instruction files without asking |
 | `--pack browser\|computer-use\|payments` | Adds a pack: `browser` installs the browser pack over the WebDriver at `ADK_WEBDRIVER_URL` (default `http://localhost:4444`; adk-cli feature `browser`), see [Browser and computer use](packs.md); `computer-use` and `payments` name the library API |
 | `--member NAME=explore\|general` | Adds a team member |
@@ -107,6 +108,7 @@ sandbox = true
 fail_if_unavailable = true
 yes = false
 allow_unsandboxed = false
+auto_review = false          # user config only
 trust = false
 packs = []
 members = ["scout=explore"]
@@ -180,8 +182,8 @@ and the workspace's run only once the workspace is trusted.
 
 A workspace file can only tighten (spec 3.1 §9.2 I3): it may choose a stricter mode than
 your config, turn the sandbox on, or require it. `yes`, `trust`, `allow_unsandboxed`,
-`packs`, `members` and a looser mode in `.adk/harness.toml` are ignored, and the banner says
-which. A cloned repository therefore cannot approve its own commands.
+`auto_review`, `packs`, `members` and a looser mode in `.adk/harness.toml` are ignored, and the
+banner says which. A cloned repository therefore cannot approve its own commands.
 
 ## Approvals at the terminal
 

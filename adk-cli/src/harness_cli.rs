@@ -467,6 +467,12 @@ impl Setup {
         if let Some(cache) = &model.cache_capable {
             builder = builder.cache_capable(cache.clone());
         }
+        // Auto review: in auto mode the session's model reviews what the mode holds, in a
+        // context of its own, before the person is asked (autonomy parity item 2).
+        if self.resolved.auto_review {
+            builder =
+                builder.auto_review(Arc::new(adk_core::ModelApprover::new(model.llm.clone())));
+        }
         if let Ok(trust) = FileWorkspaceTrustStore::in_home() {
             builder = builder.workspace_trust(Arc::new(trust));
         }

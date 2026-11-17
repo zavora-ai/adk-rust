@@ -22,10 +22,13 @@
 //!
 //! Approval decisions come from, in order: a decision keyed by call ID
 //! ([`RunConfig::tool_confirmation_decisions`]), a decision keyed by fingerprint
-//! ([`RunConfig::tool_approvals`]), the run's [`ApprovalStore`], and the live
-//! [`ToolConfirmationHandler`](crate::ToolConfirmationHandler), asked through
-//! [`decide_approval`](crate::ToolConfirmationHandler::decide_approval), which is bounded by
-//! [`RunConfig::tool_confirmation_timeout`] and denies when it expires.
+//! ([`RunConfig::tool_approvals`]), the run's [`ApprovalStore`], the run's
+//! [`ToolReviewer`](crate::ToolReviewer) ([`RunConfig::tool_reviewer`]) for a call the
+//! policy holds, and the live [`ToolConfirmationHandler`](crate::ToolConfirmationHandler),
+//! asked through [`decide_approval`](crate::ToolConfirmationHandler::decide_approval), which
+//! is bounded by [`RunConfig::tool_confirmation_timeout`] and denies when it expires. A
+//! reviewer that escalates leaves the call to the handler or, without one, to the approval
+//! inbox; see [`review`](crate::review) for what it never decides.
 //!
 //! The kill switch also ends that wait. A freeze while the handler decides refuses the call
 //! with the freeze error and records it as denied by the switch, and what the wait left open
@@ -2051,6 +2054,9 @@ pub struct ToolGate<'a> {
     screen: Option<&'a dyn ToolCallScreen>,
     abandon: Option<tokio::sync::watch::Receiver<bool>>,
     actor: Option<AuditActor>,
+    /// The invocation, when the gate was built from one: a reviewer reads the user's recent
+    /// messages from its session.
+    context: Option<&'a dyn InvocationContext>,
 }
 
 impl<'a> ToolGate<'a> {
@@ -2075,18 +2081,21 @@ impl<'a> ToolGate<'a> {
             screen: None,
             abandon: None,
             actor: None,
+            context: None,
         }
     }
 
     /// A gate reading the run config and identity of `ctx`.
     pub fn for_context(ctx: &'a dyn InvocationContext) -> Self {
-        Self::new(
+        let mut gate = Self::new(
             ctx.run_config(),
             ctx.agent_name(),
             ctx.invocation_id(),
             ApprovalScope::new(ctx.app_name(), ctx.user_id(), ctx.session_id()),
         )
-        .with_acting_context(ctx.acting_context())
+        .with_acting_context(ctx.acting_context());
+        gate.context = Some(ctx);
+        gate
     }
 
     /// Sets the acting context every policy request, held call, and audit record of
@@ -2424,9 +2433,15 @@ pub async fn authorize_tool_call(
         acting: Some(Box::new(gate.acting.clone())),
         origin: origin.clone(),
     };
-    let (approval, source) = match resolve_confirmation(gate, &request, requested).await? {
+    // A reviewer decides only what the policy holds: never a call the agent's confirmation
+    // policy asks a person about, one a person asked for, or a held call being resumed.
+    let review = approval_reason
+        .as_deref()
+        .filter(|_| !requires_confirmation && resumes.is_none())
+        .map(|reason| ReviewInput { reason, effect });
+    let (approval, source) = match resolve_confirmation(gate, &request, requested, review).await? {
         Resolution::Decided(approval, source) => (approval, source),
-        Resolution::Undecided => {
+        Resolution::Undecided(escalated) => {
             let held_by = if approval_reason.is_some() {
                 policy_ref.as_deref()
             } else {
@@ -2440,10 +2455,13 @@ pub async fn authorize_tool_call(
                     approval_reason.as_deref(),
                 )
                 .await?;
-            let reason = match approval_reason {
+            let mut reason = match approval_reason {
                 Some(reason) => format!("Tool '{tool_name}' requires confirmation: {reason}"),
                 None => format!("Tool '{tool_name}' requires confirmation"),
             };
+            if let Some(escalated) = escalated {
+                reason.push_str(&format!(" ({escalated})"));
+            }
             record_held_call(gate, &request, &reason).await?;
             return Ok(ToolAuthorization::Pending { request, reason });
         }
@@ -2565,8 +2583,10 @@ async fn close_waiting_call(
     };
     // Whether a decision for the call may have reached the store: the store was read
     // without one before this decision, or through a request for the call.
-    let mut absorb =
-        matches!(source, "handler" | "handler_timeout" | "withdrawn" | SOURCE_GOVERNANCE);
+    let mut absorb = matches!(
+        source,
+        "handler" | "handler_timeout" | "withdrawn" | SOURCE_GOVERNANCE | crate::REVIEW_SOURCE
+    );
     if let Some(service) = &config.approval_service {
         // Every request not yet applied: pending, or resolved with its outcome on the way. A
         // request already applied wrote its outcome, which may not have been taken yet.
@@ -2769,9 +2789,10 @@ pub async fn confirm_tool_call(
 ) -> Result<Option<ToolApproval>> {
     let config = gate.run_config;
     config.check_governance()?;
-    let (approval, source) = match resolve_confirmation(gate, request, false).await? {
+    // A tool's own escalation is a person's to answer, so no reviewer is asked.
+    let (approval, source) = match resolve_confirmation(gate, request, false, None).await? {
         Resolution::Decided(approval, source) => (approval, source),
-        Resolution::Undecided => {
+        Resolution::Undecided(_) => {
             tracing::info!(
                 tool.name = %request.tool_name,
                 agent.id = %gate.acting.agent.id,
@@ -3013,8 +3034,9 @@ async fn evaluate_policy(
 enum Resolution {
     /// A decision, and the source it came from.
     Decided(ToolApproval, &'static str),
-    /// No decision: the call is held for one.
-    Undecided,
+    /// No decision: the call is held for one. Carries the reviewer's escalation, shown with
+    /// the held call, when a reviewer escalated it.
+    Undecided(Option<String>),
     /// A kill switch refused work while the handler was deciding, or when it stopped
     /// without a decision; the error is the switch's.
     Refused(AdkError),
@@ -3029,6 +3051,7 @@ async fn resolve_confirmation(
     gate: &ToolGate<'_>,
     request: &ToolConfirmationRequest,
     people_only: bool,
+    review: Option<ReviewInput<'_>>,
 ) -> Result<Resolution> {
     let config = gate.run_config;
     let fingerprint = request.fingerprint();
@@ -3065,8 +3088,19 @@ async fn resolve_confirmation(
         return Ok(Resolution::Decided(approval, "approval_store"));
     }
 
+    let mut escalated = None;
+    if let (Some(reviewer), Some(review), false) = (&config.tool_reviewer, review, people_only) {
+        match review_held_call(gate, reviewer.as_ref(), request, review).await? {
+            Reviewed::Decided(approval) => {
+                return Ok(Resolution::Decided(approval, crate::REVIEW_SOURCE));
+            }
+            Reviewed::Escalated(note) => escalated = note,
+            Reviewed::Refused(refusal) => return Ok(Resolution::Refused(refusal)),
+        }
+    }
+
     let Some(handler) = config.tool_confirmation_handler.as_ref().filter(|_| !people_only) else {
-        return Ok(Resolution::Undecided);
+        return Ok(Resolution::Undecided(escalated));
     };
     let timeout = config.tool_confirmation_timeout;
     let decide = tokio::time::timeout(timeout, handler.decide_approval(request));
@@ -3119,7 +3153,7 @@ async fn resolve_confirmation(
             timeout = ?config.tool_confirmation_timeout,
             "confirmation handler did not decide in time; the call waits for a decision"
         );
-        return Ok(Resolution::Undecided);
+        return Ok(Resolution::Undecided(escalated));
     }
     match decided {
         Ok(Ok(approval)) => Ok(Resolution::Decided(approval, "handler")),
@@ -3133,6 +3167,179 @@ async fn resolve_confirmation(
             Ok(Resolution::Decided(ToolApproval::deny(), "handler_timeout"))
         }
     }
+}
+
+/// What a call's reviewer is asked with: the policy's reason and the call's effect.
+#[derive(Clone, Copy)]
+struct ReviewInput<'r> {
+    reason: &'r str,
+    effect: ToolEffect,
+}
+
+/// What [`review_held_call`] concluded.
+enum Reviewed {
+    /// The reviewer approved or denied the call.
+    Decided(ToolApproval),
+    /// The reviewer left the call to a person: it does not cover the call, or it escalated
+    /// it, with the note shown with the held call.
+    Escalated(Option<String>),
+    /// A kill switch refused work while the reviewer was deciding.
+    Refused(AdkError),
+}
+
+/// How many of the user's recent messages a reviewer sees.
+const REVIEW_MESSAGES: usize = 3;
+
+/// Asks the run's reviewer about a call the policy holds (spec 3.0 parity item 2).
+///
+/// A call already pending for a person stays theirs. A reviewer that fails or times out
+/// escalates. Every verdict is recorded in the run's audit trail with the reviewer as the
+/// actor before it takes effect, and an approval or denial is filed in the run's approval
+/// inbox as a request the reviewer decided.
+async fn review_held_call(
+    gate: &ToolGate<'_>,
+    reviewer: &dyn crate::ToolReviewer,
+    request: &ToolConfirmationRequest,
+    input: ReviewInput<'_>,
+) -> Result<Reviewed> {
+    use crate::ReviewVerdict;
+
+    let config = gate.run_config;
+    let fingerprint = request.fingerprint();
+    if let Some(store) = &config.approval_store
+        && store.pending(&gate.scope).await?.iter().any(|entry| entry.fingerprint == fingerprint)
+    {
+        return Ok(Reviewed::Escalated(None));
+    }
+    let context = gate
+        .context
+        .map(|ctx| {
+            crate::review::recent_user_messages(
+                &ctx.session().conversation_history(),
+                REVIEW_MESSAGES,
+            )
+        })
+        .unwrap_or_default();
+    let mut review = crate::ToolReview::new(request.clone(), gate.scope.clone())
+        .with_reason(input.reason)
+        .with_agent(gate.agent_name, gate.invocation_id)
+        .with_effect(input.effect)
+        .with_context(context)
+        .with_metering(crate::ModelCallScope::for_run(
+            config,
+            &gate.scope.app_name,
+            gate.agent_name,
+        ));
+    review.fingerprint = fingerprint;
+    if !reviewer.covers(&review).await {
+        return Ok(Reviewed::Escalated(None));
+    }
+    let subject = reviewer.reviewer();
+    let timeout = reviewer.timeout();
+    let abandoned = async {
+        if let Some(mut abandon) = gate.abandon.clone()
+            && abandon.wait_for(|failed| *failed).await.is_ok()
+        {
+            return;
+        }
+        std::future::pending::<()>().await;
+    };
+    let outcome = tokio::select! {
+        biased;
+        refusal = config.governance_refused() => return Ok(Reviewed::Refused(refusal)),
+        () = abandoned => {
+            return Err(AdkError::tool(format!(
+                "the review of tool '{}' was abandoned because another approval in the same \
+                 batch failed",
+                request.tool_name
+            )));
+        }
+        outcome = tokio::time::timeout(timeout, reviewer.review(&review)) => outcome,
+    };
+    let verdict = match outcome {
+        Ok(Ok(verdict)) => verdict,
+        Ok(Err(error)) => {
+            tracing::warn!(
+                tool.name = %request.tool_name,
+                reviewer.id = %subject.id,
+                error = %error,
+                "the reviewer failed; a person decides the call"
+            );
+            ReviewVerdict::escalate(format!("the reviewer could not decide ({})", error.code))
+        }
+        Err(_) => ReviewVerdict::escalate(format!(
+            "the reviewer did not answer within {}s",
+            timeout.as_secs()
+        )),
+    };
+    tracing::info!(
+        tool.name = %request.tool_name,
+        reviewer.id = %subject.id,
+        review.verdict = verdict.label(),
+        "a reviewer decided a held call"
+    );
+    let audited = AuditedCall {
+        gate,
+        tool_name: &request.tool_name,
+        function_call_id: request.function_call_id.as_deref().unwrap_or_default(),
+        effect: input.effect,
+        origin: request.origin.as_ref(),
+    };
+    if let (Some(trail), Some(draft)) =
+        (&config.audit, audited.draft(AuditRecordKind::Approval, &request.args))
+    {
+        let decision = match &verdict {
+            ReviewVerdict::Approve { .. } => AuditDecision::Approved,
+            ReviewVerdict::Deny { .. } => AuditDecision::Rejected,
+            ReviewVerdict::Escalate { .. } => AuditDecision::ApprovalRequired,
+        };
+        // The rationale is model text about the call, so the record keeps its digest.
+        let draft = draft
+            .decision(decision)
+            .actor(AuditActor::subject(subject.clone()))
+            .ext("source", Value::String(crate::REVIEW_SOURCE.to_string()))
+            .ext("reviewer", Value::String(subject.id.clone()))
+            .ext("verdict", Value::String(verdict.label().to_string()))
+            .ext(
+                "rationaleDigest",
+                Value::String(trail.digest(&Value::String(verdict.rationale().to_string()))),
+            )
+            .ext("actingAgent", Value::String(gate.acting.agent.id.to_string()))
+            .ext("sessionId", Value::String(gate.scope.session_id.clone()));
+        trail.record(draft).await?;
+    }
+    let decision = match &verdict {
+        ReviewVerdict::Approve { rationale } => {
+            crate::ApprovalDecision::approve(subject.clone()).with_reason(rationale.clone())
+        }
+        ReviewVerdict::Deny { rationale } => {
+            crate::ApprovalDecision::reject(subject.clone(), rationale.clone())
+        }
+        ReviewVerdict::Escalate { rationale } => {
+            return Ok(Reviewed::Escalated(Some(format!(
+                "{} escalated it to a person: {rationale}",
+                subject.id
+            ))));
+        }
+    };
+    if let Some(service) = &config.approval_service {
+        let call = crate::approval::ApprovalCall {
+            scope: gate.scope.clone(),
+            request: request.clone(),
+            reason: format!("Tool '{}' requires confirmation: {}", request.tool_name, input.reason),
+            agent_name: gate.agent_name.to_string(),
+            invocation_id: gate.invocation_id.to_string(),
+            run_id: config.durable_run_id.clone(),
+            acting: Some(gate.acting.clone()),
+        };
+        service.record_review(call, decision).await?;
+    }
+    Ok(Reviewed::Decided(match verdict {
+        ReviewVerdict::Deny { rationale } => {
+            ToolApproval::deny().with_message(format!("{}: {rationale}", subject.id))
+        }
+        ReviewVerdict::Approve { .. } | ReviewVerdict::Escalate { .. } => ToolApproval::approve(),
+    }))
 }
 
 // ---------------------------------------------------------------------------
