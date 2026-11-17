@@ -13,6 +13,8 @@
 //! - [`LoopAgent`] - Iterate until a sub-agent escalates or the iteration limit is reached
 //! - [`ConditionalAgent`] - Branch based on conditions
 //! - [`LlmConditionalAgent`] - Route to a sub-agent by a model classification
+//! - [`DecisionAgent`] - Route to a sub-agent by a typed decision with a rationale and a
+//!   confidence, made with structured output
 //! - [`TeamSpec`] - Validate and compile a portable team from existing agents
 //!
 //! `CodeActAgent` (feature `codeact`), `CodingAgent` (feature `coding`), and `AmbientAgent`
@@ -131,8 +133,8 @@ pub use team::{
 pub use tool_call_markup::{normalize_content, normalize_option_content};
 pub use tool_ledger::held_call_ledger_key;
 pub use workflow::{
-    ConditionalAgent, DEFAULT_LOOP_MAX_ITERATIONS, LlmConditionalAgent, LlmConditionalAgentBuilder,
-    LoopAgent, ParallelAgent, SequentialAgent,
+    ConditionalAgent, DEFAULT_LOOP_MAX_ITERATIONS, DecisionAgent, DecisionAgentBuilder,
+    LlmConditionalAgent, LlmConditionalAgentBuilder, LoopAgent, ParallelAgent, SequentialAgent,
 };
 
 #[cfg(feature = "ambient")]

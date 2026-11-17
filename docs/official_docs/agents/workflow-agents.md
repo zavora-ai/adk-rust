@@ -274,6 +274,19 @@ All agents start simultaneously and their events stream as they are produced.
 - Retry logic with improvement
 - Quality gates that require multiple passes
 
+### DecisionAgent
+
+```rust
+DecisionAgent::builder("name", model)
+    .instruction("What to decide")
+    .route("name", "What the route is for", agent)
+    .routes::<Route>(|route| agent_for(route)) // Or one route per option of a Choice type
+    .fallback(fallback_agent)                  // Optional
+    .min_confidence(0.6)                       // Optional, default 0.0
+    .output_key("decision")                    // Optional
+    .build()?
+```
+
 ### ExitLoopTool
 
 To exit a loop early, give an agent the `ExitLoopTool`. When called, it signals the loop to stop.
@@ -524,6 +537,92 @@ otherwise the longest route label that the reply contains is used, and then `def
 └───────┘ └───────┘ └─────────┘
 ```
 
+---
+
+## DecisionAgent (Typed Decision)
+
+`DecisionAgent` routes by a typed decision instead of a free-text label. Its model call asks
+for structured output: a JSON object whose `choice` is one of the route names, with a
+`rationale` and a `confidence` from 0 to 1. A provider with structured outputs constrains the
+reply to a valid route; any other reply that names no route fails the turn instead of falling
+through to a guess.
+
+```rust,no_run
+use std::sync::Arc;
+
+use adk_rust::prelude::*;
+
+fn specialist(model: &Arc<dyn Llm>, name: &str, instruction: &str) -> Result<Arc<dyn Agent>> {
+    Ok(Arc::new(
+        LlmAgentBuilder::new(name).instruction(instruction).model(model.clone()).build()?,
+    ))
+}
+
+fn triage(model: Arc<dyn Llm>) -> Result<DecisionAgent> {
+    DecisionAgent::builder("triage", model.clone())
+        .instruction("Route the support request to the team that should answer it.")
+        .route(
+            "billing",
+            "Invoices, refunds and payment problems",
+            specialist(&model, "billing", "Answer billing questions.")?,
+        )
+        .route(
+            "technical",
+            "Errors, outages and how-to questions",
+            specialist(&model, "technical", "Answer technical questions.")?,
+        )
+        .fallback(specialist(&model, "general", "Ask what the request is about.")?)
+        .min_confidence(0.6)
+        .output_key("triage")
+        .build()
+}
+```
+
+| Setting | Effect |
+|---|---|
+| `route(name, description, agent)` | One option the model sees, by name and description, and the agent that handles it |
+| `routes::<T>(agent_for)` | One route per option of a `Choice` type `T` |
+| `min_confidence(x)` | Below `x` the `fallback` agent runs; without one the turn fails with `decision.low_confidence` |
+| `output_key(key)` | Writes `{option, rationale, confidence, followed, route}` to session state |
+
+Each turn yields a routing event, `[Decision: billing (0.92)] The customer was charged twice.`,
+before the chosen agent's events. The decision's call runs in the run's `ModelCallScope`, so
+it counts against the run budget and spend ledger. A turn that resumes a held call returns to
+the route that holds it without deciding again.
+
+### Typed decisions in code
+
+`adk_core::decide::<T>` makes the same decision outside an agent, for any type that implements
+`Choice`. `#[derive(Choice)]` (`adk-rust-macros`) writes the implementation for an enum of unit
+variants: each variant is an option named in snake_case and described by its doc comment.
+
+```rust,no_run
+use std::sync::Arc;
+
+use adk_core::{Choice, Llm, decide};
+use adk_rust_macros::Choice;
+
+#[derive(Choice, Debug)]
+enum Next {
+    /// The docs answer the question
+    Answer,
+    /// A person must decide
+    Escalate,
+}
+
+async fn next(model: Arc<dyn Llm>, ticket: &str) -> adk_core::Result<bool> {
+    assert_eq!(Next::options()[1].name, "escalate");
+    let decision = decide::<Next>(model, ticket).await?;
+    println!("{} ({:.2}): {}", decision.option, decision.confidence, decision.rationale);
+    Ok(matches!(decision.choice, Next::Escalate))
+}
+```
+
+`Decider` adds an instruction, an explicit `ModelCallScope` and an output cap, and
+`Decider::decide_among(&options, input)` decides among options known only at run time. A
+decision request declares no tool and forces no `tool_choice`, which Claude Fable 5.1 and
+later, Opus 5.5 and Sonnet 5.5 reject; see
+[structured output by provider](../models/providers.md#structured-output-by-provider).
 
 ---
 

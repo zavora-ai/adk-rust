@@ -444,6 +444,32 @@ let ledger = InMemorySpendLedger::new(
 
 Calls billed in units rather than tokens — images, audio, characters — go through `ModelCallScope::meter` or `meter_usage`: the spend hold covers `UsageCall::max_cost_micro_usd` before the call is sent, and `MeteredUsage` commits the cost in micro-USD and counts its `UsageVector` (`UsageUnit::Images`, `AudioMillis`, `Characters`, …) in `BudgetTracker::units`. A unit call with no known price is refused under a cost cap. Agents make the run's scope current around every tool call (`ModelCallScope::within_tool`), so media calls in tools count against the run. `UnitRate` prices a unit in integer micro-USD.
 
+## Typed Decisions
+
+`decide::<T>(model, input)` has a model pick one value of a `Choice` type, such as an enum of
+routes, and returns a `Decision` with the option's name, the model's rationale and its
+confidence. The request carries a JSON response schema whose `choice` enumerates the options,
+declares no tool and forces no `tool_choice`; a reply that names no option fails with
+`decision.invalid_choice`. `Decider` adds an instruction, an explicit `ModelCallScope` and
+`decide_among` for options known only at run time; without an explicit scope the call is
+metered against the current one. `adk-agent`'s `DecisionAgent` and `adk-graph`'s
+`DecisionNode` route on it, and `adk-rust-macros` derives `Choice` for an enum.
+
+```rust,no_run
+use std::sync::Arc;
+
+use adk_core::{ChoiceOption, Decider, Llm};
+
+async fn triage(model: Arc<dyn Llm>, ticket: &str) -> adk_core::Result<String> {
+    let options = [
+        ChoiceOption::new("urgent", "Production is down or data is at risk"),
+        ChoiceOption::new("normal", "Everything else"),
+    ];
+    let decision = Decider::new(model).decide_among(&options, ticket).await?;
+    Ok(decision.option)
+}
+```
+
 ## Audit Records
 
 `AuditRecorder` (module `audit_log`) receives a record for every governed tool decision, approval decision, kill-switch change, and `outcome_unknown` answer; `InMemoryAuditRecorder` keeps them in memory and `FileAuditRecorder` appends them to a JSON Lines file that survives a restart. Each record names the acting agent and the subject it acts for and carries an argument digest, never the arguments. Under `AuditFailureMode::Block` (the default) an action whose record cannot be written does not happen. `AuditLogStore` and `InMemoryAuditLogStore` hold append-only logs with a compare-and-swap on the log size; `adk-auth`'s `signed_audit::AuditLog` signs them. `AuditLogStore::redact` drops chosen record bodies and keeps their hashes; `subject::PseudonymousRecorder` names visitors (or every subject) by registry pseudonym, and `subject::AuditLogSubjectData` redacts the records that name a subject being erased.

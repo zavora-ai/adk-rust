@@ -13,6 +13,7 @@ Procedural macros for ADK-Rust: `#[tool]` for tool definitions, and `#[entrypoin
 | `#[tool]` | A zero-sized struct implementing `adk_core::Tool` from an async function | `adk-tool` |
 | `#[entrypoint]` | A workflow agent struct with `new(checkpointer)` and `invoke(state, config)` | `adk-graph` (`functional` feature) |
 | `#[task]` | A checkpointed wrapper `__task_<name>` with optional retry | `adk-graph` (`functional` feature) |
+| `#[derive(Choice)]` | An `adk_core::Choice` implementation for an enum of unit variants: snake_case option names, doc comments as descriptions | `adk_core::decide`, `DecisionAgent`, `DecisionNode` |
 
 ## Installation
 

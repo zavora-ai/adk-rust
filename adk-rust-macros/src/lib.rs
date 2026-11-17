@@ -7,6 +7,7 @@
 //! | [`macro@tool`] | A zero-sized struct implementing `adk_core::Tool` from an async function |
 //! | [`macro@entrypoint`] | An `adk-graph` functional workflow agent struct |
 //! | [`macro@task`] | A checkpointed, optionally retried `adk-graph` task wrapper |
+//! | [`macro@Choice`] | An `adk_core::Choice` implementation for an enum of unit variants, for typed decisions |
 //!
 //! ## `#[tool]`
 //!
@@ -1122,4 +1123,138 @@ fn parse_duration_str(s: &str) -> u64 {
     }
     // Try parsing as plain number (assume seconds)
     s.parse::<u64>().unwrap_or(1)
+}
+
+/// Derives `adk_core::Choice` for an enum of unit variants, so a model can decide one of them
+/// with `adk_core::decide::<T>`.
+///
+/// Each variant is an option named in snake_case (`OutOfScope` → `out_of_scope`) unless
+/// `#[choice(name = "...")]` names it, and described to the model by its doc comment. The
+/// generated code refers to `adk_core`, so the calling crate depends on `adk-core` beside
+/// `adk-rust-macros`.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::Choice;
+/// use adk_rust_macros::Choice;
+///
+/// #[derive(Choice, Debug, PartialEq)]
+/// enum Route {
+///     /// Invoices, refunds and payment problems
+///     Billing,
+///     /// Errors, outages and how-to questions
+///     Technical,
+///     /// Anything the support team does not handle
+///     #[choice(name = "elsewhere")]
+///     OutOfScope,
+/// }
+///
+/// let names: Vec<String> = Route::options().into_iter().map(|option| option.name).collect();
+/// assert_eq!(names, ["billing", "technical", "elsewhere"]);
+/// assert_eq!(Route::options()[0].description, "Invoices, refunds and payment problems");
+/// assert_eq!(Route::from_option("elsewhere"), Some(Route::OutOfScope));
+/// assert_eq!(Route::from_option("sales"), None);
+/// ```
+///
+/// A struct, a union, a variant with fields, or two variants with the same option name fails
+/// to compile.
+#[proc_macro_derive(Choice, attributes(choice))]
+pub fn derive_choice(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as syn::DeriveInput);
+    match choice_impl(&input) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
+fn choice_impl(input: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let syn::Data::Enum(data) = &input.data else {
+        return Err(syn::Error::new_spanned(
+            &input.ident,
+            "#[derive(Choice)] needs an enum whose variants are the options",
+        ));
+    };
+    let ident = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let mut names = Vec::new();
+    let mut descriptions = Vec::new();
+    let mut variants = Vec::new();
+    for variant in &data.variants {
+        if !matches!(variant.fields, syn::Fields::Unit) {
+            return Err(syn::Error::new_spanned(
+                variant,
+                "#[derive(Choice)] options are unit variants; move the data elsewhere",
+            ));
+        }
+        let mut name = None;
+        for attr in variant.attrs.iter().filter(|attr| attr.path().is_ident("choice")) {
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("name") {
+                    let value: syn::LitStr = meta.value()?.parse()?;
+                    name = Some(value.value());
+                    Ok(())
+                } else {
+                    Err(meta.error("expected `name = \"...\"`"))
+                }
+            })?;
+        }
+        let name = name.unwrap_or_else(|| snake_case(&variant.ident.to_string()));
+        if names.contains(&name) {
+            return Err(syn::Error::new_spanned(
+                variant,
+                format!(
+                    "two variants are both the option `{name}`; give one a #[choice(name = ...)]"
+                ),
+            ));
+        }
+        let description = variant
+            .attrs
+            .iter()
+            .filter_map(|attr| match &attr.meta {
+                Meta::NameValue(pair) if pair.path.is_ident("doc") => match &pair.value {
+                    syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(text), .. }) => {
+                        Some(text.value().trim().to_string())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        names.push(name);
+        descriptions.push(description);
+        variants.push(variant.ident.clone());
+    }
+    Ok(quote! {
+        impl #impl_generics ::adk_core::Choice for #ident #ty_generics #where_clause {
+            fn options() -> ::std::vec::Vec<::adk_core::ChoiceOption> {
+                ::std::vec![#(::adk_core::ChoiceOption::new(#names, #descriptions)),*]
+            }
+
+            fn from_option(name: &str) -> ::std::option::Option<Self> {
+                match name {
+                    #(#names => ::std::option::Option::Some(Self::#variants),)*
+                    _ => ::std::option::Option::None,
+                }
+            }
+        }
+    })
+}
+
+/// `OutOfScope` → `out_of_scope`.
+fn snake_case(name: &str) -> String {
+    let mut snake = String::new();
+    for (index, ch) in name.chars().enumerate() {
+        if ch.is_uppercase() {
+            if index > 0 {
+                snake.push('_');
+            }
+            snake.extend(ch.to_lowercase());
+        } else {
+            snake.push(ch);
+        }
+    }
+    snake
 }
