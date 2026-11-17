@@ -361,7 +361,7 @@ Use current-generation models. Gemini 2.0 models were shut down on June 1, 2026.
 | Image generation | `gemini-3.1-flash-image` | Native image output |
 | Live voice | `gemini-3.1-flash-live-preview` | Realtime audio and video; default in `adk-realtime` and `adk-model` |
 | Live voice, newer model | `gemini-3.8-live` | Built-in reasoning, no thinking level; tools declared `BLOCKING` |
-| Live voice with configurable reasoning | `gemini-3.8-live-extended-thinking` | Set `RealtimeConfig::with_thinking_level` (low, medium, high); tools run non-blocking |
+| Live voice with configurable reasoning | `gemini-3.8-live-extended-thinking` | `RealtimeConfig::with_thinking_level` (low, medium, high; ADK sends medium unless set); tools run non-blocking |
 
 **Avoid retired models:** `gemini-2.0-flash`, `gemini-2.0-flash-lite`,
 `gemini-3.1-flash-lite-preview`, and `gemini-3-pro-preview`.

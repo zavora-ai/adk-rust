@@ -505,9 +505,10 @@ impl RealtimeConfig {
     /// Sets how much the Gemini Live model reasons, as `generationConfig.thinkingConfig`.
     ///
     /// [`Effort::Low`](adk_core::Effort::Low), `Medium` and `High` are sent as the thinking
-    /// levels `low`, `medium` and `high`. `gemini-3.8-live-extended-thinking` and
-    /// `gemini-3.1-flash-live-preview` take one; `gemini-3.8-live` reasons on its own and
-    /// closes the socket with 1007 on one, so it is not sent there.
+    /// levels `low`, `medium` and `high`. `gemini-3.8-live-extended-thinking` requires a
+    /// level (its server closes a setup without one with 1007), so ADK sends `medium` unless
+    /// you set one. `gemini-3.1-flash-live-preview` takes one. `gemini-3.8-live` reasons on
+    /// its own and closes the socket with 1007 on one, so it is not sent there.
     ///
     /// Stored under `extra.thinking_level`. An `extra` value that is not a JSON object is
     /// replaced. The OpenAI Realtime session copies every `extra` key into its
