@@ -29,6 +29,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 - [OpenAI Responses API](models/openai-responses.md) - The dedicated `/v1/responses` client
 - [Gemini Interactions API](models/gemini-interactions.md) - The Beta Interactions client and its `GeminiModel` transport
 - [OpenCode Go and Zen](models/opencode.md) - Per-model routing across four wire APIs with conversation headers
+- [Model Fallback](models/fallback.md) - `FallbackLlm`: an ordered chain of models across providers, metered per attempt
 - [Ollama](models/ollama.md) - Local inference with Ollama
 - [mistral.rs Integration](models/mistralrs.md) - Native mistral.rs for high-performance local inference
 
