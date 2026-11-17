@@ -10,7 +10,7 @@ Session management and state persistence for Rust Agent Development Kit (ADK-Rus
 
 `adk-session` provides session and state management for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)):
 
-- **InMemorySessionService** - Simple in-memory session storage; a read shares the stored events instead of copying them, and copies only the `num_recent_events` window it returns
+- **InMemorySessionService** - In-process session storage; a read shares the stored events instead of copying them, and copies only the `num_recent_events` window it returns
 - **SqliteSessionService** - SQLite-backed persistence (`sqlite` feature); `new` opens a file database in write-ahead-log mode with `synchronous = FULL`, and events are indexed by session
 - **Durable stores** - `SpendLedger`, `ActionLedger`, and `ApprovalStore` for SQLite, PostgreSQL, Redis, MongoDB, Neo4j, and Firestore, each behind its backend's feature and proven by the `adk-core` conformance suites; the approval stores also hold the requests and delegations of the `adk-core` approval service
 - **Durable runtime stores** - `LeaseStore`, `DurableRunStore`, `ScheduleStore`, and `GovernanceStateStore` for SQLite, PostgreSQL, Redis, MongoDB, Neo4j, and Firestore, each proven by the `adk-core` conformance suites
@@ -85,12 +85,14 @@ async fn main() -> adk_core::Result<()> {
 
 ## Feature Flags
 
+No feature is enabled by default; `InMemorySessionService` needs none.
+
 | Feature | Backend | Description |
 |---------|---------|-------------|
 | `sqlite` | SQLite | Single-node persistence via sqlx |
 | `database` | SQLite | Alias for `sqlite` |
-| `postgres` | PostgreSQL | Production-grade relational persistence |
-| `redis` | Redis | Low-latency in-memory persistence via fred |
+| `postgres` | PostgreSQL | Relational persistence via sqlx, with TLS |
+| `redis` | Redis | Persistence on a standalone server or Redis Cluster via fred |
 | `mongodb` | MongoDB | Document-oriented persistence |
 | `neo4j` | Neo4j | Graph database persistence |
 | `firestore` | Firestore | Google Cloud Firestore persistence |
@@ -117,7 +119,8 @@ adk-rust = { version = "3.0.0", features = ["vertex-session"] }
 ## Vertex AI Sessions
 
 `VertexAiSessionService` stores sessions through the GA `v1` Vertex AI Agent
-Engine Session API:
+Engine Session API. The blocks in this section need the `vertex-session` feature, which no
+`adk-rust` tier enables:
 
 ```rust
 use adk_session::{VertexAiSessionConfig, VertexAiSessionService};
@@ -283,7 +286,8 @@ IDs are Firestore document IDs, so they must not contain `/`.
 ## Encrypted Sessions
 
 Wrap any `SessionService` with `EncryptedSession` to encrypt session state and event
-payloads at rest using AES-256-GCM:
+payloads at rest using AES-256-GCM. The blocks in this section need the `encrypted-session`
+feature, which no `adk-rust` tier enables:
 
 ```rust
 use adk_session::{EncryptedSession, EncryptionKey, InMemorySessionService};
@@ -409,9 +413,12 @@ The SQL types have `new(url)` and `from_pool` over the pool a session service us
 Redis, MongoDB, Neo4j, and Firestore types have `new(...)` and a constructor over a shared
 handle (`from_client`, `from_database`, `from_graph`, `from_db`). Every type has `migrate()`; the lease, run, and governance stores add `with_clock`. PostgreSQL claims runs
 with `SELECT ... FOR UPDATE SKIP LOCKED`, SQLite under `BEGIN IMMEDIATE`, and every worker
-write is fenced on the run's lease epoch. Every type passes the `adk-core` conformance
+write is fenced on the run's lease epoch. A run requeued by a retryable `RunOutcome::Failed`
+becomes claimable once its `backoff` has passed. Every type passes the `adk-core` conformance
 suites; see the
 [Durable Runtime guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/core/durable-runtime.md).
+
+This block needs the `postgres` feature (`adk-rust`'s `postgres-session`), which no tier enables:
 
 ```rust
 use std::time::Duration;
@@ -524,7 +531,10 @@ async fn undo_last_turn(service: &InMemorySessionService) -> adk_core::Result<()
 | `get` and `list` read the current `app:` and `user:` tiers | — |
 | `delete_all_sessions` also erases the user's `user:` tier; Vertex AI implements it; the default returns `session.delete_all.unsupported` | Keep a value that must outlive the user's sessions in `app:` state or outside the session store |
 | Concurrent appends keep every state delta; equal timestamps keep append order | — |
-| SQL backends use SQLx 0.9; `sqlx` and `pgvector` are no longer implicit features | Depend on SQLx 0.9 when sharing a pool; enable `sqlite` or `postgres` |
+| SQL backends use SQLx 0.9 | Depend on SQLx 0.9 when sharing a pool |
+| Features named after optional dependencies (`sqlx`, `fred`, `tokio`, `reqwest`, `sha2`, `aes-gcm`, `rand`, `base64`, `adk-gcp`, `google-cloud-auth`) are removed | Enable the backend feature that uses the dependency: `sqlite`, `postgres`, `redis`, `mongodb`, `firestore`, `neo4j`, `vertex-session`, or `encrypted-session` |
+| Session stores add schema migrations: SQLite `sessions.initial_state` and the `idx_events_session_ts` index, PostgreSQL `events.seq`, and a MongoDB index | Call the service's `migrate()` |
+| `RedisSessionService` writes sessions through Lua scripts | Allow `EVAL` for the service's Redis user |
 | `sql_schema_version` and `schema_version()` return read failures as errors | — |
 | Migration runners take `&'static` steps | — |
 | Durable stores, durable runtime stores, and audit log stores on every backend | — |

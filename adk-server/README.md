@@ -11,7 +11,7 @@ HTTP server and A2A protocol for Rust Agent Development Kit (ADK-Rust) agents.
 `adk-server` provides HTTP infrastructure for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)):
 
 - **REST API** — session, runtime (SSE and JSON), artifact, and debug endpoints
-- **A2A** — agent card discovery and JSON-RPC endpoints, a client (`A2aClient`), and `RemoteA2aAgent` for remote agents as sub-agents; the `a2a-v1` feature adds the A2A v1.0.0 handlers for all 11 operations
+- **A2A** — agent card discovery and JSON-RPC endpoints, a client (`A2aClient`), and `RemoteA2aAgent` for remote agents as sub-agents; with the `a2a-v1` feature the same mount also serves A2A v1.0.0, all 11 operations over JSON-RPC and HTTP+JSON
 - **Custom routes** — `ServerBuilder` mounts routers such as `adk-surface`'s web home behind the same middleware
 - **Security defaults** — loopback hosts only, no cross-origin access, body and time limits, security headers
 - **Auth bridge** — flows authenticated identity from HTTP requests into agent execution
@@ -25,7 +25,9 @@ HTTP server and A2A protocol for Rust Agent Development Kit (ADK-Rust) agents.
 adk-server = "3.0.0"
 ```
 
-Or use the umbrella crate (the `server` feature, in the `standard` tier and above, also enables `a2a-v1`):
+Or use the umbrella crate. Its `server` feature, in the `standard` tier and above, also enables
+`a2a-v1` and `agent-registry`; 3.0 removes the umbrella's `a2a` and `agent-registry` aliases, which
+`server` replaces:
 
 ```toml
 [dependencies]
@@ -38,7 +40,7 @@ No feature is enabled by default.
 
 | Feature | Enables |
 |---------|---------|
-| `a2a-v1` | The `a2a::v1` module (A2A v1.0.0 JSON-RPC and REST handlers, v1 client) and `A2aServer` |
+| `a2a-v1` | A2A v1.0.0 on `a2a-protocol-types` 0.15: the `a2a::v1` module (JSON-RPC and HTTP+JSON handlers, `A2aV1Server`, the v1 client), `A2aServer`, and the v1 endpoints and card that `with_a2a` mounts |
 | `a2a-interceptors` | Built-in A2A interceptors (auth, rate limit, audit) |
 | `background` | Durable background runs (`/api/runs`), cron jobs (`/api/cron`), `DurableWorker`, and `DurableScheduler` |
 | `webhook-ingress` | `ServerBuilder::with_webhook_ingress`: signed `POST /hooks/{name}` deliveries that enqueue durable runs, with Standard Webhooks or a forge's push signature (`WebhookHook::forge`: GitHub, GitLab) |
@@ -167,6 +169,8 @@ fn with_services(
 ```
 
 Compaction and prompt-cache settings apply to the SSE runtime endpoints and the A2A controller.
+`with_compaction` sets the event compaction of a session; separately, every runner the server
+builds compacts a long history before each model call, which `adk-runner` turns on by default.
 
 ### ServerBuilder — Custom Routes
 
@@ -252,14 +256,20 @@ fn governed(config: ServerConfig) -> axum::Router {
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/.well-known/agent-card.json` | GET | Agent card (public) |
-| `/.well-known/agent.json` | GET | Agent card at the earlier path (public) |
-| `/a2a` | POST | JSON-RPC: `message/send`, `tasks/get`, `tasks/cancel` (authenticated) |
-| `/a2a/stream` | POST | JSON-RPC streaming: `message/stream`, `message/send` (authenticated) |
+| `/.well-known/agent-card.json` | GET | Agent card (public): the A2A v1 card with `a2a-v1`, which also lists the 0.3 endpoint; the A2A 0.3 card without it |
+| `/.well-known/agent.json` | GET | A2A 0.3 agent card (public) |
+| `/a2a` | POST | A2A 0.3 JSON-RPC: `message/send`, `tasks/get`, `tasks/cancel` (authenticated) |
+| `/a2a/stream` | POST | A2A 0.3 JSON-RPC streaming: `message/stream`, `message/send` (authenticated) |
+| `/a2a/v1` | POST | A2A v1 JSON-RPC binding, all 11 operations (`a2a-v1`, authenticated) |
+| `/a2a/v1/rest/…` | GET, POST | A2A v1 HTTP+JSON binding (`a2a-v1`, authenticated) |
+
+Any page may read the agent cards: they answer CORS preflights and are not subject to
+`allowed_origins`; the host check still applies. The v1 bindings refuse a request without
+`A2A-Version: 1.0` (header or query parameter) with `VersionNotSupportedError`.
 
 With an auth bridge, A2A routes use the authenticated identity as the session user and the owner of every task they create, so `tasks/get` and `tasks/cancel` cannot reach another caller's task. Model thinking is never sent to a peer.
 
-The `a2a-v1` feature adds `adk_server::a2a::v1`: a `RequestHandler` with the A2A v1.0.0 JSON-RPC handler (`jsonrpc_handler`, all 11 operations from `SendMessage` to `GetExtendedAgentCard`) and REST router (`rest_router`), which an application mounts on its own routes, and `a2a::client::v1_client::A2aV1Client`. The v1 implementation covers RFC 3339 timestamps, capabilities declaration, message ID idempotency, push notification authentication, the `INPUT_REQUIRED` multi-turn flow, input validation, `application/a2a+json` responses, and the task as the first SSE event. See the `a2a-research-agent` example in [adk-playground](https://github.com/zavora-ai/adk-playground) and [A2A docs](../docs/official_docs/deployment/a2a.md).
+The `a2a-v1` feature adds `adk_server::a2a::v1`, whose wire types come from `a2a-protocol-types` 0.15: a `RequestHandler` with the A2A v1.0.0 JSON-RPC handler (`jsonrpc_handler`, all 11 operations from `SendMessage` to `GetExtendedAgentCard`) and REST router (`rest_router`); `v1::server::A2aV1Server`, which assembles the task store, executor, handler and card for one agent and serves them with `router()`, or `card_router()` and `rpc_router()` apart; and `a2a::client::v1_client::A2aV1Client`. The v1 implementation covers RFC 3339 timestamps, capabilities declaration, message ID idempotency, push notification authentication, the `INPUT_REQUIRED` multi-turn flow, input validation, `application/a2a+json` responses, and the task as the first SSE event. See the `a2a-research-agent` example in [adk-playground](https://github.com/zavora-ai/adk-playground) and [A2A docs](../docs/official_docs/deployment/a2a.md).
 
 ### Remote Agent Client
 
@@ -399,7 +409,7 @@ Each fire time is enqueued once however many replicas run the scheduler, and res
 
 > **Important:** the standalone routers (`background_runs_router`, `cron_jobs_router`) carry no authentication, so they apply no owner checks. `ServerBuilder::with_background_runs` and `ServerBuilder::with_cron_jobs` serve `/api/runs` and `/api/cron` behind the server's auth middleware; put a standalone mount behind your own authentication layer.
 
-**Retries.** A retryable failure requeues the run while attempts remain. A model provider's (`429`, `503`, a timeout) or one that names a wait is claimable after `DurableWorkerConfig::retry_backoff`: about 5, 10 and 20 seconds, jittered, at least the error's `Retry-After`, at most 10 minutes; another, such as a busy store or a workflow's, is retried at once. The last attempt's failure fails the run with `attempts exhausted (N of N)` in its error.
+**Retries.** A retryable failure requeues the run while attempts remain. A model provider's (a rate limit, `503`, a timeout; an exhausted quota or credit balance is not retried) or one that names a wait is claimable after `DurableWorkerConfig::retry_backoff`: about 5, 10 and 20 seconds, jittered, at least the error's `Retry-After`, at most 10 minutes; another, such as a busy store or a workflow's, is retried at once. The last attempt's failure fails the run with `attempts exhausted (N of N)` in its error.
 
 **What survives a restart.** With a durable run store, everything: a run whose worker stopped is recovered by another worker once its lease expires and resumes from its checkpoint (see [Durable Runtime](../docs/official_docs/core/durable-runtime.md#crash-resume)). Finished runs are pruned after `DurableWorkerConfig::retain_finished` (24 hours by default). An agent run that ends holding a tool call for approval is parked (until woken, or until `DurableWorkerConfig::approval_timeout` when set) and resumes on the same session.
 
@@ -528,7 +538,7 @@ Runtime endpoints support protocol negotiation via:
 - request body field `uiTransport` / `ui_transport`
 - header `x-adk-ui-transport` (takes precedence)
 
-Supported runtime profile values: `adk_ui` (default), `a2ui`, `ag_ui`, `mcp_apps`.
+Supported runtime profile values: `adk_ui` (default), `a2ui`, `ag_ui`, `mcp_apps`. `adk_ui` is deprecated, with a sunset target of 2026-12-31, and `/api/ui/capabilities` names `a2ui`, `ag_ui` and `mcp_apps` as its replacements; the `adk-ui` crate is retired, and `adk-surface`'s `genui` feature draws agent UI instead.
 
 Current support is intentionally tiered:
 - `a2ui` is a draft-aligned hybrid subset exposed through protocol-aware UI tool payloads.
@@ -542,7 +552,7 @@ Runtime transport values:
 
 Use `/api/ui/capabilities` instead of assuming full upstream protocol parity.
 
-For MCP Apps tool responses, `adk-server::ui_types` now exposes a canonical additive helper:
+For MCP Apps tool responses, `adk_server::ui_types` exposes these helpers:
 - `McpUiBridgeSnapshot` for typed host/app bridge state that can be promoted into tool responses
 - `McpUiToolResult` for the shared tool-result envelope
 - `McpUiToolResultBridge` for typed bridge metadata (`protocolVersion`, `structuredContent`, `hostInfo`, `hostCapabilities`, `hostContext`, `appInfo`, `appCapabilities`, `initialized`)
@@ -598,6 +608,11 @@ The server applies these layers to every route:
 | `DurableWorker` refuses untrusted stored principals (`identity.principal_not_allowed`) | List them with `DurableWorkerConfig::with_allowed_principal` |
 | A failed session lookup no longer recreates the session | — |
 | Webhook ingress, approvals endpoints, and governance endpoints are new | — |
+| With `a2a-v1`, `with_a2a`, `create_app_with_a2a`, and `A2aServer` also serve A2A v1; `/.well-known/agent-card.json` holds the v1 card and the 0.3 card is at `/.well-known/agent.json` only | A 0.3 client reads `/.well-known/agent.json`, or uses `A2aClient`, which falls back to it |
+| The A2A v1 layer uses `a2a-protocol-types` 0.15 instead of 0.12 | Depend on `a2a-protocol-types = "0.15"` to build v1 messages, tasks, or cards; the wire format is unchanged |
+| The A2A v1 handlers refuse a request without `A2A-Version` | Send `A2A-Version: 1.0` |
+| A task ending on a held or long-running call is `input-required`; one ending on `adk_request_credential` is `auth-required` | Handle `TaskState::AuthRequired` |
+| The bundled runtime UI at `/` and `/ui/` is removed | Mount `adk-surface`'s web home (see [The web home](#the-web-home)) |
 
 See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
 

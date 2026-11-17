@@ -51,6 +51,7 @@ No feature is enabled by default.
 | `egress-dns` | `egress::SystemResolver`: the operating system resolver for egress checks |
 | `egress-client` | `egress::GuardedClient` and `egress::EgressResolver`: HTTP clients that enforce an `EgressPolicy` (implies `egress-dns`) |
 | `webhook-delivery` | The `webhook_delivery` module: signed outbound webhook delivery (implies `webhooks`, `egress-client`) |
+| `auth-bridge` | `request_context::RequestContextExtractor`, the trait an HTTP server authenticates requests through |
 
 ## Core Traits
 
@@ -63,7 +64,7 @@ No feature is enabled by default.
 | `sub_agents()` | required | Child agents; return `&[]` for a leaf agent |
 | `run(ctx)` | required | Returns `Result<EventStream>` |
 | `allows_transfer_to_parent()` / `allows_transfer_to_peers()` | `true` | Transfer restrictions the runner enforces for every transfer |
-| `screen_user_input(content)` | no screening | Input guardrails the runner applies before it saves a user message |
+| `screen_user_input(content)` | screens with each sub-agent | Input guardrails the runner applies before it saves a user message; a wrapper whose inner agent is not a sub-agent delegates to it |
 | `close()` | closes each sub-agent | Releases what the agent holds; `Runner::close` calls it |
 
 `EventStream` is `Pin<Box<dyn Stream<Item = Result<Event>> + Send>>`.
@@ -118,6 +119,7 @@ impl Tool for GetWeather {
 | `timeout_override()` | `None` (the agent's tool timeout) | `Some(None)` removes the timeout; `Some(Some(d))` sets one |
 | `origin()` | `STATIC_TOOL_ORIGIN` (`"static"`) | Where the tool came from; MCP tools report `mcp:{toolset name}` |
 | `annotations()` | `None` | Behaviour annotations the tool's publisher declared |
+| `egress(args)` | `ToolEgress::Undeclared` | Network destinations the call reaches; a run with an egress policy refuses an undeclared call |
 | `required_scopes()` | `&[]` | Scopes the caller must hold |
 
 Only `ReadOnly` and `Idempotent` tools are retried, and only after a retryable error or a timeout. With an `ActionLedger` on `RunConfig::action_ledger` (`InMemoryActionLedger` here, `SqliteActionLedger` and the other backends in `adk-session`), a `NonIdempotent` call executes at most once per `ToolContext::idempotency_key()`; a replay of a call that never recorded an outcome is answered with `outcome_unknown_response()` instead of executing again.
@@ -162,8 +164,10 @@ impl Toolset for WeatherTools {
 | `generate_content(request, stream)` | required | Returns `Result<LlmResponseStream>` |
 | `schema_adapter()` | `GenericSchemaAdapter` | Provider-specific schema normalization |
 | `max_cost_micro_usd(request)` | `None` | Upper bound on the request's cost; a spend cap refuses a model that returns `None` |
+| `context_window()` | `None` | The model's context window in tokens; auto-compaction sets its threshold from it, or uses 100,000 tokens without one |
+| `native_web_search()` | `None` | The provider-executed web search the model's transport serves |
 
-Wrappers around another `Llm` forward `max_cost_micro_usd`.
+Wrappers around another `Llm` forward `max_cost_micro_usd`, `context_window`, and `native_web_search`.
 
 ### SchemaAdapter
 
@@ -297,6 +301,8 @@ fn render_tools(event: &Event) {
 | `route` | Target node names for dynamic routing in graph workflows |
 | `input_screened` | The runner screened this user message with input guardrails |
 | `workflow_positions` | Where each workflow agent stopped on a held call |
+| `steering` | A user message that reached the run through `Runner::steer` |
+| `grounding_sources` | Sources a tool call retrieved, which citation checks match against |
 
 `EventActions` derives `Default`; struct literals end with `..Default::default()`.
 
@@ -371,7 +377,7 @@ let _log_line = err.diagnostics().to_string(); // everything but the message
 | `Unsupported` | 501 | no |
 | `Unavailable` | 503 | yes |
 
-`ErrorCategory` is not `#[non_exhaustive]`, so exhaustive matches list every category. `upstream_excerpt` and `json_error_summary` keep upstream text and JSON values out of messages and logs.
+`ResourceExhausted` covers a used-up run budget and a provider account out of quota, credit, or spend limit; neither is retried within the run. `ErrorCategory` is not `#[non_exhaustive]`, so exhaustive matches list every category. `upstream_excerpt` and `json_error_summary` keep upstream text and JSON values out of messages and logs.
 
 ## Governed Tool Execution
 
@@ -384,7 +390,7 @@ let _log_line = err.diagnostics().to_string(); // everything but the message
 | Policy | `ToolPolicy`, `DeclarativePolicy`, `StrictestPolicy` | Allow, deny, or require approval; `DeclarativePolicy` denies unlisted tools; `evaluate_call` also receives the tool's `ToolOrigin` and the call ID (`PolicyCall`); `StrictestPolicy` applies several policies and keeps the strictest decision |
 | Screen | `ToolCallScreen` | The agent's guardrails; a rewrite is checked against the policy again |
 | Confirmation | `ToolApproval`, `ApprovalStore`, `ToolConfirmationHandler::decide_approval` | A live handler may return edited arguments, checked against the policy again, or a denial message. Decisions bind to the call's fingerprint — acting agent, tool origin and declaration digest, tool name, arguments — so they survive a re-issued call ID and never authorize another agent's call or another server's tool |
-| Approval service | `ApprovalService`, `StoreApprovalService`, `ApprovalPolicy` | An inbox over the approval store: quorum, slots filled by distinct approvers, an approver directory, delegation, escalation, expiry, and edit / reject / respond actions with compare-and-swap decisions |
+| Approval service | `ApprovalService`, `StoreApprovalService`, `ApprovalPolicy` | An inbox over the approval store: quorum, slots filled by distinct approvers, an approver directory, delegation, escalation, expiry, and edit / reject / respond actions with compare-and-swap decisions. `route_unrouted` files held calls under a host's router, such as a kernel's inbox, and `add_notifier` adds an `ApprovalNotifier` to a service already built; wrappers forward both |
 
 ```rust
 use adk_core::{ArgPredicate, DeclarativePolicy, PolicyDecision, PolicyRule, ToolPolicyRequest};
@@ -409,7 +415,7 @@ Every run has an acting agent. `AgentId`, `AgentPrincipal`, and `ActingContext` 
 
 ## Network Egress
 
-`egress::EgressPolicy` is a host, port and CIDR allowlist with a pure `decide()`, intersected by `narrow()` so lower layers only tighten an operator's ceiling; cloud metadata endpoints are always refused and non-public addresses need an explicit CIDR rule or `with_private_networks()`. `egress::classify` is the one address classifier the workspace shares. `egress::GuardedClient` (feature `egress-client`) checks every request URL, every resolved address and every redirect hop, ignores proxy settings, and fails to build rather than fall back to an unguarded client. See [Network Egress Policy](../docs/official_docs/security/egress.md).
+`egress::EgressPolicy` is a host, port and CIDR allowlist with a pure `decide()`, intersected by `narrow()` so lower layers only tighten an operator's ceiling; cloud metadata endpoints are always refused and non-public addresses need an explicit CIDR rule or `with_private_networks()`. `egress::classify` is the one address classifier the workspace shares. `egress::GuardedClient` (feature `egress-client`) checks every request URL, every resolved address and every redirect hop, ignores proxy settings, and fails to build rather than fall back to an unguarded client; its `get` and `post` return a reqwest 0.13 `RequestBuilder`. See [Network Egress Policy](../docs/official_docs/security/egress.md).
 
 ## Run Budgets and Spend
 
@@ -460,7 +466,7 @@ Backend-neutral traits for running agents durably across replicas, each with an 
 | `SpendLedger` | `InMemorySpendLedger` | Spend reservations and committed spend |
 | `AuditLogStore` | `InMemoryAuditLogStore` | Append-only audit logs and checkpoints |
 
-`NewRun::with_service_subject` marks a scheduled, webhook, or queue run as acting for a service. `schedule::plan_fires` computes fire times; cron specs need the `cron` feature. `GovernanceControl::mirrored` mirrors a shared `GovernanceStateStore`, so a freeze on one replica reaches every replica.
+A retryable `RunOutcome::Failed` with attempts left requeues the run, claimable once its `backoff` has passed; `RetryBackoff` computes a jittered, doubling wait that honours an error's `Retry-After`. `NewRun::with_service_subject` marks a scheduled, webhook, or queue run as acting for a service. `schedule::plan_fires` computes fire times; cron specs need the `cron` feature. `GovernanceControl::mirrored` mirrors a shared `GovernanceStateStore`, so a freeze on one replica reaches every replica.
 
 ```rust
 use std::time::Duration;
@@ -543,6 +549,7 @@ assert!(validate_state_key("../etc/passwd").is_err());
 | `BeforeAgentCallback` / `AfterAgentCallback` | `Arc<dyn CallbackContext>` | `Result<Option<Content>>` |
 | `BeforeModelCallback` | context, `LlmRequest` | `Result<BeforeModelResult>` (`Continue(request)` or `Skip(response)`) |
 | `AfterModelCallback` | context, `LlmResponse` | `Result<Option<LlmResponse>>` |
+| `HistoryProcessor` | context, the agent's history (`Vec<Content>`) | `Result<Vec<Content>>`, the history the rest of the turn continues from |
 | `BeforeToolCallback` / `AfterToolCallback` | `Arc<dyn CallbackContext>` | `Result<Option<Content>>` |
 | `AfterToolCallbackFull` | context, tool, arguments, response | `Result<Option<Value>>` |
 | `OnToolErrorCallback` | context, tool, arguments, error message | `Result<Option<Value>>` |
@@ -552,7 +559,28 @@ Each alias boxes an async closure: `Box<dyn Fn(..) -> Pin<Box<dyn Future<Output 
 
 ## Context Compaction
 
-`EventsCompactionConfig` configures compaction: `compaction_interval` (compaction runs when the session's user-message count is a multiple of it), `overlap_size` (the most recent invocations left out of the summary), and a `summarizer` implementing `BaseEventsSummarizer`. Compaction never covers a call still held for confirmation (`held_call_compaction_limit`). `IntraCompactionConfig` sets auto-compaction, which is on by default: before each model call an agent passes its history to `RunConfig::history_compactor` (a `HistoryCompactor`), which compacts it once the request passes 80% of the model's context window (`Llm::context_window`) or 100,000 estimated tokens. `is_context_limit_error` tells a model's rejection of a too-long request from other errors, and `LlmEventSummarizer` writes summaries for both.
+`EventsCompactionConfig` configures compaction: `compaction_interval` (compaction runs when the session's user-message count is a multiple of it), `overlap_size` (the most recent invocations left out of the summary), and a `summarizer` implementing `BaseEventsSummarizer`. Compaction never covers a call still held for confirmation (`held_call_compaction_limit`).
+
+`IntraCompactionConfig` sets auto-compaction, which is on by default: before each model call an agent passes its history to `RunConfig::history_compactor` (a `HistoryCompactor`, which the runner installs), and the compactor summarizes it once the request passes the threshold.
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `enabled` | `true` | `IntraCompactionConfig::disabled()` turns auto-compaction off |
+| `token_threshold` | `None` | A fixed threshold in estimated tokens (`IntraCompactionConfig::at_tokens(n)`); `None` derives it from the model's window |
+| `context_window_fraction` | `0.8` | The share of `Llm::context_window` a request may reach (`IntraCompactionConfig::at_window_fraction(f)`); a model that reports no window compacts at 100,000 estimated tokens (`intra_compaction::DEFAULT_TOKEN_THRESHOLD`) |
+| `overlap_event_count` | `10` | The most recent history entries kept as they are, within half the threshold (`with_overlap_event_count`) |
+| `chars_per_token` | `4` | Characters per token for the estimate |
+
+```rust
+use adk_core::{IntraCompactionConfig, RunConfig};
+
+let config = RunConfig {
+    intra_compaction: Some(IntraCompactionConfig::at_tokens(50_000).with_overlap_event_count(6)),
+    ..Default::default()
+};
+```
+
+`RunConfig::intra_compaction` overrides the runner's setting for one run. `is_context_limit_error` tells a model's rejection of a too-long request from other errors, and `LlmEventSummarizer` writes summaries for both.
 
 ## Streaming Modes
 
@@ -573,12 +601,12 @@ Set per agent with `LlmAgentBuilder::tool_execution_strategy()`.
 | Change | Migration |
 |--------|-----------|
 | `ToolConfirmationRequest::fingerprint()` names the acting agent and the tool's `ToolOrigin` | Take fingerprints from the held call's request or `ToolConfirmationRequest::for_tool` |
-| `ErrorCategory` gains `Conflict` (409) and `ResourceExhausted` (429) | Add match arms |
-| `RunConfig` gains `acting`, `action_ledger`, `approval_store`, `approval_service`, `audit`, `budget`, `budget_tracker`, `governance`, `invocation_hooks`, `llm_spend_estimate`, `spend_ledger`, `tool_approvals`, `tool_policy`, `tool_confirmation_timeout`, and `deny_on_confirmation_timeout` | End struct literals with `..Default::default()` |
-| `ToolApproval` carries `edited_args` and `message` and is no longer `Copy` | Build it with `approve()` / `deny()` |
-| `Tool` gains `effect()`, `timeout_override()`, `origin()`, and `annotations()`; `Agent` gains `close()`, `screen_user_input()`, and transfer flags | Wrappers forward them |
+| `ErrorCategory` gains `Conflict` (409) and `ResourceExhausted` (429); a provider account out of quota or credit is `ResourceExhausted`, not `RateLimited` | Add match arms |
+| `RetryBudget` gains `max_delay`; only `ReadOnly` and `Idempotent` tools are retried | `RetryBudget::new(..).with_max_delay(..)`; declare `ToolEffect::Idempotent` where a retry is safe |
+| `RunConfig` gains `acting`, `action_ledger`, `approval_service`, `approval_store`, `audit`, `budget`, `budget_tracker`, `consent_gate`, `deny_on_confirmation_timeout`, `durable_run_id`, `egress_policy`, `governance`, `history_compactor`, `intra_compaction`, `invocation_hooks`, `llm_spend_estimate`, `request_context`, `request_metadata`, `requested_call`, `spend_ledger`, `tool_approvals`, `tool_confirmation_timeout`, `tool_policy`, and `transfer_target_descriptions` | End struct literals with `..Default::default()` |
+| `IntraCompactionConfig` gains `enabled` and `context_window_fraction`; `token_threshold` is `Option<u64>`; auto-compaction runs before every model call and is on by default | `IntraCompactionConfig::at_tokens(n)` replaces a literal; `IntraCompactionConfig::disabled()` turns it off |
+| `Tool` gains `effect()`, `timeout_override()`, `origin()`, `annotations()`, and `egress()`; `Llm` gains `context_window()`; `ReadonlyContext` gains `acting_context()`; `Agent` gains `close()`, `screen_user_input()`, and transfer flags | Wrappers forward them |
 | `LlmResponse` gains `model` and `provider`; `UsageMetadata` gains `builtin_tool_uses` | End struct literals with `..Default::default()` |
-| `ActingContext` no longer carries an invocation id | Read it from the execution identity |
 | `inject_session_state` leaves `${x}`, `\{x}`, and `{{x}}` literal | — |
 
 See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.

@@ -34,11 +34,11 @@ Graph-based workflow orchestration for Rust Agent Development Kit (ADK-Rust) age
 - **Governed nodes**: `with_governed_node` puts a node's call on the governed path — approval, edits, the kill switch and the action ledger — so it runs at most once per call in its lineage, forks included; a run without an action ledger, or a graph without a checkpointer, does not run it
 - **Strictness, opt-in**: `with_strict_channels` fails the run when a node writes a channel the schema does not declare
 - **Streaming**: Five stream modes (values, updates, messages, custom, debug)
-- **ADK Integration**: Full callback support, works with existing runners
+- **ADK Integration**: `before_agent_callback` and `after_agent_callback` on `GraphAgentBuilder`; a `GraphAgent` runs under any `Runner`
 - **Functional API** (feature: `functional`): Write workflows as async functions with automatic checkpointing
 - **Typed State Reducers**: ReducedValue, UntrackedValue, MessagesValue containers
 - **State Schema Validation**: Type-level validation at workflow boundaries
-- **Proc Macros**: `#[entrypoint]` and `#[task]` (from `adk-rust-macros`) for zero-boilerplate workflow definition
+- **Proc Macros**: `#[entrypoint]` and `#[task]` (from `adk-rust-macros`) generate the workflow agent and the recorded task wrappers
 
 ## Architecture
 
@@ -62,10 +62,10 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-graph = "3.0"
-adk-agent = "3.0"
-adk-model = "3.0"
-adk-core = "3.0"
+adk-graph = "3.0.0"
+adk-agent = "3.0.0"
+adk-model = "3.0.0"
+adk-core = "3.0.0"
 anyhow = "1"
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
@@ -768,6 +768,10 @@ No feature is enabled by default.
 | `action-full` | `action`, `action-trigger`, `action-http`, `action-db`, `action-email`, `action-rss` |
 | `full` | `sqlite` and `action-full` |
 
+Through the `adk-rust` umbrella, its `action` feature enables this crate's `action`, `action-db`,
+and `action-email`, and its `action-http` feature enables `action-http` and `action-rss`.
+`adk-rust` has no `action-db`, `action-email`, `action-rss`, or `action-code` feature.
+
 ## Action Nodes
 
 `ActionNodeExecutor` runs an `adk-action` configuration as a graph node.
@@ -810,8 +814,8 @@ The Functional API (feature: `functional`) provides a higher-level programming m
 
 ```toml
 [dependencies]
-adk-graph = { version = "3.0", features = ["functional"] }
-adk-rust-macros = "3.0"
+adk-graph = { version = "3.0.0", features = ["functional"] }
+adk-rust-macros = "3.0.0"
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```

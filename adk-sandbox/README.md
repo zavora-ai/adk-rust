@@ -12,45 +12,45 @@ Isolated code execution runtime for [ADK-Rust](https://github.com/zavora-ai/adk-
 
 ```toml
 [dependencies]
-adk-sandbox = "3.0"
+adk-sandbox = "3.0.0"
 
 # Or, with OS-level enforcement and the WASM backend:
-# adk-sandbox = { version = "3.0", features = ["sandbox-native", "wasm"] }
+# adk-sandbox = { version = "3.0.0", features = ["sandbox-native", "wasm"] }
 ```
 
 Or use the meta-crate, where the `sandbox` feature (included in `full`) re-exports it:
 
 ```toml
 [dependencies]
-adk-rust = { version = "3.0", features = ["sandbox"] }
+adk-rust = { version = "3.0.0", features = ["sandbox"] }
 ```
 
 ## Feature Flags
 
 | Feature   | Description                                | Default | Extra Dependencies |
 |-----------|--------------------------------------------|---------|--------------------|
-| `process` | Subprocess execution via `tokio::process`  | ✅      | None (uses tokio)  |
-| `wasm`    | In-process WASM execution via `wasmtime`   | ❌      | `wasmtime`, `wasmtime-wasi` |
-| `sandbox-macos` | macOS Seatbelt enforcement          | ❌      | None               |
-| `sandbox-linux` | Linux bubblewrap enforcement        | ❌      | None (external `bwrap` binary) |
-| `sandbox-windows` | Windows restricted-token enforcement | ❌      | `windows-sys`      |
-| `sandbox-native` | All three enforcers; only the target platform's compiles | ❌ | All of the above |
-| `process-tree` | `process_tree::JobObject` and `ContainedChild`: a process tree held in a Job Object on Windows (implied by `sandbox-windows`); `process_tree::ProcessGroup`: one held in a session and process group of its own on Unix | ❌ | `windows-sys` on Windows |
-| `egress-proxy` | `egress_proxy::EgressProxy`: the HTTP egress proxy that admits a sandboxed call's connections by an `EgressPolicy`, with SNI matching and per-call audit records ([Network Egress Policy](../docs/official_docs/security/egress.md#egress-proxy-for-sandboxed-processes)) | ❌ | `chrono` |
-| `workspace` | Workspace lifecycle + `LocalUnixClient` | ❌   | `tar`, `uuid`      |
-| `workspace-docker` | `DockerClient` (implies `workspace`) | ❌ | `bollard`, `futures` |
+| `process` | Subprocess execution via `tokio::process`  | on | None (uses tokio)  |
+| `wasm`    | In-process WASM execution via `wasmtime`   | off | `wasmtime`, `wasmtime-wasi` |
+| `sandbox-macos` | macOS Seatbelt enforcement          | off | None               |
+| `sandbox-linux` | Linux bubblewrap enforcement        | off | None (external `bwrap` binary) |
+| `sandbox-windows` | Windows restricted-token enforcement | off | `windows-sys`      |
+| `sandbox-native` | All three enforcers; only the target platform's compiles | off | All of the above |
+| `process-tree` | `process_tree::JobObject` and `ContainedChild`: a process tree held in a Job Object on Windows (implied by `sandbox-windows`); `process_tree::ProcessGroup`: one held in a session and process group of its own on Unix | off | `windows-sys` on Windows |
+| `egress-proxy` | `egress_proxy::EgressProxy`: the HTTP egress proxy that admits a sandboxed call's connections by an `EgressPolicy`, with SNI matching and per-call audit records ([Network Egress Policy](../docs/official_docs/security/egress.md#egress-proxy-for-sandboxed-processes)) | off | `chrono` |
+| `workspace` | Workspace lifecycle + `LocalUnixClient` | off | `tar`, `uuid`      |
+| `workspace-docker` | `DockerClient` (implies `workspace`) | off | `bollard`, `futures` |
 
 ## Backend Comparison
 
 | Capability              | `ProcessBackend`         | `WasmBackend`            |
 |-------------------------|--------------------------|--------------------------|
-| Timeout enforcement     | ✅ `tokio::time::timeout`, stdin write included | ✅ Epoch-based interruption |
-| Memory limit            | ❌ Not enforced           | ✅ `StoreLimitsBuilder`: one linear memory, `memory_limit_mb` or 256 MiB by default |
-| Network isolation       | Only with an OS enforcer | ✅ No WASI network        |
-| Filesystem isolation    | Only with an OS enforcer | ✅ No WASI preopens       |
-| Environment isolation   | ✅ `env_clear()` + explicit env | ✅ Full (no host access) |
-| Output truncation       | ✅ 1 MB limit applied while reading, UTF-8 safe | ✅ 1 MB capture pipes |
-| Process cleanup         | ✅ Process group killed on timeout and on exit | — (in-process) |
+| Timeout enforcement     | `tokio::time::timeout`, stdin write included | Epoch-based interruption |
+| Memory limit            | Not enforced             | `StoreLimitsBuilder`: one linear memory, `memory_limit_mb` or 256 MiB by default |
+| Network isolation       | Only with an OS enforcer | No WASI network          |
+| Filesystem isolation    | Only with an OS enforcer | No WASI preopens         |
+| Environment isolation   | `env_clear()` plus explicit env | Full (no host access) |
+| Output truncation       | 1 MB limit applied while reading, UTF-8 safe | 1 MB capture pipes |
+| Process cleanup         | Process group killed on timeout and on exit | — (in-process) |
 | Supported languages     | Rust, Python, JS, TS, Command | Wasm only            |
 
 `ProcessBackend` is honest about what it does *not* enforce. Use `WasmBackend` when you need full sandboxing with memory limits and no host access, or attach an OS enforcer (below) to confine a `ProcessBackend`.
@@ -122,6 +122,7 @@ crate needs a wildcard arm.
 | `EnforcerFailed`   | Sandbox enforcer failed to apply profile      |
 | `EnforcerUnavailable` | Sandbox enforcer not functional on this system |
 | `PolicyViolation`  | A policy path could not be resolved           |
+| `Unenforceable`    | The enforcer cannot enforce part of the policy, such as its network mode, so the command does not run |
 | `ProvisionFailed`, `SessionNotFound`, `SnapshotNotFound`, `PathTraversal`, `DockerUnavailable`, `SessionTimeout` | Workspace lifecycle failures (`workspace` feature only) |
 
 Non-zero exit codes are **not** errors — they are returned in `ExecResult.exit_code`.
@@ -153,9 +154,10 @@ async fn run_confined(request: ExecRequest) -> Result<ExecResult, SandboxError> 
     // 1. Build a policy. Seatbelt grants the macOS system runtime itself; bubblewrap
     //    mounts only the listed paths, so Linux policies list the system directories too.
     //    Every allowed path must exist, or execution fails with `PolicyViolation`.
+    //    With the network denied, bubblewrap refuses a grant of `/tmp` itself, so the
+    //    policy grants a directory below it.
     let policy = SandboxPolicyBuilder::new()
         .allow_read("/usr")
-        .allow_read("/tmp")
         .allow_read_write("/tmp/work")
         .allow_process_spawn()
         // Network is denied by default
@@ -174,6 +176,69 @@ async fn run_confined(request: ExecRequest) -> Result<ExecResult, SandboxError> 
 }
 ```
 
+### Network Access
+
+`SandboxPolicy::network` is one `NetworkAccess` mode, and `Denied` is the default. An enforcer
+runs a policy only when its `network_support()` covers the mode; otherwise it refuses with
+`SandboxError::Unenforceable` and the command does not run.
+
+| Mode | Builder call | What the process reaches |
+|------|--------------|--------------------------|
+| `Denied` | none (the default) | No network |
+| `Proxied { endpoint }` | `.network(call_proxy.network())` or `.proxied(endpoint)` | Only the egress proxy's loopback port; `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` name it and `NO_PROXY` is empty |
+| `Open` | `.allow_network()` | The host network |
+
+A custom `SandboxEnforcer` implements `network_support()` to state which restrictive modes it
+enforces, and a wrapper forwards its inner enforcer's.
+
+The `egress-proxy` feature adds `egress_proxy::EgressProxy`, which admits a call's connections
+by an `adk_core::egress::EgressPolicy`, checks each resolved address and the TLS server name,
+and files one `EgressRecord` per connection. `EgressProxyBuilder::start_for` starts one proxy
+per call where the enforcer needs it — on the host's loopback for Seatbelt, inside the call's
+network namespace for bubblewrap — and `max_bytes_per_direction` and
+`max_connection_lifetime` cap each admitted connection:
+
+```rust
+use std::ffi::{OsStr, OsString};
+use std::path::Path;
+use std::time::Duration;
+
+use adk_core::egress::EgressPolicy;
+use adk_sandbox::egress_proxy::EgressProxy;
+use adk_sandbox::sandbox::{SandboxPolicyBuilder, get_enforcer, sandboxed_command};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let enforcer = get_enforcer()?;
+    let proxy = EgressProxy::builder(EgressPolicy::allowlist(["pypi.org:443"])?)
+        .call_id("call-42")
+        .max_bytes_per_direction(25 * 1024 * 1024)
+        .max_connection_lifetime(Duration::from_secs(60))
+        .start_for(enforcer.as_ref())?;
+    let policy = SandboxPolicyBuilder::new()
+        .allow_read("/usr")
+        .network(proxy.network())
+        .env("PATH", "/usr/bin:/bin")
+        .build();
+
+    let output = sandboxed_command(
+        enforcer.as_ref(),
+        OsStr::new("curl"),
+        &[OsString::from("-sI"), OsString::from("https://pypi.org/")],
+        &policy,
+        Path::new("/usr"),
+    )?
+    .output()
+    .await?;
+    drop(proxy); // after the command ends
+    println!("{}", String::from_utf8_lossy(&output.stdout));
+    Ok(())
+}
+```
+
+[Network Egress Policy](../docs/official_docs/security/egress.md#egress-proxy-for-sandboxed-processes)
+describes the proxy's checks, refusals and audit records.
+
 ### Running a Command in a Workspace
 
 `sandbox::sandboxed_command` builds the `tokio::process::Command` for one program under an
@@ -185,7 +250,7 @@ harness runs in the user's workspace rather than in a scratch directory.
 | Program | The enforcer's wrapper (`sandbox-exec`, `bwrap`), resolved on the caller's `PATH` |
 | Arguments | The wrapper's arguments, then the program and its arguments |
 | Working directory | The `cwd` argument; it is not granted, so list it in the policy |
-| Environment | Cleared, then exactly `policy.env` |
+| Environment | Cleared, then exactly `policy.env`, plus the proxy variables of a `Proxied` network |
 | Streams, process group, kill-on-drop | Left to the caller |
 
 ```rust

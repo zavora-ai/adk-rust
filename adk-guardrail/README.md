@@ -249,6 +249,7 @@ so text beside a tool call is not checked, and `validate` without evidence fails
 | `ToolGuardrail::validate_result`, `ResultTextGuardrail`, and `validate_preamble` are new; `validate_call` defaults to allowing | — |
 | `validate_output`, `OutputEvidence`, `GuardrailExecutor::enforce_output`, and `CitationRequired` are new; an agent screens its final answer through `validate_output`, which defaults to `validate` | — |
 | `Low` findings pass and are recorded as warnings | — |
+| The implicit `jsonschema` feature is removed | Enable `schema` (on by default) |
 
 See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
 

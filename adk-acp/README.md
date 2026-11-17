@@ -34,19 +34,20 @@ start from `Client.v1()` and `Agent.v1()`.
 
 Besides the stable v1 surface, both directions implement these unstable ACP
 surfaces: session fork, archive, status, options and title, `auth/status`,
-end-of-turn token usage, plan operations and subagent updates. The SDK may change
-unstable surfaces in a minor release, so adk-acp depends on `~5.2` and takes patch
-releases only. The draft protocol v2, MCP-over-ACP and LLM provider methods are not
-implemented yet.
+end-of-turn token usage, plan operations, subagent updates, MCP over ACP
+(`mcp/message`) and the LLM provider methods (`providers/list`, `providers/set`,
+`providers/disable`). The SDK may change unstable surfaces in a minor release, so
+adk-acp depends on `~5.2` and takes patch releases only. The draft protocol v2 is
+behind the `unstable-protocol-v2` feature; see [Draft protocol v2](#draft-protocol-v2).
 
 ## Installation
 
 ```toml
 [dependencies]
-adk-acp = "3.0"
+adk-acp = "3.0.0"
 
 # Or, to also expose an ADK-Rust agent to a client:
-# adk-acp = { version = "3.0", features = ["server"] }
+# adk-acp = { version = "3.0.0", features = ["server"] }
 ```
 
 | Feature | Description |
@@ -59,7 +60,7 @@ Or use the meta-crate's `acp` feature, which is not part of any tier:
 
 ```toml
 [dependencies]
-adk-rust = { version = "3.0", features = ["acp"] }
+adk-rust = { version = "3.0.0", features = ["acp"] }
 ```
 
 ## Use an ACP agent as an ADK-Rust tool
@@ -152,7 +153,8 @@ forked sessions, and the client answers the agent's `mcp/message` requests
 
 `AcpConnection` exposes the rest of the protocol. Every request is checked against
 the capabilities the agent advertised; one it did not advertise returns
-`AcpError::Unsupported` without being sent.
+`AcpError::Unsupported` without being sent. The excerpt runs inside an async function
+that returns `adk_acp::Result`.
 
 ```rust,ignore
 use adk_acp::{AcpAgentConfig, AcpConnection, PermissionPolicy};
@@ -232,7 +234,11 @@ async fn serve(agent: Arc<dyn Agent>) -> Result<(), Box<dyn std::error::Error>> 
 | `user_id` | `"acp-client"`, the ADK user that owns every session |
 | `max_sessions` | 16; `build()` fails on 0 |
 | `shutdown_timeout` | 30 seconds; `build()` fails on 0 |
-| `session_controls` | None |
+| `session_controls` | None; no modes or configuration options are advertised |
+| `standing_permissions` | None; permission requests offer only one-time options |
+| `authenticator` | None; no `authMethods` are advertised |
+| `system_prompts` | `SystemPromptSupport::AppendAndOverride` |
+| `providers` | None; the `providers` capability is not advertised |
 | `transport` | `TransportConfig::Stdio`, the only transport |
 
 Protocol traffic is the only data written to stdout; send tracing and diagnostics to stderr.

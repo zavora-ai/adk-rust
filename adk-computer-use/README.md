@@ -45,8 +45,8 @@ by wrapping every action in the same fixed, predictable control flow:
 
 ```toml
 [dependencies]
-adk-computer-use = "3.0"
-adk-graph = "3.0"
+adk-computer-use = "3.0.0"
+adk-graph = "3.0.0"
 ```
 
 Or use the meta-crate, where the `computer-use` feature (included in `standard`) exposes it as
@@ -54,7 +54,7 @@ Or use the meta-crate, where the `computer-use` feature (included in `standard`)
 
 ```toml
 [dependencies]
-adk-rust = { version = "3.0", features = ["computer-use"] }
+adk-rust = { version = "3.0.0", features = ["computer-use"] }
 ```
 
 The crate has no feature flags of its own.
@@ -95,7 +95,10 @@ every error after it is acquired.
 
 ## What's included
 
-| Module | What it provides |
+Every item below is exported at the crate root; `contracts` and `runtime` are also public
+modules.
+
+| Area | What it provides |
 | --- | --- |
 | `contracts` | The `computer-use-mcp` MCP server wire types (`action`, `target`, `approval`, `receipt`, `lease`, `session`, `safety`), each validated so they cannot carry unsafe or disclosing data. |
 | `runtime` | The `ComputerUseRuntime` trait plus its live MCP adapter, `ComputerUseMcpRuntime`. |

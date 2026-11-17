@@ -36,7 +36,7 @@ keeps it running in the background (`adk-harness` background shells).
 
 ```toml
 [dependencies]
-adk-devtools = "3.0"
+adk-devtools = "3.0.0"
 ```
 
 The crate has no feature flags.
@@ -125,6 +125,14 @@ environment — and names its isolation; the tool keeps the timeout ceiling, out
 streaming, standard input, session and group kill. `HostLauncher` (`sh -c`, the default)
 reproduces the built-in behaviour. A sandboxing launcher can wrap the script with an
 `adk-sandbox` enforcer.
+
+| Method | Default | Purpose |
+|--------|---------|---------|
+| `command` | required | The command that runs the script |
+| `isolation` | required | The isolation the launcher names for `bash` |
+| `guarded_command` | `command`, with no guard | The command and a `LaunchGuard` that `BashTool` holds until the process exits, such as the call's egress proxy |
+| `egress` | `ToolEgress::Undeclared`, which a run egress policy refuses | What the launcher's commands reach on the network, declared as `bash`'s `Tool::egress` |
+| `spawn_contained` (Windows) | `None` | Starts the process itself, for confinement set when the process is created, such as a restricted token |
 
 ```rust
 use std::sync::Arc;

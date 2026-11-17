@@ -123,7 +123,7 @@ category, and code (`error`); its text (`error.message`) is logged only under
 
 | Change | Migration |
 |--------|-----------|
-| `RetryTracker::increment`, `get`, and `total` take the invocation ID and tool name; `reset_tool` and `tracked_invocations` are new; at most 1,024 invocations are tracked | Pass the invocation ID |
+| `RetryTracker::increment` and `get` take the invocation ID, the tool name, and the call key, and `total` takes the invocation ID; `reset_tool` and `tracked_invocations` are new; at most 1,024 invocations are tracked (`with_capacity` changes it) | Pass the invocation ID |
 | `GlobalRetryTracker::record_success` clears a tool's failures | — |
 | Authorization and approval refusals, and timeouts of a `NonIdempotent` tool, pass through unchanged | — |
 
