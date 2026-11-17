@@ -10,6 +10,7 @@
 //! |------|------|------|
 //! | Server | [`McpServer`] | Lists the tools and answers `tools/call`; an rmcp `ServerHandler` |
 //! | Executor | [`McpCallExecutor`] | Runs or refuses every call; [`DirectExecutor`] by default |
+//! | Tasks | [`McpTaskHost`] | Answers `tasks/get`, `tasks/update` and `tasks/cancel` for calls the executor turned into tasks (SEP-2663); none by default |
 //! | Caller | [`McpCallerResolver`] | Turns each HTTP request into the [`McpCaller`] the executor sees |
 //! | Router | [`McpRouterBuilder`] | The `axum::Router`: Streamable HTTP, the Server Card at `{endpoint}/server-card` (SEP-2127) with its `/.well-known/mcp/server-card.json` alias (spec 3.5 §7.9), and `/.well-known/ai-catalog.json` |
 //! | Card | [`ServerCard`], [`AiCatalog`] | Discovery documents to the SEP-2127 schema |
@@ -48,6 +49,7 @@ mod caller;
 mod card;
 mod executor;
 mod http;
+mod task;
 
 pub use caller::{AnonymousCallers, McpCaller, McpCallerResolver, McpHttpRequest};
 pub use card::{
@@ -59,6 +61,7 @@ pub use card::{
 };
 pub use executor::{DirectExecutor, McpCallExecutor, McpToolCall, McpToolOutcome};
 pub use http::{McpRouterBuilder, McpSessions};
+pub use task::{McpRequestPeer, McpTaskHost};
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -70,9 +73,10 @@ use adk_core::{
     ToolEffect, Url, tool_error_response,
 };
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorCode, ErrorData,
-    Implementation, InitializeResult, JsonObject, ListToolsResult, PaginatedRequestParams,
-    ServerCapabilities, ServerConfig, ToolAnnotations,
+    CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ContentBlock,
+    CreateTaskResult, ErrorCode, ErrorData, GetTaskParams, GetTaskResult, Implementation,
+    InitializeResult, InputRequiredResult, JsonObject, ListToolsResult, PaginatedRequestParams,
+    ProtocolVersion, ServerCapabilities, ServerConfig, ToolAnnotations, UpdateTaskParams,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler};
@@ -103,8 +107,16 @@ const QUOTED_NAME_LIMIT: usize = 128;
 /// arguments against the parameters schema, then hands the call to the
 /// [`McpCallExecutor`] under the [call timeout](McpServerBuilder::call_timeout).
 ///
-/// The server is an rmcp `ServerHandler`, so it also serves stdio; there every caller is
-/// [`McpCaller::anonymous`]. [`McpRouterBuilder`] serves it over Streamable HTTP.
+/// The server is an rmcp `ServerHandler`, so it also serves stdio; there every caller is the
+/// [local caller](McpServerBuilder::local_caller), anonymous unless set.
+/// [`McpRouterBuilder`] serves it over Streamable HTTP.
+///
+/// With a [task host](McpServerBuilder::task_host) the server declares the tasks extension
+/// (SEP-2663): the executor may answer a call from a client that declared it with
+/// [`McpToolOutcome::Task`], and `tasks/get`, `tasks/update` and `tasks/cancel` go to the host.
+/// An executor may answer a client on MCP `2026-07-28` or later with
+/// [`McpToolOutcome::InputRequired`] (SEP-2322), and receives the answers with the retried
+/// call.
 ///
 /// # Example
 ///
@@ -146,6 +158,8 @@ struct Inner {
     entries: Vec<Entry>,
     index: HashMap<String, usize>,
     executor: Arc<dyn McpCallExecutor>,
+    task_host: Option<Arc<dyn McpTaskHost>>,
+    local_caller: McpCaller,
     call_timeout: Option<Duration>,
 }
 
@@ -279,18 +293,33 @@ impl McpServer {
         self.inner.executor.is_visible(entry.tool.as_ref(), caller).then_some(entry)
     }
 
+    /// The caller of `context`: the one the router resolved for an HTTP request, else the
+    /// [local caller](McpServerBuilder::local_caller).
+    fn caller_of(&self, context: &RequestContext<RoleServer>) -> McpCaller {
+        match context.extensions.get::<axum::http::request::Parts>() {
+            Some(parts) => {
+                parts.extensions.get::<McpCaller>().cloned().unwrap_or_else(McpCaller::anonymous)
+            }
+            None => self.inner.local_caller.clone(),
+        }
+    }
+
+    /// The task host, or the refusal of a `tasks/*` request on a server without one.
+    fn task_host(&self) -> std::result::Result<&Arc<dyn McpTaskHost>, ErrorData> {
+        self.inner.task_host.as_ref().ok_or_else(|| {
+            ErrorData::new(ErrorCode::METHOD_NOT_FOUND, "this server keeps no tasks", None)
+        })
+    }
+
     /// Runs one call: arguments checked, then the executor under the timeout and the request's
     /// cancellation.
     async fn call(
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> std::result::Result<CallToolResult, ErrorData> {
+    ) -> std::result::Result<CallToolResponse, ErrorData> {
         let parts = context.extensions.get::<axum::http::request::Parts>();
-        let caller = parts
-            .and_then(|parts| parts.extensions.get::<McpCaller>())
-            .cloned()
-            .unwrap_or_else(McpCaller::anonymous);
+        let caller = self.caller_of(&context);
         let name = request.name.as_ref();
         let Some(entry) = self.visible(name, &caller) else {
             tracing::debug!(tool.name = %quoted(name), caller.id = caller.id(), "mcp call to an unknown tool");
@@ -301,18 +330,40 @@ impl McpServer {
         };
         let arguments = Value::Object(request.arguments.unwrap_or_default());
         if let Err(error) = entry.validator.validate(name, &arguments) {
-            return Ok(failed_result(name, &error));
+            return Ok(failed_result(name, &error).into());
         }
         let session_id = parts
             .and_then(|parts| parts.headers.get("mcp-session-id"))
             .and_then(|value| value.to_str().ok())
             .map(str::to_string);
+        let capabilities = context.client_capabilities();
+        let accepts_task = self.inner.task_host.is_some()
+            && capabilities.as_ref().is_some_and(|capabilities| capabilities.supports_tasks());
+        // ISO `YYYY-MM-DD` versions compare lexically the same as chronologically.
+        let accepts_input_required = context
+            .protocol_version()
+            .is_some_and(|version| version.as_str() >= ProtocolVersion::V_2026_07_28.as_str());
+        let can_elicit = !accepts_input_required
+            && capabilities
+                .as_ref()
+                .and_then(|capabilities| capabilities.elicitation.as_ref())
+                .is_some_and(|elicitation| elicitation.form.is_some() || elicitation.url.is_none());
+        let peer = McpRequestPeer::new(
+            context.peer.clone(),
+            context.meta.get_progress_token(),
+            can_elicit,
+        );
         let call = McpToolCall {
             tool: Arc::clone(&entry.tool),
             arguments,
             caller,
             request_id: request_id_string(&context.id),
             session_id,
+            accepts_task,
+            accepts_input_required,
+            input_responses: request.input_responses,
+            request_state: request.request_state,
+            peer: Some(peer),
         };
         let caller_id = call.caller.id().to_string();
         let run = self.inner.executor.execute(call);
@@ -334,10 +385,36 @@ impl McpServer {
             )),
         };
         match outcome {
-            Ok(McpToolOutcome::Completed(value)) => Ok(completed_result(value)),
+            Ok(McpToolOutcome::Completed(value)) => Ok(completed_result(value).into()),
             Ok(McpToolOutcome::Failed(error)) => {
                 tracing::debug!(tool.name = name, caller.id = %caller_id, error = %error.diagnostics(), "mcp tool failed");
-                Ok(failed_result(name, &error))
+                Ok(failed_result(name, &error).into())
+            }
+            Ok(McpToolOutcome::Task(task)) if accepts_task => {
+                tracing::debug!(tool.name = name, caller.id = %caller_id, task.id = %task.task_id, "mcp call continues as a task");
+                Ok(CallToolResponse::Task(CreateTaskResult::new(task)))
+            }
+            Ok(McpToolOutcome::InputRequired { input_requests, request_state })
+                if accepts_input_required =>
+            {
+                let requests = (!input_requests.is_empty()).then_some(input_requests);
+                if requests.is_none() && request_state.is_none() {
+                    return Err(ErrorData::internal_error(
+                        "the call asked for input with neither questions nor state",
+                        None,
+                    ));
+                }
+                Ok(CallToolResponse::InputRequired(InputRequiredResult::new(
+                    requests,
+                    request_state,
+                )))
+            }
+            Ok(McpToolOutcome::Task(_) | McpToolOutcome::InputRequired { .. }) => {
+                tracing::warn!(tool.name = name, caller.id = %caller_id, "mcp executor answered with a result the client cannot take");
+                Err(ErrorData::internal_error(
+                    "the call needs a client that takes MCP tasks or input_required results",
+                    None,
+                ))
             }
             Err(error) => {
                 tracing::info!(tool.name = name, caller.id = %caller_id, error = %error.diagnostics(), "mcp call refused");
@@ -361,8 +438,12 @@ impl ServerHandler for McpServer {
         if !inner.icons.is_empty() {
             implementation = implementation.with_icons(inner.icons.iter().map(rmcp_icon).collect());
         }
-        let config = InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(implementation);
+        let capabilities = if inner.task_host.is_some() {
+            ServerCapabilities::builder().enable_tools().enable_tasks().build()
+        } else {
+            ServerCapabilities::builder().enable_tools().build()
+        };
+        let config = InitializeResult::new(capabilities).with_server_info(implementation);
         match &inner.instructions {
             Some(instructions) => config.with_instructions(instructions),
             None => config,
@@ -374,12 +455,7 @@ impl ServerHandler for McpServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListToolsResult, ErrorData> {
-        let caller = context
-            .extensions
-            .get::<axum::http::request::Parts>()
-            .and_then(|parts| parts.extensions.get::<McpCaller>())
-            .cloned()
-            .unwrap_or_else(McpCaller::anonymous);
+        let caller = self.caller_of(&context);
         Ok(ListToolsResult::with_all_items(self.tool_definitions_for(&caller)))
     }
 
@@ -393,7 +469,47 @@ impl ServerHandler for McpServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResponse, ErrorData> {
-        self.call(request, context).await.map(CallToolResponse::from)
+        self.call(request, context).await
+    }
+
+    async fn get_task(
+        &self,
+        request: GetTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> std::result::Result<GetTaskResult, ErrorData> {
+        let caller = self.caller_of(&context);
+        let task = self.task_host()?.get(&request.task_id, &caller).await.map_err(|error| {
+            tracing::debug!(task.id = %quoted(&request.task_id), caller.id = caller.id(), error = %error.diagnostics(), "mcp tasks/get refused");
+            refusal(&error)
+        })?;
+        Ok(GetTaskResult::new(task))
+    }
+
+    async fn update_task(
+        &self,
+        request: UpdateTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> std::result::Result<(), ErrorData> {
+        let caller = self.caller_of(&context);
+        self.task_host()?
+            .update(&request.task_id, &caller, request.input_responses)
+            .await
+            .map_err(|error| {
+                tracing::info!(task.id = %quoted(&request.task_id), caller.id = caller.id(), error = %error.diagnostics(), "mcp tasks/update refused");
+                refusal(&error)
+            })
+    }
+
+    async fn cancel_task(
+        &self,
+        request: CancelTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> std::result::Result<(), ErrorData> {
+        let caller = self.caller_of(&context);
+        self.task_host()?.cancel(&request.task_id, &caller).await.map_err(|error| {
+            tracing::debug!(task.id = %quoted(&request.task_id), caller.id = caller.id(), error = %error.diagnostics(), "mcp tasks/cancel refused");
+            refusal(&error)
+        })
     }
 }
 
@@ -428,6 +544,8 @@ pub struct McpServerBuilder {
     instructions: Option<String>,
     tools: Vec<Arc<dyn Tool>>,
     executor: Option<Arc<dyn McpCallExecutor>>,
+    task_host: Option<Arc<dyn McpTaskHost>>,
+    local_caller: McpCaller,
     open_world: bool,
     call_timeout: Option<Duration>,
 }
@@ -445,6 +563,8 @@ impl McpServerBuilder {
             instructions: None,
             tools: Vec::new(),
             executor: None,
+            task_host: None,
+            local_caller: McpCaller::anonymous(),
             open_world: true,
             call_timeout: Some(DEFAULT_CALL_TIMEOUT),
         }
@@ -501,6 +621,23 @@ impl McpServerBuilder {
     /// Runs calls through `executor` instead of [`DirectExecutor`].
     pub fn executor(mut self, executor: Arc<dyn McpCallExecutor>) -> Self {
         self.executor = Some(executor);
+        self
+    }
+
+    /// Follows the tasks the executor starts with `host`, and declares the tasks extension
+    /// (SEP-2663) so clients that support it may receive a task for a call.
+    pub fn task_host(mut self, host: Arc<dyn McpTaskHost>) -> Self {
+        self.task_host = Some(host);
+        self
+    }
+
+    /// The caller of requests that reach the server without an HTTP request, such as over
+    /// stdio; [`McpCaller::anonymous`] by default.
+    ///
+    /// A stdio server serves the one client that started it, so the host that starts it names
+    /// who that is, for example `McpCaller::authenticated("local:ana")`.
+    pub fn local_caller(mut self, caller: McpCaller) -> Self {
+        self.local_caller = caller;
         self
     }
 
@@ -569,6 +706,8 @@ impl McpServerBuilder {
                 entries,
                 index,
                 executor,
+                task_host: self.task_host,
+                local_caller: self.local_caller,
                 call_timeout: self.call_timeout,
             }),
         })
