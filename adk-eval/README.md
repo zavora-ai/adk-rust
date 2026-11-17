@@ -26,6 +26,7 @@ Agent evaluation framework for Rust Agent Development Kit (ADK-Rust).
 - **Regression Baselines**: Save/load metric snapshots, detect quality degradation
 - **Repeated Runs**: `Evaluator::evaluate_test_file_runs` runs an eval set `num_runs` times and reports each case's pass rate, score mean and sample variance, and flakiness (`MultiRunReport`); baselines from it carry a `pass_rate` metric
 - **Metered Judging**: `Evaluator::set_run_config` puts every eval run and LLM-judge call under one budget, spend ledger and kill switch; a refusal stops the evaluation (`EvalError::Refused`) instead of failing cases
+- **Online Evaluation**: `online::OnlineEvaluator` judges a seeded sample of finished production runs (filters by agent, request metadata and outcome) on a background worker with rubric, safety, hallucination, trajectory-efficiency and thread-level criteria, under its own budget and the kill switch; verdicts go to an `OnlineEvalStore` (in-memory or JSONL) and to `gen_ai.evaluation.result` telemetry
 - **Ledger Statistics**: Median/MAD baselines per dimension and day class, warm-up, windowed deviation test, and drift runs with cooldowns over a content-free activity ledger (`ledger`), also run as `cargo adk eval --ledger`
 - **JUnit XML Output**: CI-friendly report generation (feature: `ci-helpers`)
 - **Human Annotation**: JSONL export/import workflow for human review
@@ -338,6 +339,32 @@ async fn three_runs(mut evaluator: Evaluator, agent: Arc<dyn Agent>) -> adk_eval
 ```
 
 When the budget, the spend ledger or a frozen kill switch refuses a run or a judge call, the runs stop: the report keeps the completed runs and says why in `stopped`. `cargo adk eval --num-runs 3 --min-pass-rate 0.67 --judge-max-calls 50` does the same for an agent binary.
+
+### Online Evaluation
+
+Judge a sample of production runs after they finish, without slowing them down. The evaluator's plugin samples runs on a `Runner`; a background worker judges them under the evaluator's own budget:
+
+```rust
+use std::sync::Arc;
+
+use adk_core::{Llm, RunBudget};
+use adk_eval::EvaluationCriteria;
+use adk_eval::online::{OnlineEvalConfig, OnlineEvaluator, RunOutcome, SamplingPolicy};
+use adk_plugin::PluginManager;
+
+fn online(judge: Arc<dyn Llm>) -> adk_eval::Result<(OnlineEvaluator, Arc<PluginManager>)> {
+    let sampling = SamplingPolicy::rate(0.05)?.with_seed(1).outcome(RunOutcome::Completed);
+    let config = OnlineEvalConfig::new(sampling)
+        .with_criteria(EvaluationCriteria { safety_score: Some(0.9), ..Default::default() })
+        .with_min_trajectory_efficiency(0.5)
+        .with_budget(RunBudget::new().max_model_calls(500));
+    let evaluator = OnlineEvaluator::builder(config).judge(judge).start()?;
+    let plugins = Arc::new(PluginManager::new(vec![evaluator.plugin()]));
+    Ok((evaluator, plugins)) // Runner::builder().plugin_manager(plugins)
+}
+```
+
+`evaluator.store().list(&OnlineEvalQuery::default().failed_only())` returns the failed runs newest first. See the [online evaluation guide](../docs/official_docs/evaluation/online-evaluation.md).
 
 ## Integration with cargo test
 

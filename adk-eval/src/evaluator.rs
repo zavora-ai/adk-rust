@@ -722,7 +722,7 @@ impl Evaluator {
     }
 
     /// Extract response text and tool calls from events
-    fn extract_from_events(&self, events: &[Event]) -> (Option<String>, Vec<ToolUse>) {
+    pub(crate) fn extract_from_events(&self, events: &[Event]) -> (Option<String>, Vec<ToolUse>) {
         let mut response_text = String::new();
         let mut tool_calls = Vec::new();
         let complete_ids: std::collections::HashSet<_> = events

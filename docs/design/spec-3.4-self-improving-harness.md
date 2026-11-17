@@ -210,6 +210,7 @@ The fingerprint deduplicates; the count and `last_seen` rank; the severity comes
 | Spans | SQLite spans with GenAI attributes ([`adk-telemetry/src/sqlite.rs:56-68`](../../adk-telemetry/src/sqlite.rs)) | latency outliers, provider errors | a status column (T1) |
 | `TraceAnalyzer` | `RedundantCall`, `ExecutionLoop` ([`adk-eval/src/trace_analyzer.rs:58-91`](../../adk-eval/src/trace_analyzer.rs)) | loops and redundancy per session | `ExcessiveRetries` is declared but never produced (E1) |
 | Baselines | `BaselineStore::check_regressions` ([`baseline.rs:128`](../../adk-eval/src/baseline.rs)) | regressions since the last baseline | — |
+| Online evaluation | `OnlineEvalStore` records of sampled production runs judged by rubric, safety, hallucination, trajectory-efficiency and thread-level criteria ([`adk-eval/src/online`](../../adk-eval/src/online/mod.rs)) | `list(failed_only, since)`: the failing criterion names the kind, `session_id` and `invocation_id` are the evidence; `OnlineEvalSummary` pass rates confirm a fix after an upgrade | — |
 | Loop guard | `harness.loop.detected` (3.1 §7.13) | each detection | stubbed in the builder ([`adk-harness/src/builder.rs:432`](../../adk-harness/src/builder.rs)), owned by the 3.1 observe work |
 
 The miner runs inside the tick ([§7.9](#79-sleep-time-consolidation)) with read-only access to these stores and write access to the `DefectStore` only. It writes `harness.selfimprove.defect.{opened,updated}` records. It never reads session content beyond what the evidence references need to compute a fingerprint.

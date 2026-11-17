@@ -23,6 +23,10 @@
 //!   and reports each case's pass rate, score mean and variance, and flakiness ([`multi_run`])
 //! - **Metered judging**: [`Evaluator::set_run_config`] puts every eval run and judge call
 //!   under one budget, spend ledger and kill switch; a refusal stops the evaluation
+//! - **Online evaluation**: [`online::OnlineEvaluator`] judges a seeded sample of finished
+//!   production runs on a background worker, under its own budget and the kill switch, and
+//!   records the verdicts in an [`online::OnlineEvalStore`] and as `gen_ai.evaluation.result`
+//!   telemetry
 //!
 //! | Feature | Enables |
 //! |---------|---------|
@@ -67,6 +71,7 @@ pub mod scoring;
 pub mod personas;
 
 pub mod multi_run;
+pub mod online;
 pub mod optimizer;
 pub mod outcome;
 

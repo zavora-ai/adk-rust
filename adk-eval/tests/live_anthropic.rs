@@ -1,5 +1,6 @@
 //! Live evaluation against Anthropic: a real `LlmAgent` on `claude-haiku-5-5`, judged by the
-//! same model, under one budget for the agent's and the judge's calls.
+//! same model — repeated eval runs under one budget for the agent's and the judge's calls, and
+//! online evaluation of sampled `Runner` traffic under the evaluator's own budget.
 //!
 //! The tests are ignored by default. Run them with `ANTHROPIC_API_KEY` set:
 //!
@@ -11,15 +12,23 @@ use std::sync::Arc;
 
 use adk_agent::LlmAgentBuilder;
 use adk_core::{
-    Agent, InMemorySpendLedger, Llm, RunBudget, RunConfig, SpendKey, SpendLedger, SpendLimits,
-    SpendPeriod, Tool, ToolContext,
+    Agent, Content, GovernanceControl, InMemorySpendLedger, Llm, RunBudget, RunConfig, SessionId,
+    SpendKey, SpendLedger, SpendLimits, SpendPeriod, Tool, ToolContext, UserId,
+};
+use adk_eval::online::{
+    JsonlOnlineEvalStore, ONLINE_EVAL_AGENT_NAME, OnlineEvalConfig, OnlineEvalQuery,
+    OnlineEvalSummary, OnlineEvaluator, SamplingPolicy,
 };
 use adk_eval::schema::{ContentData, IntermediateData};
 use adk_eval::{
-    EvalCase, EvaluationConfig, EvaluationCriteria, Evaluator, JUDGE_AGENT_NAME, MultiRunConfig,
-    TestFile, ToolUse, Turn,
+    ConversationScorerConfig, EvalCase, EvaluationConfig, EvaluationCriteria, Evaluator,
+    JUDGE_AGENT_NAME, MultiRunConfig, Rubric, TestFile, ToolUse, Turn,
 };
+use adk_plugin::PluginManager;
+use adk_runner::Runner;
+use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use async_trait::async_trait;
+use futures::StreamExt;
 use serde_json::{Value, json};
 
 const MODEL: &str = "claude-haiku-5-5";
@@ -169,4 +178,142 @@ async fn a_spent_live_budget_stops_the_runs() {
     let stopped = report.stopped.as_deref().unwrap();
     assert!(stopped.starts_with("run 2 of 3"), "{stopped}");
     assert!(!report.all_passed());
+}
+
+#[tokio::test]
+#[ignore = "calls the Anthropic API; needs ANTHROPIC_API_KEY"]
+async fn sampled_live_traffic_is_judged_online_by_a_live_judge() {
+    let dir = tempfile::tempdir().unwrap();
+    let records_path = dir.path().join("online-eval.jsonl");
+    let ledger = Arc::new(InMemorySpendLedger::new(SpendLimits::new()));
+    let kill_switch = GovernanceControl::new();
+    let policy = SamplingPolicy::rate(0.5).unwrap().with_seed(2026);
+    let criteria = EvaluationCriteria { safety_score: Some(0.8), ..Default::default() }
+        .with_rubrics(
+            0.6,
+            vec![Rubric::new(
+                "Uses the tool result",
+                "States the weather condition and the temperature in °C that get_weather returned",
+            )],
+        );
+    let online = OnlineEvaluator::builder(
+        OnlineEvalConfig::new(policy.clone())
+            .with_criteria(criteria)
+            .with_min_trajectory_efficiency(0.5)
+            .with_thread(ConversationScorerConfig::default())
+            .with_budget(RunBudget::new().max_model_calls(60).max_cost_usd(0.25)),
+    )
+    .judge(model())
+    .spend_ledger(ledger.clone(), "weather-app")
+    .governance(kill_switch.clone())
+    .store(Arc::new(JsonlOnlineEvalStore::new(&records_path)))
+    .start()
+    .unwrap();
+
+    let sessions = Arc::new(InMemorySessionService::new());
+    let runner = Runner::builder()
+        .app_name("weather-app")
+        .agent(weather_agent())
+        .session_service(sessions.clone())
+        .plugin_manager(Arc::new(PluginManager::new(vec![online.plugin()])))
+        .build()
+        .unwrap();
+    let ask = |session: SessionId, text: &'static str| {
+        let runner = &runner;
+        async move {
+            let mut stream = runner
+                .run(
+                    UserId::try_from("alice").unwrap(),
+                    session,
+                    Content::new("user").with_text(text),
+                )
+                .await
+                .unwrap();
+            let mut invocation = String::new();
+            while let Some(event) = stream.next().await {
+                invocation = event.unwrap().invocation_id;
+            }
+            invocation
+        }
+    };
+    let new_session = || async {
+        let session = sessions
+            .create(CreateRequest {
+                app_name: "weather-app".into(),
+                user_id: "alice".into(),
+                session_id: None,
+                state: Default::default(),
+            })
+            .await
+            .unwrap();
+        SessionId::try_from(session.id()).unwrap()
+    };
+
+    let mut invocations = Vec::new();
+    for _ in 0..2 {
+        let session = new_session().await;
+        for question in ["What's the weather in Nairobi?", "And in London?", "Which one is warmer?"]
+        {
+            invocations.push(ask(session.clone(), question).await);
+        }
+    }
+    online.flush().await;
+
+    let records = online.store().list(&OnlineEvalQuery::default()).await.unwrap();
+    for record in &records {
+        println!(
+            "judged {} ({:?}): passed={} judge_calls={} scores={:?} failures={:?}",
+            record.invocation_id,
+            record.outcome,
+            record.passed,
+            record.judge_model_calls,
+            record.scores,
+            record.failures.iter().map(|f| (&f.criterion, &f.details)).collect::<Vec<_>>()
+        );
+    }
+    let mut judged: Vec<&str> = records.iter().map(|r| r.invocation_id.as_str()).collect();
+    let mut expected: Vec<&str> =
+        invocations.iter().map(String::as_str).filter(|id| policy.sample_point(id) < 0.5).collect();
+    judged.sort_unstable();
+    expected.sort_unstable();
+    println!("sampled {} of {} runs: {expected:?}", expected.len(), invocations.len());
+    assert_eq!(judged, expected, "the judged runs are exactly the seeded sample");
+    assert!(records.iter().all(|r| r.scores.contains_key("rubric_quality")
+        && r.scores.contains_key("safety")
+        && r.scores.contains_key("trajectory_efficiency")
+        && r.thread.is_some()));
+
+    // Frozen: sampled runs are dropped and nothing more is judged.
+    kill_switch.freeze("live drill");
+    let calls_before = online.budget().usage().model_calls;
+    let dropped_before = online.stats().dropped;
+    let session = new_session().await;
+    let mut frozen_sampled = 0;
+    for _ in 0..4 {
+        let invocation = ask(session.clone(), "What's the weather in Nairobi?").await;
+        if policy.sample_point(&invocation) < 0.5 {
+            frozen_sampled += 1;
+        }
+    }
+    online.flush().await;
+    assert_eq!(online.stats().dropped - dropped_before, frozen_sampled);
+    assert_eq!(online.budget().usage().model_calls, calls_before);
+    assert_eq!(
+        online.store().list(&OnlineEvalQuery::default()).await.unwrap().len(),
+        records.len()
+    );
+
+    let usage = online.budget().usage();
+    let judge_key = SpendKey::org("weather-app")
+        .with_agent(format!("urn:adk:agent:weather-app/{ONLINE_EVAL_AGENT_NAME}"));
+    let spent = ledger.spent(&judge_key, SpendPeriod::Day).await.unwrap();
+    println!("stats: {:?}", online.stats());
+    println!("summary: {:?}", OnlineEvalSummary::from_records(&records));
+    println!(
+        "judge budget: {} model calls, {} tokens, {} micro-USD; ledger {spent} micro-USD; frozen drill dropped {frozen_sampled}",
+        usage.model_calls, usage.total_tokens, usage.cost_micro_usd
+    );
+    println!("jsonl lines: {}", std::fs::read_to_string(&records_path).unwrap().lines().count());
+    assert!(spent > 0);
+    online.shutdown().await;
 }
