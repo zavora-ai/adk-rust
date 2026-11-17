@@ -4,7 +4,7 @@
 //! for both AI Studio (API key) and Vertex AI (OAuth/ADC) backends.
 
 use crate::audio::{AudioChunk, AudioFormat};
-use crate::config::{RealtimeConfig, ToolDefinition, VadMode};
+use crate::config::{RealtimeConfig, ToolBehavior, ToolDefinition, VadMode};
 use crate::error::{RealtimeError, Result};
 use crate::events::{ClientEvent, ServerEvent, ToolResponse};
 use crate::session::{ContextMutationOutcome, RealtimeSession};
@@ -67,7 +67,7 @@ impl GeminiLiveBackend {
     ///
     /// ```rust,ignore
     /// let backend = GeminiLiveBackend::vertex_adc("my-project", "us-central1")?;
-    /// let model = GeminiRealtimeModel::new(backend, "models/gemini-3.1-flash-live-preview");
+    /// let model = GeminiRealtimeModel::new(backend, "gemini-3.8-live");
     /// ```
     #[cfg(feature = "vertex-live")]
     pub fn vertex_adc(project_id: impl Into<String>, region: impl Into<String>) -> Result<Self> {
@@ -803,18 +803,32 @@ impl GeminiRealtimeSession {
             generation_config["enableAffectiveDialog"] = json!(true);
         }
 
-        if let Some(extra) = &config.extra
-            && let Some(thinking_level) = extra.get("thinking_level")
-            && let Some(obj) = generation_config.as_object_mut()
+        // Per Google's Live model comparison: Gemini 3.8 Live closes the socket with 1007 on a
+        // thinking level and runs a call without a `behavior` non-blocking, and its
+        // extended-thinking sibling refuses blocking calls. Other models keep their defaults.
+        let (accepts_thinking_level, default_tool_behavior) = match live_model_id(model) {
+            GEMINI_38_LIVE => (false, Some(ToolBehavior::Blocking)),
+            GEMINI_38_LIVE_EXTENDED_THINKING => (true, Some(ToolBehavior::NonBlocking)),
+            _ => (true, None),
+        };
+        if let Some(thinking_level) =
+            config.extra.as_ref().and_then(|ext| ext.get("thinking_level"))
         {
-            obj.insert("thinkingConfig".to_string(), json!({ "thinkingLevel": thinking_level }));
+            if accepts_thinking_level {
+                generation_config["thinkingConfig"] = json!({ "thinkingLevel": thinking_level });
+            } else {
+                tracing::warn!(
+                    model_id = %model,
+                    "model refuses a thinking level, so thinking_level is not sent"
+                );
+            }
         }
 
         let system_instruction = config.instruction.map(|text| GeminiContent {
             parts: vec![GeminiPart { text: Some(text), inline_data: None }],
         });
 
-        let tools = convert_tools(config.tools, dialect);
+        let tools = convert_tools(config.tools, dialect, default_tool_behavior);
 
         let context_window_compression =
             GeminiContextWindowCompression::from_extra(config.extra.as_ref());
@@ -1435,6 +1449,18 @@ pub fn build_vertex_live_url(region: &str, project_id: &str) -> Result<String> {
     ))
 }
 
+/// The Live model that reasons on its own and refuses a thinking level.
+const GEMINI_38_LIVE: &str = "gemini-3.8-live";
+
+/// The Live model with configurable reasoning, which accepts only non-blocking tools.
+const GEMINI_38_LIVE_EXTENDED_THINKING: &str = "gemini-3.8-live-extended-thinking";
+
+/// The model id in a setup model name: `models/{id}` on AI Studio, a resource path ending in
+/// the id on Vertex AI.
+fn live_model_id(model: &str) -> &str {
+    model.rsplit('/').next().unwrap_or(model)
+}
+
 /// The `setup.model` resource name for `model` on `backend`.
 ///
 /// AI Studio accepts only `models/{model}` and closes the socket with 1007 ("unexpected model
@@ -1600,9 +1626,14 @@ pub(crate) fn translate_client_message(
 /// legacy field silently discards every constraint the subset cannot carry —
 /// `additionalProperties`, `allOf`, `if`/`then`, the exclusive bounds — leaving
 /// the model to guess at rules the caller still enforces.
+///
+/// A declaration states the tool's own `behavior`, else `default_behavior`, else none so
+/// the model's default applies. Gemini 3.8 Live runs a call without one non-blocking, so
+/// its turn ends before the result that a caller waiting on the tool loop expects.
 fn convert_tools(
     tools: Option<Vec<ToolDefinition>>,
     dialect: adk_gemini::GeminiSchemaDialect,
+    default_behavior: Option<ToolBehavior>,
 ) -> Option<Vec<Value>> {
     let field = dialect.parameters_field();
     tools.map(|tools| {
@@ -1614,6 +1645,11 @@ fn convert_tools(
                 }
                 if let Some(params) = &t.parameters {
                     decl[field] = params.clone();
+                }
+                match t.behavior.or(default_behavior) {
+                    Some(ToolBehavior::Blocking) => decl["behavior"] = json!("BLOCKING"),
+                    Some(ToolBehavior::NonBlocking) => decl["behavior"] = json!("NON_BLOCKING"),
+                    None => {}
                 }
                 decl
             }).collect::<Vec<_>>()
@@ -2217,6 +2253,7 @@ mod tests {
                 "additionalProperties": false,
                 "properties": {"n": {"type": "string", "minLength": 7}}
             })),
+            behavior: None,
         }]
     }
 
@@ -2225,7 +2262,7 @@ mod tests {
     #[test]
     fn tools_default_to_the_legacy_parameters_field() {
         let tools =
-            convert_tools(Some(tool_with_constrained_schema()), Default::default()).unwrap();
+            convert_tools(Some(tool_with_constrained_schema()), Default::default(), None).unwrap();
         let decl = &tools[0]["functionDeclarations"][0];
 
         assert!(decl.get("parameters").is_some(), "{decl}");
@@ -2241,6 +2278,7 @@ mod tests {
         let tools = convert_tools(
             Some(tool_with_constrained_schema()),
             adk_gemini::GeminiSchemaDialect::JsonSchema,
+            None,
         )
         .unwrap();
         let decl = &tools[0]["functionDeclarations"][0];
@@ -2272,6 +2310,116 @@ mod tests {
 
         assert!(decl.get("parameters").is_none(), "legacy field used: {frame}");
         assert_eq!(decl["parametersJsonSchema"]["additionalProperties"], json!(false));
+    }
+
+    fn setup_for(model: &str, config: RealtimeConfig) -> Value {
+        let msg = GeminiRealtimeSession::build_setup_message(
+            model,
+            config,
+            adk_gemini::GeminiSchemaDialect::default(),
+        );
+        serde_json::to_value(&msg).expect("setup serializes")
+    }
+
+    fn lookup_and_notify() -> RealtimeConfig {
+        RealtimeConfig::default()
+            .with_tool(ToolDefinition::new("lookup_account"))
+            .with_tool(ToolDefinition::new("notify_team").with_behavior(ToolBehavior::NonBlocking))
+    }
+
+    /// Gemini 3.8 Live runs a call without a `behavior` non-blocking: its turn ends at the
+    /// call, before the result the tool loop sends. Its declarations are `BLOCKING` unless
+    /// the tool opts out, on AI Studio and on Vertex AI.
+    #[test]
+    fn gemini_3_8_live_declares_tools_blocking_unless_they_opt_out() {
+        for model in [
+            "models/gemini-3.8-live",
+            "projects/p/locations/us-central1/publishers/google/models/gemini-3.8-live",
+        ] {
+            assert_eq!(
+                setup_for(model, lookup_and_notify())["setup"]["tools"],
+                json!([{ "functionDeclarations": [
+                    { "name": "lookup_account", "behavior": "BLOCKING" },
+                    { "name": "notify_team", "behavior": "NON_BLOCKING" },
+                ] }]),
+                "{model}"
+            );
+        }
+    }
+
+    /// `gemini-3.8-live-extended-thinking` closes the socket with 1007 on a blocking
+    /// declaration, so a tool that states no behavior is declared non-blocking there.
+    #[test]
+    fn the_extended_thinking_model_declares_tools_non_blocking() {
+        let config = RealtimeConfig::default()
+            .with_tool(ToolDefinition::new("lookup_account"))
+            .with_tool(ToolDefinition::new("confirm").with_behavior(ToolBehavior::Blocking));
+
+        assert_eq!(
+            setup_for("models/gemini-3.8-live-extended-thinking", config)["setup"]["tools"],
+            json!([{ "functionDeclarations": [
+                { "name": "lookup_account", "behavior": "NON_BLOCKING" },
+                { "name": "confirm", "behavior": "BLOCKING" },
+            ] }])
+        );
+    }
+
+    /// Other models keep their own default: a declaration states a behavior only when the
+    /// tool sets one, so the `gemini-3.1-flash-live-preview` setup is what it was.
+    #[test]
+    fn other_models_declare_only_the_behavior_a_tool_sets() {
+        assert_eq!(
+            setup_for("models/gemini-3.1-flash-live-preview", lookup_and_notify())["setup"]["tools"],
+            json!([{ "functionDeclarations": [
+                { "name": "lookup_account" },
+                { "name": "notify_team", "behavior": "NON_BLOCKING" },
+            ] }])
+        );
+    }
+
+    /// Gemini 3.8 Live closes the socket with 1007 ("Thinking level is not supported for this
+    /// model.") on a `thinkingConfig`; the models that take one still receive it.
+    #[test]
+    fn a_thinking_level_is_sent_only_to_models_that_accept_it() {
+        let config = RealtimeConfig::default().with_thinking_level(adk_core::Effort::High);
+        for model in [
+            "models/gemini-3.8-live",
+            "projects/p/locations/us-central1/publishers/google/models/gemini-3.8-live",
+        ] {
+            assert_eq!(
+                setup_for(model, config.clone())["setup"]["generationConfig"],
+                json!({ "responseModalities": ["AUDIO"] }),
+                "{model}"
+            );
+        }
+        for model in
+            ["models/gemini-3.1-flash-live-preview", "models/gemini-3.8-live-extended-thinking"]
+        {
+            assert_eq!(
+                setup_for(model, config.clone())["setup"]["generationConfig"],
+                json!({
+                    "responseModalities": ["AUDIO"],
+                    "thinkingConfig": { "thinkingLevel": "high" },
+                }),
+                "{model}"
+            );
+        }
+    }
+
+    /// Without a level none is sent, to any model: the setup states only what the caller set.
+    #[test]
+    fn no_thinking_level_is_sent_unless_one_is_set() {
+        for model in [
+            "models/gemini-3.8-live",
+            "models/gemini-3.8-live-extended-thinking",
+            "models/gemini-3.1-flash-live-preview",
+        ] {
+            assert_eq!(
+                setup_for(model, RealtimeConfig::default())["setup"]["generationConfig"],
+                json!({ "responseModalities": ["AUDIO"] }),
+                "{model}"
+            );
+        }
     }
 
     /// AI Studio closes the socket with 1007 ("unexpected model name format") on a bare model

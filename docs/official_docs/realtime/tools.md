@@ -44,6 +44,7 @@ fn process_refund_def() -> ToolDefinition {
             },
             "required": ["order_id", "reason"]
         })),
+        behavior: None,
     }
 }
 
@@ -80,6 +81,31 @@ configuration error.
 
 > Handlers share the runner's task: a handler that blocks the thread stalls the session
 > (see [Tool concurrency](#tool-concurrency)).
+
+## Waiting for a result: `ToolBehavior`
+
+A Gemini Live function declaration can state whether the model waits for the tool's
+result. `ToolDefinition::behavior` sets it, and `None` leaves the choice to the session:
+
+| Model | `None` (default) | `Some(ToolBehavior::Blocking)` | `Some(ToolBehavior::NonBlocking)` |
+|-------|------------------|--------------------------------|-----------------------------------|
+| `gemini-3.8-live` | Declared `BLOCKING`: the turn waits for the result and answers with it | `BLOCKING` | `NON_BLOCKING`: the turn ends at the call, and the model takes the result when it arrives, usually in a later turn |
+| `gemini-3.8-live-extended-thinking` | Declared `NON_BLOCKING`, the only behavior it accepts | Refused by the model (1007) | `NON_BLOCKING` |
+| `gemini-3.1-flash-live-preview` and others | No behavior declared; the model's default applies (3.1 Flash Live waits for every result) | `BLOCKING` | `NON_BLOCKING`, where the model supports it |
+
+Gemini 3.8 Live runs a declaration without a `behavior` as non-blocking, so the session states
+`BLOCKING` itself. The OpenAI Realtime API has no such setting and ignores the field.
+
+```rust
+use adk_realtime::config::{ToolBehavior, ToolDefinition};
+
+/// The conversation continues while the note is posted.
+fn notify_team_def() -> ToolDefinition {
+    ToolDefinition::new("notify_team")
+        .with_description("Post a note to the team channel.")
+        .with_behavior(ToolBehavior::NonBlocking)
+}
+```
 
 ## Bridged tools: any `adk_core::Tool`
 

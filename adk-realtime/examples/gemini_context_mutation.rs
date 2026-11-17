@@ -44,6 +44,7 @@ async fn main() -> anyhow::Result<()> {
             },
             "required": ["account_id"]
         })),
+        behavior: None,
     };
 
     let runner = RealtimeRunner::builder()
@@ -125,6 +126,7 @@ async fn main() -> anyhow::Result<()> {
             },
             "required": ["invoice_number"]
         })),
+        behavior: None,
     }];
 
     let update = SessionUpdateConfig(

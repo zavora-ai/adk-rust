@@ -1722,6 +1722,7 @@ mod tests {
             ("openai", "gpt-5-turbo"),
             ("openai", "gpt-image-2"),
             ("gemini", "gemini-3.1-flash-live-preview"),
+            ("gemini", "gemini-3.8-live"),
             ("groq", "llama-3.3-70b-versatile"),
             ("groq", "minimaxai/minimax-m2.7"),
             ("cerebras", "gpt-oss-120b"),

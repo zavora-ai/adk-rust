@@ -674,6 +674,7 @@ impl RealtimeAgent {
                 name: t.name().to_string(),
                 description: Some(t.enhanced_description().to_string()),
                 parameters: t.parameters_schema(),
+                behavior: None,
             })
             .collect();
 
@@ -697,6 +698,7 @@ impl RealtimeAgent {
                     },
                     "required": ["agent_name"]
                 })),
+                behavior: None,
             });
             config.tools = Some(tools);
         }

@@ -118,7 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 |----------|-------|-----------|--------------|--------------|
 | OpenAI | `gpt-realtime-2.1` | WebSocket | `openai` | PCM16 24kHz |
 | OpenAI | `gpt-realtime-2.1` | WebRTC | `openai-webrtc` | Opus |
-| Google | `gemini-3.1-flash-live-preview` | WebSocket | `gemini` | PCM16 16kHz/24kHz |
+| Google | `gemini-3.1-flash-live-preview` (default), `gemini-3.8-live`, `gemini-3.8-live-extended-thinking` | WebSocket | `gemini` | PCM16 16kHz/24kHz |
 | Google | Gemini via Vertex AI | WebSocket + OAuth2 | `vertex-live` | PCM16 16kHz/24kHz |
 | LiveKit | Any (bridge to Gemini/OpenAI) | WebRTC | `livekit` | PCM16 |
 
@@ -265,6 +265,7 @@ let tools = vec![
             },
             "required": ["location"]
         })),
+        behavior: None,
     },
 ];
 
@@ -430,7 +431,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Use Application Default Credentials
     let backend = GeminiLiveBackend::vertex_adc(project_id, region)?;
-    let model = GeminiRealtimeModel::new(backend, "models/gemini-3.1-flash-live-preview");
+    let model = GeminiRealtimeModel::new(backend, "models/gemini-3.8-live");
 
     let config = RealtimeConfig::default()
         .with_instruction("You are a helpful voice assistant.");
@@ -456,7 +457,7 @@ let backend = GeminiLiveBackend::Vertex {
     region: "us-central1".to_string(),
     project_id: "my-project-id".to_string(),
 };
-let model = GeminiRealtimeModel::new(backend, "models/gemini-3.1-flash-live-preview");
+let model = GeminiRealtimeModel::new(backend, "models/gemini-3.8-live");
 ```
 
 ### Vertex AI Live with Tool Calling
@@ -480,6 +481,7 @@ let tools = vec![
             },
             "required": ["city"]
         })),
+        behavior: None,
     },
 ];
 
