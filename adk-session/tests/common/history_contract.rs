@@ -238,20 +238,17 @@ pub async fn assert_fork_contract(service: &dyn SessionService, app_name: &str) 
     let taken = service
         .fork(ForkRequest::new(source.clone()).with_session_id(&fork_id))
         .await
-        .err()
-        .expect("a fork cannot reuse a taken session ID");
+        .expect_err("a fork cannot reuse a taken session ID");
     assert_eq!((taken.category, taken.code), (ErrorCategory::Conflict, "session.already_exists"));
     let missing = service
         .fork(ForkRequest::new(identity(app_name, &user, &unique("missing"))))
         .await
-        .err()
-        .expect("a missing source cannot be forked");
+        .expect_err("a missing source cannot be forked");
     assert_eq!((missing.category, missing.code), (ErrorCategory::NotFound, "session.not_found"));
     let foreign = service
         .fork(ForkRequest::new(source.clone()).at_event("not-an-event"))
         .await
-        .err()
-        .expect("a fork point must be an event of the source");
+        .expect_err("a fork point must be an event of the source");
     assert_eq!(
         (foreign.category, foreign.code),
         (ErrorCategory::NotFound, "session.event_not_found")
@@ -298,8 +295,7 @@ pub async fn assert_edit_contract(service: &dyn SessionService, app_name: &str) 
             .expect_version("fnv1a128:stale"),
         )
         .await
-        .err()
-        .expect("a stale version is refused");
+        .expect_err("a stale version is refused");
     assert_eq!(
         (stale.category, stale.code),
         (ErrorCategory::Conflict, "session.history.version_mismatch")
@@ -312,7 +308,7 @@ pub async fn assert_edit_contract(service: &dyn SessionService, app_name: &str) 
                 alice.clone(),
                 HistoryRewrite::Edit {
                     edits: vec![
-                        HistoryEdit::Replace { event: corrected },
+                        HistoryEdit::Replace { event: Box::new(corrected) },
                         HistoryEdit::Remove { event_id: event_ids[2].clone() },
                     ],
                 },
@@ -384,8 +380,7 @@ pub async fn assert_edit_contract(service: &dyn SessionService, app_name: &str) 
             },
         ))
         .await
-        .err()
-        .expect("a removed event cannot be edited again");
+        .expect_err("a removed event cannot be edited again");
     assert_eq!(
         (missing.category, missing.code),
         (ErrorCategory::NotFound, "session.event_not_found")
@@ -436,7 +431,7 @@ pub async fn assert_tool_call_rules(service: &dyn SessionService, app_name: &str
         ),
     ];
     for request in splits {
-        let error = service.rewrite_history(request).await.err().expect("a split is refused");
+        let error = service.rewrite_history(request).await.expect_err("a split is refused");
         assert_eq!(
             (error.category, error.code),
             (ErrorCategory::InvalidInput, "session.history.splits_tool_call")
@@ -445,8 +440,7 @@ pub async fn assert_tool_call_rules(service: &dyn SessionService, app_name: &str
     let error = service
         .fork(ForkRequest::new(target.clone()).at_event(&call_id))
         .await
-        .err()
-        .expect("a fork point between a call and its response is refused");
+        .expect_err("a fork point between a call and its response is refused");
     assert_eq!(error.code, "session.history.splits_tool_call");
     assert_eq!(get(service, &target).await.events().len(), 4, "refused rewrites change nothing");
 
@@ -478,8 +472,7 @@ pub async fn assert_tool_call_rules(service: &dyn SessionService, app_name: &str
     let held_fork = service
         .fork(ForkRequest::new(target.clone()))
         .await
-        .err()
-        .expect("a fork that would copy a held call is refused");
+        .expect_err("a fork that would copy a held call is refused");
     assert_eq!(held_fork.code, "session.history.held_call");
     let before_hold = service
         .fork(ForkRequest::new(target.clone()).at_event(&ask_id))

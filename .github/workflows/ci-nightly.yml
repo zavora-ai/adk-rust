@@ -396,6 +396,21 @@ jobs:
         --features all-backends
         --run-ignored all --no-fail-fast
 
+    # The session history contract (fork, rewind, edit, import) and the integrity contract on
+    # the backends the PR tier does not reach (PostgreSQL's run in the PR tier's postgres job);
+    # MongoDB on its replica set here and on the standalone server below.
+    - name: Run the session history contract on every backend
+      if: ${{ !cancelled() }}
+      run: >-
+        cargo nextest run -p adk-session
+        --features sqlite,postgres,redis,mongodb,neo4j,firestore
+        --run-ignored all --no-fail-fast
+        --test session_contract_redis
+        --test mongodb_state_tests
+        --test neo4j_state_tests
+        --test session_contract_firestore
+        -E 'test(/history_contract|integrity_contract/) and not test(/cluster/)'
+
     - name: Run MongoDB store suites on a standalone server
       if: ${{ !cancelled() }}
       env:
@@ -406,6 +421,18 @@ jobs:
         --features sqlite,postgres,redis,mongodb,neo4j,firestore
         --run-ignored all --no-fail-fast
         --test store_conformance_mongodb
+
+    - name: Run the MongoDB session history contract on a standalone server
+      if: ${{ !cancelled() }}
+      env:
+        MONGODB_URL: mongodb://localhost:27018
+        MONGODB_REQUIRE_TRANSACTIONS: "0"
+      run: >-
+        cargo nextest run -p adk-session
+        --features mongodb
+        --run-ignored all --no-fail-fast
+        --test mongodb_state_tests
+        -E 'test(/history_contract|integrity_contract/)'
 
     # The kernel's stores on MongoDB, Firestore and Neo4j (spec 3.2 §7.1, §13 Q8). They need no
     # multi-document transaction, so the standalone server runs the MongoDB suite as well.

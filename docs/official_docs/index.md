@@ -179,6 +179,7 @@ editor through stable ACP v1.
 
 - [Sessions](sessions/sessions.md) - Session management and lifecycle
 - [State Management](sessions/state.md) - Managing conversation state with prefixes
+- [Fork, Rewind, and Edit History](sessions/history.md) - Forking a session at an event, rewinding it, and editing its events on every backend
 - [Context Compaction](sessions/context-compaction.md) - Summarizing older events to bound request size
 
 ## Memory

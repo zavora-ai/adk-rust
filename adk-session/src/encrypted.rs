@@ -892,9 +892,9 @@ impl<S: SessionService> SessionService for EncryptedSession<S> {
                 edits: edits
                     .iter()
                     .map(|edit| match edit {
-                        HistoryEdit::Replace { event } => {
-                            Ok(HistoryEdit::Replace { event: self.seal_event(&id, event)? })
-                        }
+                        HistoryEdit::Replace { event } => Ok(HistoryEdit::Replace {
+                            event: Box::new(self.seal_event(&id, event)?),
+                        }),
                         other => Ok(other.clone()),
                     })
                     .collect::<Result<_>>()?,

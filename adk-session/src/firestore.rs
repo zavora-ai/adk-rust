@@ -2034,7 +2034,7 @@ mod tests {
             .rewrite_history(RewriteHistoryRequest::new(
                 alice.clone(),
                 crate::HistoryRewrite::Edit {
-                    edits: vec![crate::HistoryEdit::Replace { event: replacement }],
+                    edits: vec![crate::HistoryEdit::Replace { event: Box::new(replacement) }],
                 },
             ))
             .await

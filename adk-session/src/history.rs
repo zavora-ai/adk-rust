@@ -250,7 +250,7 @@ impl SessionHistory {
                                 .iter()
                                 .position(|stored| stored.id == event.id)
                                 .ok_or_else(|| event_not_found(identity, &event.id))?;
-                            let mut replacement = event.clone();
+                            let mut replacement = Event::clone(event);
                             // Order is (timestamp, append order), so the original timestamp
                             // keeps the replacement where the original stood.
                             replacement.timestamp = self.events[index].timestamp;
@@ -398,7 +398,7 @@ pub enum HistoryRewrite {
 /// corrected.id = "event-to-correct".into();
 /// let rewrite = HistoryRewrite::Edit {
 ///     edits: vec![
-///         HistoryEdit::Replace { event: corrected },
+///         HistoryEdit::Replace { event: Box::new(corrected) },
 ///         HistoryEdit::Remove { event_id: "event-to-drop".into() },
 ///     ],
 /// };
@@ -414,7 +414,7 @@ pub enum HistoryEdit {
     /// event but not applied to the shared tiers.
     Replace {
         /// The replacement; its `id` names the event it replaces.
-        event: Event,
+        event: Box<Event>,
     },
     /// Removes the event `event_id`.
     Remove {
@@ -821,7 +821,7 @@ mod tests {
                 &identity(),
                 &HistoryRewrite::Edit {
                     edits: vec![
-                        HistoryEdit::Replace { event: replacement },
+                        HistoryEdit::Replace { event: Box::new(replacement) },
                         HistoryEdit::Remove { event_id: "e3".into() },
                     ],
                 },
