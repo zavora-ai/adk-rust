@@ -13,6 +13,8 @@
 //! - **Response quality**: text similarity (exact, contains, Levenshtein, Jaccard, ROUGE)
 //! - **LLM-judged criteria**: semantic match, rubrics, safety, and hallucination checks, which
 //!   fail closed when they cannot be judged
+//! - **Rubric-graded outcomes**: [`OutcomeGrader`] grades a deliverable per criterion in a
+//!   context of its own, and [`RubricCheckAgent`] ends a `LoopAgent` once the rubric passes
 //! - **Analysis**: structured judge, cost and latency tracking, trace analysis, regression
 //!   baselines, human annotation, test generation, and conversation metrics
 //! - **Ledger statistics**: per-dimension median/MAD baselines and drift detection over a
@@ -61,6 +63,7 @@ pub mod scoring;
 pub mod personas;
 
 pub mod optimizer;
+pub mod outcome;
 
 // New unconditional modules
 pub mod annotation;
@@ -101,6 +104,11 @@ pub use llm_judge::{
 pub use report::{EvaluationReport, EvaluationResult, Failure, TestCaseResult};
 pub use schema::{EvalCase, EvalSet, IntermediateData, SessionInput, TestFile, ToolUse, Turn};
 pub use scoring::{ResponseScorer, ToolTrajectoryScorer};
+
+pub use outcome::{
+    CriterionGrade, DEFAULT_OUTCOME_ITERATIONS, MAX_OUTCOME_ITERATIONS, OutcomeGrade,
+    OutcomeGrader, RUBRIC_CHECK_OUTPUT_KEY, RubricCheckAgent, RubricOutcome,
+};
 
 // Optimizer re-exports
 pub use optimizer::{

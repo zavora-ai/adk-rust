@@ -362,12 +362,10 @@ async fn a_durable_goal_survives_killing_the_process() {
     // the call, and the run resumes at the same iteration with the write executed once.
     let dir = workspace();
     let (user, session) = (user("alice"), session_id("s1"));
-    let spec = GoalSpec {
-        goal: "create done.txt".into(),
-        until: "test -f done.txt".into(),
-        max_iterations: 3,
-        check_timeout: Duration::from_secs(30),
-    };
+    let spec = GoalSpec::new("create done.txt")
+        .with_until("test -f done.txt")
+        .with_max_iterations(3)
+        .with_check_timeout(Duration::from_secs(30));
     let run_id = {
         let p = open(
             dir.path(),
@@ -421,12 +419,10 @@ async fn a_held_edit_parked_by_a_goal_runs_once_when_approved_from_a_new_process
     let dir = workspace();
     std::fs::write(dir.path().join("ws/notes.txt"), "status: draft\n").unwrap();
     let (user, session) = (user("alice"), session_id("s1"));
-    let spec = GoalSpec {
-        goal: "mark the notes done".into(),
-        until: "grep -q 'status: done' notes.txt".into(),
-        max_iterations: 3,
-        check_timeout: Duration::from_secs(30),
-    };
+    let spec = GoalSpec::new("mark the notes done")
+        .with_until("grep -q 'status: done' notes.txt")
+        .with_max_iterations(3)
+        .with_check_timeout(Duration::from_secs(30));
     let run_id = {
         let p = open(
             dir.path(),

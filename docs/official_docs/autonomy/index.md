@@ -16,7 +16,7 @@ path, so policy, approvals, budgets, the action ledger and the kill switch apply
 | `AmbientAgent` | An event loop inside your program that runs an agent on each event | Cron, file changes, queues, webhooks your program subscribes to | Your program's concern: delivery is at most once | The agent is one part of a service you already run, and losing an event on a crash is acceptable | [Ambient agents](../agents/ambient-agents.md) |
 | `DurableWorker` and `DurableScheduler` | Durable runs claimed by workers under leases, and a schedule store that enqueues them | Schedules, runs you enqueue | Yes: a stopped run is reclaimed and resumes; the action ledger keeps a call in flight from running twice | You host your own server and want runs, schedules and retries with no supervisor above them | [Durable runtime](../core/durable-runtime.md) |
 | Server background runs | `/api/runs` and `POST /hooks/{name}` on `adk-server` (`background`, `webhook-ingress`) | HTTP requests, signed webhooks | Yes, through the durable runtime | Other systems start the agent over HTTP or webhooks | [Wake-ups and webhooks](../core/wake-ups.md) |
-| The harness goal | `adk-rust goal`, or `goal` of a `HarnessLauncher` app: turns toward a goal until a check command passes | You start it | Yes with a durable run store: `--resume` continues it | A coding or operations task with a verifiable finish line | [Plans and goals](../harness/plan-and-goals.md) |
+| The harness goal | `adk-rust goal`, or `goal` of a `HarnessLauncher` app: turns toward a goal until a check command passes, a separate grader passes a rubric, or both | You start it | Yes with a durable run store: `--resume` continues it | A coding or operations task with a verifiable finish line | [Plans and goals](../harness/plan-and-goals.md) |
 | The agent kernel | A resident supervisor: a process table, wake sources, an approvals inbox, quotas, a control plane and the kill switch (`adk-rust up`, or `Kernel` in your program) | Cron, file changes, webhooks, approvals, budget refills | Yes: processes, schedules, held calls and the freeze are in its stores | The agent is always on: it sleeps between events, waits for decisions for days, and you operate it from other terminals | [Agent kernel](../kernel/index.md) |
 | The managed runtime | `adk-managed`: declarative agents run as resumable sessions whose turns park on the client | Client events | Yes: a parked turn resumes on any instance over the same stores | You host agents for others as a platform, behind your own API | [Managed agents](../managed-agents/runtime.md) |
 
@@ -32,6 +32,7 @@ from the notes in `notes/` and publishes it. Replace the notes, the instruction 
 | Property | How the template does it |
 |---|---|
 | Works toward a goal | `cargo run -- goal "…" --until "…"`: turns until the check command exits 0 |
+| Checks its own work | A grader in a separate context grades each iteration's `STATUS.md` against `rubric.md` (`[goal]` in `.adk/harness.toml`) and feeds the failed criteria back |
 | Wakes itself | A cron `Trigger` on the kernel: each weekday at 09:00 UTC |
 | Durable | One SQLite file, `.adk/state.db`: sessions, runs, held calls and decisions, the action ledger, spend, standing rules, modes, goals, the audit log, and the kernel's processes, cron cursors and kill switch |
 | Governed | `auto` mode: reads, edits and sandboxed commands run; `publish_status`, an external tool, waits for approval |
@@ -147,7 +148,9 @@ cargo run -- goal "Write STATUS.md from the notes in notes/ and publish it" \
 ```text
 goal on the kernel at .adk · mode auto
 goal:  Write STATUS.md from the notes in notes/ and publish it
-until: test -s outbox/published.md  (budget: 8 iterations)
+until: test -s outbox/published.md
+rubric: 4 criteria, graded at most 3 times; the grader reads STATUS.md
+budget: 8 iterations
 process 0803e865-8337-40cf-bbb9-32a8d4cac6dc · session 1e0281ee-df19-40ad-a380-1d78bf4a3f79
 Ctrl-C detaches; the goal keeps running.
 
@@ -174,6 +177,8 @@ goal waits on the kernel: close the terminal, or the laptop lid, and nothing is 
 | `--sandbox` | Refuses to run unless `bash` is in the OS sandbox; the template's `.adk/harness.toml` turns it on |
 | `--yes` | Approves every call that reaches the prompt, through the inbox while this terminal follows; never an unsandboxed retry without `--allow-unsandboxed` |
 | `--max-iters N` | Turns toward the goal before it counts as exhausted (default 8) |
+| `--rubric FILE`, `--rubric-from-goal` | The criteria a separate grader checks each iteration against; the template's `[goal]` table names `rubric.md` |
+| `--deliverable PATH`, `--max-evaluations N`, `--rubric-hidden` | The files the grader reads, its grading rounds (default 3, at most 20), and criteria shown to the grader only |
 | `--resume [--session ID]` | Continues the latest unfinished goal, or the one in `ID` |
 
 The same flags work on `adk-rust goal`, the built-in coding agent: `adk-rust goal "…" --until
@@ -203,7 +208,9 @@ approved publish_status once; process 0803e865-8337-40cf-bbb9-32a8d4cac6dc conti
 ```
 
 The decision resumes the parked process at once: `publish_status` runs exactly once, the check
-passes, and the goal ends. `adk-rust approvals --home .adk deny ID --reason "…"` refuses it
+passes, and the grader checks `STATUS.md` against `rubric.md`. The goal ends once every
+criterion passes; a failed criterion sends the agent back to revise with the grader's feedback,
+for at most three grading rounds ([rubric-graded goals](../harness/plan-and-goals.md#rubric-graded-goals)). `adk-rust approvals --home .adk deny ID --reason "…"` refuses it
 instead, and the agent is told why.
 
 ```text

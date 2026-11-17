@@ -194,8 +194,9 @@ pub use goal::GoalEngine;
 #[cfg(feature = "sqlite")]
 pub use goal::SqliteGoalStore;
 pub use goal::{
-    GOAL_QUEUE, GOAL_STALL_WINDOW, GOAL_STATE_KEY, GOAL_TARGET, GoalRecord, GoalSpec, GoalState,
-    GoalStatus, GoalStore, InMemoryGoalStore, UNTIL_CHECK_AGENT, UntilCheckAgent,
+    DEFAULT_CHECK_TIMEOUT, DEFAULT_GOAL_ITERATIONS, GOAL_QUEUE, GOAL_STALL_WINDOW, GOAL_STATE_KEY,
+    GOAL_TARGET, GoalRecord, GoalRubric, GoalSpec, GoalState, GoalStatus, GoalStore,
+    InMemoryGoalStore, UNTIL_CHECK_AGENT, UntilCheckAgent,
 };
 #[cfg(feature = "runner")]
 pub use harness::{CANCELLED_BY_MODE_CHANGE_STATUS, CloseReport, Harness, HarnessDecision};

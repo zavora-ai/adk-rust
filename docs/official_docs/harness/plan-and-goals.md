@@ -2,7 +2,7 @@
 
 The `HarnessAgent` (`adk-harness`) has two forms of stepwise work: an approved plan with
 steps runs as a checkpointed graph (feature `graph`), and a goal iterates the agent until an
-operator's command passes.
+operator's command passes, a separate grader passes every criterion of a rubric, or both.
 
 ## Plan graph
 
@@ -95,8 +95,16 @@ the files they first saw ([Snapshots and rewind](snapshots-and-rewind.md)).
 
 ## Goals
 
-A goal iterates the harness agent until `until` exits 0 or `max_iterations` is reached. Goals
-run in Ask or Auto only; each iteration's tool calls are governed like any turn.
+A goal iterates the harness agent until its checks pass or `max_iterations` is reached. A goal
+has an `until` command, a rubric, or both:
+
+| Check | Passes when | Set with |
+|---|---|---|
+| `until` | the operator's shell command exits 0 | `GoalSpec::with_until`, `--until CMD` |
+| Rubric | a separate grader passes every criterion | `GoalSpec::with_rubric(GoalRubric)`, `--rubric FILE` |
+| Both | the command exits 0, then the grader passes every criterion | both |
+
+Goals run in Ask or Auto only; each iteration's tool calls are governed like any turn.
 
 ```rust,no_run
 use std::time::Duration;
@@ -105,12 +113,10 @@ use adk_core::{SessionId, UserId};
 use adk_harness::{GoalSpec, Harness};
 
 async fn start(harness: &Harness, user: &UserId, session: &SessionId) -> adk_core::Result<()> {
-    let goal = GoalSpec {
-        goal: "make the failing test pass".into(),
-        until: "cargo test --quiet".into(),
-        max_iterations: 5,
-        check_timeout: Duration::from_secs(600),
-    };
+    let goal = GoalSpec::new("make the failing test pass")
+        .with_until("cargo test --quiet")
+        .with_max_iterations(5)
+        .with_check_timeout(Duration::from_secs(600));
     let _events = harness.start_goal(user, session, goal).await?;
     if let Some(state) = harness.goal(user, session).await? {
         println!("{:?} after {} of {}", state.status, state.iteration, state.max_iterations);
@@ -130,9 +136,78 @@ runs, and `serve` runs goals on the `Graph` engine over its plan checkpointer (s
 
 `UntilCheckAgent` checks the kill switch, runs `until` through the harness bash tool's
 launcher (the OS sandbox when one is active) for up to the goal's `check_timeout`, which may
-exceed the workspace's limit for the model's own commands, updates the goal state and stops
-the loop on exit 0 (`Done`) or at the cap (`Exhausted`). The next iteration reads the check's output.
+exceed the workspace's limit for the model's own commands, grades the iteration when the goal
+has a rubric, updates the goal state and stops the loop once every check passes (`Done`) or at
+a cap (`Exhausted`). The next iteration reads the check's output and the grader's feedback in
+a system notice (authored `system`), the harness's own message to the agent rather than another
+agent's output quoted to it as data.
 The command is the operator's, so it is not a governed call; it is audited.
+
+### Rubric-graded goals
+
+A rubric is a list of independently gradeable criteria. After each iteration a grader checks
+the iteration's deliverable against every criterion, in a context of its own: its one request
+holds the goal, the criteria, the iteration's final message and the rubric's `deliverables`
+files, never the conversation that produced them. It answers pass or fail with feedback per
+criterion, and the failed criteria with their feedback are what the next iteration reads.
+
+```rust,no_run
+use adk_core::{SessionId, UserId};
+use adk_harness::{GoalRubric, GoalSpec, Harness};
+
+async fn start(harness: &Harness, user: &UserId, session: &SessionId) -> adk_core::Result<()> {
+    let rubric = GoalRubric::from_markdown(
+        "- blurb.md names the product, Ferris Notes\n\
+         - It states the monthly price\n\
+         - It is at most 60 words long",
+    )?
+    .with_deliverables(["blurb.md"])
+    .with_max_evaluations(3);
+    let goal = GoalSpec::new("Write the launch blurb to blurb.md").with_rubric(rubric);
+    let _events = harness.start_goal(user, session, goal).await?;
+    if let Some(outcome) = harness.goal(user, session).await?.and_then(|state| state.outcome()) {
+        println!("{outcome}");
+    }
+    Ok(())
+}
+```
+
+| Setting | Default | Effect |
+|---|---|---|
+| `criteria` | — | One pass/fail verdict each; `GoalRubric::new`, `from_markdown` (one list item per criterion), or `from_goal` (the goal text's list items, else the goal itself) |
+| `deliverables` | none | Workspace files the grader reads besides the final message, up to 64 KiB each, through the workspace's containment and exclusions |
+| `max_evaluations` | 3 (`adk_eval::DEFAULT_OUTCOME_ITERATIONS`) | Grading rounds before the goal is `Exhausted`; at most 20 (`adk_eval::MAX_OUTCOME_ITERATIONS`) |
+| `hidden` | `false` | Shows the criteria to the grader only; the agent learns the failed ones from the feedback |
+| `HarnessAgentBuilder::goal_grader(model)` | the harness model | The model that grades |
+
+- **Order.** With `until` as well, the grader runs only once the command exits 0, so a failing
+  command costs no grading call and only graded rounds count toward `max_evaluations`.
+- **Budget.** The grading call runs in the run's `ModelCallScope`: it counts against the run
+  budget and spend ledger, and a refused call stops the run with the budget's error before it
+  reaches the provider.
+- **Fail closed.** A criterion the grader gives no verdict on fails, and a reply with no
+  readable JSON fails every criterion. The request carries a JSON response schema, which a
+  provider with structured outputs enforces.
+- **Outcome.** `GoalState` keeps `evaluations` and `last_grade` (an `adk_eval::OutcomeGrade`),
+  and `GoalState::outcome` states how the goal ended, naming the criteria that still fail.
+
+`adk-rust goal` and a launcher's `goal` take the rubric as flags, or from a `[goal]` table in
+the workspace's `.adk/harness.toml` when no flag names one:
+
+| Flag | `[goal]` key | Effect |
+|---|---|---|
+| `--rubric FILE` | `rubric = "rubric.md"` | Criteria from a Markdown file; the project file's path must lie inside the workspace |
+| `--rubric-from-goal` | — | Criteria from the goal text |
+| `--deliverable PATH` (repeatable) | `deliverables = ["…"]` | Files the grader reads |
+| `--max-evaluations N` | `max_evaluations = N` | Grading rounds, 1 to 20 |
+| `--rubric-hidden` | `hidden = true` | Criteria for the grader only |
+
+```bash
+adk-rust goal "Write the launch blurb to blurb.md" --rubric rubric.md --deliverable blurb.md
+```
+
+`adk_eval::RubricCheckAgent` is the same check for any `LoopAgent`; see
+[Evaluation](../evaluation/evaluation.md#rubric-graded-outcomes).
 
 Goal state lives in a harness-owned `GoalStore` — `goal_store(..)`, in memory by default,
 `SqliteGoalStore` under `sqlite` — and is mirrored to `harness:goal` for display. While a
@@ -141,7 +216,8 @@ goal runs, every turn of the session continues it.
 | Record | Fields |
 |---|---|
 | `harness.bash.begin` / `.end` | `functionCallId`, `enforcer`, `goalCheck: true`; `exitCode`, `durationMs`, `timedOut` |
-| `harness.goal.iteration` | `iteration`, `max`, `checkExitCode`, `status` |
+| `harness.goal.grade` | `goal`, `iteration`, `evaluation`, `maxEvaluations`, `model`, `criteria`, `failed` (criterion numbers), `satisfied` |
+| `harness.goal.iteration` | `iteration`, `max`, `checkExitCode`, `rubricSatisfied`, `status` |
 
 Each check runs in a `harness.goal` span with `harness.goal.iteration`.
 
