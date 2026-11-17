@@ -47,11 +47,12 @@ mcp-sampling = ["mcp"]
 # extension, keep each tool's `_meta.ui`, leave app-only tools out of the model's tools, and
 # read `ui://` resources back for a host to show sandboxed.
 mcp-apps = ["mcp"]
-# Publish a set of adk_core::Tool as a Streamable HTTP MCP server with a Server Card
-# (spec 3.5 §7.9).
+# Publish a set of adk_core::Tool as an MCP server over Streamable HTTP, with a Server Card
+# (spec 3.5 §7.9), or over stdio.
 mcp-server = [
     "mcp",
     "rmcp/server",
+    "rmcp/transport-io",
     "rmcp/transport-streamable-http-server",
     "dep:axum",
     "dep:sha2",

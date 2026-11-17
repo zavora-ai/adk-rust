@@ -111,6 +111,18 @@ application must obey. Review the message, URL, requested fields, and metadata.
 Decline unsupported or unexpected requests. Validate all accepted form values
 before using them.
 
+## Serving an agent
+
+An agent served over MCP ([Serve an agent over MCP](agent-server.md)) acts for its caller:
+
+| Boundary | Rule |
+|---|---|
+| Who may start a run | Authenticated callers only, unless `allow_anonymous(true)` |
+| Whose task it is | The caller that started it; any other caller's task id is unknown |
+| Who answers a held call's elicitation | The task's caller, under the approval service's policy when it holds a request for the call |
+| What an answer decides | The one call its key names; an answer to a call decided or held again since is refused as stale |
+| What the agent may do | Its own tool policy, approvals, budgets and kill switch, as in any other run |
+
 ## Logging and secrets
 
 Redact environment variables, authorization headers, API keys, elicitation

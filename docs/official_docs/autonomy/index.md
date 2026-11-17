@@ -8,7 +8,7 @@ feature.
 
 ## Choose a mechanism
 
-Six mechanisms run an agent without a person driving each turn. They share one governed tool
+Seven mechanisms run an agent without a person driving each turn. They share one governed tool
 path, so policy, approvals, budgets, the action ledger and the kill switch apply in each.
 
 | Mechanism | What it is | Wakes on | Survives a crash | Choose it when | Page |
@@ -19,6 +19,7 @@ path, so policy, approvals, budgets, the action ledger and the kill switch apply
 | The harness goal | `adk-rust goal`, or `goal` of a `HarnessLauncher` app: turns toward a goal until a check command passes, a separate grader passes a rubric, or both | You start it | Yes with a durable run store: `--resume` continues it | A coding or operations task with a verifiable finish line | [Plans and goals](../harness/plan-and-goals.md) |
 | The agent kernel | A resident supervisor: a process table, wake sources, an approvals inbox, quotas, a control plane and the kill switch (`adk-rust up`, or `Kernel` in your program) | Cron, file changes, webhooks, approvals, budget refills | Yes: processes, schedules, held calls and the freeze are in its stores | The agent is always on: it sleeps between events, waits for decisions for days, and you operate it from other terminals | [Agent kernel](../kernel/index.md) |
 | The managed runtime | `adk-managed`: declarative agents run as resumable sessions whose turns park on the client | Client events | Yes: a parked turn resumes on any instance over the same stores | You host agents for others as a platform, behind your own API | [Managed agents](../managed-agents/runtime.md) |
+| The MCP agent server | `adk_server::mcp::McpAgentHost`: each MCP tool call a durable run, followed as an MCP task; a held call is asked as an elicitation and decided through the approval inbox | Tool calls from another agent or MCP client | Yes: the task is the run, so a restarted server answers for it | Another agent — yours, Claude, a LangChain agent — delegates long work to this one over MCP | [Serve an agent over MCP](../mcp/agent-server.md) |
 
 The path below combines the last two that need no platform of your own: a harness agent whose
 goals and schedule run on the agent kernel.

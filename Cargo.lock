@@ -1235,6 +1235,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
+ "dotenvy",
  "fred",
  "futures",
  "google-cloud-auth 1.19.0",
