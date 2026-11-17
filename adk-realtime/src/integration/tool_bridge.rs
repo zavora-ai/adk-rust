@@ -80,6 +80,7 @@ impl ToolBridgeAdapter {
             name: tool.name().to_string(),
             description: Some(tool.description().to_string()),
             parameters: tool.parameters_schema(),
+            behavior: None,
         }
     }
 }

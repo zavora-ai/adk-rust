@@ -123,6 +123,29 @@ impl VadConfig {
     }
 }
 
+/// Whether the model waits for a tool's result before it continues the conversation.
+///
+/// Gemini Live sends it as the function declaration's `behavior`. The OpenAI Realtime API
+/// has no such setting and ignores it.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_realtime::config::{ToolBehavior, ToolDefinition};
+///
+/// let notify = ToolDefinition::new("notify_team").with_behavior(ToolBehavior::NonBlocking);
+/// assert_eq!(notify.behavior, Some(ToolBehavior::NonBlocking));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolBehavior {
+    /// The model pauses until the result arrives, then answers with it in the same turn.
+    Blocking,
+    /// The model keeps talking while the tool runs and takes the result when it arrives,
+    /// usually in a later turn.
+    NonBlocking,
+}
+
 /// Tool/function definition for realtime sessions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolDefinition {
@@ -134,12 +157,38 @@ pub struct ToolDefinition {
     /// JSON Schema for parameters.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parameters: Option<Value>,
+    /// Whether the model waits for this tool's result.
+    ///
+    /// `None` lets the session decide: on `gemini-3.8-live` the tool is declared
+    /// [`Blocking`](ToolBehavior::Blocking), so a turn that calls it answers with its result;
+    /// on `gemini-3.8-live-extended-thinking`, which accepts only non-blocking calls,
+    /// [`NonBlocking`](ToolBehavior::NonBlocking); on other models no behavior is declared
+    /// and the model's own default applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavior: Option<ToolBehavior>,
 }
 
 impl ToolDefinition {
     /// Create a new tool definition.
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into(), description: None, parameters: None }
+        Self { name: name.into(), description: None, parameters: None, behavior: None }
+    }
+
+    /// Set whether the model waits for this tool's result.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_realtime::config::{ToolBehavior, ToolDefinition};
+    ///
+    /// // The model keeps talking while the report is sent.
+    /// let send_report =
+    ///     ToolDefinition::new("send_report").with_behavior(ToolBehavior::NonBlocking);
+    /// assert_eq!(send_report.behavior, Some(ToolBehavior::NonBlocking));
+    /// ```
+    pub fn with_behavior(mut self, behavior: ToolBehavior) -> Self {
+        self.behavior = Some(behavior);
+        self
     }
 
     /// Set the tool description.
@@ -451,6 +500,30 @@ impl RealtimeConfig {
     /// ```
     pub fn with_language(self, code: impl Into<String>) -> Self {
         self.with_extra("language_code", Value::String(code.into()))
+    }
+
+    /// Sets how much the Gemini Live model reasons, as `generationConfig.thinkingConfig`.
+    ///
+    /// [`Effort::Low`](adk_core::Effort::Low), `Medium` and `High` are sent as the thinking
+    /// levels `low`, `medium` and `high`. `gemini-3.8-live-extended-thinking` and
+    /// `gemini-3.1-flash-live-preview` take one; `gemini-3.8-live` reasons on its own and
+    /// closes the socket with 1007 on one, so it is not sent there.
+    ///
+    /// Stored under `extra.thinking_level`. An `extra` value that is not a JSON object is
+    /// replaced. The OpenAI Realtime session copies every `extra` key into its
+    /// `session.update`, so set it only for a Gemini Live model.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_core::Effort;
+    /// use adk_realtime::RealtimeConfig;
+    ///
+    /// let config = RealtimeConfig::default().with_thinking_level(Effort::Medium);
+    /// assert_eq!(config.extra.unwrap()["thinking_level"], "medium");
+    /// ```
+    pub fn with_thinking_level(self, effort: adk_core::Effort) -> Self {
+        self.with_extra("thinking_level", Value::String(effort.as_str().to_string()))
     }
 
     /// Turns on Gemini Live context window compression (a sliding window).

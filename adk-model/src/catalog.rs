@@ -301,9 +301,10 @@ pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
     ModelCatalogEntry::default("cohere", COHERE_DEFAULT, ModelRole::Balanced),
     ModelCatalogEntry::default("openai-realtime", OPENAI_REALTIME_DEFAULT, ModelRole::Realtime),
     ModelCatalogEntry::default_preview("gemini-live", GEMINI_LIVE_DEFAULT, ModelRole::Realtime),
+    ModelCatalogEntry::active("gemini-live", "gemini-3.8-live", ModelRole::Realtime),
     ModelCatalogEntry::active(
         "gemini-live",
-        "gemini-live-2.5-flash-native-audio",
+        "gemini-3.8-live-extended-thinking",
         ModelRole::Realtime,
     ),
     ModelCatalogEntry::default(
@@ -446,18 +447,27 @@ pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
         CARTESIA_DEFAULT,
         None,
     ),
+    // Google names `gemini-3.8-live` as the replacement of each of these.
     ModelCatalogEntry::obsolete(
         "gemini-live",
         "gemini-2.5-flash-native-audio-preview-12-2025",
         ModelLifecycle::Deprecated,
-        GEMINI_LIVE_DEFAULT,
-        None,
+        "gemini-3.8-live",
+        Some("2027-03-31"),
+    ),
+    // Vertex AI's name; AI Studio answers it with an error.
+    ModelCatalogEntry::obsolete(
+        "gemini-live",
+        "gemini-live-2.5-flash-native-audio",
+        ModelLifecycle::Deprecated,
+        "gemini-3.8-live",
+        Some("2026-12-13"),
     ),
     ModelCatalogEntry::obsolete(
         "gemini-live",
         "gemini-live-2.5-flash-preview",
         ModelLifecycle::Retired,
-        GEMINI_LIVE_DEFAULT,
+        "gemini-3.8-live",
         Some("2025-12-09"),
     ),
     ModelCatalogEntry::obsolete(
@@ -696,14 +706,54 @@ mod tests {
     }
 
     #[test]
-    fn live_catalog_distinguishes_vertex_ga_from_retired_studio_model() {
+    fn live_catalog_dates_the_vertex_model_and_rejects_the_retired_studio_model() {
         let vertex = lookup_model("gemini-live", "models/gemini-live-2.5-flash-native-audio")
-            .expect("Vertex Live GA model should be catalogued");
-        assert_eq!(vertex.lifecycle, ModelLifecycle::Active);
+            .expect("Vertex Live model should be catalogued");
+        assert_eq!(
+            vertex,
+            &ModelCatalogEntry::obsolete(
+                "gemini-live",
+                "gemini-live-2.5-flash-native-audio",
+                ModelLifecycle::Deprecated,
+                "gemini-3.8-live",
+                Some("2026-12-13"),
+            )
+        );
 
         let error = validate_model_selection("gemini-live", "gemini-live-2.5-flash-preview")
             .expect_err("retired AI Studio Live model must be rejected");
-        assert!(error.to_string().contains(GEMINI_LIVE_DEFAULT));
+        assert!(error.to_string().contains("gemini-3.8-live"));
+    }
+
+    /// The default stays the 3.1 preview, which Google gives no shutdown date; both 3.8 Live
+    /// models are catalogued as generally available.
+    #[test]
+    fn live_catalog_lists_the_default_and_both_3_8_models() {
+        for (model, entry) in [
+            (
+                GEMINI_LIVE_DEFAULT,
+                ModelCatalogEntry::default_preview(
+                    "gemini-live",
+                    "gemini-3.1-flash-live-preview",
+                    ModelRole::Realtime,
+                ),
+            ),
+            (
+                "models/gemini-3.8-live",
+                ModelCatalogEntry::active("gemini-live", "gemini-3.8-live", ModelRole::Realtime),
+            ),
+            (
+                "gemini-3.8-live-extended-thinking",
+                ModelCatalogEntry::active(
+                    "gemini-live",
+                    "gemini-3.8-live-extended-thinking",
+                    ModelRole::Realtime,
+                ),
+            ),
+        ] {
+            assert_eq!(lookup_model("gemini-live", model), Some(&entry), "{model}");
+            assert!(validate_model_selection("gemini-live", model).is_ok(), "{model}");
+        }
     }
 
     #[test]

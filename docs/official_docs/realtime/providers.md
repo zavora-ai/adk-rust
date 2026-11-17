@@ -49,7 +49,8 @@ fn gemini_model() -> anyhow::Result<BoxedModel> {
 | Model (AI Studio) | Use |
 |-------------------|-----|
 | `models/gemini-3.1-flash-live-preview` | Conversations with tools and video frames; the catalog default (`GEMINI_LIVE_DEFAULT`) and the examples' default |
-| `models/gemini-3.8-live` | Conversations; camera frames reach it through `realtimeInput.video` |
+| `models/gemini-3.8-live` | The newer model, with built-in reasoning: it refuses a thinking level, so none is sent, and its tools are declared `BLOCKING`. Camera frames reach it through `realtimeInput.video` |
+| `models/gemini-3.8-live-extended-thinking` | Configurable background reasoning: set `RealtimeConfig::with_thinking_level(Effort::Low)`, `Medium` or `High`. It accepts only non-blocking tools and speaks while they run; its `turnComplete` can come while it still works (`interactionStatus: IN_PROGRESS`), and each `turnComplete` ends a response. See the note below on tool use |
 | `models/gemini-2.5-flash-native-audio-preview-12-2025` | Native audio, required for [affective dialogue](affective-dialogue.md); the catalog lists it as deprecated |
 | `models/gemini-3.5-live-translate-preview` | Translation; see the [`live_translation` example](examples.md#live_translation) |
 
@@ -57,7 +58,9 @@ fn gemini_model() -> anyhow::Result<BoxedModel> {
   (`vertex-live`, OAuth2 / ADC — see [Realtime Agents](../agents/realtime-agents.md#vertex-ai-live-google-cloud)).
   `GeminiLiveBackend::studio` connects to AI Studio's `v1alpha` endpoint.
 - **Model names differ by endpoint**: `gemini-live-2.5-flash-native-audio` is the Vertex AI
-  name; AI Studio answers it with an error.
+  name, which Vertex AI retires on 2026-12-13 in favour of `gemini-3.8-live`; AI Studio
+  answers it with an error. Vertex AI lists `gemini-3.8-live` and not
+  `gemini-3.1-flash-live-preview`.
 - **Bare ids**: AI Studio's setup takes the resource name `models/{id}` and closes the socket
   with 1007 on a bare id, so `GeminiRealtimeModel::new` adds the prefix: `gemini-3.1-flash-live-preview`
   and `models/gemini-3.1-flash-live-preview` name the same model, and `model_id()` reports the
@@ -66,6 +69,25 @@ fn gemini_model() -> anyhow::Result<BoxedModel> {
   `AUDIO`; the server closes the socket with 1007 ("The requested combination of response
   modalities … is not supported by the model") on a setup the model does not support. A
   `RealtimeConfig` without modalities asks for `AUDIO`.
+- **Tool behavior**: a declaration states the `ToolDefinition`'s `behavior` when it has one.
+  Without one, `gemini-3.8-live` tools are declared `BLOCKING`, so the model answers with the
+  result in the turn that called the tool (the model's own default is non-blocking, which ends
+  the turn at the call); `gemini-3.8-live-extended-thinking` tools are declared
+  `NON_BLOCKING`, the only behavior it accepts; other models keep their own default. See
+  [Waiting for a result](tools.md#waiting-for-a-result-toolbehavior).
+- **Thinking level**: `RealtimeConfig::with_thinking_level` is sent as
+  `generationConfig.thinkingConfig.thinkingLevel`, except to `gemini-3.8-live`, which closes
+  the socket with 1007 on one; for that model it is dropped with a warning. Without it no
+  level is sent. Google's guide describes the extended-thinking level as configuration, and
+  on 2026-11-17 the server closed a `gemini-3.8-live-extended-thinking` setup without one
+  with 1007 ("Thinking level must be specified for this model.").
+
+> **Note:** tool use on `gemini-3.8-live-extended-thinking` is unverified. In six live
+> attempts on AI Studio on 2026-11-17 (ADK and raw WebSocket, `v1alpha` and `v1beta`) no
+> `toolCall` frame reached the client: the model said it would look the answer up, sent
+> `turnComplete` with `interactionStatus: IN_PROGRESS`, and about 20 seconds later said a
+> system error had occurred. The setup carried the `NON_BLOCKING` declarations Google's guide
+> shows.
 - **Voice activity**: the server's `voiceActivity` messages arrive as `ServerEvent::SpeechStarted`
   (`ACTIVITY_START`) and `ServerEvent::SpeechStopped` (`ACTIVITY_END`), with the offset into the
   audio stream in `audio_start_ms` / `audio_end_ms`, so barge-in handlers work as on OpenAI.

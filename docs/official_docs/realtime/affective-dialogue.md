@@ -28,7 +28,7 @@ sends `enableAffectiveDialog: true` inside `generationConfig`.
 
 | Requirement | Detail |
 |-------------|--------|
-| A Gemini Live native-audio model | On AI Studio, `models/gemini-2.5-flash-native-audio-preview-12-2025` (the catalog lists it as deprecated); only native-audio models honor the setting, and the half-cascade `models/gemini-3.1-flash-live-preview` is not one |
+| A Gemini Live native-audio model | On AI Studio, `models/gemini-2.5-flash-native-audio-preview-12-2025` (the catalog lists it as deprecated); only native-audio models honor the setting: the half-cascade `models/gemini-3.1-flash-live-preview` and `models/gemini-3.8-live` close the socket with 1007 on it |
 | The `v1alpha` endpoint | `GeminiLiveBackend::studio(...)` connects to it |
 
 On OpenAI the setting is ignored, so it can be set for every provider. Choose the model with
