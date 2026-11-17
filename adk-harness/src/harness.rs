@@ -1095,7 +1095,8 @@ impl Harness {
     }
 
     /// Starts a goal for the session (spec 3.1 §7.11): the harness iterates until the
-    /// goal's `until` command exits 0 or its iterations run out.
+    /// goal's checks pass — its `until` command exits 0 and its rubric's grader passes every
+    /// criterion, whichever it has — or a cap is reached.
     ///
     /// Goals run only in Ask or Auto. The goal state is written to the goal store and
     /// mirrored to `harness:goal`. With a run store ([`with_run_store`](Self::with_run_store))
@@ -1255,7 +1256,7 @@ impl Harness {
     ///     Arc::new(adk_agent::CronTrigger::new("0 0 2 * * *")?),
     ///     UserId::new("ops")?,
     ///     None,
-    ///     GoalSpec { goal: "make main green".into(), until: "cargo test".into(), max_iterations: 5, check_timeout: Duration::from_secs(900) },
+    ///     GoalSpec::new("make main green").with_until("cargo test").with_max_iterations(5).with_check_timeout(Duration::from_secs(900)),
     /// );
     /// ```
     #[cfg(feature = "ambient")]

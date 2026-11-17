@@ -695,9 +695,10 @@ impl HarnessLauncher {
 
     /// Runs the command line: the REPL (`chat`, the default), the server
     /// (`serve [--port PORT] [--host ADDRESS]`), the agent kernel (`up`, likewise), or a goal
-    /// (`goal TEXT --until CMD`).
+    /// (`goal TEXT --until CMD`, `goal TEXT --rubric FILE`, or both).
     ///
-    /// `goal` works toward `TEXT` until `CMD` exits 0 (spec 3.1 §7.11, §8.1). With a kernel
+    /// `goal` works toward `TEXT` until `CMD` exits 0 and a separate grader passes every
+    /// criterion of the rubric, whichever the goal has (spec 3.1 §7.11, §8.1). With a kernel
     /// answering at the launcher's [home](Self::with_kernel_config), the goal is a durable
     /// run of this user on the kernel's `background` queue, followed here until it ends,
     /// holds a call nobody here decides, or Ctrl-C detaches, which leaves it running.
@@ -766,7 +767,7 @@ impl HarnessLauncher {
                 #[arg(long)]
                 host: Option<IpAddr>,
             },
-            /// Work toward a goal until a check passes: on the kernel `up` runs, else here
+            /// Work toward a goal until its checks pass: on the kernel `up` runs, else here
             Goal(super::goal::GoalCommand),
         }
         let done = match Cli::parse_from(args).command.unwrap_or(Command::Chat) {

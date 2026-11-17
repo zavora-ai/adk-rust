@@ -188,6 +188,7 @@ pub struct HarnessAgentBuilder {
     /// Snapshots and rewind (spec 3.1 §7.27); off until `snapshots` is set.
     snapshots: crate::snapshot::SnapshotSetup,
     goal_store: Option<Arc<dyn crate::goal::GoalStore>>,
+    goal_grader: Option<Arc<dyn Llm>>,
     #[cfg(feature = "graph")]
     goal_engine: Option<crate::goal::GoalEngine>,
     #[cfg(feature = "memory")]
@@ -312,6 +313,7 @@ impl HarnessAgentBuilder {
             plan_checkpointer: None,
             snapshots: crate::snapshot::SnapshotSetup::default(),
             goal_store: None,
+            goal_grader: None,
             #[cfg(feature = "graph")]
             goal_engine: None,
             #[cfg(feature = "memory")]
@@ -707,6 +709,7 @@ impl HarnessAgentBuilder {
         self.default_members = false;
         self.partition.coordinator = false;
         self.goal_store = None;
+        self.goal_grader = None;
         #[cfg(feature = "graph")]
         {
             self.goal_engine = None;
@@ -1222,6 +1225,22 @@ impl HarnessAgentBuilder {
     /// Where session goals are kept (spec 3.1 §7.11; default in memory).
     pub fn goal_store(mut self, store: Arc<dyn crate::goal::GoalStore>) -> Self {
         self.goal_store = Some(store);
+        self
+    }
+
+    /// The model that grades goals with a [`GoalRubric`](crate::GoalRubric); the harness
+    /// model by default. The grader works in a context of its own and its calls count
+    /// against the run's budget and spend ledger.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let builder = adk_harness::HarnessAgent::builder("harness")
+    ///     .model(worker_model)
+    ///     .goal_grader(grader_model);
+    /// ```
+    pub fn goal_grader(mut self, model: Arc<dyn Llm>) -> Self {
+        self.goal_grader = Some(model);
         self
     }
 
@@ -2806,11 +2825,11 @@ impl HarnessAgentBuilder {
         };
         let goals = crate::goal::GoalRuntime {
             store: goal_store.clone(),
-            until: Arc::new(crate::goal::UntilCheckAgent::new(
-                goal_store,
-                workspace.clone(),
-                check_launcher,
-            )),
+            until: Arc::new(
+                crate::goal::UntilCheckAgent::new(goal_store, workspace.clone(), check_launcher)
+                    .with_grader(self.goal_grader.clone().unwrap_or_else(|| model.clone()))
+                    .with_worker(self.name.clone()),
+            ),
             #[cfg(feature = "graph")]
             engine: self.goal_engine.unwrap_or(if self.plan_checkpointer.is_some() {
                 crate::goal::GoalEngine::Graph

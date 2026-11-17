@@ -6,7 +6,7 @@ use crate::common;
 
 use std::time::Duration;
 
-use adk_harness::{GOAL_STATE_KEY, GoalSpec, GoalStatus, HarnessMode};
+use adk_harness::{GOAL_STATE_KEY, GoalRubric, GoalSpec, GoalStatus, HarnessMode};
 use adk_model::ScriptedResponse;
 use common::*;
 use serde_json::{Value, json};
@@ -24,12 +24,10 @@ fn write(path: &str) -> ScriptedResponse {
 }
 
 fn goal(max_iterations: u32) -> GoalSpec {
-    GoalSpec {
-        goal: "create done.txt".into(),
-        until: "test -f done.txt".into(),
-        max_iterations,
-        check_timeout: Duration::from_secs(30),
-    }
+    GoalSpec::new("create done.txt")
+        .with_until("test -f done.txt")
+        .with_max_iterations(max_iterations)
+        .with_check_timeout(Duration::from_secs(30))
 }
 
 /// Two iterations: the first writes progress.txt (the check fails), the second done.txt.
@@ -107,6 +105,183 @@ async fn a_goal_stops_at_its_iteration_cap() {
     assert_eq!(f.model.remaining(), 0, "no third iteration");
 }
 
+/// The grader's reply: criterion `i + 1` passes when `passed[i]`.
+fn grade(passed: &[bool]) -> ScriptedResponse {
+    let criteria: Vec<Value> = passed
+        .iter()
+        .enumerate()
+        .map(|(index, passed)| {
+            json!({
+                "id": index + 1,
+                "passed": passed,
+                "feedback": if *passed { "met" } else { "state the monthly price, $9" },
+            })
+        })
+        .collect();
+    text(&json!({ "criteria": criteria, "summary": "graded" }).to_string())
+}
+
+fn blurb_rubric() -> GoalRubric {
+    GoalRubric::new(["names the product", "states the monthly price"])
+        .with_deliverables(["blurb.md"])
+}
+
+fn graded_goal(rubric: GoalRubric) -> GoalSpec {
+    GoalSpec::new("write the launch blurb to blurb.md").with_rubric(rubric)
+}
+
+#[tokio::test]
+async fn a_rubric_goal_revises_on_the_graders_feedback_until_every_criterion_passes() {
+    let script = vec![
+        write("blurb.md"),
+        text("first draft"),
+        grade(&[true, false]),
+        write("blurb.md"),
+        text("second draft"),
+        grade(&[true, true]),
+    ];
+    let f = fixture(script, |b| b.mode(HarnessMode::Auto).without_default_members()).await;
+    run_goal(&f, graded_goal(blurb_rubric())).await;
+    let state = f.harness.goal(&f.user, &f.session).await.unwrap().unwrap();
+    assert_eq!((state.status, state.iteration, state.evaluations), (GoalStatus::Done, 2, 2));
+    assert!(state.last_grade.as_ref().is_some_and(adk_eval::OutcomeGrade::satisfied));
+    assert_eq!(state.outcome().unwrap(), "goal met after 2 iteration(s): the rubric passed.");
+    // A rubric alone runs no command.
+    assert!(f.records("harness.bash.begin").is_empty());
+    // Each grading round is audited.
+    let grades = f.records("harness.goal.grade");
+    let verdicts: Vec<(Value, Value)> = grades
+        .iter()
+        .map(|record| (record.ext["satisfied"].clone(), record.ext["failed"].clone()))
+        .collect();
+    assert_eq!(verdicts, vec![(json!(false), json!([2])), (json!(true), json!([]))]);
+
+    let requests = f.model.requests();
+    // The grader works in a context of its own: one message holding the goal, the
+    // criteria, the final message and the deliverable file, not the worker's conversation.
+    let grader = &requests[2];
+    assert_eq!(grader.contents.len(), 1, "{:?}", grader.contents);
+    let asked = serde_json::to_string(&grader.contents).unwrap();
+    for expected in
+        ["write the launch blurb", "2. states the monthly price", "first draft", "File `blurb.md`"]
+    {
+        assert!(asked.contains(expected), "missing {expected:?} in {asked}");
+    }
+    assert!(!asked.contains("Work toward the goal"), "the worker's prompt leaked: {asked}");
+    assert!(grader.config.as_ref().is_some_and(|config| config.response_schema.is_some()));
+    // The second iteration read the grader's feedback.
+    let revised = serde_json::to_string(&requests[3].contents).unwrap();
+    // As the harness's own notice, not another agent's output quoted as data.
+    assert!(revised.contains("[System notice] The grader failed 1 of 2 criteria"), "{revised}");
+    assert!(!revised.contains("[until_check] said"), "{revised}");
+    assert!(revised.contains("FAILED: states the monthly price"), "{revised}");
+    assert!(revised.contains("state the monthly price, $9"), "{revised}");
+}
+
+#[tokio::test]
+async fn a_rubric_goal_stops_once_its_grading_rounds_are_used_up() {
+    let script = vec![
+        write("blurb.md"),
+        text("first draft"),
+        grade(&[true, false]),
+        write("blurb.md"),
+        text("second draft"),
+        grade(&[false, false]),
+    ];
+    let f = fixture(script, |b| b.mode(HarnessMode::Auto).without_default_members()).await;
+    let spec = graded_goal(blurb_rubric().with_max_evaluations(2)).with_max_iterations(10);
+    run_goal(&f, spec).await;
+    let state = f.harness.goal(&f.user, &f.session).await.unwrap().unwrap();
+    assert_eq!((state.status, state.iteration, state.evaluations), (GoalStatus::Exhausted, 2, 2));
+    assert_eq!(f.model.remaining(), 0, "no third iteration");
+    let outcome = state.outcome().unwrap();
+    assert!(
+        outcome.starts_with(
+            "budget exhausted after 2 iteration(s); the rubric is not satisfied after 2 grading \
+             round(s): 2 of 2 criteria fail"
+        ),
+        "{outcome}"
+    );
+    assert!(outcome.contains("- FAILED: names the product"), "{outcome}");
+    assert_eq!(statuses(&f), vec![json!("running"), json!("exhausted")]);
+}
+
+#[tokio::test]
+async fn with_until_the_grader_runs_only_once_the_command_passes() {
+    let script = vec![
+        write("progress.txt"),
+        text("not yet"),
+        write("done.txt"),
+        text("done"),
+        grade(&[true]),
+    ];
+    let f = fixture(script, |b| b.mode(HarnessMode::Auto).without_default_members()).await;
+    let spec = goal(5).with_rubric(GoalRubric::new(["the final message says done"]));
+    run_goal(&f, spec).await;
+    let state = f.harness.goal(&f.user, &f.session).await.unwrap().unwrap();
+    assert_eq!((state.status, state.iteration, state.evaluations), (GoalStatus::Done, 2, 1));
+    assert_eq!(f.records("harness.bash.begin").len(), 2);
+    assert_eq!(f.records("harness.goal.grade").len(), 1, "no grading while the command fails");
+    assert_eq!(f.model.remaining(), 0);
+}
+
+#[tokio::test]
+async fn the_graders_call_counts_against_the_run_budget() {
+    let script = vec![write("blurb.md"), text("first draft"), grade(&[true, true])];
+    let f = fixture(script, |b| {
+        b.mode(HarnessMode::Auto)
+            .without_default_members()
+            .budget(adk_core::RunBudget::new().max_model_calls(2))
+    })
+    .await;
+    let stream =
+        f.harness.start_goal(&f.user, &f.session, graded_goal(blurb_rubric())).await.unwrap();
+    let results: Vec<_> = futures::StreamExt::collect(stream).await;
+    let error = results.iter().find_map(|result| result.as_ref().err()).expect("the run stops");
+    assert_eq!(error.category, adk_core::ErrorCategory::ResourceExhausted, "{error}");
+    assert_eq!(f.model.requests().len(), 2, "the refused grading call never reached the model");
+    assert_eq!(f.model.remaining(), 1);
+    assert!(f.records("harness.goal.grade").is_empty());
+}
+
+#[tokio::test]
+async fn the_graph_engine_grades_the_iterations_final_message_too() {
+    let script = vec![
+        write("blurb.md"),
+        text("first draft"),
+        grade(&[false, true]),
+        write("blurb.md"),
+        text("second draft"),
+        grade(&[true, true]),
+    ];
+    let f = fixture(script, |b| {
+        b.mode(HarnessMode::Auto)
+            .without_default_members()
+            .goal_engine(adk_harness::GoalEngine::Graph)
+    })
+    .await;
+    run_goal(&f, graded_goal(blurb_rubric())).await;
+    let state = f.harness.goal(&f.user, &f.session).await.unwrap().unwrap();
+    assert_eq!((state.status, state.evaluations), (GoalStatus::Done, 2));
+    let requests = f.model.requests();
+    let second_grading = serde_json::to_string(&requests[5].contents).unwrap();
+    assert!(second_grading.contains("second draft"), "{second_grading}");
+    assert!(!second_grading.contains("first draft"), "{second_grading}");
+}
+
+#[tokio::test]
+async fn a_hidden_rubric_reaches_the_grader_only() {
+    let script = vec![write("blurb.md"), text("draft"), grade(&[true, true])];
+    let f = fixture(script, |b| b.mode(HarnessMode::Auto).without_default_members()).await;
+    run_goal(&f, graded_goal(blurb_rubric().hidden(true))).await;
+    let requests = f.model.requests();
+    let worker = serde_json::to_string(&requests[0].contents).unwrap();
+    assert!(!worker.contains("states the monthly price"), "{worker}");
+    assert!(worker.contains("criteria you are not shown"), "{worker}");
+    let grader = serde_json::to_string(&requests[2].contents).unwrap();
+    assert!(grader.contains("states the monthly price"), "{grader}");
+}
+
 #[tokio::test]
 async fn goals_require_ask_or_auto() {
     for mode in [HarnessMode::Plan, HarnessMode::ReadOnly] {
@@ -116,7 +291,7 @@ async fn goals_require_ask_or_auto() {
         assert!(f.harness.goal(&f.user, &f.session).await.unwrap().is_none());
     }
     let f = fixture(Vec::new(), |b| b.without_default_members()).await;
-    let incomplete = GoalSpec { until: String::new(), ..goal(3) };
+    let incomplete = goal(3).with_until("");
     let error = f.harness.start_goal(&f.user, &f.session, incomplete).await.err().unwrap();
     assert_eq!(error.code, "harness.goal.invalid");
 }
@@ -272,12 +447,10 @@ async fn the_check_runs_for_its_check_timeout_beyond_the_shell_limit() {
         .without_default_members()
     })
     .await;
-    let spec = GoalSpec {
-        goal: "wait for the slow check".into(),
-        until: "sleep 2 && touch checked".into(),
-        max_iterations: 1,
-        check_timeout: Duration::from_secs(20),
-    };
+    let spec = GoalSpec::new("wait for the slow check")
+        .with_until("sleep 2 && touch checked")
+        .with_max_iterations(1)
+        .with_check_timeout(Duration::from_secs(20));
     run_goal(&f, spec).await;
     let state = f.harness.goal(&f.user, &f.session).await.unwrap().unwrap();
     assert_eq!((state.status, state.last_check), (GoalStatus::Done, Some(0)));
