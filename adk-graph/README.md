@@ -22,7 +22,7 @@ Graph-based workflow orchestration for Rust Agent Development Kit (ADK-Rust) age
 - **Durability modes**: `Sync` (default), `Async`, or `Exit` per run; a step with a declared `NonIdempotent` node writes earlier checkpoints first
 - **Pending writes**: when one node of a parallel step fails, the finished nodes are not run again on resume
 - **Durable Resume**: Automatically resume from the last checkpoint after a crash — skips nodes of every checkpointed step. Execution is at-least-once: a crash mid-step re-runs that step's nodes; see [Execution Guarantees](#execution-guarantees)
-- **Human-in-the-Loop**: Interrupt before/after nodes, dynamic interrupts. A pause is resumable, including one raised inside a subgraph. Every pause of a step reaches the caller, and `NodeContext::resume_value` hands a paused node the answer to that pause alone
+- **Human-in-the-Loop**: Interrupt before/after nodes, dynamic interrupts. A pause is resumable, including one raised inside a subgraph. Every pause of a step reaches the caller, and `NodeContext::resume_value` hands a paused node the answer to that pause alone. Each dynamic pause has a stable id (`Interrupt::id`), may declare a JSON Schema for its answer (`NodeOutput::with_response_schema`, checked on resume), and `ExecutionConfig::strict_resume` accepts answers only under the ids of pending pauses, refusing stale ones with `GraphError::ResumeRejected`
 - **Subgraphs**: run a compiled graph as a node with mapped channels (`SubgraphNode`). A pause inside pauses the parent, and a channel mapping that names a channel neither side declares fails when the parent **compiles**
 - **Routing from inside a node**: `NodeOutput::with_goto` names successors and replaces the node's declared edges; `AgentNode::with_goto_mapper` routes on what the agent answered; `with_goto_parent` hands control to a node of the parent graph
 - **Reliability**: per-node retry with backoff and jitter that never exceeds `max_delay`, a concurrency bound, per-node timeouts, graph-wide `NodeDefaults`, and `with_node_error_handler` to recover once a retry budget is spent. A failure no handler recovers stops the step: queued nodes do not start and sibling retries stop waiting
@@ -313,7 +313,9 @@ async fn run(planner: Arc<dyn Agent>, input: State) -> adk_graph::Result<()> {
 ```
 
 `GraphError::Interrupted` carries an `InterruptedExecution`: its `interrupt` is the first pause
-and `interrupts` holds every pause of the step, in node-name order.
+and `interrupts` holds every pause of the step, in node-name order. A dynamic pause carries its
+id (`Interrupt::id`), which answers it as a resume key too; see
+[Interrupt Ids, Typed Answers and Strict Resume](../docs/official_docs/agents/graph-agents.md#interrupt-ids-typed-answers-and-strict-resume).
 
 ### ReAct Agent with Tools
 
