@@ -222,8 +222,17 @@ the approval store is asked as a form elicitation:
     "requestedSchema": {
       "type": "object",
       "properties": {
-        "approve": { "type": "boolean", "title": "Approve", "default": true },
-        "reason": { "type": "string", "title": "Reason" }
+        "approve": {
+          "type": "boolean",
+          "title": "Approve",
+          "description": "Run the call as shown",
+          "default": true
+        },
+        "reason": {
+          "type": "string",
+          "title": "Reason",
+          "description": "Why not, told to the agent when you decline"
+        }
       }
     }
   }

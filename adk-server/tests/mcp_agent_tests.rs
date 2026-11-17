@@ -147,7 +147,7 @@ impl ElicitationHandler for Answer {
         _metadata: Option<&Value>,
     ) -> std::result::Result<ElicitResult, Box<dyn std::error::Error + Send + Sync>> {
         self.asked.lock().unwrap().push(message.to_string());
-        Ok(ElicitResult::new(self.action))
+        Ok(ElicitResult::new(self.action.clone()))
     }
 
     async fn handle_url_elicitation(
@@ -344,8 +344,12 @@ async fn a_task_asks_for_the_held_call_and_finishes_once_approved() {
     let McpCallOutcome::Completed(value) = finished else {
         panic!("expected a result: {finished:?}")
     };
-    assert_eq!(value["text"], format!("transfer: {}", json!({ "status": "sent" })), "{value}");
-    assert_eq!(value["runId"], task_id.as_str());
+    assert_eq!(
+        value["output"]["text"],
+        format!("transfer: {}", json!({ "status": "sent" })),
+        "{value}"
+    );
+    assert_eq!(value["output"]["runId"], task_id.as_str());
     assert_eq!(executions.load(Ordering::SeqCst), 1);
     assert_eq!(stores.runs.get(task_id).await.unwrap().unwrap().state, RunState::Completed);
 
@@ -374,7 +378,7 @@ async fn a_declined_call_is_not_run_and_the_agent_hears_why() {
         json!({ "action": "accept", "content": { "approve": false, "reason": "over budget" } });
     let finished = toolset.reissue(&parked, answers(&parked, &declined)).await.unwrap();
     let McpCallOutcome::Completed(value) = finished else { panic!("{finished:?}") };
-    let text = value["text"].as_str().unwrap();
+    let text = value["output"]["text"].as_str().unwrap();
     assert!(text.contains("over budget"), "the denial reaches the model: {text}");
     assert_eq!(executions.load(Ordering::SeqCst), 0, "a declined call never runs");
     served.stop().await;
@@ -402,7 +406,11 @@ async fn a_client_without_tasks_is_asked_on_its_connection_and_gets_the_answer()
         )
         .await
         .unwrap();
-    assert_eq!(value["text"], format!("transfer: {}", json!({ "status": "sent" })), "{value}");
+    assert_eq!(
+        value["output"]["text"],
+        format!("transfer: {}", json!({ "status": "sent" })),
+        "{value}"
+    );
     let asked = answer.asked.lock().unwrap().clone();
     assert_eq!(asked.len(), 1, "{asked:?}");
     assert!(asked[0].contains("`transfer`"), "{asked:?}");
@@ -482,7 +490,11 @@ async fn a_task_survives_a_server_restart() {
     let parked: ParkedMcpCall = serde_json::from_str(&checkpoint).unwrap();
     let finished = toolset.reissue(&parked, answers(&parked, &accept())).await.unwrap();
     let McpCallOutcome::Completed(value) = finished else { panic!("{finished:?}") };
-    assert_eq!(value["text"], format!("transfer: {}", json!({ "status": "sent" })), "{value}");
+    assert_eq!(
+        value["output"]["text"],
+        format!("transfer: {}", json!({ "status": "sent" })),
+        "{value}"
+    );
     assert_eq!(executions.load(Ordering::SeqCst), 1);
     second.stop().await;
 }
@@ -516,7 +528,11 @@ async fn over_stdio_the_local_caller_owns_the_task() {
     assert_eq!((run.user_id.as_str(), run.authenticated), ("local:ana", true));
     let finished = toolset.reissue(&parked, answers(&parked, &accept())).await.unwrap();
     let McpCallOutcome::Completed(value) = finished else { panic!("{finished:?}") };
-    assert_eq!(value["text"], format!("transfer: {}", json!({ "status": "sent" })), "{value}");
+    assert_eq!(
+        value["output"]["text"],
+        format!("transfer: {}", json!({ "status": "sent" })),
+        "{value}"
+    );
     assert_eq!(executions.load(Ordering::SeqCst), 1);
     drop(toolset);
     serving.abort();
@@ -524,7 +540,9 @@ async fn over_stdio_the_local_caller_owns_the_task() {
 }
 
 /// Serves `server` over an in-process pipe, as a stdio child process would be.
-fn pipe(server: adk_tool::mcp::server::McpServer) -> (tokio::io::DuplexStream, tokio::task::JoinHandle<()>) {
+fn pipe(
+    server: adk_tool::mcp::server::McpServer,
+) -> (tokio::io::DuplexStream, tokio::task::JoinHandle<()>) {
     use adk_tool::mcp::rmcp::ServiceExt;
 
     let (client_io, server_io) = tokio::io::duplex(1 << 16);
@@ -551,13 +569,16 @@ async fn a_2026_07_28_client_without_tasks_is_asked_through_input_required() {
         .unwrap();
     let (client_io, serving) = pipe(server);
     let answer = Answer::new(ElicitationAction::Accept);
-    let client = adk_tool::mcp::AdkClientHandler::new(Arc::clone(&answer) as Arc<dyn ElicitationHandler>)
-        .serve_with_lifecycle(
-            tokio::io::split(client_io),
-            ClientLifecycleMode::Discover { preferred_versions: vec![ProtocolVersion::V_2026_07_28] },
-        )
-        .await
-        .unwrap();
+    let client =
+        adk_tool::mcp::AdkClientHandler::new(Arc::clone(&answer) as Arc<dyn ElicitationHandler>)
+            .serve_with_lifecycle(
+                tokio::io::split(client_io),
+                ClientLifecycleMode::Discover {
+                    preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                },
+            )
+            .await
+            .unwrap();
     assert_eq!(
         client.peer_info().map(|info| info.protocol_version.clone()),
         Some(ProtocolVersion::V_2026_07_28)
@@ -567,7 +588,11 @@ async fn a_2026_07_28_client_without_tasks_is_asked_through_input_required() {
     let tools = adk_core::Toolset::tools(&toolset, ctx.clone() as _).await.unwrap();
     let ops = tools.iter().find(|tool| tool.name() == "ops").unwrap();
     let value = ops.execute(ctx, json!({ "message": "send 50 USD" })).await.unwrap();
-    assert_eq!(value["text"], format!("transfer: {}", json!({ "status": "sent" })), "{value}");
+    assert_eq!(
+        value["output"]["text"],
+        format!("transfer: {}", json!({ "status": "sent" })),
+        "{value}"
+    );
     assert_eq!(answer.asked.lock().unwrap().len(), 1);
     assert_eq!(executions.load(Ordering::SeqCst), 1);
     drop(toolset);
@@ -584,8 +609,8 @@ struct Listener {
 }
 
 impl adk_tool::mcp::rmcp::ClientHandler for Listener {
-    fn get_info(&self) -> adk_tool::mcp::rmcp::model::ClientInfo {
-        let mut info = adk_tool::mcp::rmcp::model::ClientInfo::default();
+    fn get_info(&self) -> adk_tool::mcp::rmcp::model::ClientConfig {
+        let mut info = adk_tool::mcp::rmcp::model::ClientConfig::default();
         info.capabilities =
             adk_tool::mcp::rmcp::model::ClientCapabilities::builder().enable_elicitation().build();
         info
@@ -596,7 +621,11 @@ impl adk_tool::mcp::rmcp::ClientHandler for Listener {
         request: adk_tool::mcp::rmcp::model::ElicitRequestParams,
         _context: adk_tool::mcp::rmcp::service::RequestContext<adk_tool::mcp::rmcp::RoleClient>,
     ) -> std::result::Result<ElicitResult, adk_tool::mcp::rmcp::ErrorData> {
-        if let adk_tool::mcp::rmcp::model::ElicitRequestParams::FormElicitationParams { message, .. } = request {
+        if let adk_tool::mcp::rmcp::model::ElicitRequestParams::FormElicitationParams {
+            message,
+            ..
+        } = request
+        {
             self.asked.lock().unwrap().push(message);
         }
         Ok(ElicitResult::new(ElicitationAction::Accept))
@@ -605,7 +634,9 @@ impl adk_tool::mcp::rmcp::ClientHandler for Listener {
     async fn on_progress(
         &self,
         params: adk_tool::mcp::rmcp::model::ProgressNotificationParam,
-        _context: adk_tool::mcp::rmcp::service::NotificationContext<adk_tool::mcp::rmcp::RoleClient>,
+        _context: adk_tool::mcp::rmcp::service::NotificationContext<
+            adk_tool::mcp::rmcp::RoleClient,
+        >,
     ) {
         if let Some(message) = params.message {
             self.progress.lock().unwrap().push(message);
@@ -643,7 +674,9 @@ async fn progress_notifications_stream_the_runs_steps() {
     let started = tokio::time::Instant::now();
     let heard = loop {
         let heard = progress.lock().unwrap().clone();
-        if heard.iter().any(|line| line.starts_with("ops: transfer:")) || started.elapsed() > Duration::from_secs(2) {
+        if heard.iter().any(|line| line.starts_with("ops: transfer:"))
+            || started.elapsed() > Duration::from_secs(2)
+        {
             break heard;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -710,7 +743,7 @@ async fn live_anthropic_agent_over_mcp_with_a_restart_mid_task() {
     let McpCallOutcome::Completed(value) = finished else { panic!("{finished:?}") };
     println!("task {task_id} completed: {value}");
     assert_eq!(executions.load(Ordering::SeqCst), 1, "the approved transfer ran once");
-    assert_eq!(value["runId"], task_id.as_str());
-    assert!(!value["text"].as_str().unwrap_or_default().is_empty());
+    assert_eq!(value["output"]["runId"], task_id.as_str());
+    assert!(!value["output"]["text"].as_str().unwrap_or_default().is_empty());
     second.stop().await;
 }

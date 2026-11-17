@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use adk_core::audit_log::InMemoryAuditRecorder;
+use adk_core::audit_log::{AuditRecorder, InMemoryAuditRecorder};
 use adk_core::{InMemoryApprovalStore, InMemoryRunStore, ToolConfirmationRequest};
 use chrono::Utc;
 
@@ -60,7 +60,8 @@ fn a_key_changes_whenever_the_question_does() {
 
 /// A host over fresh stores, auditing into the recorder, and a run of `ana` parked on the held
 /// `transfer`.
-async fn parked_run() -> (McpAgentHost, Arc<InMemoryApprovalStore>, RunRecord, InMemoryAuditRecorder) {
+async fn parked_run() -> (McpAgentHost, Arc<InMemoryApprovalStore>, RunRecord, InMemoryAuditRecorder)
+{
     let runs = Arc::new(InMemoryRunStore::new());
     let approvals = Arc::new(InMemoryApprovalStore::new());
     let recorder = InMemoryAuditRecorder::new();
@@ -183,7 +184,8 @@ async fn a_finished_run_is_a_completed_task_with_the_answer() {
         json!({
             "content": [{ "type": "text", "text": "sent" }],
             "structuredContent": { "text": "sent", "sessionId": "s-1", "runId": record.run_id },
-            "isError": false
+            "isError": false,
+            "resultType": "complete"
         })
     );
     assert_eq!(task.task.status_message.as_deref(), Some("sent"));
