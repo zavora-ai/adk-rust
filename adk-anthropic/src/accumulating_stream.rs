@@ -85,6 +85,9 @@ impl AccumulatingStream {
                     if delta_event.delta.stop_sequence.is_some() {
                         msg.stop_sequence = delta_event.delta.stop_sequence.clone();
                     }
+                    if delta_event.delta.stop_details.is_some() {
+                        msg.stop_details = delta_event.delta.stop_details.clone();
+                    }
                     if let Some(input_tokens) = delta_event.usage.input_tokens {
                         msg.usage.input_tokens = input_tokens;
                     }
@@ -390,6 +393,39 @@ mod tests {
             assert!(matches!(&message.content[1], ContentBlock::ToolUse(tool)
                 if tool.id == "read" && tool.input == json!({"path":"file.txt"})));
         }
+    }
+
+    /// A refusal's `stop_details` arrives on `message_delta` and is kept on the message, so
+    /// both the streamed and the unary message carry the refusal category.
+    #[tokio::test]
+    async fn refusal_stop_details_reach_the_accumulated_message() {
+        use futures::StreamExt;
+        use serde_json::json;
+        let details = json!({"type": "refusal", "category": "cyber", "explanation": "Declined."});
+        let values = [
+            json!({"type":"message_start","message":{"id":"fixture","type":"message",
+                "role":"assistant","model":"fixture","content":[],"stop_reason":null,
+                "stop_sequence":null,"usage":{"input_tokens":8,"output_tokens":0}}}),
+            json!({"type":"message_delta","delta":{"stop_reason":"refusal",
+                "stop_details":details},"usage":{"output_tokens":1}}),
+            json!({"type":"message_stop"}),
+        ];
+        let events: Vec<_> =
+            values.into_iter().map(|value| Ok(serde_json::from_value(value).unwrap())).collect();
+        let (mut stream, result) = AccumulatingStream::new(stream::iter(events));
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+        let message = result.await.unwrap().unwrap();
+        assert_eq!(message.stop_reason, Some(StopReason::Refusal));
+        assert_eq!(serde_json::to_value(&message).unwrap()["stop_details"], details);
+
+        let unary: crate::Message = serde_json::from_value(json!({"id":"fixture",
+            "type":"message","role":"assistant","model":"fixture","content":[],
+            "stop_reason":"refusal","stop_sequence":null,"stop_details":details,
+            "usage":{"input_tokens":8,"output_tokens":1}}))
+        .unwrap();
+        assert_eq!(serde_json::to_value(&unary).unwrap()["stop_details"], details);
     }
 
     /// Null counts in `message_start` and `message_delta` read as zero, and the message keeps

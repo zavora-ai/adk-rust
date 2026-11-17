@@ -23,7 +23,10 @@ pub enum ThinkingDisplay {
 ///   **rejected on Opus 4.8 / Opus 4.7**).
 /// - `Adaptive` — Adaptive thinking for Opus 4.8 / Opus 4.7 / Opus 4.6 / Sonnet 4.6.
 ///   Pair with `output_config.effort` to control reasoning depth.
-/// - `Disabled` — Thinking disabled.
+/// - `Disabled` — Thinking disabled. Claude Fable 5.x, Mythos 5.x, Opus 5.5 and Sonnet 5.5
+///   reject it; on the first three, omit `thinking` and lower `output_config.effort`.
+/// - `BetweenTools` — No thinking before the response, only short updates between tool
+///   calls. The way to turn thinking off on Claude Sonnet 5.5, at effort `high` or below.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ThinkingConfig {
@@ -44,6 +47,10 @@ pub enum ThinkingConfig {
     },
     /// Thinking disabled.
     Disabled,
+    /// No thinking before the response; the updates written between tool calls come back as
+    /// thinking blocks. Claude Sonnet 5.5 accepts it at effort `high` or below, with no other
+    /// field.
+    BetweenTools,
 }
 
 impl ThinkingConfig {
@@ -52,7 +59,9 @@ impl ThinkingConfig {
     pub fn num_tokens(&self) -> u32 {
         match self {
             ThinkingConfig::Enabled { budget_tokens, .. } => *budget_tokens,
-            ThinkingConfig::Adaptive { .. } | ThinkingConfig::Disabled => 0,
+            ThinkingConfig::Adaptive { .. }
+            | ThinkingConfig::Disabled
+            | ThinkingConfig::BetweenTools => 0,
         }
     }
 
@@ -70,6 +79,20 @@ impl ThinkingConfig {
     /// Create a disabled thinking configuration.
     pub fn disabled() -> Self {
         Self::Disabled
+    }
+
+    /// Create the configuration that turns up-front thinking off on Claude Sonnet 5.5.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_anthropic::ThinkingConfig;
+    ///
+    /// let config = serde_json::to_value(ThinkingConfig::between_tools()).unwrap();
+    /// assert_eq!(config, serde_json::json!({"type": "between_tools"}));
+    /// ```
+    pub fn between_tools() -> Self {
+        Self::BetweenTools
     }
 }
 
@@ -140,9 +163,18 @@ mod tests {
     }
 
     #[test]
+    fn between_tools_round_trips() {
+        let value = json!({"type": "between_tools"});
+        assert_eq!(to_value(ThinkingConfig::between_tools()).unwrap(), value);
+        let config: ThinkingConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(config, ThinkingConfig::BetweenTools);
+    }
+
+    #[test]
     fn num_tokens() {
         assert_eq!(ThinkingConfig::enabled(8192).num_tokens(), 8192);
         assert_eq!(ThinkingConfig::adaptive().num_tokens(), 0);
         assert_eq!(ThinkingConfig::disabled().num_tokens(), 0);
+        assert_eq!(ThinkingConfig::between_tools().num_tokens(), 0);
     }
 }
