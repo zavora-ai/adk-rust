@@ -380,7 +380,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 |---------|-------|
 | [ADK-Rust](https://github.com/zavora-ai/adk-rust) | Core framework (43 crates) |
 | [ADK-Studio](https://github.com/zavora-ai/adk-studio) | Visual agent builder |
-| [ADK-UI](https://github.com/zavora-ai/adk-ui) | Retired; agent-drawn UI ships as `adk-surface`'s `genui` feature |
+| [ADK-UI](https://github.com/zavora-ai/adk-ui) | 3.x: extension catalogs for `adk-surface`'s `genui` (charts, metrics, pages, scenes); 2.x retired with ADK-Rust 2 |
 | [ADK-Playground](https://github.com/zavora-ai/adk-playground) | 120+ working examples |
 | Super-Agents | Autonomous vertical agents (planned) |
 | Spatial-OS | Spatial deployment platform (Q4 2026) |
