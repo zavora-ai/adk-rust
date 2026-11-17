@@ -22,4 +22,24 @@
   - **`DrawnDepth`:** tilt, flip, layers, carousel, wall and stage.
   - **The terminal** shows a scene as its summary, its text view or labelled objects with
     their states, and its panels; a flip card as its front and back.
-  - **The web home** shows the same, in words, for now.
+  - **The web home** draws a scene with WebGL (`three` 0.185.1, pinned). It loads in its
+    own chunk, only for a drawing that has a scene, and the main chunk is checked to stay
+    free of it (`npm run check:chunks`, part of `verify`).
+    - It draws in the home's palette, light and dark. Labels, ticks and panels are page
+      text over the canvas.
+    - The person can orbit and zoom with the pointer or the arrow keys, + and −, and Home
+      to reset.
+    - Picking fills the drawing's field through the home's own field state, outlines what
+      is picked, and announces it.
+    - Motion pauses when the scene is off screen, under reduced motion, or with Pause.
+    - A patch eases objects that keep their ids to their new places, and the camera stays
+      where the person left it.
+    - At most six scenes draw at once; older ones fall back to their words.
+    - Its words stand in where WebGL is missing or fails, and on "Show as text".
+  - **Depth effects on the web** use CSS 3D:
+    - a card tilts towards the pointer;
+    - a flip card turns over with its own button, and its hidden face is inert;
+    - a carousel turns with Previous and Next;
+    - layers stack, a wall curves, and a stage turns by drag or arrow keys.
+    - A field with a problem is never left on a hidden face. Under reduced motion, and on
+      narrow screens, they lay out flat.
