@@ -293,52 +293,8 @@ async fn a_live_native_compaction_keeps_the_run_and_its_thinking() {
 
     // The kept turns' thinking holds: the first request after a swap that replays thinking is
     // sent again with the binding check set to fail on any mismatch.
-    let with_thinking = bodies
-        .iter()
-        .find(|body| {
-            opens_with_compaction(body)
-                && body["messages"].as_array().unwrap().iter().skip(1).any(|message| {
-                    message["content"].as_array().is_some_and(|blocks| {
-                        blocks.iter().any(|block| block["type"] == "thinking")
-                    })
-                })
-        })
-        .cloned();
-    match with_thinking {
-        Some(mut body) => {
-            body["thinking"] = json!({
-                "type": "adaptive",
-                "block_binding": {"prefix_mismatch_behavior": "error"}
-            });
-            body["max_tokens"] = json!(1_024);
-            body["stream"] = json!(false);
-            let headers = sent.lock().unwrap()[0].1.clone();
-            let response = reqwest::Client::new()
-                .post("https://api.anthropic.com/v1/messages")
-                .header("x-api-key", &key)
-                .header(
-                    "anthropic-version",
-                    headers.get("anthropic-version").unwrap().to_str().unwrap(),
-                )
-                .header("anthropic-beta", "compact-2026-09-04,thinking-binding-controls-2026-08-01")
-                .json(&body)
-                .send()
-                .await
-                .unwrap();
-            let status = response.status();
-            let reply: Value = response.json().await.unwrap();
-            println!(
-                "kept-thinking check: status {status}, input_transformations {}",
-                reply.get("input_transformations").cloned().unwrap_or(Value::Null)
-            );
-            assert!(status.is_success(), "kept thinking failed the binding check: {reply}");
-            assert!(
-                reply["input_transformations"].as_array().is_none_or(Vec::is_empty),
-                "no thinking block was dropped: {reply}"
-            );
-        }
-        None => println!("kept-thinking check: no request after a swap replayed thinking"),
-    }
+    let headers = sent.lock().unwrap()[0].1.clone();
+    check_kept_thinking(&bodies, &headers, &key).await;
 
     // The next run starts from the signed block the session recorded and still answers.
     let before = sent.lock().unwrap().len();
@@ -356,6 +312,170 @@ async fn a_live_native_compaction_keeps_the_run_and_its_thinking() {
             || second.answer.contains("9840")
             || second.answer.contains("9,840")
     );
+}
+
+/// Sends the first request that opens with a compaction block and replays thinking after it
+/// again, with the binding check set to fail on any mismatch: a success with no dropped block
+/// shows the kept turns' thinking is still bound to the conversation.
+async fn check_kept_thinking(bodies: &[Value], headers: &reqwest::header::HeaderMap, key: &str) {
+    let with_thinking = bodies
+        .iter()
+        .find(|body| {
+            opens_with_compaction(body)
+                && body["messages"].as_array().unwrap().iter().skip(1).any(|message| {
+                    message["content"].as_array().is_some_and(|blocks| {
+                        blocks.iter().any(|block| block["type"] == "thinking")
+                    })
+                })
+        })
+        .cloned();
+    let Some(mut body) = with_thinking else {
+        println!("kept-thinking check: no request after a swap replayed thinking");
+        return;
+    };
+    body["thinking"] = json!({
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"}
+    });
+    body["max_tokens"] = json!(1_024);
+    body["stream"] = json!(false);
+    let response = reqwest::Client::new()
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", key)
+        .header("anthropic-version", headers.get("anthropic-version").unwrap().to_str().unwrap())
+        .header("anthropic-beta", "compact-2026-09-04,thinking-binding-controls-2026-08-01")
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let reply: Value = response.json().await.unwrap();
+    println!(
+        "kept-thinking check: status {status}, input_transformations {}",
+        reply.get("input_transformations").cloned().unwrap_or(Value::Null)
+    );
+    assert!(status.is_success(), "kept thinking failed the binding check: {reply}");
+    assert!(
+        reply["input_transformations"].as_array().is_none_or(Vec::is_empty),
+        "no thinking block was dropped: {reply}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "calls the Anthropic API; needs ANTHROPIC_API_KEY"]
+async fn a_live_background_compaction_started_in_one_turn_opens_the_next() {
+    dotenvy::dotenv().ok();
+    let key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY");
+    const MODEL: &str = "claude-haiku-5-5";
+    // Every request body and its headers, with when it was sent.
+    type Sent = (Value, reqwest::header::HeaderMap, std::time::Instant);
+    let sent: Arc<Mutex<Vec<Sent>>> = Arc::default();
+    let capture = sent.clone();
+    let model = adk_model::anthropic::AnthropicClient::new(
+        adk_model::anthropic::AnthropicConfig::new(key.clone(), MODEL)
+            .with_max_tokens(4_096)
+            .with_thinking_mode(adk_model::anthropic::ThinkingMode::Adaptive)
+            .with_effort(adk_model::anthropic::Effort::High),
+    )
+    .unwrap()
+    .with_request_adapter(Arc::new(move |body, headers| {
+        capture.lock().unwrap().push((body.clone(), headers.clone(), std::time::Instant::now()));
+        Ok(())
+    }));
+    let read_page = FunctionTool::new(
+        "read_page",
+        "Reads one page of the ledger. Page 1 takes the cursor \"start\"; each page gives the \
+         cursor of the next.",
+        |_ctx: Arc<dyn ToolContext>, args: Value| async move {
+            Ok(page(args["page"].as_u64().unwrap_or(1), args["cursor"].as_str().unwrap_or("")))
+        },
+    )
+    .with_parameters_schema::<PageArgs>();
+    let agent = LlmAgentBuilder::new("auditor")
+        .instruction(format!(
+            "You audit a ledger of {PAGES} pages. Read the pages the user asks for, in order, \
+             with read_page: page 1 takes the cursor \"start\" and each page gives the cursor \
+             of the next. Reply with only the number asked for."
+        ))
+        .model(Arc::new(model) as Arc<dyn Llm>)
+        .tool(Arc::new(read_page))
+        .max_iterations(20)
+        .build()
+        .unwrap();
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "live".to_string(),
+            user_id: "u".to_string(),
+            session_id: Some("s".to_string()),
+            state: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let runner = Runner::builder()
+        .app_name("live")
+        .agent(Arc::new(agent))
+        .session_service(sessions as Arc<dyn SessionService>)
+        // COMPACTION: summaries start in the background at 50% of a 5,000-token threshold.
+        .intra_compaction_config(
+            IntraCompactionConfig::at_tokens(5_000).with_overlap_event_count(4).in_background(0.5),
+        )
+        .build()
+        .unwrap();
+    let tracker = Arc::new(BudgetTracker::new(RunBudget::new()));
+    let config = RunConfig { budget_tracker: Some(tracker.clone()), ..Default::default() };
+
+    let first = audit(
+        &runner,
+        "Read pages 1 through 4, then reply with the sum of their page_total values.",
+        config.clone(),
+    )
+    .await;
+    let first_turn = sent.lock().unwrap().len();
+    let started: Vec<std::time::Instant> = sent.lock().unwrap()[..first_turn]
+        .iter()
+        .filter(|(body, _, _)| body.get("compaction").is_some())
+        .map(|(_, _, at)| *at)
+        .collect();
+    let first_compactions =
+        first.events.iter().filter(|event| event.actions.compaction.is_some()).count();
+    println!(
+        "first turn: {first_turn} requests, {} compaction requests started, {first_compactions} \
+         swapped in; answer {:?}",
+        started.len(),
+        first.answer
+    );
+    assert!(!started.is_empty(), "a summary started in the background during the first turn");
+    assert!(first.answer.contains(&(820 * 10).to_string()), "{:?}", first.answer);
+
+    // The person takes a moment to reply; the summary is written meanwhile.
+    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+    let second = audit(
+        &runner,
+        "Now read pages 5 and 6, then reply with the sum of page_total over pages 1 through 6.",
+        config,
+    )
+    .await;
+
+    let all: Vec<Sent> = sent.lock().unwrap().clone();
+    let opening = &all[first_turn];
+    let second_compactions =
+        second.events.iter().filter(|event| event.actions.compaction.is_some()).count();
+    println!(
+        "second turn: first request opens with the signed block: {}; {} compaction requests in the \
+         second turn; {second_compactions} swapped in; answer {:?}; budget model calls {}",
+        opens_with_compaction(&opening.0),
+        all[first_turn..].iter().filter(|(body, _, _)| body.get("compaction").is_some()).count(),
+        second.answer,
+        tracker.usage().model_calls,
+    );
+    assert!(opening.0.get("compaction").is_none(), "the second turn wrote no summary first");
+    assert!(opens_with_compaction(&opening.0), "the second turn opens with the summary");
+    assert!(second_compactions >= 1, "the swap is recorded in the session");
+    assert!(second.answer.contains(&(820 * 21).to_string()), "{:?}", second.answer);
+    assert_eq!(tracker.usage().model_calls, all.len() as u64, "every call is metered");
+    let bodies: Vec<Value> = all.iter().map(|(body, _, _)| body.clone()).collect();
+    check_kept_thinking(&bodies[first_turn..], &opening.1, &key).await;
 }
 
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]

@@ -34,6 +34,10 @@ pub const DEFAULT_TOKEN_THRESHOLD: u64 = 100_000;
 /// The rest leaves room for the response and for the error of a character-based estimate.
 pub const DEFAULT_CONTEXT_WINDOW_FRACTION: f64 = 0.8;
 
+/// The share of the threshold at which a background compaction starts
+/// ([`IntraCompactionConfig::background`]).
+pub const DEFAULT_BACKGROUND_FRACTION: f64 = 0.7;
+
 /// When an agent's history is compacted during a run.
 ///
 /// Before each model call, `LlmAgent` and `CodeActAgent` ask the run's
@@ -83,6 +87,14 @@ pub struct IntraCompactionConfig {
     /// ([`Llm::native_compaction`]) writes the summary, in place of the runner's summarizer
     /// (default: `true`). A summarizer or strategy configured on the runner takes precedence.
     pub native: bool,
+    /// Whether the summary is written off the critical path (default: `false`): once a request
+    /// passes `background_fraction` of the threshold, the runner starts the summary while the
+    /// agent goes on, and swaps it in before a later model call, in this run or the session's
+    /// next. A request that reaches the threshold first waits for it.
+    pub background: bool,
+    /// The share of the threshold at which a background compaction starts. Values outside
+    /// `(0, 1)` use [`DEFAULT_BACKGROUND_FRACTION`].
+    pub background_fraction: f64,
 }
 
 impl Default for IntraCompactionConfig {
@@ -94,6 +106,8 @@ impl Default for IntraCompactionConfig {
             overlap_event_count: 10,
             chars_per_token: 4,
             native: true,
+            background: false,
+            background_fraction: DEFAULT_BACKGROUND_FRACTION,
         }
     }
 }
@@ -135,6 +149,39 @@ impl IntraCompactionConfig {
     pub fn with_native(mut self, native: bool) -> Self {
         self.native = native;
         self
+    }
+
+    /// Writes summaries off the critical path, starting each once a request passes `fraction`
+    /// of the threshold.
+    ///
+    /// The summary costs a model call that may come earlier than the threshold requires, and
+    /// it is swapped in only when the history still starts with the entries it covers.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::IntraCompactionConfig;
+    ///
+    /// // Start summarizing at 60% of the threshold, so the next turn rarely waits for it.
+    /// let config = IntraCompactionConfig::default().in_background(0.6);
+    /// assert!(config.background);
+    /// assert_eq!(config.background_threshold_for(Some(1_000_000)), 480_000);
+    /// ```
+    pub fn in_background(mut self, fraction: f64) -> Self {
+        self.background = true;
+        self.background_fraction = fraction;
+        self
+    }
+
+    /// The estimated tokens at which a background compaction starts, for a model with
+    /// `context_window` tokens: `background_fraction` of [`threshold_for`](Self::threshold_for).
+    pub fn background_threshold_for(&self, context_window: Option<u64>) -> u64 {
+        let fraction = if self.background_fraction > 0.0 && self.background_fraction < 1.0 {
+            self.background_fraction
+        } else {
+            DEFAULT_BACKGROUND_FRACTION
+        };
+        (self.threshold_for(context_window) as f64 * fraction) as u64
     }
 
     /// The threshold, in estimated tokens, for a model with `context_window` tokens.
@@ -728,6 +775,8 @@ mod tests {
                 overlap_event_count: 10,
                 chars_per_token: 4,
                 native: true,
+                background: false,
+                background_fraction: DEFAULT_BACKGROUND_FRACTION,
             }
         );
     }
