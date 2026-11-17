@@ -1,0 +1,94 @@
+//! Live tool-call turns on the current Claude models, including Claude Sonnet 5.5 with thinking
+//! turned off through `between_tools`. Require `ANTHROPIC_API_KEY`.
+#![cfg(feature = "anthropic")]
+
+use adk_core::{Content, GenerateContentConfig, Llm, LlmRequest, LlmResponse, Part};
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig, Effort, ThinkingMode};
+use futures::TryStreamExt;
+use serde_json::json;
+
+fn weather_request() -> LlmRequest {
+    let mut request = LlmRequest::new(
+        "ignored",
+        vec![Content::new("user").with_text("Use get_weather for Paris, then answer in one line.")],
+    );
+    request.tools.insert(
+        "get_weather".to_string(),
+        json!({
+            "description": "Get the current weather for a city",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"]
+            }
+        }),
+    );
+    request.config =
+        Some(GenerateContentConfig { max_output_tokens: Some(2_048), ..Default::default() });
+    request
+}
+
+async fn turn(client: &AnthropicClient, request: LlmRequest, stream: bool) -> Content {
+    let responses: Vec<LlmResponse> = client
+        .generate_content(request, stream)
+        .await
+        .expect("request accepted")
+        .try_collect()
+        .await
+        .expect("response parsed");
+    let last = responses.last().expect("a response");
+    assert_eq!(last.error_code, None, "turn failed: {last:?}");
+    responses.into_iter().rev().find_map(|response| response.content).expect("turn content")
+}
+
+/// Calls the tool, answers it, and returns the final text.
+async fn tool_round_trip(config: AnthropicConfig, stream: bool) -> String {
+    let client = AnthropicClient::new(config).unwrap();
+    let mut request = weather_request();
+    let call = turn(&client, request.clone(), stream).await;
+    let call_id = call
+        .parts
+        .iter()
+        .find_map(|part| match part {
+            Part::FunctionCall { name, id, .. } if name == "get_weather" => id.clone(),
+            _ => None,
+        })
+        .expect("the model calls get_weather");
+    request.contents.push(call);
+    request.contents.push(Content {
+        role: "function".into(),
+        parts: vec![Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new(
+                "get_weather",
+                json!({"city": "Paris", "temperature_c": 9, "conditions": "rain"}),
+            ),
+            id: Some(call_id),
+            annotations: None,
+        }],
+    });
+    let answer = turn(&client, request, stream).await;
+    answer.parts.iter().filter_map(Part::text).collect()
+}
+
+#[tokio::test]
+#[ignore = "calls the Anthropic API; requires ANTHROPIC_API_KEY"]
+async fn live_current_models_complete_a_tool_call() {
+    let Ok(key) = std::env::var("ANTHROPIC_API_KEY") else { return };
+    let cases = [
+        (AnthropicConfig::new(key.clone(), "claude-haiku-5-5").with_effort(Effort::Low), false),
+        (AnthropicConfig::new(key.clone(), "claude-sonnet-5-5").with_effort(Effort::Low), true),
+        (
+            AnthropicConfig::new(key.clone(), "claude-sonnet-5-5")
+                .with_thinking_mode(ThinkingMode::BetweenTools)
+                .with_effort(Effort::Low),
+            false,
+        ),
+        (AnthropicConfig::new(key, "claude-fable-5-2").with_effort(Effort::Low), false),
+    ];
+    for (config, stream) in cases {
+        let label = format!("{} thinking={:?} stream={stream}", config.model, config.thinking);
+        let answer = tool_round_trip(config, stream).await;
+        println!("{label}: {answer}");
+        assert!(!answer.trim().is_empty(), "{label}: empty answer");
+    }
+}

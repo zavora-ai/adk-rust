@@ -235,6 +235,10 @@ included, as a starting map for `send_with_headers` and `stream_with_headers`.
 | Tool errors | A `tool_result` is sent with `is_error: true` when the agent answered the call as `refused`, `not_run` or `failed` ([tool result status](../tools/function-tools.md#tool-result-status)); a tool's own result, including one with an `error` field, is sent without it |
 | Generation config | `stop_sequences` is sent; `seed`, `frequency_penalty`, `presence_penalty`, and `top_logprobs` fail with `model.unsupported_config` |
 | Claude 5 and Opus 4.7/4.8 sampling | For `claude-opus-5*`, `claude-sonnet-5*`, `claude-haiku-5*`, `claude-fable-5*`, `claude-mythos-5*`, `claude-mythos-preview`, `claude-opus-4-8`, and `claude-opus-4-7`, a request with `temperature`, `top_p`, or `top_k` fails with `model.anthropic.claude5_sampling_unsupported`, and `ThinkingMode::Enabled` with `model.anthropic.claude5_manual_thinking_unsupported`, before anything is sent |
+| Platform model IDs | A platform-prefixed ID such as `anthropic.claude-sonnet-5-5` or `us.anthropic.claude-opus-4-7-v1` follows the sampling and fast-mode rules of the first-party model it names |
+| Refusals | A classifier refusal (`stop_reason: "refusal"`) ends the turn with `FinishReason::Safety`, `error_code` `"refusal"`, an `error_message` naming the `stop_details` category and explanation, and `provider_metadata.stop_details` as sent; `LlmAgent` reports it as a failed turn, never as an answer |
+| Fast mode | `with_fast_mode(true)` is accepted for `claude-opus-5-5`, `claude-fable-5-2`, `claude-mythos-5-2`, `claude-opus-5`, and `claude-opus-4-8`; other models fail with `model.anthropic.fast_mode_unsupported` before anything is sent |
+| Forced tool choice | Requests never send a forced `tool_choice` (`any` or `tool`), which Claude Fable 5.1 and later, Mythos 5.1 and later, Opus 5.5, and Sonnet 5.5 reject; tools and `output_schema` leave the choice to the model |
 
 ## Key Features
 
@@ -274,6 +278,29 @@ fn build() -> Result<AnthropicClient, Box<dyn std::error::Error>> {
     )?)
 }
 ```
+
+### Turning Thinking Off
+
+Claude Fable 5.x, Mythos 5.x, and Opus 5.5 always think; lower the effort instead.
+Claude Sonnet 5.5 rejects `{"type": "disabled"}` and turns thinking off with
+`ThinkingMode::BetweenTools` (`{"type": "between_tools"}`): the model does not think before
+answering, and the short updates it writes between tool calls come back as thinking blocks. The
+API accepts it at effort `high` or below, and takes no `display` with it.
+
+```rust
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig, Effort, ThinkingMode};
+
+fn build() -> Result<AnthropicClient, Box<dyn std::error::Error>> {
+    let api_key = std::env::var("ANTHROPIC_API_KEY")?;
+    Ok(AnthropicClient::new(
+        AnthropicConfig::new(api_key, "claude-sonnet-5-5")
+            .with_thinking_mode(ThinkingMode::BetweenTools)
+            .with_effort(Effort::Low),
+    )?)
+}
+```
+
+`adk-anthropic` sends the same setting with `ThinkingConfig::between_tools()`.
 
 ### Prompt Caching
 

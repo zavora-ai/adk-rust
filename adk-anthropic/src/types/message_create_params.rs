@@ -513,8 +513,8 @@ impl MessageCreateParams {
                         ));
                     }
                 }
-                ThinkingConfig::Disabled => {
-                    // No validation needed for disabled state
+                ThinkingConfig::Disabled | ThinkingConfig::BetweenTools => {
+                    // No validation needed when thinking is off
                 }
                 ThinkingConfig::Adaptive { .. } => {
                     // No validation needed for adaptive thinking
