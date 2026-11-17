@@ -496,7 +496,7 @@ const MAX_RATIONALE_CHARS: usize = 300;
 ///     .guidance("This agent maintains a Rust workspace; builds and tests are routine.")
 ///     .timeout(Duration::from_secs(30));
 /// assert_eq!(approver.reviewer().id, "model:claude-haiku-5-5");
-/// assert_eq!(approver.timeout(), Duration::from_secs(30));
+/// assert_eq!(ToolReviewer::timeout(&approver), Duration::from_secs(30));
 /// ```
 #[derive(Clone)]
 pub struct ModelApprover {

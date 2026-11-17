@@ -91,6 +91,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-eval"
+version = "3.0.0"
+dependencies = [
+ "adk-core",
+ "adk-model",
+ "adk-runner",
+ "adk-session",
+ "async-trait",
+ "chrono",
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "adk-gemini"
 version = "3.0.0"
 dependencies = [
@@ -119,6 +137,7 @@ dependencies = [
  "adk-agent",
  "adk-core",
  "adk-devtools",
+ "adk-eval",
  "adk-runner",
  "adk-sandbox",
  "adk-session",
