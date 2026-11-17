@@ -636,12 +636,10 @@ async fn goal_resumes_after_crash() -> Result<Checks> {
     let dir = tempfile::tempdir()?;
     std::fs::create_dir_all(dir.path().join("ws"))?;
     let (user, session) = ids()?;
-    let spec = GoalSpec {
-        goal: "create done.txt".into(),
-        until: "test -f done.txt".into(),
-        max_iterations: 3,
-        check_timeout: Duration::from_secs(30),
-    };
+    let spec = GoalSpec::new("create done.txt")
+        .with_until("test -f done.txt")
+        .with_max_iterations(3)
+        .with_check_timeout(Duration::from_secs(30));
     let run_id = {
         let process = open(
             dir.path(),
@@ -840,12 +838,10 @@ async fn live_durable_goal(model: Arc<dyn Llm>) -> Result<Checks> {
     let dir = tempfile::tempdir()?;
     crate::write_crate(&dir.path().join("ws"))?;
     let (user, session) = ids()?;
-    let spec = GoalSpec {
-        goal: "Make the failing test in src/lib.rs pass. Fix the code with edit_file; do not change the test.".into(),
-        until: "cargo test --quiet".into(),
-        max_iterations: 3,
-        check_timeout: Duration::from_secs(300),
-    };
+    let spec = GoalSpec::new("Make the failing test in src/lib.rs pass. Fix the code with edit_file; do not change the test.")
+        .with_until("cargo test --quiet")
+        .with_max_iterations(3)
+        .with_check_timeout(Duration::from_secs(300));
     let run_id = {
         let process = open(dir.path(), model.clone(), HarnessMode::Ask, |b| {
             b.without_default_members().max_iterations(15)

@@ -863,12 +863,10 @@ async fn a_goal_check_under_the_container_shell_never_runs_on_the_host() {
         },
     )
     .await;
-    let spec = adk_harness::GoalSpec {
-        goal: "create done.txt".into(),
-        until: "touch ran-on-host.txt && test -f done.txt".into(),
-        max_iterations: 1,
-        check_timeout: Duration::from_secs(30),
-    };
+    let spec = adk_harness::GoalSpec::new("create done.txt")
+        .with_until("touch ran-on-host.txt && test -f done.txt")
+        .with_max_iterations(1)
+        .with_check_timeout(Duration::from_secs(30));
     common::collect(f.harness.start_goal(&f.user, &f.session, spec).await.unwrap()).await;
     assert!(f.path("done.txt").exists(), "the iteration ran");
     assert!(!f.path("ran-on-host.txt").exists(), "the goal check ran on the host");

@@ -22,16 +22,17 @@ pub const HARNESS_CONFIG_FILE: &str = ".adk/harness.toml";
 const DEPLOY_TABLE: &str = "deploy";
 
 /// Keys `adk-rust` reads from its own config that a project file may not set.
-const LOOSENING_KEYS: [&str; 5] = ["yes", "allow_unsandboxed", "trust", "packs", "members"];
+const LOOSENING_KEYS: [&str; 6] =
+    ["yes", "allow_unsandboxed", "auto_review", "trust", "packs", "members"];
 
 /// What `.adk/harness.toml` asks of a harness (spec 3.1 §8.3), applied with
 /// [`HarnessAgentBuilder::config`](crate::HarnessAgentBuilder::config).
 ///
 /// The file sits in the workspace the agent works in, so it may only tighten
 /// (spec 3.1 §9.2 I3): a stricter mode, the OS sandbox, and `fail_if_unavailable`. Keys
-/// that would loosen what the agent may do (`yes`, `allow_unsandboxed`, `trust`, `packs`,
-/// `members`) and unknown keys are ignored and reported in [`notes`](Self::notes); set
-/// them in code. The `[deploy]` table is left to deployment tooling (spec 3.1 §8.5). An
+/// that would loosen what the agent may do (`yes`, `allow_unsandboxed`, `auto_review`,
+/// `trust`, `packs`, `members`) and unknown keys are ignored and reported in
+/// [`notes`](Self::notes); set them in code. The `[deploy]` table is left to deployment tooling (spec 3.1 §8.5). An
 /// unknown mode reads as `read_only` (spec 3.1 §9.2 I16).
 ///
 /// ```toml
@@ -99,6 +100,11 @@ struct ConfigFile {
     #[serde(default)]
     #[allow(dead_code)]
     compaction: Option<toml::Value>,
+    /// The `[goal]` table (the rubric goals in this workspace are graded against) is read by
+    /// the `adk-rust` CLI, so it is neither applied here nor reported as unknown.
+    #[serde(default)]
+    #[allow(dead_code)]
+    goal: Option<toml::Value>,
     #[serde(flatten)]
     other: BTreeMap<String, toml::Value>,
 }

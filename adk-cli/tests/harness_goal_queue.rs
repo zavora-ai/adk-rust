@@ -57,12 +57,12 @@ async fn goal_runs_and_served_runs_on_one_store_stay_with_their_own_workers() {
         .with_console(ConsoleIo::scripted([], false))
         .quiet();
     let outcome = launcher
-        .run_goal(GoalSpec {
-            goal: "create done.txt".into(),
-            until: "test -f done.txt".into(),
-            max_iterations: 2,
-            check_timeout: Duration::from_secs(30),
-        })
+        .run_goal(
+            GoalSpec::new("create done.txt")
+                .with_until("test -f done.txt")
+                .with_max_iterations(2)
+                .with_check_timeout(Duration::from_secs(30)),
+        )
         .await
         .unwrap();
     assert!(outcome.held.is_empty(), "{outcome:?}");
@@ -111,12 +111,12 @@ async fn a_goal_enqueued_for_a_kernel_runs_as_its_authenticated_user() {
         let mut launcher =
             if authenticated { launcher.with_authenticated_goals() } else { launcher };
         let pid = launcher
-            .enqueue_goal(GoalSpec {
-                goal: "create done.txt".into(),
-                until: "test -f done.txt".into(),
-                max_iterations: 2,
-                check_timeout: Duration::from_secs(30),
-            })
+            .enqueue_goal(
+                GoalSpec::new("create done.txt")
+                    .with_until("test -f done.txt")
+                    .with_max_iterations(2)
+                    .with_check_timeout(Duration::from_secs(30)),
+            )
             .await
             .unwrap();
         let run = runs.get(&pid).await.unwrap().unwrap();

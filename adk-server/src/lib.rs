@@ -70,6 +70,9 @@ pub mod background;
 #[cfg(feature = "approvals")]
 pub mod approvals;
 
+#[cfg(feature = "mcp")]
+pub mod mcp;
+
 #[cfg(feature = "awp")]
 pub mod subject_rights;
 

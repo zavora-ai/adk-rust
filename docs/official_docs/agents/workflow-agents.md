@@ -278,6 +278,37 @@ All agents start simultaneously and their events stream as they are produced.
 
 To exit a loop early, give an agent the `ExitLoopTool`. When called, it signals the loop to stop.
 
+### Until a Rubric Passes
+
+A loop can end on a grader's verdict instead of the critic's own call: `RubricCheckAgent`
+(`adk-eval`) grades each attempt against a rubric in a context of its own, feeds the failed
+criteria back to the next attempt, and stops the loop once every criterion passes or after at
+most 20 graded attempts (3 by default). Its grading call counts against the run budget.
+
+```rust,no_run
+use std::sync::Arc;
+
+use adk_agent::{LlmAgentBuilder, LoopAgent};
+use adk_eval::{RubricCheckAgent, RubricConfig};
+
+fn blurb_loop(model: Arc<dyn adk_core::Llm>) -> adk_core::Result<LoopAgent> {
+    let writer = LlmAgentBuilder::new("writer")
+        .instruction("Write the product blurb the user asks for.")
+        .model(model.clone())
+        .output_key("draft")
+        .build()?;
+    let check = RubricCheckAgent::new(
+        "rubric_check",
+        model,
+        RubricConfig::from_criteria(["Names the product", "States the monthly price"]),
+    )
+    .with_deliverable_key("draft");
+    Ok(LoopAgent::new("blurb", vec![Arc::new(writer), Arc::new(check)]))
+}
+```
+
+See [Rubric-graded outcomes](../evaluation/evaluation.md#rubric-graded-outcomes).
+
 ### Complete Example
 
 ```rust

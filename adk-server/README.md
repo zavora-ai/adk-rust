@@ -45,6 +45,7 @@ No feature is enabled by default.
 | `background` | Durable background runs (`/api/runs`), cron jobs (`/api/cron`), `DurableWorker`, and `DurableScheduler` |
 | `webhook-ingress` | `ServerBuilder::with_webhook_ingress`: signed `POST /hooks/{name}` deliveries that enqueue durable runs, with Standard Webhooks or a forge's push signature (`WebhookHook::forge`: GitHub, GitLab) |
 | `approvals` | `ServerBuilder::with_approval_service`: the `/api/approvals` inbox, `spawn_approval_ticker`, and `WebhookApprovalNotifier` |
+| `mcp` | `mcp::McpAgentHost`: agents served over MCP (stdio and Streamable HTTP), each call a durable run followed as an MCP task, held calls asked as elicitations and decided through the approval inbox; `RequestContextCallers` for the server's identity layer (implies `background`; experimental; [Serve an agent over MCP](../docs/official_docs/mcp/agent-server.md)) |
 | `openai-webhooks` | `OpenAIWebhookHandler` for OpenAI background-task completion events |
 | `yaml-agent` | `AgentConfigLoader` and `HotReloadWatcher` for YAML agent definitions |
 | `agent-registry` | The agent registry REST API, `registry::registry_router(store, extractor)`: every request authenticates through a `RequestContextExtractor`, and only a card's owner updates or deletes it |

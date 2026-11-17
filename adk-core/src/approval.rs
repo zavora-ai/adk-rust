@@ -1889,6 +1889,66 @@ pub trait ApprovalService: fmt::Debug + Send + Sync {
         let _ = notifier;
         false
     }
+
+    /// Files a call a [`ToolReviewer`](crate::ToolReviewer) approved or denied in the run as
+    /// a request it decided, so the inbox's history shows the decision and who made it
+    /// (`decided_by: model:<id>` for a [`ModelApprover`](crate::ModelApprover)). Returns
+    /// `None` when the service routes no request for the call.
+    ///
+    /// The run applies the verdict itself, so the request is created resolved, with its
+    /// outcome applied: nothing is written to the store and no run is woken. Notifiers hear
+    /// [`Decided`](ApprovalEventKind::Decided) and [`Resolved`](ApprovalEventKind::Resolved).
+    ///
+    /// The default files nothing and answers `None`; a wrapper forwards it to the service
+    /// it wraps.
+    ///
+    /// # Errors
+    ///
+    /// Returns a store error, or the audit trail's when the service records decisions.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::principal::SubjectRef;
+    /// use adk_core::{
+    ///     ApprovalCall, ApprovalDecision, ApprovalPolicy, ApprovalScope, ApprovalService,
+    ///     ApprovalState, ApproverSelector, InMemoryApprovalStore, StoreApprovalService,
+    ///     ToolConfirmationRequest,
+    /// };
+    /// use serde_json::json;
+    ///
+    /// # futures::executor::block_on(async {
+    /// let service = StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+    ///     .with_router(ApprovalPolicy::new([ApproverSelector::group("operator")]));
+    /// let call = ApprovalCall {
+    ///     scope: ApprovalScope::new("app", "u", "s"),
+    ///     request: ToolConfirmationRequest::new("bash", json!({ "command": "cargo test" })),
+    ///     reason: "host commands wait for approval".into(),
+    ///     agent_name: "harness".into(),
+    ///     invocation_id: "inv-1".into(),
+    ///     run_id: None,
+    ///     acting: None,
+    /// };
+    /// let reviewer = SubjectRef::service("model:claude-sonnet-5-5");
+    /// let filed = service
+    ///     .record_review(call, ApprovalDecision::approve(reviewer.clone()))
+    ///     .await?
+    ///     .unwrap();
+    /// assert_eq!(filed.state, ApprovalState::Approved);
+    /// assert_eq!(filed.decisions[0].approver, reviewer);
+    /// assert!(filed.outcome_applied);
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// # }).unwrap();
+    /// ```
+    async fn record_review(
+        &self,
+        call: ApprovalCall,
+        decision: ApprovalDecision,
+    ) -> Result<Option<ApprovalRequest>> {
+        let _ = (call, decision);
+        Ok(None)
+    }
 }
 
 /// Who belongs to which approver group, as the deployment knows it.
@@ -2744,6 +2804,86 @@ impl ApprovalService for StoreApprovalService {
 
     fn approval_store(&self) -> Option<Arc<dyn ApprovalStore>> {
         Some(self.store.clone())
+    }
+
+    async fn record_review(
+        &self,
+        call: ApprovalCall,
+        mut decision: ApprovalDecision,
+    ) -> Result<Option<ApprovalRequest>> {
+        let router = self.router.as_ref().or_else(|| self.fallback_router.get());
+        let Some(route) = router.and_then(|router| router.route(&call)) else {
+            return Ok(None);
+        };
+        route.policy.validate()?;
+        let now = self.clock.now();
+        let fingerprint = call.request.fingerprint();
+        let id = ApprovalRequest::id_for_call(&call.scope, &fingerprint, now);
+        let mut request = ApprovalRequest::new(id, call.scope.clone(), &call.request, route.policy)
+            .with_summary(route.summary.unwrap_or(call.reason))
+            .with_risk(route.risk);
+        if let Some(args) = route.redacted_args {
+            request = request.with_redacted_args(args);
+        }
+        if let Some(actions) = route.allowed_actions {
+            request = request.with_allowed_actions(actions);
+        }
+        if let Some(acting) = call.acting {
+            request = request.with_acting(acting);
+        }
+        if request.requester.is_none() {
+            request = request.with_requester(SubjectRef::human(call.scope.user_id.clone()));
+        }
+        if let Some(run_id) = call.run_id {
+            request = request.with_run_id(run_id);
+        }
+        decision.decided_at = now;
+        request.created_at = now;
+        request.state = match decision.kind {
+            ApprovalAction::Approve | ApprovalAction::Edit => ApprovalState::Approved,
+            ApprovalAction::Reject => ApprovalState::Rejected,
+            ApprovalAction::Respond => ApprovalState::Responded,
+        };
+        request.decisions = vec![decision.clone()];
+        request.resolved_at = Some(now);
+        // The run applied the verdict itself: there is no outcome to write and no run to wake.
+        request.outcome_applied = true;
+
+        if let Some(trail) = &self.audit {
+            use crate::audit_log::{AuditActor, AuditDecision, AuditRecordDraft, AuditRecordKind};
+            let audited = match decision.kind {
+                ApprovalAction::Approve | ApprovalAction::Edit => AuditDecision::Approved,
+                ApprovalAction::Reject | ApprovalAction::Respond => AuditDecision::Rejected,
+            };
+            let action = serde_json::to_value(decision.kind).unwrap_or(Value::Null);
+            let mut draft = AuditRecordDraft::new(AuditRecordKind::Approval, &request.tool_name)
+                .actor(AuditActor::subject(decision.approver.clone()))
+                .args_digest(trail.digest(&request.args_redacted))
+                .decision(audited)
+                .ext("source", Value::String(crate::REVIEW_SOURCE.to_string()))
+                .ext("approvalId", Value::String(request.id.clone()))
+                .ext("approvalAction", action)
+                .ext("version", Value::from(request.version))
+                .ext("sessionId", Value::String(request.scope.session_id.clone()));
+            if let Some(acting) = &request.acting {
+                draft = draft.ext("actingAgent", Value::String(acting.agent.id.to_string()));
+            }
+            trail.record(draft).await?;
+        }
+
+        let stored = self.store.create_request(&request).await?;
+        tracing::info!(
+            approval.id = %stored.id,
+            tool.name = %stored.tool_name,
+            approval.state = stored.state.as_str(),
+            reviewer.id = %decision.approver.id,
+            "approval request decided by a reviewer"
+        );
+        if stored == request {
+            self.notify(ApprovalEventKind::Decided, &stored, Some(&decision), None).await;
+            self.notify(ApprovalEventKind::Resolved, &stored, None, None).await;
+        }
+        Ok(Some(stored))
     }
 
     fn route_unrouted(&self, router: Arc<dyn ApprovalRouter>) -> bool {

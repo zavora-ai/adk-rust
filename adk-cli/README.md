@@ -42,6 +42,7 @@ adk-rust --session release-notes --mode plan
 # One task, a goal, or an implement-and-review loop on the harness
 adk-rust code "make the failing test pass"
 adk-rust goal "all tests green" --until "cargo test" --resume
+adk-rust goal "write the release notes to NOTES.md" --rubric rubric.md --deliverable NOTES.md
 adk-rust ultracode "add input validation"
 
 # The harness behind the HTTP server, in plan mode, with the approval inbox

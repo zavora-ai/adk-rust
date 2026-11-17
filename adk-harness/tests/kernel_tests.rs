@@ -88,12 +88,10 @@ async fn in_state(runs: &Arc<dyn DurableRunStore>, pid: &str, state: RunState) {
 }
 
 fn goal(until: &str, max_iterations: u32) -> GoalSpec {
-    GoalSpec {
-        goal: "make progress".into(),
-        until: until.into(),
-        max_iterations,
-        check_timeout: Duration::from_secs(30),
-    }
+    GoalSpec::new("make progress")
+        .with_until(until)
+        .with_max_iterations(max_iterations)
+        .with_check_timeout(Duration::from_secs(30))
 }
 
 /// Starts `spec` as a durable goal run and returns its pid.

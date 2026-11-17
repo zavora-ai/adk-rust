@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 use adk_core::{AdkError, Result, Tool};
 use async_trait::async_trait;
+use rmcp::model::{InputRequests, InputResponses, Task};
 use serde_json::Value;
 
-use super::McpCaller;
+use super::{McpCaller, McpRequestPeer};
 use crate::SimpleToolContext;
 
 /// One `tools/call` the server is about to run: the tool, its arguments, the caller and the
@@ -26,6 +27,21 @@ pub struct McpToolCall {
     pub request_id: String,
     /// The MCP session the request belongs to, for stateful sessions.
     pub session_id: Option<String>,
+    /// Whether the request declared the tasks extension (SEP-2663), so the executor may
+    /// answer with [`McpToolOutcome::Task`].
+    pub accepts_task: bool,
+    /// Whether the client negotiated MCP `2026-07-28` or later, so the executor may answer
+    /// with [`McpToolOutcome::InputRequired`].
+    pub accepts_input_required: bool,
+    /// The answers to the input requests an earlier [`McpToolOutcome::InputRequired`] asked,
+    /// sent with the retried call (SEP-2322).
+    pub input_responses: Option<InputResponses>,
+    /// The `requestState` the client echoed back with the retried call. The client may have
+    /// changed it, so an executor treats it as untrusted.
+    pub request_state: Option<String>,
+    /// The client end of the request, for progress notifications and, before `2026-07-28`,
+    /// elicitation on the live connection; `None` for a call made outside a server.
+    pub peer: Option<McpRequestPeer>,
 }
 
 impl McpToolCall {
@@ -53,12 +69,42 @@ impl McpToolCall {
         caller: McpCaller,
         request_id: impl Into<String>,
     ) -> Self {
-        Self { tool, arguments, caller, request_id: request_id.into(), session_id: None }
+        Self {
+            tool,
+            arguments,
+            caller,
+            request_id: request_id.into(),
+            session_id: None,
+            accepts_task: false,
+            accepts_input_required: false,
+            input_responses: None,
+            request_state: None,
+            peer: None,
+        }
     }
 
     /// Sets the MCP session the call belongs to.
     pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
         self.session_id = Some(session_id.into());
+        self
+    }
+
+    /// Marks the call as made by a client that takes a task in answer (SEP-2663).
+    pub fn with_task_support(mut self) -> Self {
+        self.accepts_task = true;
+        self
+    }
+
+    /// Marks the call as a retry carrying `responses` to an earlier `input_required` result
+    /// and the `request_state` it echoed back (SEP-2322); the client takes `input_required`.
+    pub fn with_input_responses(
+        mut self,
+        responses: InputResponses,
+        request_state: Option<String>,
+    ) -> Self {
+        self.accepts_input_required = true;
+        self.input_responses = Some(responses);
+        self.request_state = request_state;
         self
     }
 }
@@ -70,6 +116,9 @@ impl std::fmt::Debug for McpToolCall {
             .field("caller", &self.caller.id())
             .field("request_id", &self.request_id)
             .field("session_id", &self.session_id)
+            .field("accepts_task", &self.accepts_task)
+            .field("accepts_input_required", &self.accepts_input_required)
+            .field("request_state", &self.request_state.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -85,6 +134,20 @@ pub enum McpToolOutcome {
     /// `adk_core::tool_error_response` describes it: a rejection's message, otherwise only its
     /// category and code.
     Failed(AdkError),
+    /// The call continues as this task (SEP-2663), which the client follows through
+    /// `tasks/get`, `tasks/update` and `tasks/cancel` on the server's
+    /// [`McpTaskHost`](super::McpTaskHost). Only for a call that
+    /// [accepts a task](McpToolCall::accepts_task); otherwise the call is refused.
+    Task(Task),
+    /// The call needs answers to `input_requests` before it can finish (SEP-2322): the client
+    /// calls again with the answers and `request_state`. Only for a call that
+    /// [accepts it](McpToolCall::accepts_input_required); otherwise the call is refused.
+    InputRequired {
+        /// The questions, keyed as the answers must be.
+        input_requests: InputRequests,
+        /// Echoed back by the client with the answers.
+        request_state: Option<String>,
+    },
 }
 
 /// Runs, or refuses, each call the server receives (spec 3.5 §7.9).

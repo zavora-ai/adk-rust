@@ -13,7 +13,7 @@ waits on any of them, so a slow receiver never holds up a process.
 | `process` | A process changes state, with the reason, such as a park |
 | `wake` | A wake event is routed: the process it woke or spawned, its key and outcome |
 | `held` | A call is filed in the kernel's approvals inbox; carries the call with the arguments approvers see, and the process parked on it |
-| `decided` | A decision resolves a held call: `approve` or `deny`, who made it, and the fingerprint its `held` carries |
+| `decided` | A decision resolves a held call: `approve` or `deny`, who made it, and the fingerprint its `held` carries. A call a model reviewer decided in the run ([auto review](../harness/modes-and-approvals.md#auto-review)) is published once, with no `held` before it, by `model:<model id>` |
 | `ruleHit` | A standing rule allows a call |
 | `spend` | Spend is committed against a partition |
 | `agenda` | An agenda item changes state, or a proposal is refused |

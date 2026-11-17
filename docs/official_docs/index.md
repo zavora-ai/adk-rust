@@ -148,6 +148,7 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 - [MCP client](mcp/client.md) - Tools, resources, prompts, completion, subscriptions, elicitation, tasks, and HTTP
 - [Dynamic MCP server manager](mcp/manager.md) - Runtime local-server registry, persistence, monitoring, and restart
 - [MCP server authoring](mcp/server.md) - Publish tools and other capabilities with the aligned official Rust SDK
+- [Serve an agent over MCP](mcp/agent-server.md) - Agents as MCP tools: durable runs as tasks, held calls as elicitations
 - [MCP security](mcp/security.md) - Authentication, visibility, authorization, approval, and secret handling
 - [MCP testing](mcp/testing.md) - Deterministic gates and deployment verification
 - [Browser Tools](tools/browser-tools.md) - 46 WebDriver tools for web automation

@@ -130,6 +130,7 @@ pub struct HarnessAgentBuilder {
     confirmation_handler: Option<Arc<dyn ToolConfirmationHandler>>,
     approval_store: Option<Arc<dyn ApprovalStore>>,
     approval_service: Option<Arc<dyn ApprovalService>>,
+    auto_review: Option<Arc<dyn adk_core::ToolReviewer>>,
     #[cfg(feature = "kernel")]
     kernel_approvals: Arc<crate::kernel::LateApprovalNotifier>,
     #[cfg(feature = "kernel")]
@@ -188,6 +189,7 @@ pub struct HarnessAgentBuilder {
     /// Snapshots and rewind (spec 3.1 §7.27); off until `snapshots` is set.
     snapshots: crate::snapshot::SnapshotSetup,
     goal_store: Option<Arc<dyn crate::goal::GoalStore>>,
+    goal_grader: Option<Arc<dyn Llm>>,
     #[cfg(feature = "graph")]
     goal_engine: Option<crate::goal::GoalEngine>,
     #[cfg(feature = "memory")]
@@ -268,6 +270,7 @@ impl HarnessAgentBuilder {
             confirmation_handler: None,
             approval_store: None,
             approval_service: None,
+            auto_review: None,
             #[cfg(feature = "kernel")]
             kernel_approvals: Arc::default(),
             #[cfg(feature = "kernel")]
@@ -312,6 +315,7 @@ impl HarnessAgentBuilder {
             plan_checkpointer: None,
             snapshots: crate::snapshot::SnapshotSetup::default(),
             goal_store: None,
+            goal_grader: None,
             #[cfg(feature = "graph")]
             goal_engine: None,
             #[cfg(feature = "memory")]
@@ -707,6 +711,7 @@ impl HarnessAgentBuilder {
         self.default_members = false;
         self.partition.coordinator = false;
         self.goal_store = None;
+        self.goal_grader = None;
         #[cfg(feature = "graph")]
         {
             self.goal_engine = None;
@@ -947,6 +952,40 @@ impl HarnessAgentBuilder {
         #[cfg(feature = "kernel")]
         let service = crate::kernel::NotifyingApprovals::wrap(service, &self.kernel_approvals);
         self.approval_service = Some(service);
+        self
+    }
+
+    /// Reviews, in Auto mode, the calls the mode holds with `reviewer` before a person is
+    /// asked: it approves, denies, or escalates each one (autonomy parity item 2). Off by
+    /// default.
+    ///
+    /// It decides only a call the harness holds in Auto mode that a standing rule could
+    /// answer: a host `bash` command or an external tool. Everything Auto denies, and every
+    /// non-waivable approval — an edit of a protected path, an unsandboxed retry,
+    /// `exit_plan_mode`, memory writes, payments, computer use and partition crossings — goes
+    /// to a person as before, and so does every call in `read_only`, `plan` and `ask`. A
+    /// served harness without authenticated identity decides Auto as Ask, so its calls are
+    /// never reviewed. An escalated call is prompted or held as it would be without a
+    /// reviewer. See `adk_core::review` for the verdicts and their records.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::{ModelApprover, ReviewScope};
+    /// use adk_harness::{HarnessAgent, HarnessMode};
+    /// use adk_model::{ScriptedLlm, ScriptedResponse};
+    ///
+    /// let reviewer = Arc::new(ScriptedLlm::new("claude-haiku-5-5", vec![]));
+    /// let builder = HarnessAgent::builder("harness")
+    ///     .mode(HarnessMode::Auto)
+    ///     .auto_review(Arc::new(
+    ///         ModelApprover::new(reviewer).scope(ReviewScope::default().excluding_tools(["mcp_*"])),
+    ///     ));
+    /// # let _ = builder;
+    /// ```
+    pub fn auto_review(mut self, reviewer: Arc<dyn adk_core::ToolReviewer>) -> Self {
+        self.auto_review = Some(reviewer);
         self
     }
 
@@ -1222,6 +1261,22 @@ impl HarnessAgentBuilder {
     /// Where session goals are kept (spec 3.1 §7.11; default in memory).
     pub fn goal_store(mut self, store: Arc<dyn crate::goal::GoalStore>) -> Self {
         self.goal_store = Some(store);
+        self
+    }
+
+    /// The model that grades goals with a [`GoalRubric`](crate::GoalRubric); the harness
+    /// model by default. The grader works in a context of its own and its calls count
+    /// against the run's budget and spend ledger.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let builder = adk_harness::HarnessAgent::builder("harness")
+    ///     .model(worker_model)
+    ///     .goal_grader(grader_model);
+    /// ```
+    pub fn goal_grader(mut self, model: Arc<dyn Llm>) -> Self {
+        self.goal_grader = Some(model);
         self
     }
 
@@ -2806,11 +2861,11 @@ impl HarnessAgentBuilder {
         };
         let goals = crate::goal::GoalRuntime {
             store: goal_store.clone(),
-            until: Arc::new(crate::goal::UntilCheckAgent::new(
-                goal_store,
-                workspace.clone(),
-                check_launcher,
-            )),
+            until: Arc::new(
+                crate::goal::UntilCheckAgent::new(goal_store, workspace.clone(), check_launcher)
+                    .with_grader(self.goal_grader.clone().unwrap_or_else(|| model.clone()))
+                    .with_worker(self.name.clone()),
+            ),
             #[cfg(feature = "graph")]
             engine: self.goal_engine.unwrap_or(if self.plan_checkpointer.is_some() {
                 crate::goal::GoalEngine::Graph
@@ -2883,6 +2938,7 @@ impl HarnessAgentBuilder {
                 ledger,
                 approval_store,
                 approval_service: self.approval_service,
+                auto_review: self.auto_review,
                 ledgers: crate::ledger::HarnessLedgers::new(
                     self.action_ledger.unwrap_or_else(|| Arc::new(InMemoryActionLedger::new())),
                 ),

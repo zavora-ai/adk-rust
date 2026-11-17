@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditRecordKind};
 use adk_core::{
     AdkError, Agent, Content, ErrorCategory, ErrorComponent, Event, EventStream, InvocationContext,
-    Result, Tool,
+    Llm, Result, Tool,
 };
 use adk_devtools::{BashTool, CommandLauncher, Workspace};
 use async_trait::async_trait;
@@ -200,45 +200,115 @@ impl GoalBook {
     }
 }
 
-/// A loop-until goal (spec 3.1 §7.11).
+/// The iterations a goal takes unless configured otherwise, as `adk-rust goal` defaults
+/// `--max-iters`.
 ///
 /// # Example
 ///
 /// ```rust
-/// use adk_harness::GoalSpec;
-/// use std::time::Duration;
+/// assert_eq!(adk_harness::DEFAULT_GOAL_ITERATIONS, 8);
+/// ```
+pub const DEFAULT_GOAL_ITERATIONS: u32 = 8;
+
+/// How long one run of a goal's `until` command may take unless configured otherwise.
 ///
-/// let goal = GoalSpec {
-///     goal: "make the tests pass".into(),
-///     until: "cargo test".into(),
-///     max_iterations: 10,
-///     check_timeout: Duration::from_secs(600),
-/// };
-/// assert_eq!(goal.max_iterations, 10);
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_harness::DEFAULT_CHECK_TIMEOUT.as_secs(), 600);
+/// ```
+pub const DEFAULT_CHECK_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// The most bytes of one deliverable file the grader reads; the rest is cut.
+const DELIVERABLE_MAX_BYTES: usize = 64 * 1024;
+
+/// The most bytes of the iteration's final message the grader reads.
+const FINAL_MESSAGE_MAX_BYTES: usize = 16 * 1024;
+
+/// A loop-until goal (spec 3.1 §7.11): the harness iterates until the goal's checks pass —
+/// the `until` command exits 0, the rubric's grader passes every criterion, or both when
+/// both are set — or `max_iterations` is reached.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_harness::{GoalRubric, GoalSpec};
+///
+/// let tests = GoalSpec::new("make the tests pass").with_until("cargo test").with_max_iterations(10);
+/// assert_eq!(tests.max_iterations, 10);
+///
+/// let blurb = GoalSpec::new("write the launch blurb to blurb.md").with_rubric(
+///     GoalRubric::new(["names the product", "states the price"]).with_deliverables(["blurb.md"]),
+/// );
+/// assert!(blurb.until.is_none());
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct GoalSpec {
     /// What to achieve.
     pub goal: String,
-    /// The operator's check command; exit 0 means done.
-    pub until: String,
+    /// The operator's check command; exit 0 passes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+    /// The rubric a grader checks each iteration's deliverable against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rubric: Option<GoalRubric>,
     /// Most iterations.
     pub max_iterations: u32,
-    /// Timeout of one check.
+    /// Timeout of one run of `until`.
     pub check_timeout: Duration,
 }
 
 impl GoalSpec {
+    /// A goal with no check yet, [`DEFAULT_GOAL_ITERATIONS`] iterations and a
+    /// [`DEFAULT_CHECK_TIMEOUT`]; give it [`with_until`](Self::with_until),
+    /// [`with_rubric`](Self::with_rubric) or both.
+    pub fn new(goal: impl Into<String>) -> Self {
+        Self {
+            goal: goal.into(),
+            until: None,
+            rubric: None,
+            max_iterations: DEFAULT_GOAL_ITERATIONS,
+            check_timeout: DEFAULT_CHECK_TIMEOUT,
+        }
+    }
+
+    /// The check command: the goal needs it to exit 0.
+    #[must_use]
+    pub fn with_until(mut self, command: impl Into<String>) -> Self {
+        self.until = Some(command.into());
+        self
+    }
+
+    /// The rubric: the goal needs a grader to pass every criterion.
+    #[must_use]
+    pub fn with_rubric(mut self, rubric: GoalRubric) -> Self {
+        self.rubric = Some(rubric);
+        self
+    }
+
+    /// The most iterations.
+    #[must_use]
+    pub fn with_max_iterations(mut self, max: u32) -> Self {
+        self.max_iterations = max;
+        self
+    }
+
+    /// How long one run of `until` may take.
+    #[must_use]
+    pub fn with_check_timeout(mut self, timeout: Duration) -> Self {
+        self.check_timeout = timeout;
+        self
+    }
+
     /// The goal's digest: SHA-256 of its canonical JSON, as the durable run's idempotency
     /// key uses it (`goal:<session>:<digest>`).
     ///
     /// # Example
     ///
     /// ```rust
-    /// # use adk_harness::GoalSpec;
-    /// # use std::time::Duration;
-    /// let goal = GoalSpec { goal: "g".into(), until: "true".into(), max_iterations: 1, check_timeout: Duration::from_secs(1) };
+    /// let goal = adk_harness::GoalSpec::new("g").with_until("true");
     /// assert_eq!(goal.digest().len(), 64);
     /// ```
     pub fn digest(&self) -> String {
@@ -247,15 +317,29 @@ impl GoalSpec {
 
     /// The message that starts the goal's run.
     pub fn prompt(&self) -> String {
-        format!(
-            "Goal: {goal}\n\nWork toward the goal. After each of your turns the harness runs \
-             `{until}`; the goal is reached when it exits 0, and you get at most {max} \
-             iterations. Read the check's output from the previous iteration before you \
-             continue.",
+        let mut checks = Vec::new();
+        if let Some(until) = &self.until {
+            checks.push(format!("the harness runs `{until}`, which must exit 0"));
+        }
+        if let Some(rubric) = &self.rubric {
+            checks.push(rubric.prompt_line());
+        }
+        let mut prompt = format!(
+            "Goal: {goal}\n\nWork toward the goal. After each of your turns {checks}; the goal \
+             is reached when {all}, and you get at most {max} iterations. Read the feedback \
+             from the previous iteration before you continue.",
             goal = self.goal,
-            until = self.until,
+            checks = checks.join(", then "),
+            all = if checks.len() > 1 { "both pass" } else { "it passes" },
             max = self.max_iterations,
-        )
+        );
+        if let Some(rubric) = self.rubric.as_ref().filter(|rubric| !rubric.hidden) {
+            prompt.push_str("\n\nThe grader's criteria:");
+            for (index, criterion) in rubric.criteria.iter().enumerate() {
+                prompt.push_str(&format!("\n{}. {criterion}", index + 1));
+            }
+        }
+        prompt
     }
 
     #[cfg(feature = "runner")]
@@ -271,14 +355,196 @@ impl GoalSpec {
         if self.goal.trim().is_empty() {
             return Err(invalid("a goal needs a goal"));
         }
-        if self.until.trim().is_empty() {
-            return Err(invalid("a goal needs an until command"));
+        if self.until.is_none() && self.rubric.is_none() {
+            return Err(invalid("a goal needs an until command, a rubric, or both"));
+        }
+        if self.until.as_deref().is_some_and(|until| until.trim().is_empty()) {
+            return Err(invalid("a goal's until command is empty"));
+        }
+        if let Some(rubric) = &self.rubric {
+            rubric.validate().map_err(|message| invalid(&message))?;
         }
         if self.max_iterations == 0 {
             return Err(invalid("a goal needs at least one iteration"));
         }
         if self.check_timeout.is_zero() {
             return Err(invalid("a goal's check needs a timeout"));
+        }
+        Ok(())
+    }
+}
+
+/// The rubric of a goal: independently gradeable criteria that a grader checks each
+/// iteration's deliverable against, in a context of its own.
+///
+/// The grader reads the goal, the criteria, the iteration's final message and the
+/// `deliverables` files of the workspace — never the conversation that produced them. It
+/// grades only once the goal's `until` command (if any) has passed, and at most
+/// `max_evaluations` times ([`adk_eval::DEFAULT_OUTCOME_ITERATIONS`] by default, at most
+/// [`adk_eval::MAX_OUTCOME_ITERATIONS`]); a goal that reaches the cap unsatisfied is
+/// `Exhausted`. A `hidden` rubric is shown only to the grader: the agent learns the failed
+/// criteria from the grader's feedback.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_harness::GoalRubric;
+///
+/// let rubric = GoalRubric::from_markdown("- names the product\n- states the price")?
+///     .with_deliverables(["blurb.md"])
+///     .with_max_evaluations(5);
+/// assert_eq!(rubric.criteria, ["names the product", "states the price"]);
+/// # Ok::<(), adk_core::AdkError>(())
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct GoalRubric {
+    /// The criteria, each graded pass or fail on its own.
+    pub criteria: Vec<String>,
+    /// Workspace-relative files the grader reads besides the final message.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deliverables: Vec<String>,
+    /// The most grading rounds before the goal counts as exhausted.
+    pub max_evaluations: u32,
+    /// Shows the criteria to the grader only.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+}
+
+impl GoalRubric {
+    /// A rubric of `criteria`, graded at most [`adk_eval::DEFAULT_OUTCOME_ITERATIONS`]
+    /// times. Blank criteria are dropped.
+    pub fn new<I, S>(criteria: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            criteria: criteria
+                .into_iter()
+                .map(|criterion| criterion.into().trim().to_string())
+                .filter(|criterion| !criterion.is_empty())
+                .collect(),
+            deliverables: Vec::new(),
+            max_evaluations: adk_eval::DEFAULT_OUTCOME_ITERATIONS,
+            hidden: false,
+        }
+    }
+
+    /// Reads the criteria from Markdown, one per list item
+    /// ([`adk_eval::RubricConfig::from_markdown`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns `harness.goal.invalid` when `text` holds no criterion.
+    pub fn from_markdown(text: &str) -> Result<Self> {
+        let rubric = adk_eval::RubricConfig::from_markdown(text);
+        if rubric.rubrics.is_empty() {
+            return Err(AdkError::new(
+                ErrorComponent::Agent,
+                ErrorCategory::InvalidInput,
+                "harness.goal.invalid",
+                "the rubric holds no criteria; write one list item per criterion",
+            ));
+        }
+        Ok(Self::new(rubric.rubrics.into_iter().map(|criterion| criterion.description)))
+    }
+
+    /// The criteria the goal text lists, one per list item; a goal that lists none is its
+    /// own single criterion.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let rubric = adk_harness::GoalRubric::from_goal("Write blurb.md:\n- under 60 words\n- names the price");
+    /// assert_eq!(rubric.criteria, ["under 60 words", "names the price"]);
+    /// let whole = adk_harness::GoalRubric::from_goal("Write a haiku about Rust");
+    /// assert_eq!(whole.criteria, ["The deliverable achieves the goal: Write a haiku about Rust"]);
+    /// ```
+    pub fn from_goal(goal: &str) -> Self {
+        let listed = adk_eval::RubricConfig::from_markdown(goal);
+        let has_items = goal.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with("- ")
+                || line.starts_with("* ")
+                || line.starts_with("+ ")
+                || line.split_once(['.', ')']).is_some_and(|(number, rest)| {
+                    !number.is_empty()
+                        && number.bytes().all(|byte| byte.is_ascii_digit())
+                        && rest.starts_with(' ')
+                })
+        });
+        if has_items && !listed.rubrics.is_empty() {
+            Self::new(listed.rubrics.into_iter().map(|criterion| criterion.description))
+        } else {
+            Self::new([format!("The deliverable achieves the goal: {}", goal.trim())])
+        }
+    }
+
+    /// The workspace files the grader reads.
+    #[must_use]
+    pub fn with_deliverables<I, S>(mut self, paths: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.deliverables = paths.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// The most grading rounds, from 1 to [`adk_eval::MAX_OUTCOME_ITERATIONS`].
+    #[must_use]
+    pub fn with_max_evaluations(mut self, max: u32) -> Self {
+        self.max_evaluations = max;
+        self
+    }
+
+    /// Shows the criteria to the grader only.
+    #[must_use]
+    pub fn hidden(mut self, yes: bool) -> Self {
+        self.hidden = yes;
+        self
+    }
+
+    /// The criteria as the grader takes them.
+    pub(crate) fn config(&self) -> adk_eval::RubricConfig {
+        adk_eval::RubricConfig::from_criteria(&self.criteria)
+    }
+
+    /// How the goal's prompt describes this rubric.
+    fn prompt_line(&self) -> String {
+        let reads = if self.deliverables.is_empty() {
+            "your final message".to_string()
+        } else {
+            format!("your final message and {}", self.deliverables.join(", "))
+        };
+        let what = if self.hidden {
+            "criteria you are not shown; its feedback names the ones that fail".to_string()
+        } else {
+            format!("the {} criteria below", self.criteria.len())
+        };
+        format!(
+            "a separate grader that reads only {reads} grades the result against {what} \
+             (at most {} grading rounds)",
+            self.max_evaluations
+        )
+    }
+
+    #[cfg(feature = "runner")]
+    fn validate(&self) -> std::result::Result<(), String> {
+        if self.criteria.is_empty() {
+            return Err("a goal's rubric needs at least one criterion".to_string());
+        }
+        let max = adk_eval::MAX_OUTCOME_ITERATIONS;
+        if !(1..=max).contains(&self.max_evaluations) {
+            return Err(format!(
+                "a goal's rubric allows {} grading rounds; set from 1 to {max}",
+                self.max_evaluations
+            ));
+        }
+        if let Some(path) = self.deliverables.iter().find(|path| path.trim().is_empty()) {
+            return Err(format!("a goal's rubric names an empty deliverable path `{path}`"));
         }
         Ok(())
     }
@@ -315,11 +581,13 @@ pub enum GoalStatus {
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct GoalState {
     /// What to achieve.
     pub goal: String,
-    /// The check command.
-    pub until: String,
+    /// The check command, when the goal has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
     /// The current iteration.
     pub iteration: u32,
     /// Most iterations.
@@ -328,8 +596,71 @@ pub struct GoalState {
     pub status: GoalStatus,
     /// The last check's exit code.
     pub last_check: Option<i32>,
+    /// Grading rounds so far, when the goal has a rubric.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub evaluations: u32,
+    /// The grader's last verdict, when the goal has a rubric and was graded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_grade: Option<adk_eval::OutcomeGrade>,
     /// When it last changed.
     pub updated_at: DateTime<Utc>,
+}
+
+impl GoalState {
+    /// How the goal ended, in one line, or `None` while it runs.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_harness::{GoalRecord, GoalSpec};
+    ///
+    /// let record = GoalRecord::start(GoalSpec::new("g").with_until("true"));
+    /// assert_eq!(record.state.outcome(), None);
+    /// ```
+    pub fn outcome(&self) -> Option<String> {
+        let grade = self.last_grade.as_ref();
+        let checks = match (&self.until, grade) {
+            (Some(until), Some(_)) => format!("`{until}` and the rubric"),
+            (Some(until), None) => format!("`{until}`"),
+            (None, _) => "the rubric".to_string(),
+        };
+        match self.status {
+            GoalStatus::Running => None,
+            GoalStatus::Done => {
+                Some(format!("goal met after {} iteration(s): {checks} passed.", self.iteration))
+            }
+            GoalStatus::Exhausted => {
+                let failing = match (self.last_check, grade) {
+                    (Some(code), _) if code != 0 && self.until.is_some() => {
+                        format!(
+                            "`{}` still fails (exit {code})",
+                            self.until.as_deref().unwrap_or_default()
+                        )
+                    }
+                    (None, None) if self.until.is_some() => {
+                        format!("`{}` still fails", self.until.as_deref().unwrap_or_default())
+                    }
+                    (_, Some(grade)) => format!(
+                        "the rubric is not satisfied after {} grading round(s): {} of {} \
+                         criteria fail\n{}",
+                        self.evaluations,
+                        grade.criteria.len() - grade.passed(),
+                        grade.criteria.len(),
+                        grade.feedback()
+                    ),
+                    _ => "the checks still fail".to_string(),
+                };
+                Some(format!("budget exhausted after {} iteration(s); {failing}", self.iteration))
+            }
+            GoalStatus::Cancelled => {
+                Some(format!("the goal was cancelled at iteration {}.", self.iteration))
+            }
+        }
+    }
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 /// The goal loop's engine (spec 3.1 §7.11, feature `graph`).
@@ -355,9 +686,8 @@ pub enum GoalEngine {
 ///
 /// ```rust
 /// use adk_harness::{GoalRecord, GoalSpec, GoalStatus};
-/// use std::time::Duration;
 ///
-/// let spec = GoalSpec { goal: "g".into(), until: "true".into(), max_iterations: 3, check_timeout: Duration::from_secs(5) };
+/// let spec = GoalSpec::new("g").with_until("true").with_max_iterations(3);
 /// let record = GoalRecord::start(spec);
 /// assert_eq!(record.state.status, GoalStatus::Running);
 /// assert_eq!(record.state.iteration, 0);
@@ -383,6 +713,8 @@ impl GoalRecord {
             max_iterations: spec.max_iterations,
             status: GoalStatus::Running,
             last_check: None,
+            evaluations: 0,
+            last_grade: None,
             updated_at: Utc::now(),
         };
         Self { spec, state, run_id: uuid::Uuid::new_v4().to_string() }
@@ -398,11 +730,10 @@ impl GoalRecord {
 ///
 /// ```rust
 /// use adk_harness::{GoalRecord, GoalSpec, GoalStore, InMemoryGoalStore};
-/// use std::time::Duration;
 ///
 /// # futures::executor::block_on(async {
 /// let store = InMemoryGoalStore::new();
-/// let spec = GoalSpec { goal: "g".into(), until: "true".into(), max_iterations: 3, check_timeout: Duration::from_secs(5) };
+/// let spec = GoalSpec::new("g").with_until("true").with_max_iterations(3);
 /// store.set("app", "alice", "s1", GoalRecord::start(spec)).await?;
 /// assert!(store.get("app", "alice", "s1").await?.is_some());
 /// # Ok::<(), adk_core::AdkError>(())
@@ -603,14 +934,27 @@ impl GoalStore for SqliteGoalStore {
     }
 }
 
-/// Runs a goal's `until` check after each iteration (spec 3.1 §7.11).
+/// Runs a goal's checks after each iteration (spec 3.1 §7.11): its `until` command, then,
+/// once that passes, its rubric's grader.
 ///
 /// It checks the kill switch, runs `until` through the harness's command launcher with the
-/// goal's `check_timeout`, updates the goal state, and sets `escalate` on exit 0 (Done) or
-/// at the cap (Exhausted), which stops the `LoopAgent`. The command comes from the
+/// goal's `check_timeout`, grades the iteration's deliverable when the goal has a
+/// [`GoalRubric`], updates the goal state, and sets `escalate` once every check passes
+/// (Done) or at a cap (Exhausted), which stops the `LoopAgent`. The command comes from the
 /// operator, not the model, so it is not a governed tool call; it is audited as
-/// `harness.bash.begin`/`.end` with `goalCheck: true`, and each iteration as
-/// `harness.goal.iteration` (spec 3.1 §9.3).
+/// `harness.bash.begin`/`.end` with `goalCheck: true`, each grading round as
+/// `harness.goal.grade`, and each iteration as `harness.goal.iteration` (spec 3.1 §9.3).
+///
+/// The check's result reaches the next iteration as a system notice
+/// ([`adk_core::history::system_notice`], authored `system`), so the agent reads the command's
+/// output and the grader's feedback as the harness's own notice rather than as another agent's
+/// output quoted to it as data.
+///
+/// The grader ([`with_grader`](Self::with_grader); the harness model by default) works in a
+/// context of its own: its request holds the goal, the criteria, the iteration's final
+/// message and the rubric's deliverable files, never the conversation. Its call counts
+/// against the run's budget and spend ledger, and its per-criterion feedback is what the
+/// next iteration reads.
 ///
 /// # Example
 ///
@@ -630,6 +974,8 @@ pub struct UntilCheckAgent {
     workspace: Workspace,
     launcher: Arc<dyn CommandLauncher>,
     book: Arc<GoalBook>,
+    grader: Option<Arc<dyn Llm>>,
+    worker: Option<String>,
 }
 
 impl std::fmt::Debug for UntilCheckAgent {
@@ -637,8 +983,15 @@ impl std::fmt::Debug for UntilCheckAgent {
         f.debug_struct("UntilCheckAgent")
             .field("root", &self.workspace.root())
             .field("launcher", &self.launcher.isolation())
+            .field("grader", &self.grader.as_ref().map(|model| model.name().to_string()))
             .finish_non_exhaustive()
     }
+}
+
+/// What one run of the `until` command found.
+struct CommandCheck {
+    exit_code: Option<i32>,
+    output: String,
 }
 
 impl UntilCheckAgent {
@@ -655,7 +1008,25 @@ impl UntilCheckAgent {
             workspace: workspace.allow_bash(true),
             launcher,
             book: Arc::new(GoalBook::default()),
+            grader: None,
+            worker: None,
         }
+    }
+
+    /// The model that grades goals with a [`GoalRubric`]. Without one, a rubric goal's check
+    /// fails with `harness.goal.no_grader`.
+    #[must_use]
+    pub fn with_grader(mut self, model: Arc<dyn Llm>) -> Self {
+        self.grader = Some(model);
+        self
+    }
+
+    /// The agent whose final message of each iteration the grader reads; by default the
+    /// agent the invocation runs.
+    #[must_use]
+    pub fn with_worker(mut self, name: impl Into<String>) -> Self {
+        self.worker = Some(name.into());
+        self
     }
 
     /// The goals this check has seen, and the kernel's parker when one is attached.
@@ -670,15 +1041,16 @@ impl UntilCheckAgent {
 
     /// Runs one check and records it. The event mirrors the goal state while it runs on.
     async fn check(&self, ctx: Arc<dyn InvocationContext>) -> Result<Event> {
-        self.check_with(ctx, None).await
+        self.check_with(ctx, None, None).await
     }
 
-    /// [`check`](Self::check) for an iteration that made `tool_calls` tool calls, when the
-    /// engine counted them.
+    /// [`check`](Self::check) for an iteration that made `tool_calls` tool calls and ended
+    /// with `final_message`, when the engine collected them.
     async fn check_with(
         &self,
         ctx: Arc<dyn InvocationContext>,
         tool_calls: Option<usize>,
+        final_message: Option<String>,
     ) -> Result<Event> {
         ctx.run_config().check_governance()?;
         let (app, user, session) =
@@ -691,14 +1063,17 @@ impl UntilCheckAgent {
                 "the session has no goal to check",
             )
         })?;
+        // The check speaks as the harness, in a system notice: the agent reads its result as
+        // the runtime's own notice, not as another agent's output quoted for it as data.
         let mut event = Event::new(ctx.invocation_id());
-        event.author = UNTIL_CHECK_AGENT.to_string();
+        event.author = adk_core::history::SYSTEM_NOTICE_AUTHOR.to_string();
         event.branch = ctx.branch().to_string();
         if record.state.status != GoalStatus::Running {
             event.actions.escalate = true;
-            event.llm_response.content = Some(
-                Content::new("model").with_text(format!("The goal is {:?}.", record.state.status)),
-            );
+            event.set_content(adk_core::history::system_notice(&format!(
+                "The goal is {:?}.",
+                record.state.status
+            )));
             return Ok(event);
         }
         record.state.iteration += 1;
@@ -710,26 +1085,23 @@ impl UntilCheckAgent {
         );
         #[cfg(not(feature = "observe"))]
         let span = tracing::Span::none();
-        self.finish_check(ctx, record, event, tool_calls).instrument(span).await
+        self.finish_check(ctx, record, event, tool_calls, final_message).instrument(span).await
     }
 
-    /// Runs the check of `record`'s current iteration and records it.
-    async fn finish_check(
+    /// Runs the `until` command of `record`'s current iteration and records its run.
+    async fn run_until(
         &self,
-        ctx: Arc<dyn InvocationContext>,
-        mut record: GoalRecord,
-        mut event: Event,
-        tool_calls: Option<usize>,
-    ) -> Result<Event> {
-        let (app, user, session) =
-            (ctx.app_name().to_string(), ctx.user_id().to_string(), ctx.session_id().to_string());
+        ctx: &Arc<dyn InvocationContext>,
+        record: &GoalRecord,
+        until: &str,
+        audit: Option<&HarnessAudit>,
+    ) -> Result<CommandCheck> {
         let call_id = format!("goal-check-{}-{}", record.run_id, record.state.iteration);
-        let audit = Self::audit(ctx.as_ref());
         let args = json!({
-            "command": record.spec.until,
+            "command": until,
             "timeout_secs": record.spec.check_timeout.as_secs().max(1),
         });
-        if let Some(audit) = &audit {
+        if let Some(audit) = audit {
             let draft = AuditRecordDraft::new(
                 AuditRecordKind::Other(HARNESS_AUDIT_KIND.to_string()),
                 "harness.bash.begin",
@@ -766,7 +1138,7 @@ impl UntilCheckAgent {
             }
             Err(error) => (None, error.to_string(), error.code.contains("timeout")),
         };
-        if let Some(audit) = &audit {
+        if let Some(audit) = audit {
             audit
                 .record(
                     "harness.bash.end",
@@ -780,11 +1152,142 @@ impl UntilCheckAgent {
                 )
                 .await?;
         }
+        Ok(CommandCheck { exit_code, output })
+    }
+
+    /// Grades the iteration's deliverable against `rubric` in a context of its own, metered
+    /// against the run's budget and spend ledger, and records the round.
+    async fn grade(
+        &self,
+        ctx: &Arc<dyn InvocationContext>,
+        record: &GoalRecord,
+        rubric: &GoalRubric,
+        final_message: Option<String>,
+        audit: Option<&HarnessAudit>,
+    ) -> Result<adk_eval::OutcomeGrade> {
+        let grader = self.grader.clone().ok_or_else(|| {
+            AdkError::new(
+                ErrorComponent::Agent,
+                ErrorCategory::InvalidInput,
+                "harness.goal.no_grader",
+                "the goal has a rubric but the check has no grader model; build the harness \
+                 with a model or give UntilCheckAgent::with_grader one",
+            )
+        })?;
+        let worker = self.worker.clone().unwrap_or_else(|| ctx.agent_name().to_string());
+        let final_message = final_message
+            .or_else(|| latest_text(&ctx.session().conversation_history_for_agent(&worker)));
+        let mut deliverable = String::from("Final message of the iteration:\n");
+        match final_message.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
+            Some(text) => deliverable.push_str(tail(text, FINAL_MESSAGE_MAX_BYTES)),
+            None => deliverable.push_str("(none)"),
+        }
+        for path in &rubric.deliverables {
+            deliverable.push_str(&format!("\n\nFile `{path}`:\n"));
+            match self.workspace.read_for_review(path).await {
+                Ok(Some(bytes)) => {
+                    let text = String::from_utf8_lossy(&bytes);
+                    if text.len() > DELIVERABLE_MAX_BYTES {
+                        let mut end = DELIVERABLE_MAX_BYTES;
+                        while !text.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        deliverable.push_str(&text[..end]);
+                        deliverable.push_str(&format!(
+                            "\n(cut: the file has {} bytes; the grader read the first {end})",
+                            text.len()
+                        ));
+                    } else {
+                        deliverable.push_str(&text);
+                    }
+                }
+                Ok(None) => deliverable.push_str("(the file does not exist)"),
+                Err(error) => {
+                    deliverable.push_str(&format!("(the file could not be read: {error})"))
+                }
+            }
+        }
+        let scope = adk_core::ModelCallScope::for_run(ctx.run_config(), ctx.app_name(), &worker);
+        let metered: Arc<dyn Llm> = Arc::new(adk_core::MeteredLlm::new(grader).with_scope(scope));
+        let model = metered.name().to_string();
+        let grade = adk_eval::OutcomeGrader::new(metered)
+            .grade(&record.spec.goal, &deliverable, &rubric.config())
+            .await?;
+        let failed: Vec<usize> = grade
+            .criteria
+            .iter()
+            .enumerate()
+            .filter(|(_, criterion)| !criterion.passed)
+            .map(|(index, _)| index + 1)
+            .collect();
+        tracing::info!(
+            harness.goal.iteration = record.state.iteration,
+            goal.evaluation = record.state.evaluations,
+            goal.criteria = grade.criteria.len(),
+            goal.passed = grade.passed(),
+            "goal graded"
+        );
+        if let Some(audit) = audit {
+            audit
+                .record(
+                    "harness.goal.grade",
+                    json!({
+                        "goal": record.run_id,
+                        "iteration": record.state.iteration,
+                        "evaluation": record.state.evaluations,
+                        "maxEvaluations": rubric.max_evaluations,
+                        "model": model,
+                        "criteria": grade.criteria.len(),
+                        "failed": failed,
+                        "satisfied": grade.satisfied(),
+                    }),
+                )
+                .await?;
+        }
+        Ok(grade)
+    }
+
+    /// Runs the checks of `record`'s current iteration and records them.
+    async fn finish_check(
+        &self,
+        ctx: Arc<dyn InvocationContext>,
+        mut record: GoalRecord,
+        mut event: Event,
+        tool_calls: Option<usize>,
+        final_message: Option<String>,
+    ) -> Result<Event> {
+        let (app, user, session) =
+            (ctx.app_name().to_string(), ctx.user_id().to_string(), ctx.session_id().to_string());
+        let audit = Self::audit(ctx.as_ref());
+        let command = match record.spec.until.clone() {
+            Some(until) => Some(self.run_until(&ctx, &record, &until, audit.as_ref()).await?),
+            None => None,
+        };
+        let command_passed = command.as_ref().is_none_or(|check| check.exit_code == Some(0));
+        // The grader runs only once the command passes, so a failing command costs no
+        // model call.
+        let grade = match record.spec.rubric.clone() {
+            Some(rubric) if command_passed => {
+                record.state.evaluations += 1;
+                Some(self.grade(&ctx, &record, &rubric, final_message, audit.as_ref()).await?)
+            }
+            _ => None,
+        };
+        let exit_code = command.as_ref().and_then(|check| check.exit_code);
+        let graded_out = record
+            .spec
+            .rubric
+            .as_ref()
+            .is_some_and(|rubric| record.state.evaluations >= rubric.max_evaluations);
         record.state.last_check = exit_code;
+        if grade.is_some() {
+            record.state.last_grade = grade.clone();
+        }
         record.state.updated_at = Utc::now();
-        record.state.status = if exit_code == Some(0) {
+        let satisfied = grade.as_ref().is_none_or(adk_eval::OutcomeGrade::satisfied);
+        record.state.status = if command_passed && satisfied {
             GoalStatus::Done
-        } else if record.state.iteration >= record.state.max_iterations {
+        } else if record.state.iteration >= record.state.max_iterations || graded_out {
             GoalStatus::Exhausted
         } else {
             GoalStatus::Running
@@ -798,6 +1301,7 @@ impl UntilCheckAgent {
                         "iteration": record.state.iteration,
                         "max": record.state.max_iterations,
                         "checkExitCode": exit_code,
+                        "rubricSatisfied": grade.as_ref().map(adk_eval::OutcomeGrade::satisfied),
                         "status": record.state.status,
                     }),
                 )
@@ -809,41 +1313,27 @@ impl UntilCheckAgent {
             check.exit_code = ?exit_code,
             "goal check finished"
         );
+        // A rubric goal's progress is its grade, so a repeated verdict counts as a stall.
+        let observed = match (&command, &grade) {
+            (_, Some(grade)) => grade.feedback(),
+            (Some(check), None) => check.output.clone(),
+            (None, None) => String::new(),
+        };
         let stalled = self.book.record_check(
             &record.run_id,
             exit_code,
-            &output,
+            &observed,
             tool_calls,
             record.state.status == GoalStatus::Running,
         );
-        let tail = tail(&output, CHECK_OUTPUT_TAIL);
-        let mut summary = match record.state.status {
-            GoalStatus::Done => format!(
-                "Goal check `{}` passed on iteration {}. The goal is done.",
-                record.spec.until, record.state.iteration
-            ),
-            GoalStatus::Exhausted => format!(
-                "Goal check `{}` failed (exit {}) on iteration {} of {}; no iterations are left.\n{tail}",
-                record.spec.until,
-                exit_code.map_or_else(|| "none".to_string(), |code| code.to_string()),
-                record.state.iteration,
-                record.state.max_iterations
-            ),
-            GoalStatus::Running | GoalStatus::Cancelled => format!(
-                "Goal check `{}` failed (exit {}) on iteration {} of {}. Its output:\n{tail}",
-                record.spec.until,
-                exit_code.map_or_else(|| "none".to_string(), |code| code.to_string()),
-                record.state.iteration,
-                record.state.max_iterations
-            ),
-        };
+        let mut summary = check_summary(&record, command.as_ref(), grade.as_ref());
         if let Some(reason) = stalled {
             self.stall(ctx.as_ref(), &record, reason, audit.as_ref()).await?;
             summary.push_str(&format!(
                 "\nThe goal made no progress ({reason}); it is parked until a person resumes it."
             ));
         }
-        event.llm_response.content = Some(Content::new("model").with_text(summary));
+        event.set_content(adk_core::history::system_notice(&summary));
         event.actions.state_delta.insert(
             GOAL_STATE_KEY.to_string(),
             serde_json::to_value(&record.state).unwrap_or(Value::Null),
@@ -851,6 +1341,72 @@ impl UntilCheckAgent {
         event.actions.escalate = record.state.status != GoalStatus::Running;
         Ok(event)
     }
+}
+
+/// What the next iteration reads about this iteration's checks.
+fn check_summary(
+    record: &GoalRecord,
+    command: Option<&CommandCheck>,
+    grade: Option<&adk_eval::OutcomeGrade>,
+) -> String {
+    let state = &record.state;
+    let (iteration, max) = (state.iteration, state.max_iterations);
+    let mut lines = Vec::new();
+    if let (Some(until), Some(check)) = (&record.spec.until, command) {
+        let exit = check.exit_code.map_or_else(|| "none".to_string(), |code| code.to_string());
+        if check.exit_code == Some(0) {
+            lines.push(format!("Goal check `{until}` passed on iteration {iteration}."));
+        } else {
+            lines.push(format!(
+                "Goal check `{until}` failed (exit {exit}) on iteration {iteration} of {max}. \
+                 Its output:\n{}",
+                tail(&check.output, CHECK_OUTPUT_TAIL)
+            ));
+        }
+    }
+    if let (Some(rubric), Some(grade)) = (&record.spec.rubric, grade) {
+        let total = grade.criteria.len();
+        if grade.satisfied() {
+            lines.push(format!(
+                "The grader passed all {total} criteria on grading round {} of {}.",
+                state.evaluations, rubric.max_evaluations
+            ));
+        } else {
+            lines.push(format!(
+                "The grader failed {} of {total} criteria on grading round {} of {}. Revise \
+                 to address its feedback:\n{}",
+                total - grade.passed(),
+                state.evaluations,
+                rubric.max_evaluations,
+                grade.feedback()
+            ));
+        }
+        if !grade.summary.is_empty() {
+            lines.push(format!("Grader summary: {}", grade.summary));
+        }
+    }
+    match state.status {
+        GoalStatus::Done => lines.push("The goal is done.".to_string()),
+        GoalStatus::Exhausted => {
+            let cap = match &record.spec.rubric {
+                Some(rubric) if state.evaluations >= rubric.max_evaluations => {
+                    format!("the rubric's {} grading rounds are used up", rubric.max_evaluations)
+                }
+                _ => format!("no iterations are left ({iteration} of {max})"),
+            };
+            lines.push(format!("The goal is exhausted: {cap}."));
+        }
+        GoalStatus::Running | GoalStatus::Cancelled => {}
+    }
+    lines.join("\n")
+}
+
+/// The text of the latest model turn in `history`.
+fn latest_text(history: &[Content]) -> Option<String> {
+    history.iter().rev().filter(|content| content.role == "model").find_map(|content| {
+        let text: String = content.parts.iter().filter_map(adk_core::Part::text).collect();
+        (!text.trim().is_empty()).then_some(text)
+    })
 }
 
 impl UntilCheckAgent {
@@ -1037,6 +1593,10 @@ impl GoalRuntime {
 #[cfg(feature = "graph")]
 const ITERATION_TOOL_CALLS: &str = "iterationToolCalls";
 
+/// The graph state key of the last iteration's final message, which a rubric's grader reads.
+#[cfg(feature = "graph")]
+const ITERATION_OUTPUT: &str = "iterationOutput";
+
 /// One iteration of the `Graph` engine: the harness agent works on the goal.
 #[cfg(feature = "graph")]
 struct IterateNode {
@@ -1063,7 +1623,7 @@ impl adk_graph::Node for IterateNode {
                 message: "a goal iteration runs only inside a harness turn".into(),
             }
         })?;
-        let (held, _, tool_calls) = crate::plan_graph::run_agent_node_counted(
+        let (held, output, tool_calls) = crate::plan_graph::run_agent_node_counted(
             "iterate",
             &self.root,
             &self.harness,
@@ -1078,7 +1638,9 @@ impl adk_graph::Node for IterateNode {
                 json!({}),
             ));
         }
-        Ok(adk_graph::NodeOutput::new().with_update(ITERATION_TOOL_CALLS, json!(tool_calls)))
+        Ok(adk_graph::NodeOutput::new()
+            .with_update(ITERATION_TOOL_CALLS, json!(tool_calls))
+            .with_update(ITERATION_OUTPUT, json!(output)))
     }
 }
 
@@ -1111,7 +1673,8 @@ impl adk_graph::Node for CheckNode {
             .get(ITERATION_TOOL_CALLS)
             .and_then(Value::as_u64)
             .and_then(|calls| usize::try_from(calls).ok());
-        let event = self.until.check_with(parent, tool_calls).await.map_err(|error| {
+        let output = ctx.state.get(ITERATION_OUTPUT).and_then(Value::as_str).map(str::to_string);
+        let event = self.until.check_with(parent, tool_calls, output).await.map_err(|error| {
             adk_graph::GraphError::AgentFailed { node: "check".into(), source: Box::new(error) }
         })?;
         // A check of a goal that no longer runs mirrors nothing, and ends the graph.
@@ -1164,15 +1727,76 @@ mod tests {
     #[cfg(feature = "runner")]
     #[test]
     fn a_goal_spec_must_be_complete() {
-        let spec = GoalSpec {
-            goal: "g".into(),
-            until: "true".into(),
-            max_iterations: 1,
-            check_timeout: Duration::from_secs(1),
-        };
+        let spec = GoalSpec::new("g")
+            .with_until("true")
+            .with_max_iterations(1)
+            .with_check_timeout(Duration::from_secs(1));
         assert!(spec.validate().is_ok());
         assert!(GoalSpec { max_iterations: 0, ..spec.clone() }.validate().is_err());
-        assert!(GoalSpec { until: " ".into(), ..spec.clone() }.validate().is_err());
+        assert!(GoalSpec { until: Some(" ".into()), ..spec.clone() }.validate().is_err());
+        assert!(GoalSpec { until: None, ..spec.clone() }.validate().is_err());
         assert!(GoalSpec { check_timeout: Duration::ZERO, ..spec }.validate().is_err());
+    }
+
+    #[cfg(feature = "runner")]
+    #[test]
+    fn a_rubric_goal_needs_criteria_and_a_cap_of_at_most_twenty() {
+        let rubric = GoalRubric::new(["names the price"]);
+        let spec = GoalSpec::new("write blurb.md").with_rubric(rubric.clone());
+        assert!(spec.validate().is_ok(), "a rubric alone is a check");
+        assert_eq!(rubric.max_evaluations, adk_eval::DEFAULT_OUTCOME_ITERATIONS);
+        for (max, valid) in [(0, false), (1, true), (20, true), (21, false)] {
+            let spec = spec.clone().with_rubric(rubric.clone().with_max_evaluations(max));
+            assert_eq!(spec.validate().is_ok(), valid, "max_evaluations {max}");
+        }
+        let empty = spec.clone().with_rubric(GoalRubric::new(["  "]));
+        assert!(empty.validate().is_err());
+        let both = spec.with_until("test -f blurb.md");
+        assert!(both.validate().is_ok());
+    }
+
+    #[test]
+    fn an_until_goal_keeps_its_digest() {
+        // The digest names a goal's durable run, so adding the rubric must not move it.
+        let spec = GoalSpec::new("make main green")
+            .with_until("cargo test")
+            .with_max_iterations(5)
+            .with_check_timeout(Duration::from_secs(900));
+        assert_eq!(
+            serde_json::to_value(&spec).unwrap(),
+            json!({
+                "goal": "make main green",
+                "until": "cargo test",
+                "maxIterations": 5,
+                "checkTimeout": {"secs": 900, "nanos": 0},
+            })
+        );
+    }
+
+    #[test]
+    fn the_prompt_shows_a_visible_rubric_and_hides_a_hidden_one() {
+        let rubric = GoalRubric::new(["names the product", "states the price"])
+            .with_deliverables(["blurb.md"]);
+        let visible = GoalSpec::new("write blurb.md").with_rubric(rubric.clone()).prompt();
+        assert!(visible.contains("reads only your final message and blurb.md"), "{visible}");
+        assert!(visible.contains("1. names the product\n2. states the price"), "{visible}");
+        let hidden = GoalSpec::new("write blurb.md").with_rubric(rubric.hidden(true)).prompt();
+        assert!(hidden.contains("criteria you are not shown"), "{hidden}");
+        assert!(!hidden.contains("states the price"), "{hidden}");
+        let both = GoalSpec::new("g")
+            .with_until("cargo test")
+            .with_rubric(GoalRubric::new(["c"]))
+            .prompt();
+        assert!(both.contains("runs `cargo test`, which must exit 0, then a separate grader"));
+        assert!(both.contains("the goal is reached when both pass"), "{both}");
+    }
+
+    #[test]
+    fn a_rubric_reads_from_markdown_and_from_the_goal_text() {
+        let rubric = GoalRubric::from_markdown("# Rubric\n\n- one\n- two\n").unwrap();
+        assert_eq!(rubric.criteria, ["one", "two"]);
+        assert!(GoalRubric::from_markdown("# Only a heading\n").is_err());
+        let listed = GoalRubric::from_goal("Ship it:\n1. tests pass\n2) docs updated");
+        assert_eq!(listed.criteria, ["tests pass", "docs updated"]);
     }
 }

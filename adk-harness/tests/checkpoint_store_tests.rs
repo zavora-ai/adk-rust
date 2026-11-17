@@ -307,12 +307,10 @@ mod restart {
     async fn the_goal_graph_continues_its_thread_after_a_restart() {
         let dir = workspace();
         let (user, session) = (user("alice"), session_id("s1"));
-        let spec = GoalSpec {
-            goal: "create done.txt".into(),
-            until: "test -f done.txt".into(),
-            max_iterations: 3,
-            check_timeout: Duration::from_secs(30),
-        };
+        let spec = GoalSpec::new("create done.txt")
+            .with_until("test -f done.txt")
+            .with_max_iterations(3)
+            .with_check_timeout(Duration::from_secs(30));
         {
             // Ask with no prompter: the write is held and the graph stops at `iterate`.
             let first = process(
