@@ -102,6 +102,9 @@ pub struct PregelExecutor<'a> {
     /// Restored from the checkpoint on resume, so the step that resumes them
     /// hands each its answer from `ExecutionConfig::resume_values`.
     paused_nodes: BTreeSet<String>,
+    /// The id and answer schema of each paused node's pause, restored from the checkpoint
+    /// on resume, so an answer binds to the pause it was given for.
+    pending_interrupts: BTreeMap<String, PendingInterrupt>,
     /// The run the next checkpoint belongs to; opened when the run starts from its
     /// entry nodes and restored on resume.
     run: Option<RunRecord>,
@@ -122,14 +125,28 @@ pub struct PregelExecutor<'a> {
 
 /// Checkpoint metadata naming the nodes a dynamic pause stopped.
 pub(crate) const PAUSED_NODES_METADATA_KEY: &str = "adk.graph.paused_nodes";
+/// Checkpoint metadata holding the id and answer schema of each paused node's pause.
+const PENDING_INTERRUPTS_METADATA_KEY: &str = "adk.graph.pending_interrupts";
+
+/// A dynamic pause waiting for its answer.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingInterrupt {
+    /// The pause's id ([`Interrupt::id`]).
+    id: String,
+    /// The JSON Schema its answer must satisfy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    response_schema: Option<serde_json::Value>,
+}
 /// Checkpoint metadata counting each governed node's completed runs in the lineage.
 pub(crate) const OCCURRENCES_METADATA_KEY: &str = "adk.graph.occurrences";
 /// Checkpoint metadata holding the request each waiting governed node paused with.
 const HELD_METADATA_KEY: &str = "adk.graph.held";
 /// Every metadata key a checkpoint's revision by `update_state` carries over.
-const CARRIED_METADATA_KEYS: [&str; 7] = [
+const CARRIED_METADATA_KEYS: [&str; 8] = [
     FAN_IN_METADATA_KEY,
     PAUSED_NODES_METADATA_KEY,
+    PENDING_INTERRUPTS_METADATA_KEY,
     RUN_METADATA_KEY,
     STEPS_METADATA_KEY,
     LINEAGE_METADATA_KEY,
@@ -182,6 +199,7 @@ impl<'a> PregelExecutor<'a> {
             inflight: None,
             unsaved: false,
             paused_nodes: BTreeSet::new(),
+            pending_interrupts: BTreeMap::new(),
             run: None,
             lineage: None,
             unsaved_steps: Vec::new(),
@@ -267,6 +285,9 @@ impl<'a> PregelExecutor<'a> {
                 if let Some(paused) = checkpoint.metadata.get(PAUSED_NODES_METADATA_KEY) {
                     self.paused_nodes = serde_json::from_value(paused.clone())?;
                 }
+                if let Some(pending) = checkpoint.metadata.get(PENDING_INTERRUPTS_METADATA_KEY) {
+                    self.pending_interrupts = serde_json::from_value(pending.clone())?;
+                }
                 // A paused, failed or interrupted run continues; a checkpoint without a
                 // run, such as a fork's first, opens one.
                 self.run = run;
@@ -289,6 +310,7 @@ impl<'a> PregelExecutor<'a> {
         self.graph.check_governed_nodes()?;
         // Check for existing checkpoint to resume from
         let resumed = self.try_resume_from_checkpoint(&input).await?;
+        self.check_resume_answers()?;
 
         if !resumed {
             // No checkpoint found — fresh start
@@ -308,7 +330,7 @@ impl<'a> PregelExecutor<'a> {
             self.flush_before_side_effects().await?;
 
             // Execute super-step
-            let result = match self.execute_super_step().await {
+            let mut result = match self.execute_super_step().await {
                 Ok(result) => result,
                 Err(error) => {
                     self.checkpoint_failed_step().await;
@@ -317,8 +339,9 @@ impl<'a> PregelExecutor<'a> {
             };
 
             // Handle interrupts
-            if let Some((_, interrupt)) = result.interrupts.first().cloned() {
-                self.pause_frontier(&result)?;
+            if !result.interrupts.is_empty() {
+                self.pause_frontier(&mut result)?;
+                let interrupt = result.interrupts[0].1.clone();
                 let checkpoint_id = self.save_checkpoint().await?;
                 return Err(GraphError::Interrupted(Box::new(
                     InterruptedExecution::new(
@@ -382,6 +405,10 @@ impl<'a> PregelExecutor<'a> {
                     return;
                 }
             };
+            if let Err(error) = self.check_resume_answers() {
+                yield Err(error);
+                return;
+            }
 
             if resumed {
                 // Emit a resumed event indicating execution was restored from checkpoint
@@ -631,6 +658,7 @@ impl<'a> PregelExecutor<'a> {
                                             if let StreamEvent::NodeInterrupt {
                                                 ref message,
                                                 ref data,
+                                                ref response_schema,
                                                 ..
                                             } = event
                                             {
@@ -638,6 +666,8 @@ impl<'a> PregelExecutor<'a> {
                                                     Some(Interrupt::Dynamic {
                                                         message: message.clone(),
                                                         data: data.clone(),
+                                                        id: None,
+                                                        response_schema: response_schema.clone(),
                                                     });
                                             }
                                             collected_events.push(event);
@@ -784,7 +814,7 @@ impl<'a> PregelExecutor<'a> {
                     // This branch returns rather than falling through to the shared
                     // handling below, so the pause is reported here.
                     if !result.interrupts.is_empty() {
-                        if let Err(error) = self.pause_frontier(&result) {
+                        if let Err(error) = self.pause_frontier(&mut result) {
                             yield Err(error);
                             return;
                         }
@@ -835,7 +865,7 @@ impl<'a> PregelExecutor<'a> {
                 }
 
                 // Execute super-step (non-streaming)
-                let result = match self.execute_super_step().await {
+                let mut result = match self.execute_super_step().await {
                     Ok(r) => r,
                     Err(e) => {
                         self.checkpoint_failed_step().await;
@@ -871,7 +901,7 @@ impl<'a> PregelExecutor<'a> {
 
                 // Handle interrupts
                 if !result.interrupts.is_empty() {
-                    if let Err(error) = self.pause_frontier(&result) {
+                    if let Err(error) = self.pause_frontier(&mut result) {
                         yield Err(error);
                         return;
                     }
@@ -1243,10 +1273,17 @@ impl<'a> PregelExecutor<'a> {
         }
         // Only a node resuming its own pause gets an answer, so a node that runs
         // again later pauses again rather than reading a stale one.
-        if self.paused_nodes.contains(node)
-            && let Some(answer) = self.config.resume_values.get(node)
-        {
-            ctx.set_resume_value(answer.clone());
+        if self.paused_nodes.contains(node) {
+            // An answer under the pause's id first; under strict resume, only that.
+            let by_id = self
+                .pending_interrupts
+                .get(node)
+                .and_then(|pending| self.config.resume_values.get(&pending.id));
+            let by_node =
+                (!self.config.strict_resume).then(|| self.config.resume_values.get(node)).flatten();
+            if let Some(answer) = by_id.or(by_node) {
+                ctx.set_resume_value(answer.clone());
+            }
         }
         ctx
     }
@@ -1858,6 +1895,68 @@ impl<'a> PregelExecutor<'a> {
 
     /// The stream events reporting a paused step: each tool-confirmation pause,
     /// then one `Interrupted` event per pause, naming the node it stopped.
+    /// Refuses the run's resume answers that do not fit the pauses pending in the thread,
+    /// before any node runs: an answer that does not satisfy its pause's
+    /// `response_schema`, and under [`ExecutionConfig::strict_resume`] an answer under any
+    /// key but a pending pause's id.
+    ///
+    /// # Errors
+    ///
+    /// [`GraphError::ResumeRejected`] naming the key and why.
+    fn check_resume_answers(&self) -> Result<()> {
+        let pending: Vec<(&String, &PendingInterrupt)> = self
+            .pending_interrupts
+            .iter()
+            .filter(|(node, _)| self.paused_nodes.contains(*node))
+            .collect();
+        if self.config.strict_resume {
+            for key in self.config.resume_values.keys() {
+                if pending.iter().any(|(_, interrupt)| interrupt.id == *key) {
+                    continue;
+                }
+                let reason = if pending.iter().any(|(node, _)| *node == key) {
+                    "a strict resume answers a pause by its interrupt id, not its node's name"
+                } else {
+                    "no pause with this id is pending in the thread: it was answered already, \
+                     or the node asked again with another question"
+                };
+                return Err(GraphError::ResumeRejected { key: key.clone(), reason: reason.into() });
+            }
+        }
+        for (node, interrupt) in pending {
+            let Some(schema) = &interrupt.response_schema else { continue };
+            let by_node = (!self.config.strict_resume)
+                .then(|| self.config.resume_values.get(node).map(|answer| (node, answer)))
+                .flatten();
+            let Some((key, answer)) = self
+                .config
+                .resume_values
+                .get(&interrupt.id)
+                .map(|answer| (&interrupt.id, answer))
+                .or(by_node)
+            else {
+                continue;
+            };
+            let validator =
+                jsonschema::validator_for(schema).map_err(|error| GraphError::ResumeRejected {
+                    key: key.clone(),
+                    reason: format!(
+                        "the pause's response_schema is not a valid JSON Schema: {error}"
+                    ),
+                })?;
+            if let Some(error) = validator.iter_errors(answer).next() {
+                return Err(GraphError::ResumeRejected {
+                    key: key.clone(),
+                    reason: format!(
+                        "the answer does not satisfy the pause's response_schema at '{}': {error}",
+                        error.instance_path()
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn pause_events(&self, result: &SuperStepResult, checkpoint_id: &str) -> Vec<StreamEvent> {
         let mut events: Vec<StreamEvent> = result
             .interrupts
@@ -1877,12 +1976,11 @@ impl<'a> PregelExecutor<'a> {
                 )
             })
             .collect();
-        events.extend(
-            result
-                .interrupts
-                .iter()
-                .map(|(node, interrupt)| StreamEvent::interrupted(node, &interrupt.to_string())),
-        );
+        events.extend(result.interrupts.iter().map(|(node, interrupt)| StreamEvent::Interrupted {
+            node: node.clone(),
+            message: interrupt.to_string(),
+            interrupt_id: interrupt.id().map(str::to_string),
+        }));
         events
     }
 
@@ -1906,7 +2004,21 @@ impl<'a> PregelExecutor<'a> {
     ///
     /// Returns the routing error from [`Self::next_frontier`] or the fan-in error
     /// from [`Self::filter_deferred_nodes`].
-    fn pause_frontier(&mut self, result: &SuperStepResult) -> Result<()> {
+    fn pause_frontier(&mut self, result: &mut SuperStepResult) -> Result<()> {
+        // Each dynamic pause gets its id, which the caller answers it under and the
+        // checkpoint keeps with its answer schema.
+        for (node, interrupt) in &mut result.interrupts {
+            interrupt.identify(&self.config.thread_id, self.step, node);
+            if let Some(id) = interrupt.id() {
+                self.pending_interrupts.insert(
+                    node.clone(),
+                    PendingInterrupt {
+                        id: id.to_string(),
+                        response_schema: interrupt.response_schema().cloned(),
+                    },
+                );
+            }
+        }
         let executed = &result.executed_nodes;
         let Some((_, interrupt)) = result.interrupts.first() else { return Ok(()) };
         match interrupt {
@@ -2057,6 +2169,17 @@ impl<'a> PregelExecutor<'a> {
             checkpoint.metadata.insert(
                 PAUSED_NODES_METADATA_KEY.to_string(),
                 serde_json::to_value(&self.paused_nodes).unwrap_or_default(),
+            );
+        }
+        let pending: BTreeMap<&String, &PendingInterrupt> = self
+            .pending_interrupts
+            .iter()
+            .filter(|(node, _)| self.paused_nodes.contains(*node))
+            .collect();
+        if !pending.is_empty() {
+            checkpoint.metadata.insert(
+                PENDING_INTERRUPTS_METADATA_KEY.to_string(),
+                serde_json::to_value(&pending).unwrap_or_default(),
             );
         }
         // Run, step and lineage records (spec 3.3 §12): every step since the last write,
