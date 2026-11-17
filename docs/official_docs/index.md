@@ -158,6 +158,7 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 - [Governed Desktop Automation](computer-use/index.md) - `adk-computer-use` over the `computer-use-mcp` server
 - [ACP Tools](tools/acp-tools.md) - Use an ACP coding agent as a typed ADK-Rust tool
 - [Retry & Reflect](tools/retry-reflect.md) - Tool failure recovery with reflection prompts
+- [Advisor Tool](tools/advisor.md) - Let an agent consult a stronger model mid-task, under the run's budget and kill switch
 - [Action Nodes](tools/action-nodes.md) - 14 deterministic node types for workflow graphs
 - [Benchmarking](tools/benchmarking.md) - Performance measurement with `cargo adk bench`
 
