@@ -511,7 +511,7 @@ describe("an app from an MCP server", () => {
 
 // Extension catalogs (spec 3.3 §6.1 `genui`): charts the home draws natively, and a host's
 // renderers of extension components, which get the checked properties and never a way to send.
-import { ChartView, compact, niceTicks } from "../src/genui/ChartView";
+import { ChartView, compact, fitLabels, niceTicks } from "../src/genui/ChartView";
 import type { DrawnChart, DrawnNode } from "../src/generated/api";
 import type { ExtensionRendererProps } from "../src/genui/DrawnView";
 
@@ -554,6 +554,19 @@ describe("a chart an extension component drew", () => {
     expect(container.textContent).toContain("Feb\\u{202e}");
     expect([...container.querySelectorAll("title")].map((title) => title.textContent)).toContain("Revenue · <b>Jan</b>: 4");
     expect(container.querySelectorAll(".drawn-chart-legend li")).toHaveLength(2);
+  });
+
+  it("fits long category labels to the room between them, keeping the whole label to hover", () => {
+    const labels = ["0.4.0", "0.5.0", "0.6.0", "0.7.0", "0.8.0", "1.0.0", "2.0.0", "2.1.0", "2.2.0", "3.0.0 (unreleased)"];
+    const fitted = fitLabels(labels.map((text, index) => ({ at: 52 + index * 57, text })), 572);
+    expect(fitted[0].text).toBe("0.4.0");
+    expect(fitted[9].text).toBe("3.0.0…");
+    expect(fitted[9].full).toBe("3.0.0 (unreleased)");
+    const long = chart("bar", { x: { type: "category", labels }, series: [{ name: "Entries", y: labels.map((_, i) => i + 1) }] });
+    const { container } = render(<ChartView chart={long} />);
+    const titled = [...container.querySelectorAll("text.drawn-chart-tick")].find((tick) => tick.querySelector("title"));
+    expect(titled?.querySelector("title")?.textContent).toBe("3.0.0 (unreleased)");
+    expect(titled?.lastChild?.textContent).toBe("3.0.0…");
   });
 
   it("reads numbers compactly on round ticks", () => {
