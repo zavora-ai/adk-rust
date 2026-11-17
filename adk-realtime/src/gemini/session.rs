@@ -804,16 +804,33 @@ impl GeminiRealtimeSession {
         }
 
         // Per Google's Live model comparison: Gemini 3.8 Live closes the socket with 1007 on a
-        // thinking level and runs a call without a `behavior` non-blocking, and its
-        // extended-thinking sibling refuses blocking calls. Other models keep their defaults.
-        let (accepts_thinking_level, default_tool_behavior) = match live_model_id(model) {
-            GEMINI_38_LIVE => (false, Some(ToolBehavior::Blocking)),
-            GEMINI_38_LIVE_EXTENDED_THINKING => (true, Some(ToolBehavior::NonBlocking)),
-            _ => (true, None),
+        // thinking level and runs a call without a `behavior` non-blocking. Its
+        // extended-thinking sibling refuses blocking calls, and although Google's guide lists
+        // its level as configuration, the server closes a setup without one with 1007
+        // ("Thinking level must be specified for this model."). Other models keep their
+        // defaults. A Vertex AI resource name ends in the same model id as `models/{id}`.
+        let (accepts_thinking_level, default_thinking_level, default_tool_behavior) =
+            match model.rsplit('/').next().unwrap_or(model) {
+                GEMINI_38_LIVE => (false, None, Some(ToolBehavior::Blocking)),
+                GEMINI_38_LIVE_EXTENDED_THINKING => {
+                    (true, Some(adk_core::Effort::Medium.as_str()), Some(ToolBehavior::NonBlocking))
+                }
+                _ => (true, None, None),
+            };
+        let set_level = config.extra.as_ref().and_then(|ext| ext.get("thinking_level")).cloned();
+        let thinking_level = match (set_level, default_thinking_level) {
+            (Some(level), _) => Some(level),
+            (None, Some(level)) => {
+                tracing::debug!(
+                    model_id = %model,
+                    thinking_level = level,
+                    "model requires a thinking level and none is set, so the default is sent"
+                );
+                Some(json!(level))
+            }
+            (None, None) => None,
         };
-        if let Some(thinking_level) =
-            config.extra.as_ref().and_then(|ext| ext.get("thinking_level"))
-        {
+        if let Some(thinking_level) = thinking_level {
             if accepts_thinking_level {
                 generation_config["thinkingConfig"] = json!({ "thinkingLevel": thinking_level });
             } else {
@@ -1452,14 +1469,9 @@ pub fn build_vertex_live_url(region: &str, project_id: &str) -> Result<String> {
 /// The Live model that reasons on its own and refuses a thinking level.
 const GEMINI_38_LIVE: &str = "gemini-3.8-live";
 
-/// The Live model with configurable reasoning, which accepts only non-blocking tools.
+/// The Live model with configurable reasoning, which requires a thinking level and accepts
+/// only non-blocking tools.
 const GEMINI_38_LIVE_EXTENDED_THINKING: &str = "gemini-3.8-live-extended-thinking";
-
-/// The model id in a setup model name: `models/{id}` on AI Studio, a resource path ending in
-/// the id on Vertex AI.
-fn live_model_id(model: &str) -> &str {
-    model.rsplit('/').next().unwrap_or(model)
-}
 
 /// The `setup.model` resource name for `model` on `backend`.
 ///
@@ -2406,14 +2418,20 @@ mod tests {
         }
     }
 
-    /// Without a level none is sent, to any model: the setup states only what the caller set.
+    /// `gemini-3.8-live-extended-thinking` closes the socket with 1007 ("Thinking level must
+    /// be specified for this model.") on a setup without a level, so it gets `medium` unless
+    /// one is set; every other model gets a level only when one is set.
     #[test]
-    fn no_thinking_level_is_sent_unless_one_is_set() {
-        for model in [
-            "models/gemini-3.8-live",
-            "models/gemini-3.8-live-extended-thinking",
-            "models/gemini-3.1-flash-live-preview",
-        ] {
+    fn only_the_extended_thinking_model_gets_a_default_thinking_level() {
+        assert_eq!(
+            setup_for("models/gemini-3.8-live-extended-thinking", RealtimeConfig::default())["setup"]
+                ["generationConfig"],
+            json!({
+                "responseModalities": ["AUDIO"],
+                "thinkingConfig": { "thinkingLevel": "medium" },
+            })
+        );
+        for model in ["models/gemini-3.8-live", "models/gemini-3.1-flash-live-preview"] {
             assert_eq!(
                 setup_for(model, RealtimeConfig::default())["setup"]["generationConfig"],
                 json!({ "responseModalities": ["AUDIO"] }),

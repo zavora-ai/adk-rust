@@ -66,7 +66,7 @@ runner.
 |-------------------|---------------|-------|
 | `gemini-3.1-flash-live-preview` | The default (`gemini::DEFAULT_MODEL`) | Optional `RealtimeConfig::with_thinking_level` |
 | `gemini-3.8-live` | The newer model, with built-in reasoning | No thinking level (not sent); tools declared `BLOCKING` |
-| `gemini-3.8-live-extended-thinking` | Configurable background reasoning (low, medium, high) | `RealtimeConfig::with_thinking_level(Effort::…)`; tools run non-blocking. Tool calls are unverified: none reached the client in live tests |
+| `gemini-3.8-live-extended-thinking` | Configurable background reasoning (low, medium, high) | `RealtimeConfig::with_thinking_level(Effort::…)`; the model requires a level, and ADK sends `medium` unless you set one. Tools run non-blocking; tool calls are unverified, none reached the client in live tests |
 
 ## Quick Start
 

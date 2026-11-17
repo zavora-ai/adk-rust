@@ -50,7 +50,7 @@ fn gemini_model() -> anyhow::Result<BoxedModel> {
 |-------------------|-----|
 | `models/gemini-3.1-flash-live-preview` | Conversations with tools and video frames; the catalog default (`GEMINI_LIVE_DEFAULT`) and the examples' default |
 | `models/gemini-3.8-live` | The newer model, with built-in reasoning: it refuses a thinking level, so none is sent, and its tools are declared `BLOCKING`. Camera frames reach it through `realtimeInput.video` |
-| `models/gemini-3.8-live-extended-thinking` | Configurable background reasoning: set `RealtimeConfig::with_thinking_level(Effort::Low)`, `Medium` or `High`. It accepts only non-blocking tools and speaks while they run; its `turnComplete` can come while it still works (`interactionStatus: IN_PROGRESS`), and each `turnComplete` ends a response. See the note below on tool use |
+| `models/gemini-3.8-live-extended-thinking` | Configurable background reasoning: `RealtimeConfig::with_thinking_level(Effort::Low)`, `Medium` or `High`; the model requires a level, and ADK sends `medium` unless you set one. It accepts only non-blocking tools and speaks while they run; its `turnComplete` can come while it still works (`interactionStatus: IN_PROGRESS`), and each `turnComplete` ends a response. See the note below on tool use |
 | `models/gemini-2.5-flash-native-audio-preview-12-2025` | Native audio, required for [affective dialogue](affective-dialogue.md); the catalog lists it as deprecated |
 | `models/gemini-3.5-live-translate-preview` | Translation; see the [`live_translation` example](examples.md#live_translation) |
 
@@ -77,12 +77,14 @@ fn gemini_model() -> anyhow::Result<BoxedModel> {
   [Waiting for a result](tools.md#waiting-for-a-result-toolbehavior).
 - **Thinking level**: `RealtimeConfig::with_thinking_level` is sent as
   `generationConfig.thinkingConfig.thinkingLevel`, except to `gemini-3.8-live`, which closes
-  the socket with 1007 on one; for that model it is dropped with a warning. Without it no
-  level is sent. Google's guide describes the extended-thinking level as configuration, and
-  on 2026-11-17 the server closed a `gemini-3.8-live-extended-thinking` setup without one
-  with 1007 ("Thinking level must be specified for this model.").
+  the socket with 1007 on one; for that model it is dropped with a warning.
+  `gemini-3.8-live-extended-thinking` requires a level: Google's guide lists it as
+  configuration ("Configure background reasoning using `thinking_config` … with
+  `thinking_level` values `low`, `medium`, or `high`"), and on 2026-11-17 the server closed a
+  setup without one with 1007 ("Thinking level must be specified for this model."), so ADK
+  sends `medium` unless you set one. Other models get a level only when you set one.
 
-> **Note:** tool use on `gemini-3.8-live-extended-thinking` is unverified. In six live
+> **Note:** tool use on `gemini-3.8-live-extended-thinking` is unverified. In seven live
 > attempts on AI Studio on 2026-11-17 (ADK and raw WebSocket, `v1alpha` and `v1beta`) no
 > `toolCall` frame reached the client: the model said it would look the answer up, sent
 > `turnComplete` with `interactionStatus: IN_PROGRESS`, and about 20 seconds later said a
