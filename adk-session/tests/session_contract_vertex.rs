@@ -890,7 +890,79 @@ async fn test_vertex_create_and_append_errors_are_typed() {
     let (_state, service, server) = test_service().await;
 
     common::integrity_contract::assert_create_and_append_errors_contract(&service, "1001").await;
-    common::integrity_contract::assert_rewind_unsupported(&service, "1001").await;
+    common::history_contract::assert_rewrite_unsupported(&service, "1001").await;
+
+    server.abort();
+    let _ = server.await;
+}
+
+/// The Session API cannot delete events, so a fork is how a Vertex session is rewound: the
+/// fork holds the events up to the fork point and the state there, `app:` and `user:` keys
+/// included, since they live in the session.
+#[tokio::test]
+async fn test_vertex_fork_copies_events_and_state_at_the_fork_point() {
+    use adk_core::identity::AdkIdentity;
+    use adk_session::{ForkOrigin, ForkRequest};
+
+    let (_state, service, server) = test_service().await;
+    let source = service
+        .create(CreateRequest {
+            app_name: "1001".into(),
+            user_id: "user-1".into(),
+            session_id: Some("source".into()),
+            state: HashMap::from([("tier".to_string(), json!("gold"))]),
+        })
+        .await
+        .unwrap();
+    let identity: AdkIdentity = source.try_identity().unwrap();
+    let mut event_ids = Vec::new();
+    for n in 0..3 {
+        let mut event = Event::new(format!("inv-{n}"));
+        event.author = "agent".into();
+        event.timestamp = chrono::Utc::now() + chrono::Duration::seconds(n);
+        event.set_content(adk_core::Content::new("model").with_text(format!("turn {n}")));
+        event.actions.state_delta =
+            HashMap::from([("step".to_string(), json!(n)), ("app:turns".to_string(), json!(n))]);
+        event_ids.push(event.id.clone());
+        service
+            .append_event_for_identity(AppendEventRequest { identity: identity.clone(), event })
+            .await
+            .unwrap();
+    }
+
+    let fork = service
+        .fork(ForkRequest::new(identity.clone()).at_event(&event_ids[1]).with_session_id("fork"))
+        .await
+        .unwrap();
+    let reread = service
+        .get(GetRequest {
+            app_name: "1001".into(),
+            user_id: "user-1".into(),
+            session_id: "fork".into(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .unwrap();
+    for session in [fork.session.as_ref(), reread.as_ref()] {
+        let ids: Vec<String> = session.events().all().into_iter().map(|e| e.id).collect();
+        assert_eq!(ids, event_ids[..2]);
+        assert_eq!(
+            (
+                session.state().get("step"),
+                session.state().get("app:turns"),
+                session.state().get("tier"),
+            ),
+            (Some(json!(1)), Some(json!(1)), Some(json!("gold")))
+        );
+        let origin = ForkOrigin::of(session).expect("the fork records its origin");
+        assert_eq!(
+            (origin.session_id.as_str(), origin.event_id.as_deref()),
+            ("source", Some(event_ids[1].as_str()))
+        );
+    }
+    let source_now = service.get_for_identity(&identity).await.unwrap();
+    assert_eq!((source_now.events().len(), source_now.state().get("step")), (3, Some(json!(2))));
 
     server.abort();
     let _ = server.await;

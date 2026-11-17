@@ -411,17 +411,3 @@ pub async fn assert_rewind_contract(service: &dyn SessionService, app_name: &str
     delete(service, app_name, "alice", &shared).await;
     delete(service, app_name, "bob", &shared).await;
 }
-
-/// A backend without rewind reports it as `Unsupported`.
-pub async fn assert_rewind_unsupported(service: &dyn SessionService, app_name: &str) {
-    let target = identity(app_name, "user", "session");
-    for error in
-        [service.rewind(&target, "event").await.err(), service.rewind_steps(&target, 1).await.err()]
-    {
-        let error = error.expect("rewind must fail on this backend");
-        assert_eq!(
-            (error.category, error.code),
-            (ErrorCategory::Unsupported, "session.rewind.unsupported")
-        );
-    }
-}
