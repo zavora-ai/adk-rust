@@ -18,10 +18,10 @@
 # | Shard | Crates |
 # |-------|--------|
 # | 0  | adk-rag |
-# | 1  | adk-rust, adk-payments, adk-realtime, adk-session, adk-memory, adk-eval, adk-bench, adk-deploy |
+# | 1  | adk-rust, adk-payments, adk-realtime, adk-session, adk-memory, adk-eval, adk-bench, cargo-adk, adk-deploy |
 # | 2  | adk-kernel, adk-drivers |
 # | 3  | adk-server, adk-durability-gates, adk-graph, adk-managed, adk-code |
-# | 4  | adk-tool, adk-agent, adk-model, adk-skill |
+# | 4  | adk-tool, adk-agent, adk-runner, adk-model, adk-skill |
 # | 5  | adk-cli: voice, website and phone |
 # | 6  | small opt-in surfaces, adk-sandbox, adk-awp, adk-site |
 # | 7  | adk-harness |
@@ -279,7 +279,7 @@
 3 adk-code embedded-python
 3 adk-code vertex-sandbox
 
-# adk-tool, adk-agent, adk-model, adk-skill (shard 4).
+# adk-tool, adk-agent, adk-runner, adk-model, adk-skill (shard 4).
 4 adk-tool vertex-agent-registry
 # Example Store client (Vertex AI few-shot retrieval): wire contract and contract tests.
 4 adk-tool example-store
@@ -300,6 +300,9 @@
 4 adk-agent guardrails
 # Two individually green PRs broke the ambient build in combination.
 4 adk-agent ambient
+# Skills are not in adk-agent's or adk-runner's default features.
+4 adk-agent skills
+4 adk-runner skills
 # The workspace build gives adk-model only gemini, openai and anthropic, so no required check
 # ran the Ollama, Groq, DeepSeek, Bedrock or Azure AI tests: a stale Ollama usage test sat
 # failing on main.
@@ -313,7 +316,7 @@
 4 adk-model muse-realtime
 4 adk-skill vertex-skill-registry
 
-# adk-realtime, adk-session, adk-memory, adk-eval, adk-deploy, adk-bench (shard 1).
+# adk-realtime, adk-session, adk-memory, adk-eval, adk-deploy, adk-bench, cargo-adk (shard 1).
 1 adk-realtime integration
 # Held calls, metering and output guardrails on the integrated runner, and the scripted
 # provider the voice surface tests run on.
@@ -343,6 +346,8 @@
 1 adk-eval experiments doc
 # The tau2-bench and BFCL adapters: nothing in the workspace enables either feature.
 1 adk-bench tau2,bfcl
+# `cargo adk bench` and its adk-bench dependency are off in cargo-adk's default build.
+1 cargo-adk bench
 # Agent Engine deployment client: golden DTO and mock contract tests.
 1 adk-deploy gcp
 

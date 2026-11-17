@@ -12,6 +12,12 @@ Scaffolding, build, evaluation, and deployment CLI for [ADK-Rust](https://github
 cargo install cargo-adk
 ```
 
+`cargo adk bench` and the `adk-bench` dependency are behind the `bench` feature:
+
+```bash
+cargo install cargo-adk --features bench
+```
+
 ## Commands
 
 | Command | Purpose |
@@ -23,7 +29,7 @@ cargo install cargo-adk
 | `cargo adk validate` | Check a YAML agent definition (`--yaml`) or a Rust source file (`--rust`) |
 | `cargo adk deploy` | Build, bundle, and push to a deployment control plane |
 | `cargo adk eval` | Run eval sets against an agent binary, or gate on drift in an exported activity ledger |
-| `cargo adk bench` | Run performance benchmarks against real LLM APIs |
+| `cargo adk bench` | Run performance benchmarks against real LLM APIs (feature `bench`) |
 
 ### `cargo adk new` — Scaffold a new agent
 

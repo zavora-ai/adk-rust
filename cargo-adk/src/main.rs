@@ -551,6 +551,14 @@ fn main() {
             eprintln!("Error: cargo adk eval needs a path and --agent-cmd, or --ledger");
             std::process::exit(2);
         }
+        #[cfg(not(feature = "bench"))]
+        AdkCommand::Bench { .. } => {
+            eprintln!(
+                "Error: cargo adk bench is not in this build; install it with `cargo install cargo-adk --features bench`"
+            );
+            std::process::exit(2);
+        }
+        #[cfg(feature = "bench")]
         AdkCommand::Bench {
             model,
             runs,
@@ -1151,6 +1159,7 @@ async fn run_deploy(
 
 // ── Bench command ───────────────────────────────────────────────
 
+#[cfg(feature = "bench")]
 #[allow(clippy::too_many_arguments)]
 async fn run_bench(
     model: String,

@@ -44,7 +44,7 @@ adk-rust = "3.0.0"
 
 | Feature | Default | Enables |
 |---------|---------|---------|
-| `skills` | yes | `with_skills`, `with_auto_skills`, and the other skill methods on every agent builder |
+| `skills` | no | `with_skills`, `with_auto_skills`, and the other skill methods on every agent builder |
 | `skills-progressive-disclosure` | no | `adk-skill`'s progressive-disclosure skill tools (implies `skills`) |
 | `guardrails` | no | `input_guardrails`, `output_guardrails`, and `tool_guardrails` through `adk-guardrail` |
 | `enhanced-plugins` | no | `enhanced_plugin` / `enhanced_plugins`: the `EnhancedPlugin` pipeline intercepting tool and model calls |

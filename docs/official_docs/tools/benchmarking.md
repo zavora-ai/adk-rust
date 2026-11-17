@@ -17,7 +17,13 @@ Model calls use `temperature = 0` and a fixed seed (`DeterministicConfig`).
 
 ## Quick Start
 
-`cargo adk bench` reads `GOOGLE_API_KEY` and runs every built-in workload against Gemini:
+`cargo adk bench` is behind cargo-adk's `bench` feature, which is off by default:
+
+```bash
+cargo install cargo-adk --features bench
+```
+
+It reads `GOOGLE_API_KEY` and runs every built-in workload against Gemini:
 
 ```bash
 # Estimate the cost without calling the model
