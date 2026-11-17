@@ -25,6 +25,7 @@ Every client implements the `adk_core::Llm` trait, so agents and runners accept 
 | OpenCode Go and Zen | `opencode::OpenCodeClient` | `opencode` | `deepseek-v4.1-flash` |
 | Amazon Bedrock | `bedrock::BedrockClient` | `bedrock` | account- and region-specific |
 | Azure AI Inference | `azure_ai::AzureAIClient` | `azure-ai` | endpoint-specific |
+| Fallback chain over any of the above | `FallbackLlm` | always available | none |
 | Test doubles | `ScriptedLlm`, `MockLlm` | always available | none |
 
 The catalog default is what `adk_model::catalog::recommended_model(provider)` returns. The
@@ -684,6 +685,30 @@ with a spend cap refuses a model call that has no bound.
 Provider adapters keep native search and reasoning history, citations, usage, and multimodal tool
 results. A streaming snapshot with `provider_metadata.content_complete` set to `true` replaces the
 deltas before it.
+
+## Model fallback
+
+`FallbackLlm` tries an ordered list of models of any provider, moving to the next one on a
+configured `FallbackTrigger`: by default rate limits, timeouts, outages, unknown or retired model
+ids and spent quotas; refusals, context overflow and auth failures on request. A model that has
+streamed a response keeps the turn. Under a run, every attempt counts against the run budget and
+is committed in the spend ledger under its own provider, and a fallback is marked in
+`provider_metadata["fallback"]`. See [Model fallback](../docs/official_docs/models/fallback.md).
+
+```rust
+use std::sync::Arc;
+use adk_model::{FallbackLlm, FallbackTrigger, ScriptedLlm, ScriptedResponse};
+
+fn main() {
+    let primary = Arc::new(ScriptedLlm::new("claude-sonnet-5-5", Vec::<ScriptedResponse>::new()));
+    let backup = Arc::new(ScriptedLlm::new("gemini-3.7-flash", Vec::<ScriptedResponse>::new()));
+    let model = FallbackLlm::builder(primary)
+        .fallback(backup)
+        .fall_back_on(FallbackTrigger::Refusal)
+        .build();
+    assert_eq!(model.models().len(), 2);
+}
+```
 
 ## Test doubles
 

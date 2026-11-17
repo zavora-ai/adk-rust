@@ -1313,6 +1313,9 @@ configures: Gemini on Vertex AI when `GOOGLE_GENAI_USE_ENTERPRISE` or
 `GOOGLE_GENAI_USE_VERTEXAI` is `1` or `true` (needs `gemini-vertex`), then
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `GOOGLE_API_KEY`.
 
+To move to another provider when one fails at run time, wrap the models in a `FallbackLlm`
+([Model fallback](./fallback.md)).
+
 ---
 
 ## Content Bedrock Cannot Carry
@@ -1395,6 +1398,7 @@ are in the [adk-playground](https://github.com/zavora-ai/adk-playground) reposit
 - [Anthropic](./anthropic.md) - The `adk-anthropic` client
 - [Gemini Interactions API](./gemini-interactions.md) - Stateful Gemini transport
 - [OpenCode Go and Zen](./opencode.md) - Per-model routing for OpenCode services
+- [Model Fallback](./fallback.md) - An ordered chain of models across providers
 - [Ollama (Local)](./ollama.md) - Run models locally with Ollama
 - [Local Models (mistral.rs)](./mistralrs.md) - Native Rust inference
 - [LlmAgent](../agents/llm-agent.md) - Using models with agents

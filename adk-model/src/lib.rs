@@ -21,6 +21,7 @@
 //! | `OpenCodeClient` | OpenCode Go and Zen | `opencode` |
 //! | `BedrockClient` | Amazon Bedrock | `bedrock` |
 //! | `AzureAIClient` | Azure AI Inference | `azure-ai` |
+//! | [`FallbackLlm`] | An ordered chain of any of the above, each tried when the one before it fails | always |
 //! | [`ScriptedLlm`] | Test double that answers each call with the next scripted reply and records every request | always |
 //! | [`MockLlm`] | Test double that replays the same responses on every call | always |
 //!
@@ -133,6 +134,7 @@ pub mod deepseek;
     feature = "openrouter"
 ))]
 mod error_metadata;
+pub mod fallback;
 /// Gemini model provider (Google AI Studio and Vertex AI).
 #[cfg(feature = "gemini")]
 pub mod gemini;
@@ -237,6 +239,7 @@ pub use azure_ai::{AzureAIClient, AzureAIConfig};
 pub use bedrock::{BedrockClient, BedrockConfig};
 #[cfg(feature = "deepseek")]
 pub use deepseek::{DeepSeekClient, DeepSeekConfig};
+pub use fallback::{FallbackLlm, FallbackLlmBuilder, FallbackTrigger};
 #[cfg(feature = "gemini")]
 pub use gemini::GeminiModel;
 #[cfg(feature = "groq")]

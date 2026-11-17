@@ -404,5 +404,7 @@ Every page of these docs that imports a member crate has the same item under `ad
 - [Agent kernel](../kernel/index.md): processes, wake sources and the control plane
 - [Tool authorization](../security/tool-authorization.md): policy, approvals and the kill switch
 - [Spend ledger](../security/spend-ledger.md) and [audit log](../security/audit-log.md)
+- [Model fallback](../models/fallback.md): keep an unattended run going through a provider
+  outage, with every attempt counted against its budget
 - `examples/autonomy_validation`: the governance and durability contracts above, checked live
   against OpenAI, Anthropic and Gemini

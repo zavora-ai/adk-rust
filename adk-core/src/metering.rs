@@ -67,9 +67,9 @@ use async_trait::async_trait;
 use futures::StreamExt;
 
 use crate::{
-    BudgetTracker, Llm, LlmRequest, LlmResponse, LlmResponseStream, ReservationId, Result,
-    RunConfig, SpendKey, SpendLedger, ToolContext, UsageVector, budget::meter_stream,
-    schema_adapter::SchemaAdapter, usd_to_micro_usd,
+    BudgetTracker, GovernanceControl, Llm, LlmRequest, LlmResponse, LlmResponseStream,
+    ReservationId, Result, RunConfig, SpendKey, SpendLedger, ToolContext, UsageVector,
+    budget::meter_stream, schema_adapter::SchemaAdapter, usd_to_micro_usd,
 };
 
 /// Hold reserved for a model call whose cost cannot be bounded.
@@ -450,6 +450,7 @@ struct SpendScope {
 pub struct ModelCallScope {
     budget: Option<Arc<BudgetTracker>>,
     spend: Option<SpendScope>,
+    governance: Vec<GovernanceControl>,
 }
 
 impl fmt::Debug for ModelCallScope {
@@ -458,6 +459,7 @@ impl fmt::Debug for ModelCallScope {
             .field("budget", &self.budget.as_ref().map(|tracker| tracker.budget()))
             .field("spend_org", &self.spend.as_ref().map(|spend| spend.org.as_str()))
             .field("spend_agent", &self.spend.as_ref().and_then(|spend| spend.agent.as_deref()))
+            .field("governance", &self.governance.len())
             .finish()
     }
 }
@@ -475,8 +477,9 @@ impl ModelCallScope {
     /// Creates the scope for calls made on behalf of a run.
     ///
     /// Uses the run's [`budget_tracker`](RunConfig::budget_tracker), its
-    /// [`spend_ledger`](RunConfig::spend_ledger) and
-    /// [`llm_spend_estimate`](RunConfig::llm_spend_estimate). Spend is attributed to
+    /// [`spend_ledger`](RunConfig::spend_ledger),
+    /// [`llm_spend_estimate`](RunConfig::llm_spend_estimate) and kill switches
+    /// ([`governance`](RunConfig::governance)). Spend is attributed to
     /// `org` (the runner passes its app name) and the [`AgentId`](crate::AgentId) the
     /// agent named `agent_name` acts as
     /// ([`ActingConfig::principal_for`](crate::ActingConfig::principal_for): the
@@ -490,7 +493,42 @@ impl ModelCallScope {
                 agent: Some(config.acting.principal_for(org, agent_name).id.into()),
                 estimate: config.llm_spend_estimate.unwrap_or_default(),
             }),
+            governance: config.governance.clone(),
         }
+    }
+
+    /// Refuses every call while `control` is frozen.
+    ///
+    /// The scope checks its kill switches before each call it meters, so a call that
+    /// makes several provider calls, such as a [fallback chain](Llm::generate_content_metered),
+    /// stops at the next one once a switch is frozen.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_core::{GOVERNANCE_FROZEN_CODE, GovernanceControl, ModelCallScope};
+    ///
+    /// let control = GovernanceControl::new();
+    /// let scope = ModelCallScope::new().with_governance(control.clone());
+    /// assert!(scope.check_governance().is_ok());
+    /// control.freeze("incident");
+    /// assert_eq!(scope.check_governance().unwrap_err().code, GOVERNANCE_FROZEN_CODE);
+    /// ```
+    pub fn with_governance(mut self, control: GovernanceControl) -> Self {
+        if !self.governance.iter().any(|existing| existing.same_as(&control)) {
+            self.governance.push(control);
+        }
+        self
+    }
+
+    /// Returns the error of the first frozen kill switch, if any.
+    ///
+    /// # Errors
+    ///
+    /// Returns the frozen control's `governance.frozen` error
+    /// ([`GovernanceControl::check`]).
+    pub fn check_governance(&self) -> Result<()> {
+        self.governance.iter().try_for_each(GovernanceControl::check)
     }
 
     /// Counts calls against `tracker`.
@@ -638,20 +676,50 @@ impl ModelCallScope {
 
     /// Calls `model` under this scope.
     ///
+    /// Refuses the call while one of the scope's kill switches is frozen
+    /// ([`with_governance`](Self::with_governance)), then hands it to
+    /// [`Llm::generate_content_metered`], which meters it as one model call
+    /// ([`generate_one_call`](Self::generate_one_call)) unless the model sends the request
+    /// to several providers and meters each of their calls itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns the frozen control's `governance.frozen` error, the ledger's error when the
+    /// reservation is refused, a [`ResourceExhausted`](crate::ErrorCategory::ResourceExhausted)
+    /// error when the budget does not allow another call, or the model's own error.
+    pub async fn generate(
+        &self,
+        model: &dyn Llm,
+        request: LlmRequest,
+        stream: bool,
+    ) -> Result<LlmResponseStream> {
+        self.check_governance()?;
+        if self.is_unmetered() && self.governance.is_empty() {
+            return model.generate_content(request, stream).await;
+        }
+        model.generate_content_metered(self, request, stream).await
+    }
+
+    /// Meters one call to `model` as one model call.
+    ///
     /// Reserves the call's upper-bound cost ([`Llm::max_cost_micro_usd`], or
     /// [`UNBOUNDED_HOLD_MICRO_USD`] when there is none), then the budget's model call,
     /// before the request is sent; a refusal from either stops the call. The returned
     /// stream counts the call's usage once and commits its cost at the turn-complete
-    /// response, or when the stream ends or is dropped.
+    /// response, or when the stream ends or is dropped. The spend is reserved under the
+    /// vendor of `request.model` ([`vendor_for_model`]) and committed under the provider
+    /// the response reports.
+    ///
+    /// This is what [`Llm::generate_content_metered`] does unless a model overrides it.
     ///
     /// # Errors
     ///
     /// Returns the ledger's error when the reservation is refused, a
     /// [`ResourceExhausted`](crate::ErrorCategory::ResourceExhausted) error when the
     /// budget does not allow another call, or the model's own error.
-    pub async fn generate(
+    pub async fn generate_one_call<M: Llm + ?Sized>(
         &self,
-        model: &dyn Llm,
+        model: &M,
         request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream> {
@@ -712,10 +780,12 @@ impl ModelCallScope {
     ///
     /// # Errors
     ///
-    /// Returns the ledger's error when the reservation is refused, or a
+    /// Returns the frozen control's `governance.frozen` error while a kill switch is frozen,
+    /// the ledger's error when the reservation is refused, or a
     /// [`ResourceExhausted`](crate::ErrorCategory::ResourceExhausted) error when the
-    /// budget refuses the call. Nothing has been sent when either refuses.
+    /// budget refuses the call. Nothing has been sent when any of them refuses.
     pub async fn begin_usage(&self, call: &UsageCall) -> Result<UsageHold> {
+        self.check_governance()?;
         let spend = match (&self.spend, self.vendor_spend_key(&call.vendor)) {
             (Some(spend), Some(key)) => Some(match call.max_cost_micro_usd {
                 Some(bound) => ModelSpendHold::reserve(spend.ledger.clone(), key, bound).await?,
@@ -783,6 +853,7 @@ impl ModelCallScope {
         F: Future<Output = Result<(T, MeteredUsage)>>,
     {
         if self.is_unmetered() {
+            self.check_governance()?;
             return future.await.map(|(value, _)| value);
         }
         let hold = self.begin_usage(&call).await?;
@@ -1282,5 +1353,177 @@ mod tests {
                 false
             ))
         );
+    }
+
+    /// Answers every call with one complete response reporting `cost`, served by `provider`.
+    struct Priced {
+        name: &'static str,
+        provider: &'static str,
+        cost: f64,
+        sent: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Priced {
+        fn new(name: &'static str, provider: &'static str, cost: f64) -> Self {
+            Self { name, provider, cost, sent: std::sync::atomic::AtomicUsize::new(0) }
+        }
+    }
+
+    #[async_trait]
+    impl Llm for Priced {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        async fn generate_content(&self, _: LlmRequest, _: bool) -> Result<LlmResponseStream> {
+            self.sent.fetch_add(1, Ordering::SeqCst);
+            let mut response = LlmResponse::new(crate::Content::new("model").with_text("ok"));
+            response.provider = Some(self.provider.to_string());
+            response.model = Some(self.name.to_string());
+            response.usage_metadata = Some(crate::UsageMetadata {
+                prompt_token_count: 10,
+                candidates_token_count: 5,
+                total_token_count: 15,
+                cost: Some(self.cost),
+                ..Default::default()
+            });
+            Ok(Box::pin(futures::stream::iter([Ok(response)])))
+        }
+
+        fn max_cost_micro_usd(&self, _: &LlmRequest) -> Option<u64> {
+            Some(50_000)
+        }
+    }
+
+    /// Sends every request to both of its models and answers with the second one's stream.
+    struct BothModels {
+        first: Arc<Priced>,
+        second: Arc<Priced>,
+    }
+
+    #[async_trait]
+    impl Llm for BothModels {
+        fn name(&self) -> &str {
+            "both"
+        }
+
+        async fn generate_content(
+            &self,
+            req: LlmRequest,
+            stream: bool,
+        ) -> Result<LlmResponseStream> {
+            self.second.generate_content(req, stream).await
+        }
+
+        async fn generate_content_metered(
+            &self,
+            scope: &ModelCallScope,
+            req: LlmRequest,
+            stream: bool,
+        ) -> Result<LlmResponseStream> {
+            let mut first = req.clone();
+            first.model = self.first.name.to_string();
+            let mut drained = scope.generate(self.first.as_ref(), first, stream).await?;
+            while drained.next().await.is_some() {}
+            let mut second = req;
+            second.model = self.second.name.to_string();
+            scope.generate(self.second.as_ref(), second, stream).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_model_that_meters_its_own_calls_records_each_under_its_provider() {
+        let ledger = capped(1_000_000);
+        let tracker = Arc::new(BudgetTracker::new(RunBudget::new()));
+        let scope = ModelCallScope::new()
+            .with_budget(tracker.clone())
+            .with_spend_ledger(ledger.clone(), "acme");
+        let model = BothModels {
+            first: Arc::new(Priced::new("gpt-6.1-sol", "openai", 0.001)),
+            second: Arc::new(Priced::new("claude-haiku-5-5", "anthropic", 0.002)),
+        };
+
+        let mut responses =
+            scope.generate(&model, LlmRequest::new("both", vec![]), false).await.unwrap();
+        while responses.next().await.is_some() {}
+
+        let spent = |vendor: &'static str| {
+            let ledger = ledger.clone();
+            async move {
+                ledger
+                    .spent(&SpendKey::org("acme").with_vendor(vendor), SpendPeriod::Day)
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(spent("openai").await, 1_000);
+        assert_eq!(spent("anthropic").await, 2_000);
+        assert_eq!(tracker.usage().model_calls, 2);
+        assert_eq!(tracker.usage().total_tokens, 30);
+        assert_eq!(tracker.usage().cost_micro_usd, 3_000);
+    }
+
+    #[tokio::test]
+    async fn a_model_with_the_default_is_metered_as_one_call() {
+        let ledger = capped(1_000_000);
+        let tracker = Arc::new(BudgetTracker::new(RunBudget::new()));
+        let scope = ModelCallScope::new()
+            .with_budget(tracker.clone())
+            .with_spend_ledger(ledger.clone(), "acme");
+        let model = Priced::new("claude-haiku-5-5", "anthropic", 0.002);
+
+        let mut responses = scope
+            .generate(&model, LlmRequest::new("claude-haiku-5-5", vec![]), false)
+            .await
+            .unwrap();
+        while responses.next().await.is_some() {}
+
+        let key = SpendKey::org("acme").with_vendor("anthropic");
+        assert_eq!(ledger.spent(&key, SpendPeriod::Day).await.unwrap(), 2_000);
+        assert_eq!(tracker.usage().model_calls, 1);
+    }
+
+    #[tokio::test]
+    async fn a_frozen_scope_refuses_a_call_before_it_is_reserved_or_sent() {
+        let ledger = capped(1_000_000);
+        let tracker = Arc::new(BudgetTracker::new(RunBudget::new()));
+        let control = crate::GovernanceControl::new();
+        let scope = ModelCallScope::new()
+            .with_budget(tracker.clone())
+            .with_spend_ledger(ledger.clone(), "acme")
+            .with_governance(control.clone());
+        let model = Priced::new("claude-haiku-5-5", "anthropic", 0.002);
+        control.freeze("incident");
+
+        let refused = scope
+            .generate(&model, LlmRequest::new("claude-haiku-5-5", vec![]), false)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(refused.code, crate::GOVERNANCE_FROZEN_CODE);
+        assert_eq!(model.sent.load(Ordering::SeqCst), 0);
+        assert_eq!(tracker.usage().model_calls, 0);
+
+        let unmetered = ModelCallScope::new().with_governance(control.clone());
+        let refused = unmetered
+            .generate(&model, LlmRequest::new("claude-haiku-5-5", vec![]), false)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(refused.code, crate::GOVERNANCE_FROZEN_CODE);
+        let refused =
+            unmetered.meter(image_call(1), async { Ok(((), images(1))) }).await.unwrap_err();
+        assert_eq!(refused.code, crate::GOVERNANCE_FROZEN_CODE);
+        assert_eq!(model.sent.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_run_scope_carries_the_run_kill_switches() {
+        let control = crate::GovernanceControl::new();
+        let config = RunConfig::builder().governance(control.clone()).build();
+        let scope = ModelCallScope::for_run(&config, "acme", "assistant");
+        assert!(scope.check_governance().is_ok());
+        control.freeze("incident");
+        assert_eq!(scope.check_governance().unwrap_err().code, crate::GOVERNANCE_FROZEN_CODE);
     }
 }
