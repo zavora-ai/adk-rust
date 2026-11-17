@@ -97,6 +97,7 @@ mod steer_route;
 mod store_conformance_firestore;
 mod store_conformance_mongodb;
 mod store_conformance_neo4j;
+mod subagents;
 mod supervisor_property_tests;
 mod supervisor_tests;
 mod surface_routes;

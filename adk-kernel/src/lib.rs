@@ -41,6 +41,7 @@
 //! | [`Crossing`], [`CrossingResource`], [`CrossingAccess`], [`CrossingRun`], [`CrossingRecord`], [`CrossingOutcome`], [`CrossingFilter`], [`CrossingRoute`], [`PartitionPolicy`], [`CrossingTool`] | §7.8, §13 Q3, K-I15 |
 //! | [`control`]: [`ControlPlaneConfig`](control::ControlPlaneConfig), [`router`](control::router), [`ControlPlane`](control::ControlPlane), [`ControlClient`](control::ControlClient), [`api`](control::api) | §7.11 |
 //! | [`audit`] action names | §9.3 |
+//! | [`subagents`]: background sub-agents as processes of kind [`ProcessKind::Subagent`], [`KernelBuilder::subagents`], [`Kernel::subagents`], [`SubagentHandle`], [`KernelEvent::Subagent`] | `adk_core::subagent` |
 //! | `service` (feature `service`): `ServiceDefinition`, `install`, `uninstall`, `run_as_service` (Windows) | §7.12, §10 W3 |
 //! | `conformance` (feature `conformance`) | §11 |
 //! | `managed` (feature `managed`): `KernelDef`, `TenantKernel`, `KernelResolver`, `ManagedKernels` | §7.13, §10 M1 |
@@ -121,6 +122,7 @@ mod serde_util;
 #[cfg(feature = "service")]
 pub mod service;
 pub mod stores;
+pub mod subagents;
 mod supervise;
 pub mod wake;
 pub mod watermark;
@@ -210,6 +212,7 @@ pub use stores::{
     InMemoryAgendaStore, InMemoryCronWatermarkStore, InMemoryPartitionStore, InMemoryProcessStore,
     ProcessFilter, ProcessStore, SpendScope, UsageTotals,
 };
+pub use subagents::{SUBAGENT_LABEL, SUBAGENT_NAME_LABEL, SUBAGENT_NOTICE_SOURCE, SubagentHandle};
 #[cfg(feature = "webhooks")]
 pub use wake::webhook_wake_hook;
 pub use wake::{

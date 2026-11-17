@@ -418,6 +418,18 @@ Each fire time is enqueued once however many replicas run the scheduler, and res
 
 **Whose identity a run uses.** The worker acts as the runner's own principal, for the run's user. A run's stored principal is honoured only for agent ids listed with `DurableWorkerConfig::with_allowed_principal` (none by default); any other fails the run with `identity.principal_not_allowed`, recorded on the audit trail. Runs from the scheduler, webhook hooks, and queue ingress act for their user as a service (see [Agent Identity](../docs/official_docs/security/agent-identity.md#durable-runs)).
 
+### Background sub-agents
+
+`background::DurableSubagents` hosts background sub-agents on a `DurableRunStore` without a
+kernel: each is a durable run in its own session, `SubagentHooks` on the `DurableWorker` tells
+its parent when it finishes — by steering the parent's running turn through a
+`RunStoreBackend`'s runners, or by a new run of the parent's session — and `reconcile` tells
+parents a crash left untold. An agent run's input narrows the runner's limits under
+`runLimits`: `budget` (a `RunBudget`) and `allowedTools` (a `ToolCeiling` under the runner's
+policy); see the
+worker's "Run limits" and
+[Background sub-agents](../docs/official_docs/agents/background-subagents.md).
+
 ## Webhook Wake-ups (feature: `webhook-ingress`)
 
 `ServerBuilder::with_webhook_ingress` serves `POST /hooks/{name}`. Each `WebhookHook` verifies Standard Webhooks signatures and maps the delivery to a `NewRun` in a `DurableRunStore`, keyed by the `webhook-id`:

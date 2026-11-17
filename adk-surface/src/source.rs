@@ -39,6 +39,9 @@ pub struct AgentState {
     pub wake_at: Option<DateTime<Utc>>,
     /// The run was suspended, by a stop or by hand.
     pub suspended: bool,
+    /// The background sub-agent the latest run belongs to, by the name its parent gave it,
+    /// when it is one: the roster says so beside its status.
+    pub subagent: Option<String>,
 }
 
 /// Today's spend and the daily limit, in micro-USD (spec 3.3 §8.1 "Daily spending limit").

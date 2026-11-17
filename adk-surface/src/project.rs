@@ -754,6 +754,11 @@ impl Projector {
             // A state a later runtime adds shows as idle, never as working or done.
             _ => (AgentStatus::Asleep, words::ASLEEP.to_string()),
         };
+        // A background sub-agent's row says whose work it is (its name, from its parent).
+        let status_text = match &state.subagent {
+            Some(name) => format!("{status_text} · sub-agent {name}"),
+            None => status_text,
+        };
         AgentRow {
             agent: self.agent(&state.name),
             status,
@@ -1506,6 +1511,7 @@ mod tests {
             waiting_on_decision,
             wake_at,
             suspended,
+            subagent: None,
         };
         let seven = Some(Utc.with_ymd_and_hms(2026, 10, 24, 7, 0, 0).unwrap());
         let words = |row: AgentRow| (row.agent.display_name, row.status_text);
@@ -1532,6 +1538,13 @@ mod tests {
         assert_eq!(
             projector.agent_row(&state(RunState::Failed, false, None, false)).status_text,
             "Failed"
+        );
+        let mut alpha = state(RunState::Waiting, true, None, false);
+        alpha.subagent = Some("alpha".into());
+        assert_eq!(
+            projector.agent_row(&alpha).status_text,
+            "Waiting for you · sub-agent alpha",
+            "a background sub-agent's row names it"
         );
     }
 
