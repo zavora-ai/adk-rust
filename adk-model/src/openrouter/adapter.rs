@@ -312,6 +312,8 @@ async fn build_chat_llm_stream(
             // A finish reason or `[DONE]` marks a complete response; without one the
             // answer or a tool call may be truncated.
             let mut finished = false;
+            // The model declined in `delta.refusal`.
+            let mut refused = false;
 
             while let Some(item) = native_stream.next().await {
                 match item? {
@@ -345,7 +347,11 @@ async fn build_chat_llm_stream(
                                     yield response;
                                 }
 
-                                let text_parts = chat_content_to_parts(delta.content.as_ref());
+                                let mut text_parts = chat_content_to_parts(delta.content.as_ref());
+                                if let Some(refusal) = delta.refusal.as_ref().filter(|r| !r.is_empty()) {
+                                    refused = true;
+                                    text_parts.push(Part::Text { text: refusal.clone() });
+                                }
                                 if let Some(response) = llm_stream_response(
                                     text_parts,
                                     None,
@@ -371,7 +377,8 @@ async fn build_chat_llm_stream(
                                     ))?;
                                 }
                                 final_parts.extend(state.drain_chat_tool_calls()?);
-                                final_finish_reason = Some(chat_finish_reason_from_str(finish_reason));
+                                final_finish_reason =
+                                    Some(chat_finish_reason(choice, finish_reason, refused));
                                 finished = true;
                             }
                         }
@@ -872,6 +879,9 @@ fn chat_response_to_llm_response(response: &OpenRouterChatResponse) -> LlmRespon
             let (reasoning_parts, reasoning_metadata) = chat_message_reasoning_to_parts(message);
             parts.extend(reasoning_parts);
             parts.extend(chat_content_to_parts(message.content.as_ref()));
+            if let Some(refusal) = message.refusal.as_ref().filter(|r| !r.is_empty()) {
+                parts.push(Part::Text { text: refusal.clone() });
+            }
             parts.extend(chat_tool_calls_to_parts(message.tool_calls.as_ref()));
             merge_metadata_object(&mut provider_metadata, reasoning_metadata);
         }
@@ -897,11 +907,17 @@ fn chat_response_to_llm_response(response: &OpenRouterChatResponse) -> LlmRespon
     LlmResponse {
         content: (!parts.is_empty()).then_some(Content { role: "model".to_string(), parts }),
         usage_metadata: response.usage.as_ref().map(chat_usage_to_metadata),
-        finish_reason: response
-            .choices
-            .first()
-            .and_then(|choice| choice.finish_reason.as_deref())
-            .map(chat_finish_reason_from_str),
+        finish_reason: response.choices.first().and_then(|choice| {
+            let refused = choice
+                .message
+                .as_ref()
+                .and_then(|message| message.refusal.as_ref())
+                .is_some_and(|refusal| !refusal.is_empty());
+            choice
+                .finish_reason
+                .as_deref()
+                .map(|finish_reason| chat_finish_reason(choice, finish_reason, refused))
+        }),
         citation_metadata: chat_response_citation_metadata(response),
         partial: false,
         turn_complete: true,
@@ -1036,14 +1052,15 @@ fn response_message_item_to_parts(item: &OpenRouterResponseOutputItem) -> Vec<Pa
         .into_iter()
         .flatten()
         .filter_map(|part| {
-            if part.get("type").and_then(Value::as_str) == Some("output_text") {
-                return part
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .filter(|text| !text.is_empty())
-                    .map(|text| Part::Text { text: text.to_string() });
-            }
-            None
+            let field = match part.get("type").and_then(Value::as_str) {
+                Some("output_text") => "text",
+                Some("refusal") => "refusal",
+                _ => return None,
+            };
+            part.get(field)
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+                .map(|text| Part::Text { text: text.to_string() })
         })
         .collect()
 }
@@ -1082,18 +1099,45 @@ fn response_function_call_part(item: &OpenRouterResponseOutputItem) -> Result<Pa
     })
 }
 
-fn chat_finish_reason_from_str(finish_reason: &str) -> FinishReason {
-    match finish_reason {
-        "stop" | "tool_calls" | "function_call" => FinishReason::Stop,
-        "length" | "max_tokens" => FinishReason::MaxTokens,
-        "content_filter" | "safety" => FinishReason::Safety,
-        "recitation" => FinishReason::Recitation,
+/// The finish reason of a chat choice.
+///
+/// OpenRouter normalizes `finish_reason` and keeps the provider's own value in
+/// `native_finish_reason` (<https://openrouter.ai/docs/api-reference/overview#finish-reason>),
+/// which is where a refusal or a malformed tool call shows: Anthropic's `refusal`, Gemini's
+/// `MALFORMED_FUNCTION_CALL` and `UNEXPECTED_TOOL_CALL`, Bedrock's `malformed_tool_use`.
+fn chat_finish_reason(
+    choice: &super::chat::OpenRouterChatChoice,
+    finish_reason: &str,
+    refused: bool,
+) -> FinishReason {
+    let native = choice.extra.get("native_finish_reason").and_then(Value::as_str);
+    match (finish_reason, native) {
+        _ if refused => FinishReason::Refusal,
+        (_, Some("refusal")) => FinishReason::Refusal,
+        (_, Some("MALFORMED_FUNCTION_CALL" | "UNEXPECTED_TOOL_CALL" | "malformed_tool_use")) => {
+            FinishReason::MalformedToolCall
+        }
+        ("stop" | "tool_calls" | "function_call", _) => FinishReason::Stop,
+        ("length" | "max_tokens", _) => FinishReason::MaxTokens,
+        ("content_filter" | "safety", _) => FinishReason::Safety,
+        ("recitation", _) => FinishReason::Recitation,
         _ => FinishReason::Other,
     }
 }
 
 fn responses_finish_reason(response: &OpenRouterResponse) -> Option<FinishReason> {
+    let refused = response
+        .output
+        .iter()
+        .filter(|item| item.kind == "message")
+        .filter_map(|item| item.content.as_ref().and_then(Value::as_array))
+        .flatten()
+        .any(|part| {
+            part.get("type").and_then(Value::as_str) == Some("refusal")
+                && part.get("refusal").and_then(Value::as_str).is_some_and(|r| !r.is_empty())
+        });
     match response.status.as_deref() {
+        Some("completed") if refused => Some(FinishReason::Refusal),
         Some("completed") => Some(FinishReason::Stop),
         Some("incomplete") => match response
             .incomplete_details
@@ -1661,5 +1705,79 @@ mod tests {
         assert_eq!(calls[0].2, serde_json::json!({ "command": "whoami" }));
         assert_eq!(calls[1].0.as_deref(), Some("call_b"));
         assert_eq!(calls[1].2, serde_json::json!({ "command": "pwd" }));
+    }
+
+    fn chat_choice(
+        message: serde_json::Value,
+        finish: &str,
+        native: &str,
+    ) -> adk_core::LlmResponse {
+        let response: crate::openrouter::chat::OpenRouterChatResponse =
+            serde_json::from_value(json!({
+                "choices": [{
+                    "index": 0,
+                    "message": message,
+                    "finish_reason": finish,
+                    "native_finish_reason": native
+                }]
+            }))
+            .unwrap();
+        super::chat_response_to_llm_response(&response)
+    }
+
+    #[test]
+    fn a_chat_refusal_is_the_text_and_finishes_with_refusal() {
+        let response = chat_choice(
+            json!({"role": "assistant", "content": null, "refusal": "I can't help with that."}),
+            "stop",
+            "stop",
+        );
+        assert_eq!(
+            (response.finish_reason, response.content.unwrap().parts),
+            (
+                Some(adk_core::FinishReason::Refusal),
+                vec![Part::Text { text: "I can't help with that.".into() }]
+            )
+        );
+    }
+
+    #[test]
+    fn the_native_finish_reason_reports_refusals_and_malformed_tool_calls() {
+        for (finish, native, expected) in [
+            ("stop", "refusal", adk_core::FinishReason::Refusal),
+            ("stop", "MALFORMED_FUNCTION_CALL", adk_core::FinishReason::MalformedToolCall),
+            ("stop", "UNEXPECTED_TOOL_CALL", adk_core::FinishReason::MalformedToolCall),
+            ("stop", "malformed_tool_use", adk_core::FinishReason::MalformedToolCall),
+            ("stop", "end_turn", adk_core::FinishReason::Stop),
+            ("length", "max_tokens", adk_core::FinishReason::MaxTokens),
+            ("content_filter", "SAFETY", adk_core::FinishReason::Safety),
+        ] {
+            let response =
+                chat_choice(json!({"role": "assistant", "content": "x"}), finish, native);
+            assert_eq!(response.finish_reason, Some(expected), "{finish}/{native}");
+        }
+    }
+
+    #[test]
+    fn a_responses_refusal_part_is_the_text_and_finishes_with_refusal() {
+        let response: crate::openrouter::responses::OpenRouterResponse =
+            serde_json::from_value(json!({
+                "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "id": "msg",
+                    "role": "assistant",
+                    "content": [{"type": "refusal", "refusal": "I can't help with that."}]
+                }]
+            }))
+            .unwrap();
+        let response = super::responses_response_to_llm_response(&response).unwrap().unwrap();
+        assert_eq!(
+            (response.finish_reason, response.content.unwrap().parts),
+            (
+                Some(adk_core::FinishReason::Refusal),
+                vec![Part::Text { text: "I can't help with that.".into() }]
+            )
+        );
     }
 }

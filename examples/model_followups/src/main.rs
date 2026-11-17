@@ -10,7 +10,8 @@
 //! - a DeepSeek or Azure AI stream error frame fails the run with the provider's message and
 //!   category, and persists nothing;
 //! - a Chat Completions `refusal` (with `content: null`) reaches the session as the refusal
-//!   text with `FinishReason::Safety`, streamed and unary.
+//!   text with `FinishReason::Refusal`, and the run fails with `model.refusal`, streamed and
+//!   unary.
 //!
 //! `live_openai_chat_refusal` runs when `OPENAI_API_KEY` is set.
 //!
@@ -454,7 +455,12 @@ fn refusal_checks(outcome: &RunOutcome, refusal: Option<&str>) -> Vec<(bool, Str
     let text = outcome.final_text();
     let error_code = outcome.last().and_then(|event| event.llm_response.error_code.clone());
     vec![
-        (outcome.error.is_none(), format!("run succeeds (error: {})", outcome.error_summary())),
+        (
+            outcome.error.as_ref().is_some_and(|error| {
+                error.code == "model.refusal" && error.category == ErrorCategory::Forbidden
+            }),
+            format!("run fails with model.refusal (error: {})", outcome.error_summary()),
+        ),
         (
             match refusal {
                 Some(refusal) => text == refusal,
@@ -463,14 +469,14 @@ fn refusal_checks(outcome: &RunOutcome, refusal: Option<&str>) -> Vec<(bool, Str
             format!("final model event carries the refusal text {text:?}"),
         ),
         (
-            outcome.finish_reason() == Some(FinishReason::Safety),
-            format!("finish reason {:?} (want Safety)", outcome.finish_reason()),
+            outcome.finish_reason() == Some(FinishReason::Refusal),
+            format!("finish reason {:?} (want Refusal)", outcome.finish_reason()),
         ),
         (error_code.is_none(), format!("no error_code ({error_code:?})")),
     ]
 }
 
-/// (c) A streamed refusal reaches the session as the refusal, not an empty success.
+/// (c) A streamed refusal reaches the session as the refusal and fails the run.
 async fn chat_refusal_stream(mode: StreamingMode) -> anyhow::Result<Verdict> {
     let upstream = Upstream::start(vec![refusal_stream()]).await?;
     let outcome =
@@ -485,7 +491,7 @@ async fn chat_refusal_stream(mode: StreamingMode) -> anyhow::Result<Verdict> {
     Ok(verdict(checks))
 }
 
-/// (c) A unary refusal reaches the session as the refusal.
+/// (c) A unary refusal reaches the session as the refusal and fails the run.
 async fn chat_refusal_unary() -> anyhow::Result<Verdict> {
     let upstream = Upstream::start(vec![refusal_unary()]).await?;
     let model = Arc::new(NonStreaming(compatible(&upstream.base)?));

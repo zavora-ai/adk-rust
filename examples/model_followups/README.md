@@ -17,7 +17,7 @@ Each scenario drives `LlmAgentBuilder`, `Runner`, an in-memory session service, 
 | `deepseek_stream_answer` | `DeepSeekClient` | A complete answer | Run succeeds with the answer |
 | `azure_ai_stream_error_sse`, `azure_ai_stream_error_none` | `AzureAIClient` | Text, then `{"error": {"code": "ServiceUnavailable", "message"}}`, then `[DONE]` | Run fails with `model.azure_ai.stream_error`, `Unavailable`, the provider's message, and `provider_error_code`; nothing persisted |
 | `azure_ai_stream_answer` | `AzureAIClient` | A complete answer | Run succeeds with the answer |
-| `chat_refusal_stream_sse`, `chat_refusal_stream_none` | `OpenAICompatible` | `delta.refusal` fragments with `content: null`, then `finish_reason: "stop"` | Run succeeds; the final event's text is the refusal, with `FinishReason::Safety` and no `error_code` |
+| `chat_refusal_stream_sse`, `chat_refusal_stream_none` | `OpenAICompatible` | `delta.refusal` fragments with `content: null`, then `finish_reason: "stop"` | Run fails with `model.refusal`, `Forbidden`; the final event's text is the refusal, with `FinishReason::Refusal` and no `error_code` |
 | `chat_refusal_unary` | `OpenAICompatible`, unary | `message.refusal` with `content: null` | The same |
 | `live_openai_chat_refusal` | `OpenAIClient` | A request OpenAI declines, under a strict `response_format` schema | The same |
 

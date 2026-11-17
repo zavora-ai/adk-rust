@@ -481,6 +481,26 @@ mod refusal_recovery {
             )
             .await;
             assert_eq!(text_parts(&results), ["I cannot", " help"]);
+            assert_eq!(
+                results.last().and_then(|response| response.finish_reason),
+                Some(adk_core::FinishReason::Refusal)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_answer_without_a_refusal_finishes_with_stop() {
+        for compatible in [false, true] {
+            let results = responses(
+                &[completion(json!([message("msg", json!([text("Paris.")]))]))],
+                compatible,
+                "",
+            )
+            .await;
+            assert_eq!(
+                results.last().and_then(|response| response.finish_reason),
+                Some(adk_core::FinishReason::Stop)
+            );
         }
     }
 

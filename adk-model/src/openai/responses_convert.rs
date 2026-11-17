@@ -925,8 +925,17 @@ fn convert_usage(usage: &serde_json::Value) -> Option<UsageMetadata> {
 }
 
 /// Map response status to ADK `FinishReason`.
+///
+/// A completed response whose message carries a `refusal` content part finishes with
+/// `Refusal` (https://developers.openai.com/api/docs/guides/structured-outputs#refusals-with-structured-outputs).
 fn map_finish_reason(response: &Projection) -> Option<FinishReason> {
+    let refused = response.output.iter().any(|item| {
+        matches!(item, OutputItem::Message(message) if message.content.iter().any(|content| {
+            matches!(content, OutputMessageContent::Refusal(refusal) if !refusal.refusal.is_empty())
+        }))
+    });
     match &response.status {
+        Status::Completed if refused => Some(FinishReason::Refusal),
         Status::Completed => Some(FinishReason::Stop),
         Status::Incomplete => {
             if let Some(details) = &response.incomplete_details {
