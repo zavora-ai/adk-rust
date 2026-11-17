@@ -1003,6 +1003,7 @@ impl HarnessAgentBuilder {
     /// unsandboxed retry is on for the host and the OS sandbox and off for a container and
     /// a remote sandbox.
     pub fn shell(mut self, isolation: ShellIsolation) -> Self {
+        #[cfg(any(feature = "docker", feature = "remote-shell"))]
         let pooled = match &isolation {
             #[cfg(feature = "docker")]
             ShellIsolation::Container(_) => true,
@@ -1010,6 +1011,8 @@ impl HarnessAgentBuilder {
             ShellIsolation::Remote(_) => true,
             _ => false,
         };
+        #[cfg(not(any(feature = "docker", feature = "remote-shell")))]
+        let pooled = false;
         if !self.retry_explicit {
             self.shell.allow_unsandboxed_retry = !pooled;
         }

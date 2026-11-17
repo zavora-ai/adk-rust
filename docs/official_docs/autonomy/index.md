@@ -454,6 +454,8 @@ Every page of these docs that imports a member crate has the same item under `ad
 - [Agent kernel](../kernel/index.md): processes, wake sources and the control plane
 - [Background sub-agents](../agents/background-subagents.md): delegation that does not wait
 - [Tool authorization](../security/tool-authorization.md): policy, approvals and the kill switch
+- [Remote sandbox providers](../sandbox/remote-providers.md): `bash` and agent code in E2B or
+  Daytona microVMs, under the same kill switch and run budget
 - [Spend ledger](../security/spend-ledger.md) and [audit log](../security/audit-log.md)
 - [Model fallback](../models/fallback.md): keep an unattended run going through a provider
   outage, with every attempt counted against its budget

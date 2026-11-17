@@ -983,7 +983,7 @@ impl Tool for ContainerBashTool {
         let noun = self.place.noun();
         // The run's wall-time budget bounds the call: provisioning and the command, remote
         // round trips included.
-        let started = Instant::now();
+        let call_started = Instant::now();
         let budget = match &config.budget_tracker {
             Some(tracker) => {
                 tracker.check().map_err(AdkError::from)?;
@@ -997,13 +997,20 @@ impl Tool for ContainerBashTool {
             None => None,
         };
 
-        let leased = match budget {
-            Some(left) => tokio::time::timeout(left, self.pool.lease(&app, &user, &session))
-                .await
-                .unwrap_or_else(|_| {
-                    Err(format!("provisioning the {noun} outlasted the run's wall-time budget"))
-                }),
-            None => self.pool.lease(&app, &user, &session).await,
+        let provisioning = async {
+            match budget {
+                Some(left) => tokio::time::timeout(left, self.pool.lease(&app, &user, &session))
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(format!("provisioning the {noun} outlasted the run's wall-time budget"))
+                    }),
+                None => self.pool.lease(&app, &user, &session).await,
+            }
+        };
+        // A remote environment can take seconds to provision; a freeze ends the wait.
+        let leased = tokio::select! {
+            leased = provisioning => leased,
+            frozen = config.governance_refused() => return Err(frozen),
         };
         let lease = match leased {
             Ok(lease) => lease,
@@ -1057,8 +1064,9 @@ impl Tool for ContainerBashTool {
             .and_then(Value::as_u64)
             .map_or(limit, |requested| Duration::from_secs(requested).min(limit));
         if let Some(left) = budget {
-            timeout = timeout.min(left.saturating_sub(started.elapsed()));
+            timeout = timeout.min(left.saturating_sub(call_started.elapsed()));
         }
+        let started = Instant::now();
         // A call dropped mid-command (a cancelled run) stops the environment, since nothing
         // else would end the command; a timeout and a freeze stop it below.
         let cancel = StopOnDrop::new(self.pool.clone(), (&app, &user, &session));
@@ -1235,12 +1243,27 @@ fn timeout_error(timeout: Duration, noun: &str) -> AdkError {
 
 /// Stops a session's environment when the call running in it is dropped before it returns.
 struct StopOnDrop {
-    armed: Option<(Arc<ContainerPool>, String, String, String)>,
+    armed: Option<PoolSession>,
+}
+
+/// A pool and the (app, user, session) whose environment it holds.
+struct PoolSession {
+    pool: Arc<ContainerPool>,
+    app: String,
+    user: String,
+    session: String,
 }
 
 impl StopOnDrop {
     fn new(pool: Arc<ContainerPool>, (app, user, session): (&str, &str, &str)) -> Self {
-        Self { armed: Some((pool, app.to_string(), user.to_string(), session.to_string())) }
+        Self {
+            armed: Some(PoolSession {
+                pool,
+                app: app.to_string(),
+                user: user.to_string(),
+                session: session.to_string(),
+            }),
+        }
     }
 
     fn disarm(mut self) {
@@ -1250,7 +1273,7 @@ impl StopOnDrop {
 
 impl Drop for StopOnDrop {
     fn drop(&mut self) {
-        let Some((pool, app, user, session)) = self.armed.take() else {
+        let Some(PoolSession { pool, app, user, session }) = self.armed.take() else {
             return;
         };
         match tokio::runtime::Handle::try_current() {

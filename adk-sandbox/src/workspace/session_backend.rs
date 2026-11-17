@@ -68,7 +68,7 @@ pub struct SessionBackend {
     client: Arc<dyn SandboxClient>,
     manifest: Manifest,
     languages: Vec<Language>,
-    live: Arc<Mutex<Option<Live>>>,
+    live: Slot,
 }
 
 impl SessionBackend {
@@ -168,9 +168,19 @@ impl Drop for SessionBackend {
     }
 }
 
+/// The live environment of a backend, shared with its cancel guards.
+type Slot = Arc<Mutex<Option<Live>>>;
+
+/// The environment a running request uses, released if the request is dropped.
+struct Armed {
+    client: Arc<dyn SandboxClient>,
+    slot: Slot,
+    handle: SessionHandle,
+}
+
 /// Destroys the environment when a request is dropped before its command returned.
 struct CancelGuard {
-    armed: Option<(Arc<dyn SandboxClient>, Arc<Mutex<Option<Live>>>, SessionHandle)>,
+    armed: Option<Armed>,
 }
 
 impl CancelGuard {
@@ -181,7 +191,7 @@ impl CancelGuard {
 
 impl Drop for CancelGuard {
     fn drop(&mut self) {
-        let Some((client, slot, handle)) = self.armed.take() else {
+        let Some(Armed { client, slot, handle }) = self.armed.take() else {
             return;
         };
         // The slot is cleared first so no later request reuses an environment whose stop is
@@ -267,7 +277,11 @@ impl SandboxBackend for SessionBackend {
         command.env = request.env.into_iter().collect();
 
         let guard = CancelGuard {
-            armed: Some((self.client.clone(), self.live.clone(), live.handle.clone())),
+            armed: Some(Armed {
+                client: self.client.clone(),
+                slot: self.live.clone(),
+                handle: live.handle.clone(),
+            }),
         };
         let output = live.session.exec(command).await;
         guard.disarm();

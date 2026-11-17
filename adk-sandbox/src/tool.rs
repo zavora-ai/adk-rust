@@ -253,13 +253,14 @@ impl adk_core::Tool for SandboxTool {
 
         let mut timeout = Duration::from_secs(timeout_secs);
         let config = ctx.run_config();
+        let mut budget_left = None;
         if let Some(config) = config {
             config.check_governance()?;
-            // The run's wall-time budget bounds the call, remote round trips included.
             if let Some(tracker) = &config.budget_tracker {
                 tracker.check().map_err(adk_core::AdkError::from)?;
-                if let Some(remaining) = tracker.wall_time_remaining() {
-                    timeout = timeout.min(remaining);
+                budget_left = tracker.wall_time_remaining();
+                if let Some(left) = budget_left {
+                    timeout = timeout.min(left);
                 }
             }
         }
@@ -273,14 +274,24 @@ impl adk_core::Tool for SandboxTool {
             env: HashMap::new(),
         };
 
+        // The run's wall-time budget bounds the whole call, a backend's provisioning and remote
+        // round trips included.
+        let run = async {
+            match budget_left {
+                Some(left) => tokio::time::timeout(left, self.backend.execute(request))
+                    .await
+                    .unwrap_or(Err(SandboxError::Timeout { timeout: left })),
+                None => self.backend.execute(request).await,
+            }
+        };
         // A freeze ends the call where it stands: dropping the backend's future ends a local
         // process, and a `SessionBackend` destroys its environment, which ends a remote one.
         let outcome = match config {
             Some(config) => tokio::select! {
-                outcome = self.backend.execute(request) => outcome,
+                outcome = run => outcome,
                 frozen = config.governance_refused() => return Err(frozen),
             },
-            None => self.backend.execute(request).await,
+            None => run.await,
         };
 
         match outcome {

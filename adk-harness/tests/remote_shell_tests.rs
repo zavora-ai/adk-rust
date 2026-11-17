@@ -47,6 +47,7 @@ struct FakeRemote {
     base: PathBuf,
     behaviour: Behaviour,
     network_blocked: bool,
+    provision_delay: Duration,
     provisioned: AtomicUsize,
     stopped: AtomicUsize,
     live: Mutex<HashMap<String, PathBuf>>,
@@ -63,6 +64,7 @@ impl FakeRemote {
             base: base.to_path_buf(),
             behaviour,
             network_blocked,
+            provision_delay: Duration::ZERO,
             provisioned: AtomicUsize::new(0),
             stopped: AtomicUsize::new(0),
             live: Mutex::new(HashMap::new()),
@@ -86,6 +88,7 @@ impl FakeRemote {
 #[async_trait]
 impl SandboxClient for FakeRemote {
     async fn provision(&self, manifest: &Manifest) -> Result<SessionHandle, SandboxError> {
+        tokio::time::sleep(self.provision_delay).await;
         let n = self.provisioned.fetch_add(1, Ordering::SeqCst) + 1;
         let root = self.base.join(format!("vm-{n}"));
         std::fs::create_dir_all(&root).unwrap();
@@ -357,6 +360,35 @@ async fn a_freeze_stops_an_in_flight_remote_command_and_destroys_its_environment
     let end = f.records("harness.bash.end");
     assert_eq!(end[0].ext["killedByFreeze"], true);
     assert_eq!(end[0].ext["enforcer"], "remote");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_freeze_during_provisioning_ends_the_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let vms = tempfile::tempdir().unwrap();
+    let client = Arc::new(FakeRemote {
+        provision_delay: Duration::from_secs(60),
+        ..Arc::into_inner(FakeRemote::new(vms.path(), Behaviour::Shell)).unwrap()
+    });
+    let f = fixture_in(dir, vec![call(json!({ "command": "true" })), done()], |b| {
+        b.shell(ShellIsolation::Remote(remote(client.clone()))).mode(HarnessMode::Auto)
+    })
+    .await;
+    let governance = f.harness.runner().governance().clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        governance.freeze("incident 89");
+    });
+    let started = Instant::now();
+    let stream = f.harness.send(&f.user, &f.session, "go").await.unwrap();
+    let _ = tokio::time::timeout(
+        Duration::from_secs(20),
+        futures::StreamExt::collect::<Vec<_>>(stream),
+    )
+    .await
+    .expect("the run must end");
+    assert!(started.elapsed() < Duration::from_secs(10), "the freeze waited for provisioning");
+    assert_eq!(client.provisioned(), 0);
 }
 
 #[tokio::test]

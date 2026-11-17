@@ -296,9 +296,12 @@ async fn a_freeze_stops_a_running_call_and_destroys_its_environment() {
 async fn the_wall_time_budget_caps_the_call() {
     let (client, _dir) = local();
     let tool = SandboxTool::new(Arc::new(SessionBackend::new(client)));
-    let mut config = RunConfig::default();
-    config.budget_tracker =
-        Some(Arc::new(BudgetTracker::new(RunBudget::new().max_wall_time(Duration::from_secs(1)))));
+    let config = RunConfig {
+        budget_tracker: Some(Arc::new(BudgetTracker::new(
+            RunBudget::new().max_wall_time(Duration::from_secs(1)),
+        ))),
+        ..RunConfig::default()
+    };
     let ctx: Arc<dyn ToolContext> = Arc::new(RunContext { content: Content::new("user"), config });
     let started = Instant::now();
     let result = tool
