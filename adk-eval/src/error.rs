@@ -7,6 +7,7 @@ pub type Result<T> = std::result::Result<T, EvalError>;
 
 /// Errors that can occur during evaluation
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum EvalError {
     /// Failed to load test file
     #[error("Failed to load test file: {0}")]
@@ -67,17 +68,66 @@ pub enum EvalError {
     /// Statistics computation error
     #[error("Statistics computation error: {0}")]
     StatisticsError(String),
+
+    /// A budget, a spend cap or a kill switch refused a model call or run, so nothing was
+    /// judged. The evaluation stops rather than counting the refusal as a failed case.
+    #[error("evaluation stopped: {0}; raise the evaluation's budget or unfreeze the kill switch")]
+    Refused(Box<adk_core::AdkError>),
+}
+
+impl EvalError {
+    /// Wraps an error from an agent run or a judge call, keeping a budget, spend-cap or
+    /// kill-switch refusal ([`is_refusal`]) as [`EvalError::Refused`].
+    pub(crate) fn from_model_error(
+        error: adk_core::AdkError,
+        wrap: impl FnOnce(adk_core::AdkError) -> EvalError,
+    ) -> Self {
+        if is_refusal(&error) { EvalError::Refused(Box::new(error)) } else { wrap(error) }
+    }
+
+    /// Returns `true` for [`EvalError::Refused`].
+    pub fn is_refusal(&self) -> bool {
+        matches!(self, EvalError::Refused(_))
+    }
+}
+
+/// Returns `true` when `error` is a refusal by a run budget, a spend ledger or a kill switch
+/// rather than a failure of the agent or the judge.
+///
+/// # Example
+///
+/// ```
+/// use adk_core::{AdkError, ErrorCategory, ErrorComponent, GOVERNANCE_FROZEN_CODE};
+///
+/// let frozen = AdkError::new(
+///     ErrorComponent::Server,
+///     ErrorCategory::Forbidden,
+///     GOVERNANCE_FROZEN_CODE,
+///     "frozen",
+/// );
+/// assert!(adk_eval::error::is_refusal(&frozen));
+/// assert!(!adk_eval::error::is_refusal(&AdkError::model("upstream timeout")));
+/// ```
+pub fn is_refusal(error: &adk_core::AdkError) -> bool {
+    error.code == adk_core::GOVERNANCE_FROZEN_CODE
+        || error.code == adk_core::GOVERNANCE_STALE_CODE
+        || error.code == adk_core::SPEND_LIMIT_EXCEEDED_CODE
+        || error.code.starts_with("budget.")
 }
 
 impl From<adk_core::AdkError> for EvalError {
     fn from(err: adk_core::AdkError) -> Self {
-        EvalError::AgentError(err.to_string())
+        EvalError::from_model_error(err, |err| EvalError::AgentError(err.to_string()))
     }
 }
 
 impl From<EvalError> for adk_core::AdkError {
     fn from(err: EvalError) -> Self {
         use adk_core::{ErrorCategory, ErrorComponent};
+        // A refusal keeps the budget, spend or kill-switch error it carries.
+        if let EvalError::Refused(error) = err {
+            return *error;
+        }
         let (category, code) = match &err {
             EvalError::LoadError(_) => (ErrorCategory::NotFound, "eval.load"),
             EvalError::ParseError(_) => (ErrorCategory::InvalidInput, "eval.parse"),
@@ -94,6 +144,8 @@ impl From<EvalError> for adk_core::AdkError {
             EvalError::AnnotationError(_) => (ErrorCategory::InvalidInput, "eval.annotation"),
             EvalError::GenerationError(_) => (ErrorCategory::Internal, "eval.generation"),
             EvalError::StatisticsError(_) => (ErrorCategory::Internal, "eval.statistics"),
+            // Returned as is above.
+            EvalError::Refused(_) => (ErrorCategory::ResourceExhausted, "eval.refused"),
         };
         adk_core::AdkError::new(ErrorComponent::Eval, category, code, err.to_string())
             .with_source(err)

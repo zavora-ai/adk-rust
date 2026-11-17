@@ -205,7 +205,8 @@ enum AdkCommand {
             value_name = "EXPORT.JSONL",
             conflicts_with_all = [
                 "path", "agent_cmd", "criteria", "judge_model", "save_baseline",
-                "check_regression", "baseline", "tolerance", "turn_timeout",
+                "check_regression", "baseline", "tolerance", "turn_timeout", "num_runs",
+                "min_pass_rate", "judge_max_calls", "judge_max_cost_usd",
             ]
         )]
         ledger: Option<PathBuf>,
@@ -252,6 +253,24 @@ enum AdkCommand {
         /// Seconds to wait for each agent response before failing the case
         #[arg(long, default_value = "300")]
         turn_timeout: u64,
+
+        /// Run the eval set this many times and report each case's pass rate, score mean
+        /// and variance, and flakiness
+        #[arg(long, default_value = "1")]
+        num_runs: usize,
+
+        /// Fraction of runs, from 0.0 to 1.0, a case must pass (default: every run)
+        #[arg(long, default_value = "1.0")]
+        min_pass_rate: f64,
+
+        /// Most --judge-model calls across every run; the evaluation stops when they are spent
+        #[arg(long)]
+        judge_max_calls: Option<u64>,
+
+        /// Most --judge-model spend in US dollars across every run; the evaluation stops when
+        /// it is spent
+        #[arg(long)]
+        judge_max_cost_usd: Option<f64>,
     },
 
     /// Run performance benchmarks against real LLM APIs
@@ -517,6 +536,10 @@ fn main() {
             format,
             output,
             turn_timeout,
+            num_runs,
+            min_pass_rate,
+            judge_max_calls,
+            judge_max_cost_usd,
             ledger: None,
             floors: _,
         } => {
@@ -532,6 +555,10 @@ fn main() {
                 format,
                 output,
                 turn_timeout: std::time::Duration::from_secs(turn_timeout),
+                num_runs,
+                min_pass_rate,
+                judge_max_calls,
+                judge_max_cost_usd,
             };
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()

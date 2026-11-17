@@ -13,6 +13,13 @@ use std::sync::Arc;
 ///
 /// Every judge call returns an error when the judge's reply lacks a valid `SCORE:`
 /// line (a number from 0.0 to 1.0), so a malformed reply never counts as a pass.
+///
+/// Judge calls meter against the current [`ModelCallScope`](adk_core::ModelCallScope)
+/// ([`generate_metered`](adk_core::generate_metered)): an [`Evaluator`](crate::Evaluator) with a
+/// [run config](crate::Evaluator::set_run_config) makes one current, so its budget, spend
+/// ledger and kill switch govern the judge. A call they refuse returns
+/// [`EvalError::Refused`]. Do not also wrap the model in
+/// [`MeteredLlm`](adk_core::MeteredLlm), which would count each call twice under a scope.
 pub struct LlmJudge {
     model: Arc<dyn Llm>,
     config: LlmJudgeConfig,
@@ -254,17 +261,23 @@ REASONING: [Brief explanation of the score]"#,
             LlmRequest::new(self.model.name(), vec![Content::new("user").with_text(&full_prompt)])
                 .with_config(config);
 
-        let mut stream = self
-            .model
-            .generate_content(request, false)
-            .await
-            .map_err(|e| EvalError::JudgeError(format!("LLM judge call failed: {}", e)))?;
+        // Metered against the current scope, so an evaluation's budget, spend ledger and
+        // kill switch govern judge calls as they govern the agent's own.
+        let mut stream =
+            adk_core::generate_metered(self.model.as_ref(), request, false).await.map_err(|e| {
+                EvalError::from_model_error(e, |e| {
+                    EvalError::JudgeError(format!("LLM judge call failed: {e}"))
+                })
+            })?;
 
         // Collect all response parts
         let mut response_text = String::new();
         while let Some(result) = stream.next().await {
-            let response =
-                result.map_err(|e| EvalError::JudgeError(format!("LLM response error: {}", e)))?;
+            let response = result.map_err(|e| {
+                EvalError::from_model_error(e, |e| {
+                    EvalError::JudgeError(format!("LLM response error: {e}"))
+                })
+            })?;
 
             if let Some(content) = &response.content {
                 for part in &content.parts {

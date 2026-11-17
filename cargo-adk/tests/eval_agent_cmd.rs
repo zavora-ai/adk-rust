@@ -31,6 +31,20 @@ while IFS= read -r line; do
 done
 "#;
 
+/// Answers correctly on odd-numbered requests and wrongly on even ones; one process serves
+/// every run, so its answers alternate across runs.
+const FLAKY_AGENT: &str = r#"
+n=0
+while IFS= read -r line; do
+  n=$((n + 1))
+  if [ $((n % 2)) -eq 1 ]; then
+    printf '%s\n' '{"text":"Sunny in Nairobi.","tool_calls":[{"name":"get_weather","args":{"city":"Nairobi"}}]}'
+  else
+    printf '%s\n' '{"text":"Probably cloudy somewhere."}'
+  fi
+done
+"#;
+
 /// Remembers a name per session and reports the turn index it was given.
 const MEMORY_AGENT: &str = r#"
 import json, sys
@@ -299,4 +313,126 @@ fn judged_criteria_without_a_judge_are_refused_before_running() {
 
     assert_eq!(output.status.code(), Some(1), "{}", text(&output));
     assert!(text(&output).contains("need an LLM judge"), "{}", text(&output));
+}
+
+#[test]
+fn num_runs_report_each_case_pass_rate_and_flakiness() {
+    let dir = TempDir::new().unwrap();
+    let set = write(dir.path(), "weather.test.json", WEATHER_SET);
+    let flaky = agent_cmd(dir.path(), "flaky.sh", FLAKY_AGENT, "sh");
+    let steady = agent_cmd(dir.path(), "steady.sh", WEATHER_AGENT, "sh");
+    let set_arg = set.to_str().unwrap();
+
+    let output = cargo_adk_eval(&[set_arg, "--agent-cmd", &flaky, "--num-runs", "3"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let report = text(&output);
+    assert!(report.contains("Runs: 3/3  Cases: 1  Passed: 0  Failed: 1  Flaky: 1"), "{report}");
+    assert!(report.contains("2/3"), "{report}");
+    assert!(report.contains("FAIL (flaky)"), "{report}");
+    assert!(report.contains("FAILED current_weather"), "{report}");
+    assert!(report.contains("passed 2 of 3 runs (flaky)"), "{report}");
+
+    // Two passing runs out of three meet a minimum pass rate of 0.6.
+    let output = cargo_adk_eval(&[
+        set_arg,
+        "--agent-cmd",
+        &flaky,
+        "--num-runs",
+        "3",
+        "--min-pass-rate",
+        "0.6",
+    ]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(text(&output).contains("PASS (flaky)"), "{}", text(&output));
+
+    let output = cargo_adk_eval(&[set_arg, "--agent-cmd", &steady, "--num-runs", "3"]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(text(&output).contains("Flaky: 0"), "{}", text(&output));
+}
+
+#[test]
+fn num_runs_json_carries_case_statistics() {
+    let dir = TempDir::new().unwrap();
+    let set = write(dir.path(), "weather.test.json", WEATHER_SET);
+    let flaky = agent_cmd(dir.path(), "flaky.sh", FLAKY_AGENT, "sh");
+    let json = dir.path().join("report.json");
+
+    let output = cargo_adk_eval(&[
+        set.to_str().unwrap(),
+        "--agent-cmd",
+        &flaky,
+        "--num-runs",
+        "2",
+        "--format",
+        "json",
+        "--output",
+        json.to_str().unwrap(),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let report: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(json).unwrap()).unwrap();
+    let case = &report[0]["cases"][0];
+    assert_eq!(case["eval_id"], "current_weather");
+    assert_eq!((case["runs"].as_u64(), case["passed_runs"].as_u64()), (Some(2), Some(1)));
+    assert_eq!(case["pass_rate"], 0.5);
+    assert_eq!(case["flaky"], true);
+    assert_eq!(case["scores"]["tool_trajectory"]["mean"], 0.5);
+    assert_eq!(case["scores"]["tool_trajectory"]["variance"], 0.5);
+    assert_eq!(report[0]["runs"].as_array().map(Vec::len), Some(2));
+}
+
+#[test]
+fn a_baseline_regression_check_catches_a_drop_in_pass_rate() {
+    let dir = TempDir::new().unwrap();
+    let set = write(dir.path(), "weather.test.json", WEATHER_SET);
+    let steady = agent_cmd(dir.path(), "steady.sh", WEATHER_AGENT, "sh");
+    let flaky = agent_cmd(dir.path(), "flaky.sh", FLAKY_AGENT, "sh");
+    let set_arg = set.to_str().unwrap();
+
+    let output =
+        cargo_adk_eval(&[set_arg, "--agent-cmd", &steady, "--num-runs", "2", "--save-baseline"]);
+    assert!(output.status.success(), "{}", text(&output));
+    let baseline: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join(".eval-baseline.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(baseline["metrics"]["pass_rate"]["current_weather"], 1.0);
+
+    let output = cargo_adk_eval(&[
+        set_arg,
+        "--agent-cmd",
+        &flaky,
+        "--num-runs",
+        "2",
+        "--min-pass-rate",
+        "0.5",
+        "--check-regression",
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(
+        text(&output)
+            .contains("regression: pass_rate [current_weather]: baseline 1.000, current 0.500"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn run_settings_are_checked_before_running() {
+    let dir = TempDir::new().unwrap();
+    let set = write(dir.path(), "weather.test.json", WEATHER_SET);
+    let set_arg = set.to_str().unwrap();
+
+    for (args, expected) in [
+        (vec!["--num-runs", "0"], "num_runs must be at least 1"),
+        (vec!["--min-pass-rate", "1.5"], "min_pass_rate must be between 0.0 and 1.0"),
+        (vec!["--judge-max-calls", "5"], "pass --judge-model too"),
+    ] {
+        let mut all = vec![set_arg, "--agent-cmd", "exit 3"];
+        all.extend(args);
+        let output = cargo_adk_eval(&all);
+        assert_eq!(output.status.code(), Some(1), "{all:?}: {}", text(&output));
+        assert!(text(&output).contains(expected), "{all:?}: {}", text(&output));
+    }
 }
