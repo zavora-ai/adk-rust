@@ -537,10 +537,50 @@ impl Catalog {
     pub(crate) fn schema_error(&self, component: &str, value: &Value) -> Option<String> {
         let validator = self.components.get(component)?;
         validator.iter_errors(value).next().map(|error| {
+            let error = error.to_owned();
+            let error = specific(&error);
             let at = error.instance_path().as_str();
-            if at.is_empty() { error.to_string() } else { format!("{at}: {error}") }
+            let why = shortened(&error.to_string());
+            if at.is_empty() { why } else { format!("{at}: {why}") }
         })
     }
+}
+
+/// The most specific cause of `error`. A `oneOf` or `anyOf` that no branch matched, such as a
+/// property that is a binding or a literal list, names the deepest failure among its branches,
+/// so the agent reads which value broke which rule rather than the whole value.
+fn specific<'e>(
+    error: &'e jsonschema::ValidationError<'static>,
+) -> &'e jsonschema::ValidationError<'static> {
+    let context = match error.kind() {
+        jsonschema::error::ValidationErrorKind::OneOfNotValid { context }
+        | jsonschema::error::ValidationErrorKind::AnyOf { context } => context,
+        _ => return error,
+    };
+    let deepest = context
+        .iter()
+        .flatten()
+        .map(specific)
+        .max_by_key(|cause| cause.instance_path().as_str().matches('/').count());
+    match deepest {
+        Some(cause)
+            if cause.instance_path().as_str().len() > error.instance_path().as_str().len() =>
+        {
+            cause
+        }
+        _ => error,
+    }
+}
+
+/// The most of a schema error's text a reason carries; a value it quotes can be long.
+const MAX_SCHEMA_ERROR_CHARS: usize = 300;
+
+fn shortened(text: &str) -> String {
+    if text.chars().count() <= MAX_SCHEMA_ERROR_CHARS {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(MAX_SCHEMA_ERROR_CHARS).collect();
+    format!("{kept}…")
 }
 
 /// What an extension component's schema declares that a component that only shows may not.
@@ -687,5 +727,27 @@ mod tests {
             "action": { "functionCall": { "call": "openUrl", "args": { "url": "https://x.test" } } }
         });
         assert!(forms.schema_error("Button", &open).is_some(), "openUrl is not in the catalog");
+    }
+
+    #[test]
+    fn a_value_that_may_be_a_binding_or_a_list_names_what_broke_in_the_list() {
+        let forms = Catalog::forms();
+        let picker = json!({
+            "id": "c", "component": "ChoicePicker", "label": "Dock",
+            "options": [{ "label": "Dock 1", "value": "dock-1" }],
+            "value": ["dock-1", 5]
+        });
+        let error = forms.schema_error("ChoicePicker", &picker).expect("a number among strings");
+        assert!(error.starts_with("/value/1: "), "{error}");
+        assert!(!error.contains("oneOf"), "{error}");
+    }
+
+    #[test]
+    fn a_schema_error_quoting_a_long_value_is_shortened() {
+        let forms = Catalog::forms();
+        let long = json!({ "id": "t", "component": "Text", "text": vec![1; 400] });
+        let error = forms.schema_error("Text", &long).expect("a list is not text");
+        assert!(error.chars().count() <= MAX_SCHEMA_ERROR_CHARS + "/text: …".len(), "{error}");
+        assert!(error.ends_with('…'), "{error}");
     }
 }
