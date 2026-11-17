@@ -114,6 +114,31 @@ wake-payload>>>
 > **Note:** a run parked on its own held tool call is told nothing: the decision reaches it
 > as that call's answer.
 
+## Background sub-agents
+
+`KernelBuilder::subagents(SubagentConfig)` hosts [background sub-agents](../agents/background-subagents.md):
+an agent's `start_subagent` call runs another agent as a process and returns at once.
+`Kernel::subagents` returns the host, and a `SubagentHandle` bound with
+`KernelBuilder::subagent_handle` gives an agent built before the kernel its tools. Off by
+default; it needs a session service.
+
+| Concern | In the kernel |
+|---|---|
+| A sub-agent's run | A process of kind `subagent` on the `background` queue whose parent is the turn that started it, labelled `subagent` (its id) and `subagent.name`; spawned through the process table, so a freeze refuses it and its partition's quotas and daily spend cap admit it |
+| Telling the parent | A steering message to the parent's turn when it runs on this replica, otherwise a process of kind `triggered:subagent` whose parent is the sub-agent's run and whose input is the notice |
+| A held call | The sub-agent's process parks `waiting` on its held call, which reaches the one approvals inbox; `adk-rust ps` notes `waiting for a human` |
+| Operating it | `adk-rust ps` and `top` list it with `<name>, started by <parent pid>`; `kill`, `suspend` and `resume` act on it as on any process |
+| Status changes | `KernelEvent::Subagent` (`subagent` in `adk-rust events`) at each change: `queued`, `running`, `waitingForHuman`, `completed`, `failed`, `cancelled`. A `WebhookSink` filtered to `EventKind::Subagent` delivers each as a signed webhook |
+| Restart | `Kernel::start` runs `DurableSubagents::reconcile`: a parent whose sub-agent finished while the kernel was down — killed with `kill -9` — is told once; the sub-agent's own run is recovered like any process |
+
+```text
+$ adk-rust ps
+PID                                   STATE      KIND           QUEUE        …  NOTE
+0b9d…                                 completed  interactive    interactive  …
+5e21…                                 running    subagent       background   …  alpha, started by 0b9d4c1e
+a7c0…                                 waiting    subagent       background   …  gamma, started by 0b9d4c1e · waiting for a human
+```
+
 ## Freezing
 
 `adk-rust freeze`, `POST /api/kernel/freeze` and `POST /api/admin/freeze` all call
@@ -254,3 +279,5 @@ not forward `ApprovalService::route_unrouted` and `add_notifier`, is named in th
   coordinator under approval
 - [Agents you create](agents.md): the agent table, suggestions a person approves, hosting,
   pausing and removing, and the agent store on every backend
+- [Background sub-agents](../agents/background-subagents.md): sub-agents a parent starts and
+  does not wait for, their budget slice, tool ceiling, notices, follow-ups and fork mode

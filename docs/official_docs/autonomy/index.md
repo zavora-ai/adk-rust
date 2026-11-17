@@ -381,6 +381,19 @@ unsigned tail:        40
 result:               VALID
 ```
 
+## 9. Delegate in the background
+
+An agent that must not wait on long work starts
+[background sub-agents](../agents/background-subagents.md). Each runs as its own kernel
+process, on a budget slice carved from the parent's run and with no tool its parent lacks;
+the parent keeps working and is told when it finishes. A sub-agent that holds a call shows
+`waiting for a human` in `adk-rust ps` and waits in the same approvals inbox, and one running
+when the kernel is killed resumes on restart. Background sub-agents are off until the kernel
+is built with `KernelBuilder::subagents`, since each one works with no person watching it.
+The limits that bound them — `max_depth`, `max_active` per session and the default budget —
+are on `SubagentConfig`, and a tool policy can require approval for `start_subagent` like any
+other call.
+
 ## The umbrella paths
 
 Every page of these docs that imports a member crate has the same item under `adk-rust`:
@@ -403,6 +416,7 @@ Every page of these docs that imports a member crate has the same item under `ad
 
 - [The harness](../harness/index.md): modes, approvals, the shell and goals
 - [Agent kernel](../kernel/index.md): processes, wake sources and the control plane
+- [Background sub-agents](../agents/background-subagents.md): delegation that does not wait
 - [Tool authorization](../security/tool-authorization.md): policy, approvals and the kill switch
 - [Spend ledger](../security/spend-ledger.md) and [audit log](../security/audit-log.md)
 - `examples/autonomy_validation`: the governance and durability contracts above, checked live

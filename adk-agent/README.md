@@ -352,6 +352,14 @@ fn routers(
 
 `LlmConditionalAgent` lowercases route labels and the model's trimmed classification, and picks the first label the classification contains, so the model does not need to produce an exact match.
 
+### Background Sub-Agents
+
+`subagents::SubagentTools::new(host).tools()` gives a model `start_subagent`,
+`subagent_status`, `message_subagent` and `cancel_subagent` over any
+`adk_core::SubagentHost`. A start carves the sub-agent's budget from the calling run's, limits
+it to the caller's tools, and is keyed by the call's idempotency key. Each tool goes through
+the governed path. See [Background sub-agents](../docs/official_docs/agents/background-subagents.md).
+
 ### Multi-Agent Systems
 
 ```rust

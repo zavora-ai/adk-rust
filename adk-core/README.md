@@ -451,6 +451,19 @@ Calls billed in units rather than tokens — images, audio, characters — go th
 
 Module `subject` holds what a deployment needs to know whom it holds data about and to act on that person's data across stores. `SubjectKind::Visitor` names a person known only by a random `VisitorId`; a visitor's run is never authenticated and a visitor cannot decide an approval. `ConsentStore` keeps `ConsentRecord`s per subject and `ConsentPurpose`; `SubjectRegistry` keeps each subject's pseudonym, links, and erasure state. `SubjectRights` exports, erases, and links a subject over every registered `SubjectDataStore` adapter and reports each store's outcome — `erased`, `scheduled`, `unsupported`, `unreachable`, or `failed` — so no store is skipped silently. `InMemorySubjectRegistry` and `InMemoryConsentStore` are the reference implementations, and `subject_registry_conformance_tests!`, `consent_store_conformance_tests!`, and `subject_data_store_conformance_tests!` (feature `conformance`) prove other backends. See [Subject Rights](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/security/subject-rights.md).
 
+## Background Sub-Agents
+
+`adk_core::subagent` is the contract for sub-agents a parent starts and does not wait for:
+`SubagentHost` (start, get, list, send, cancel, scoped to the parent's session by
+`SubagentScope`), `SubagentStatus` (`queued`, `running`, `waitingForHuman`, `parked`,
+`completed`, `failed`, `cancelled`), `SubagentLaunch` (what a sub-agent's runs carry), the
+notice a parent receives (`subagent_notice`), and `ToolCeiling`, the policy that keeps a
+sub-agent to its parent's tools. `BudgetTracker::carve` takes a sub-agent's budget slice out
+of what the parent's run has left; `RunBudget` serializes, `RunBudget::narrowed` combines two
+budgets into the stricter, and `RunLimits` is what an agent run's input narrows its runner by. `adk-server` (`DurableSubagents`) and `adk-kernel`
+(`Kernel::subagents`) host them; see
+[Background sub-agents](../docs/official_docs/agents/background-subagents.md).
+
 ## Durable Runtime Contracts
 
 Backend-neutral traits for running agents durably across replicas, each with an in-memory implementation that takes a `Clock` through `with_clock`:

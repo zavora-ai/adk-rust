@@ -38,6 +38,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 - [CodeAgent (CodeAct)](agents/code-agent.md) - Acts by writing and running code via a `CodeRuntime`
 - [Workflow Agents](agents/workflow-agents.md) - Deterministic agents: Sequential, Parallel, Loop
 - [Multi-Agent Systems](agents/multi-agent.md) - Building agent hierarchies with sub-agents
+- [Background Sub-Agents](agents/background-subagents.md) - Sub-agents a parent starts and does not wait for: notified on completion, follow-ups, cancel, fork mode, budget slices, crash resume
 - [Graph Agents](agents/graph-agents.md) - LangGraph-style workflow orchestration
 - [Graph Checkpointing](agents/graph-checkpointing.md) - Checkpointer backends, the version rule, durability modes, pending writes, and the conformance suite
 - [Functional API](agents/functional-api.md) - Workflows as async functions with `#[entrypoint]`/`#[task]`, background runs, and cron scheduling
