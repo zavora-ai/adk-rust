@@ -238,6 +238,8 @@ impl Supervision {
             ProcessKind::Maintenance
         } else if run.target == GOAL_TARGET {
             ProcessKind::Goal
+        } else if run.input.get(adk_core::subagent::SUBAGENT_INPUT_KEY).is_some() {
+            ProcessKind::Subagent
         } else if key.starts_with("schedule:") {
             ProcessKind::Scheduled
         } else if let Some(source) =
@@ -1816,6 +1818,8 @@ pub(crate) struct KernelHooks {
     /// Hears every finished run except the kernel's own `kernel.wake` runs, whose finish
     /// would otherwise start another `kernel.wake` run, without end.
     pub(crate) run_finished: Arc<crate::wake::RunFinishedWakeSource>,
+    /// The background sub-agent host, which hears its runs' claims, parks and ends.
+    pub(crate) subagents: Option<adk_server::background::DurableSubagents>,
 }
 
 impl std::fmt::Debug for KernelHooks {
@@ -1941,6 +1945,9 @@ impl WorkerHooks for KernelHooks {
             to: RunState::Running,
             reason: Some("claimed".to_string()),
         });
+        if let Some(subagents) = self.subagents_of(run) {
+            subagents.run_claimed(run).await;
+        }
     }
 
     async fn wake_input(&self, run: &RunRecord) -> Option<String> {
@@ -1979,6 +1986,11 @@ impl WorkerHooks for KernelHooks {
     async fn on_park(&self, run: &RunRecord, reason: ParkReason) {
         let sup = &self.sup;
         sup.release(&run.run_id).await;
+        if reason == ParkReason::AwaitingApproval
+            && let Some(subagents) = self.subagents_of(run)
+        {
+            subagents.run_parked(run).await;
+        }
         let stored = sup.stored_meta(run).await;
         if stored.is_none() && writes_own_row(run, &sup.triggers) {
             // The kernel has not written the row yet; the row it writes is the run's, and
@@ -2101,6 +2113,18 @@ impl WorkerHooks for KernelHooks {
         {
             crate::kernel::record_histograms(&run.target, &counts);
         }
+        if let Some(subagents) = self.subagents_of(run) {
+            subagents.run_finished(run).await;
+        }
+    }
+}
+
+impl KernelHooks {
+    /// The sub-agent host, when `run` is one of its sub-agents' runs.
+    fn subagents_of(&self, run: &RunRecord) -> Option<&adk_server::background::DurableSubagents> {
+        self.subagents
+            .as_ref()
+            .filter(|_| run.input.get(adk_core::subagent::SUBAGENT_INPUT_KEY).is_some())
     }
 }
 

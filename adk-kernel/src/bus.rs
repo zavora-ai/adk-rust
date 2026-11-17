@@ -174,6 +174,22 @@ pub enum KernelEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+    /// A background sub-agent's status changed: it started, ran, waits for a person's
+    /// decision, finished, failed or was cancelled. Subscribe a `WebhookSink` to
+    /// [`EventKind::Subagent`] for a signed webhook per change.
+    Subagent {
+        /// The run the change concerns: the sub-agent's latest.
+        pid: String,
+        /// The sub-agent's id.
+        id: String,
+        /// The name its parent knows it by.
+        name: String,
+        /// The run of the parent that started it, when the parent's turn was a process.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
+        /// Its status.
+        status: adk_core::SubagentStatus,
+    },
     /// The kill switch changed.
     Governance {
         /// Whether execution is frozen.
@@ -215,6 +231,7 @@ impl KernelEvent {
             Self::Driver { .. } => EventKind::Driver,
             Self::Observation { .. } => EventKind::Observation,
             Self::Agent { .. } => EventKind::Agent,
+            Self::Subagent { .. } => EventKind::Subagent,
             Self::Governance { .. } => EventKind::Governance,
             Self::Health(_) => EventKind::Health,
         }
@@ -259,6 +276,8 @@ pub enum EventKind {
     Observation,
     /// [`KernelEvent::Agent`].
     Agent,
+    /// [`KernelEvent::Subagent`].
+    Subagent,
     /// [`KernelEvent::Governance`].
     Governance,
     /// [`KernelEvent::Health`].
@@ -267,7 +286,7 @@ pub enum EventKind {
 
 impl EventKind {
     /// Every kind, in declaration order.
-    pub const ALL: [EventKind; 13] = [
+    pub const ALL: [EventKind; 14] = [
         Self::Process,
         Self::Wake,
         Self::Held,
@@ -279,6 +298,7 @@ impl EventKind {
         Self::Driver,
         Self::Observation,
         Self::Agent,
+        Self::Subagent,
         Self::Governance,
         Self::Health,
     ];
@@ -297,6 +317,7 @@ impl EventKind {
             Self::Driver => "driver",
             Self::Observation => "observation",
             Self::Agent => "agent",
+            Self::Subagent => "subagent",
             Self::Governance => "governance",
             Self::Health => "health",
         }

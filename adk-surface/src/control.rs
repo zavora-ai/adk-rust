@@ -514,6 +514,14 @@ impl Source for ControlSource {
                         .then_some(run.not_before)
                         .flatten(),
                     suspended: process.meta.suspended_by.is_some(),
+                    subagent: (process.meta.kind == adk_kernel::ProcessKind::Subagent).then(|| {
+                        process
+                            .meta
+                            .labels
+                            .get(adk_kernel::SUBAGENT_NAME_LABEL)
+                            .cloned()
+                            .unwrap_or_else(|| "sub-agent".to_string())
+                    }),
                 },
             );
         }
