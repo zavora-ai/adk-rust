@@ -12,6 +12,8 @@
 //! - [`FunctionTool`] - Create tools from async Rust functions
 //! - [`StatefulTool`] - Share `Arc<S>` state with a tool handler
 //! - [`AgentTool`] - Use agents as callable tools for composition
+//! - [`AdvisorTool`] - Let an agent consult a stronger or different model for advice
+//!   mid-task, under the run's budget, spend ledger and kill switch
 //! - [`GoogleSearchTool`] and the other [`builtin`] wrappers - Provider-hosted tools,
 //!   each declaring its [`ToolEffect`]
 //! - `McpToolset` - MCP tools, resources, prompts, completion, elicitation,
@@ -77,6 +79,7 @@
 
 #![deny(missing_docs)]
 
+pub mod advisor;
 mod agent_tool;
 /// Argument validation against a tool's parameters schema.
 mod arguments;
@@ -127,6 +130,7 @@ pub use adk_rust_macros::tool;
 
 // Re-export async_trait so the #[tool] macro's generated code can reference it
 // without requiring users to add async-trait as a direct dependency.
+pub use advisor::{AdvisorTool, AdvisorToolBuilder};
 pub use agent_tool::{
     AgentTool, AgentToolConfig, AgentToolFailureMode, AgentToolSessionSnapshot,
     AgentToolStateMergePolicy,

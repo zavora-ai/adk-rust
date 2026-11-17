@@ -14,6 +14,7 @@ Tool system for Rust Agent Development Kit (ADK-Rust) agents (FunctionTool, MCP,
 - **FunctionTool** - Create tools from async Rust functions
 - **StatefulTool\<S\>** - Wrap shared state (`Arc<S>`) with a tool handler
 - **SimpleToolContext** - Lightweight `ToolContext` for non-agent callers (testing, MCP servers)
+- **AdvisorTool** - Let an agent consult a stronger or different model for advice mid-task; the consultation runs under the run's budget, spend ledger and kill switch, attributed to `advisor:{agent}`, with a per-run cap ([Advisor tool](../docs/official_docs/tools/advisor.md))
 - **AgentTool** - Use an agent as a callable tool; the delegate runs in non-streaming mode and shares the caller's budget, governance, policy, approvals and ledgers, but not its handoff targets, context cache or invocation toolsets
 - **GoogleSearchTool** - Web search via Gemini's grounding
 - **Provider-native wrappers** - Typed declarations for Gemini, Anthropic, and OpenAI built-in tools, each declaring a `ToolEffect`: search, URL context, Maps and file search are `ReadOnly`; code execution, computer use, image generation, shell, apply-patch and MCP tools are `NonIdempotent`
@@ -793,6 +794,20 @@ covers client construction, server authoring,
 dynamic management, security, testing, resources, prompts, completion,
 reconnect-safe subscriptions with `ResourceNotificationHandler`, elicitation,
 and tasks.
+
+## Advisor
+
+```rust
+use std::sync::Arc;
+
+use adk_core::Llm;
+use adk_tool::AdvisorTool;
+
+// Add to the worker agent with `.tool(Arc::new(advisor(stronger_model)))`.
+fn advisor(stronger_model: Arc<dyn Llm>) -> AdvisorTool {
+    AdvisorTool::builder(stronger_model).max_consultations_per_run(3).max_output_tokens(2_048).build()
+}
+```
 
 ## Google Search
 
