@@ -20,7 +20,7 @@ use crate::state::StateSchema;
 
 // ── WorkflowSchema types ──────────────────────────────────────────────
 
-/// An edge in the workflow graph, matching adk-studio's edge format.
+/// An edge in the workflow graph, in the workflow JSON format.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowEdge {
@@ -55,8 +55,7 @@ pub struct WorkflowCondition {
 /// The serializable representation of a graph workflow including nodes, edges,
 /// conditions, and action node configurations.
 ///
-/// This is the interchange format between adk-studio (visual builder) and
-/// adk-graph (runtime engine).
+/// This is the workflow JSON format that adk-graph loads and runs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowSchema {

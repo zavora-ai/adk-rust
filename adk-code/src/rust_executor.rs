@@ -110,14 +110,19 @@ pub struct CodeResult {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
 /// use adk_code::{RustExecutor, RustExecutorConfig};
 /// use adk_sandbox::ProcessBackend;
 /// use std::sync::Arc;
+/// use std::time::Duration;
 ///
+/// # async fn example() -> Result<(), adk_code::CodeError> {
 /// let backend = Arc::new(ProcessBackend::default());
 /// let executor = RustExecutor::new(backend, RustExecutorConfig::default());
-/// let result = executor.execute("fn run(input: serde_json::Value) -> serde_json::Value { input }", None).await?;
+/// let code = "fn run(input: serde_json::Value) -> serde_json::Value { input }";
+/// let result = executor.execute(code, None, Duration::from_secs(30)).await?;
+/// # Ok(())
+/// # }
 /// ```
 pub struct RustExecutor {
     backend: Arc<dyn SandboxBackend>,

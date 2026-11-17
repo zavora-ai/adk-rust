@@ -1,7 +1,6 @@
 //! Action node type definitions for all 14 node types.
 //!
-//! These types are the shared contract between `adk-studio` (visual builder)
-//! and `adk-graph` (runtime engine).
+//! These types are the workflow JSON contract that `adk-graph` deserializes and executes.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

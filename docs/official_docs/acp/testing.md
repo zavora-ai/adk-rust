@@ -98,7 +98,7 @@ selects the model.
 | Client tool-update and usage fidelity | Implemented | `OutputChunk::ToolUpdate` and `OutputChunk::Usage` surface the external agent's `ToolCallUpdate`/`UsageUpdate` |
 | Client rich prompt content | Implemented | `prompt_agent_content_with_policy` transmits non-text ADK content as the matching ACP block |
 | Remote ACP HTTP/WebSocket | Not advertised | The stable implementation is local stdio |
-| Draft protocol v2 | Not implemented | Behind the SDK's `unstable_protocol_v2`; no shipping peer speaks it yet |
+| Draft protocol v2 | Implemented, unstable | Behind the `unstable-protocol-v2` feature (the SDK's `unstable_protocol_v2`); the server serves the baseline v2 session surface and the client asks for v2 and falls back to v1; no shipping peer speaks it yet |
 | MCP over ACP | Implemented | Unstable: the client serves `AcpToolServer`s declared on every session setup (also an SDK `McpService`); the server advertises `mcp.acp` and reaches `acp` servers' tools over `mcp/message` |
 | LLM providers | Implemented | Unstable: `providers/list`, `set`, `disable` through an `AcpProviders` hook (`ModelProviders` over `SwitchableModel`s), advertised only with a hook; client methods on `AcpConnection` |
 

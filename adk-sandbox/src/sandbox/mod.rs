@@ -272,7 +272,7 @@ pub enum ProxyListener {
 /// | Enforcer | `Denied` | `Proxied` | `Open` |
 /// |----------|----------|-----------|--------|
 /// | Seatbelt (macOS) | `(deny network*)`, Unix-domain sockets included | Only `localhost:<port>` of the proxy | Allowed |
-/// | bubblewrap (Linux) | `--unshare-net`: no IP traffic and no abstract Unix sockets; Unix sockets on the filesystem under granted paths stay reachable, so `/` and `/run` cannot be granted | Refused | Allowed |
+/// | bubblewrap (Linux) | `--unshare-net`: no IP traffic and no abstract Unix sockets; a grant of `/tmp`, `/var/tmp` or `/dev/shm` itself, or of a socket-holding path under `/run`, is refused, and a grant above them, such as `/`, covers them with an empty `tmpfs` | Only the proxy, which listens inside the empty namespace (feature `egress-proxy`); refused without it | Allowed |
 /// | Restricted token (Windows) | Refused, unless the caller acknowledges that the network stays open (`WindowsEnforcer::acknowledge_open_network`) | Refused the same way | Allowed |
 ///
 /// Policies serialized before 3.0 load: `allowNetwork: true` becomes `Open`, `false` becomes

@@ -15,7 +15,9 @@ pub enum McpLifecycleMode {
     /// Maximum compatibility: use the pre-2026 initialization handshake.
     #[default]
     Initialize,
-    /// Probe with `server/discover`, falling back only on method-not-found.
+    /// Probe with `server/discover`, falling back to `initialize` when the server answers with a
+    /// JSON-RPC error other than a 2026 rejection (missing client capability, header mismatch),
+    /// or does not answer within 10 seconds.
     Auto,
     /// Require the stateless 2026-07-28 discovery lifecycle.
     Discover,
