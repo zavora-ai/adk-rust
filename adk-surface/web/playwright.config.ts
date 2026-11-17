@@ -198,6 +198,21 @@ const surfaces: Surface[] = [
     ready: "/ui/fixture.html",
   },
   {
+    // 3D scenes in an extension catalog (spec 3.3 §6.1 `genui`): a yard drawn with WebGL
+    // (SwiftShader), a dock picked into the form, the call it asks for, and the words without
+    // WebGL.
+    name: "genui-scenes",
+    prefix: "GENUI_SCENES",
+    example: "scripted_genui_scenes",
+    features: "web,genui",
+    port: 8807,
+    testMatch: ["genui-scenes.spec.ts"],
+    ready: "/ui/",
+    use: {
+      launchOptions: { args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] },
+    },
+  },
+  {
     // Apps from MCP servers (spec 3.3 §6.1 `genui-apps`): Weather's app framed sandboxed over
     // the web home's example, every concept state, light and dark.
     name: "genui-apps",
