@@ -637,7 +637,7 @@ See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.
 - [adk-telemetry](https://crates.io/crates/adk-telemetry) — OpenTelemetry integration
 - [adk-artifact](https://crates.io/crates/adk-artifact) — artifact storage
 - [adk-auth](https://crates.io/crates/adk-auth) — authentication, including the JWT auth bridge
-- [adk-surface](https://crates.io/crates/adk-surface) — the web home and agent-drawn UI (`genui`), which replaces `adk-ui`
+- [adk-surface](https://crates.io/crates/adk-surface) — the web home and agent-drawn UI (`genui`), which replaces `adk-ui` 2
 
 ## License
 

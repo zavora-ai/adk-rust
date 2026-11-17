@@ -5,8 +5,9 @@ draws in the web home, and reads a drawing as A2UI v0.9.1 JSON lines. A drawing 
 approval controls: a form's **Send** asks the agent for the call, and the person decides on
 the home's own card. [Agent-Drawn UI](surfaces/genui.md) covers the feature in full.
 
-> **Note:** the `adk-ui` crate this guide used to cover is retired (spec 3.3 decision 11). See
-> [Moving from adk-ui](surfaces/genui.md#moving-from-adk-ui).
+> **Note:** `adk-ui` 2, which this guide used to cover, is retired (spec 3.3 decision 11); `adk-ui` 3
+> adds [extension catalogs](surfaces/genui.md#extension-catalogs) to `genui`. See
+> [Moving from adk-ui 2](surfaces/genui.md#moving-from-adk-ui-2).
 
 ## 1) Add dependencies
 

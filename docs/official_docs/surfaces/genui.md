@@ -10,8 +10,9 @@ home's own card, as for any held call.
 |---|---|
 | ![A form Finance drew](../images/surfaces/genui-form-light.png) | ![The form sent, its decision answered, dark](../images/surfaces/genui-done-dark.png) |
 
-> **Note:** `genui` replaces the `adk-ui` crate, which is retired (spec 3.3 decision 11). See
-> [Moving from adk-ui](#moving-from-adk-ui).
+> **Note:** `genui` replaces `adk-ui` 2's render tools and protocol adapters (spec 3.3 decision
+> 11). `adk-ui` 3 builds on `genui` instead: it adds charts, metrics, pages and scenes as
+> [extension catalogs](#extension-catalogs). See [Moving from adk-ui 2](#moving-from-adk-ui-2).
 
 ```toml
 [dependencies]
@@ -29,6 +30,8 @@ adk-surface = { version = "3.0.0", features = ["web", "genui"] }
 | `GenuiAgUi` | `genui` | Drawings as AG-UI `a2ui-surface` activities, and a form sent from an AG-UI client held as a requested call. See [Over AG-UI](#over-ag-ui) |
 | `McpAppsHost`, `web::genui::apps_router`, `web::genui::refuse_apps_origin`, `web::home_with_apps_origin` | `genui-apps` | Apps from MCP servers in a thread, sandboxed on their own origin. See [Apps from MCP servers](#apps-from-mcp-servers) |
 | The thread item `app` and the app routes' types | every `web` build | One built without `genui-apps` never projects an app |
+| `Catalog::extend`, `ExtensionComponent`, `Catalogs` | `genui` | Extension catalogs: `forms` plus another crate's components. See [Extension catalogs](#extension-catalogs) |
+| `DrawnChart`, `DrawnExtension` and the `chart` and `extension` fields of a drawn node | every `web` build | What the home draws for a component of an extension catalog |
 
 `genui` pulls in no further `adk-*` crate. `genui-apps` adds `genui`, `web`, `adk-harness/mcp`
 and `adk-tool/mcp-apps` (wave 4 decision 16):
@@ -444,30 +447,94 @@ let app = adk_surface::web::genui::refuse_apps_origin_recorded(app, "http://127.
 The renderer is also a React package, `@zavora-ai/adk-surface-react` (`adk-surface/react`),
 which exports `DrawnView`, `RefusedNotice`, `AppFrame` and the A2UI parser.
 
-## Moving from adk-ui
+## Extension catalogs
 
-`adk-ui` 2.2.0 is built on `adk-core` 2, so an ADK-Rust 3 agent cannot register its tools.
-The render tools of `genui` take their place:
+An agent draws more than forms, cards and tables in an **extension catalog**: `forms` 1.0 plus
+components another crate defines, under the catalog's own id (A2UI gives a surface one
+catalog). `adk-ui` 3 ships two: `insight` (charts, sparklines, metrics, key-value lists,
+progress, badges) and `studio` (insight, plus apps of pages, regions and primitive 3D scenes).
 
-| `adk-ui` | `genui` |
+```rust,ignore
+use std::sync::LazyLock;
+
+use adk_surface::genui::{Catalog, DrawToolset, ExtensionSpec, Validator};
+
+static INSIGHT: LazyLock<Catalog> = LazyLock::new(|| {
+    Catalog::extend(ExtensionSpec {
+        id: "https://example.com/a2ui/catalogs/insight/1.0/catalog.json",
+        name: "insight",
+        version: "1.0",
+        components: my_components(), // Vec<Arc<dyn ExtensionComponent>>
+    })
+    .expect("the catalog compiles")
+});
+
+// The agent draws in it with the usual render tools...
+let tools = DrawToolset::new(Validator::new(&INSIGHT));
+// ...and the home shows what it draws.
+let engine = SurfaceEngine::builder(source).with_catalog(&INSIGHT).build();
+let ag_ui = GenuiAgUi::new().with_catalog(&INSIGHT);
+```
+
+Register the catalog wherever its drawings are shown, sent or carried: the toolset, the engine
+and, where set, `GenuiAgUi`. A drawing in a catalog that is not registered is refused ("this
+home does not render the catalog …"), and AG-UI drops it. The render tools keep their names in
+every catalog, and `render_screen` tells the model about the catalog's components.
+
+An extension can never loosen rule 5:
+
+| Rule | How it holds |
+|---|---|
+| A component only shows | `Catalog::extend` refuses a schema that declares `action`, `event`, `checks`, `$defs`, `functions` or a URI format, and a name of `forms` or of what `forms` leaves out (`Image`, `Icon`, `Modal`, `Video`, `AudioPlayer`); a drawn component that carries an action, an event or a check function is refused. Fields and buttons stay `forms` components, so every send is still a held call |
+| Every string is checked | Every string and every key of a component's properties, and of the data they bind, however it nests, is checked for a decision's words, length and links; so is every `formatString` and `pluralize` result |
+| The home shows what was checked | Each component says what the home and the terminal show for it (`ExtensionComponent::home`) in `forms` components and charts only; that view is checked again, shows every component it holds exactly once, and is capped in size and depth |
+| Charts stay small | At most eight series; a pie has at most eight slices, none negative; the sentence the server writes for a chart is checked too |
+| Data is bounded | The resolved properties of a drawing's extension components are capped at `MAX_RESOLVED_BYTES` (256 KiB) |
+
+**In the web home** a chart draws natively, an SVG in the home's chart colours (`--chart-1` …
+`--chart-8`), named by the sentence the server wrote for it; the rest of a component's home view
+draws as `forms` components. **In the terminal** a chart is that sentence, then a line of blocks
+per series or a table of its categories.
+
+**In a host of your own**, `DrawnView` takes `renderers`, by catalog id and component type. A
+renderer gets the component's properties as the server resolved and checked them, the nodes it
+holds and `renderChild` to draw one as the home does; it gets no way to send or change a value.
+`adk-ui-react` 3 ships renderers for its catalogs:
+
+```tsx
+import { DrawnView } from "@zavora-ai/adk-surface-react";
+import { adkUiRenderers } from "@zavora-ai/adk-ui-react";
+
+<DrawnView surface={surface} onSend={send} renderers={adkUiRenderers} />;
+```
+
+## Moving from adk-ui 2
+
+`adk-ui` 2.2 is built on `adk-core` 2, so an ADK-Rust 3 agent cannot register its tools. The
+render tools of `genui` take their place, and `adk-ui` 3's extension catalogs bring back what
+the `forms` catalog leaves out:
+
+| `adk-ui` 2 | ADK-Rust 3 |
 |---|---|
 | `render_form` | `render_form`; an action names one of the agent's tools and asks the person before it runs |
 | `render_card` | `render_card` |
 | `render_table` | `render_table` |
-| `render_screen`, `render_page`, `render_layout` | `render_screen`, with the `forms` catalog's components |
+| `render_screen`, `render_layout` | `render_screen`, with the `forms` catalog's components or an `adk-ui` 3 catalog's |
+| `render_page`, `render_app` | `render_screen` in `adk-ui` 3's `studio` catalog (`App`, `Page`, `Region`); apps from MCP servers (`genui-apps`) for apps a server ships |
+| `render_chart` | `render_screen` with `adk-ui` 3's `Chart` or `Sparkline` (`insight` catalog) |
+| `render_progress` | `adk-ui` 3's `Progress`, then `patch_surface` as the work moves |
 | `render_confirm` | None: a drawing never asks for a yes. A call that needs one is held by the agent's policy or `require_tool_confirmation`, and decided on the home's card |
 | `render_alert`, `render_toast` | The agent's reply, or `render_card` with a note |
-| `render_progress` | `render_card`, then `patch_surface` as the work moves |
-| `render_chart` | `render_table`; charts are not in the catalog |
-| `render_modal` | None: `Modal` is not in the catalog |
-| `render_kit` | None: the home's catalog and tokens are fixed |
-| `render_app` | Apps from MCP servers (`genui-apps`): the server's tool declares the app, and the home frames it sandboxed |
+| `render_modal` | None: `Modal` is not in any catalog |
+| `render_kit` | None in a drawing: the home's tokens are fixed. A host of your own applies an approved kit with `adk-ui` 3's `ApprovedKit` |
 | `save_surface`, `load_surface`, `list_surfaces` | None needed: every drawing is an event of the session, versioned by its surface id |
 | `patch_surface`, `delete_surface` | `patch_surface`, `delete_surface` |
-| `@zavora-ai/adk-ui-react` | `@zavora-ai/adk-surface-react`, the web home's renderer; the terminal draws drawings as boxes |
+| `@zavora-ai/adk-ui-react` | `@zavora-ai/adk-surface-react`, the web home's renderer, with `adk-ui-react` 3's `adkUiRenderers` in a host of your own; the terminal draws drawings as boxes |
 | The `adk_ui` profile of `adk-server` | Still served for existing clients, deprecated, with a sunset target of 2026-12-31 (`GET /api/ui/capabilities`) |
 
-The catalog id is `https://adk-rust.com/a2ui/catalogs/forms/1.0/catalog.json`, in place of
+The catalog ids are `https://adk-rust.com/a2ui/catalogs/forms/1.0/catalog.json` and `adk-ui`
+3's `https://zavora.ai/a2ui/catalogs/adk-ui-insight/1.0/catalog.json` and
+`https://zavora.ai/a2ui/catalogs/adk-ui-studio/1.0/catalog.json`, in place of
 `zavora.ai:adk-ui/extended@0.2.0`.
 
 ## Related
