@@ -133,6 +133,68 @@ async fn redact(service: &InMemorySessionService, event_id: &str) -> adk_core::R
 `HistoryEdit::Remove { event_id }` removes an event. Edits apply in order, and a `Replace`
 names its target by the replacement's `id`.
 
+## Governed Operations
+
+`Runner::history_control()` returns a `HistoryControl` that adds the runtime's rules to the
+store's:
+
+| Rule | Error |
+|------|-------|
+| No fork, rewind, or edit while a turn runs on the session: a run of the runner, of any runner sharing its `SessionActivity`, or one a durable run store records as running | `session.history.run_active` (`Conflict`) |
+| Each operation writes a decision record to the audit trail before it is applied, and an outcome record after; a decision that cannot be recorded refuses the operation under `AuditFailureMode::Block` | `audit.record_failed` |
+
+History operations run no agent, tool, or model, so the kill switch does not stop them:
+rewinding a session past a bad turn is part of handling an incident. A host that builds one
+runner per request shares one `SessionActivity` between them with
+`RunnerBuilder::session_activity`, as `adk-server` does.
+
+```rust
+use adk_core::audit_log::AuditActor;
+use adk_core::identity::AdkIdentity;
+use adk_core::principal::SubjectRef;
+use adk_runner::{RewindTarget, Runner};
+
+async fn undo_turn(
+    runner: &Runner,
+    identity: &AdkIdentity,
+    invocation_id: &str,
+) -> adk_core::Result<()> {
+    let actor = AuditActor::subject(SubjectRef::human(identity.user_id.as_ref()));
+    let outcome = runner
+        .history_control()
+        .rewind(&actor, identity, RewindTarget::BeforeInvocation(invocation_id.into()), None)
+        .await?;
+    println!("removed {:?}", outcome.change.removed);
+    Ok(())
+}
+```
+
+`RewindTarget::BeforeInvocation` removes an invocation and every event after it, undoing the
+turn it ran; `RewindTarget::Event` and `RewindTarget::Steps` match `rewind` and `rewind_steps`.
+
+## REST
+
+`adk-server` serves the operations under each session, behind the session routes'
+authentication, through `HistoryControl`:
+
+| Route | Body |
+|-------|------|
+| `GET /api/apps/{app}/users/{user}/sessions/{session}/history` | — |
+| `POST …/sessions/{session}/fork` | `{eventId?, sessionId?}` |
+| `POST …/sessions/{session}/rewind` | one of `{eventId}`, `{steps}`, `{beforeInvocationId}`, plus `expectedVersion?` |
+| `POST …/sessions/{session}/history/edit` | `{edits: [{op: "replace", event} \| {op: "remove", eventId}], expectedVersion?}` |
+
+The [server reference](../deployment/server.md#fork-rewind-and-edit-history) lists the
+responses and status codes.
+
+## CLI
+
+`adk-rust sessions fork ID [--turns N | --at EVENT_ID] [--as NEW_ID]` copies a harness session
+into a new one; continue it with `adk-rust --session NEW_ID`. It refuses a session a kernel
+worker is running; a REPL in another process is not visible to it.
+`adk-rust sessions rewind` rewinds the transcript together with the files and the plan; see
+[Snapshots and rewind](../harness/snapshots-and-rewind.md).
+
 ## What Changed
 
 `fork` and `rewrite_history` return a `HistoryOutcome`: the session afterwards and a

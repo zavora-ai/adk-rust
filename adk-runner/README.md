@@ -189,6 +189,15 @@ When `RunConfig::spend_ledger` is set, every model call of the run — agent tur
 
 `temp:` state keys stay visible for the rest of their invocation — to later tools, transferred agents, and `{temp:key}` instructions — and session services drop them when they persist the event.
 
+## Session History
+
+`runner.history_control()` forks, rewinds, and edits sessions under the runtime's rules: it
+refuses a session while a turn runs on it (`session.history.run_active`), across every runner
+sharing a `SessionActivity` (`RunnerBuilder::session_activity`) and the durable run store, and
+records a decision and an outcome per operation in the runner's audit trail.
+`RewindTarget::BeforeInvocation` undoes a turn. See
+[Fork, Rewind, and Edit History](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/sessions/history.md).
+
 ## Context Compaction
 
 ```rust

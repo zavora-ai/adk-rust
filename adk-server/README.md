@@ -498,6 +498,10 @@ Every endpoint below is nested under `/api`.
 | `/api/sessions/{app_name}/{user_id}/{session_id}` | GET, DELETE | Get or delete a session |
 | `/api/apps/{app_name}/users/{user_id}/sessions` | GET, POST | List or create sessions |
 | `/api/apps/{app_name}/users/{user_id}/sessions/{session_id}` | GET, POST, DELETE | Get, create, or delete a session |
+| `/api/apps/{app_name}/users/{user_id}/sessions/{session_id}/history` | GET | The session with its history version and fork origin |
+| `/api/apps/{app_name}/users/{user_id}/sessions/{session_id}/fork` | POST | Fork the session up to an event (`eventId?`, `sessionId?`) |
+| `/api/apps/{app_name}/users/{user_id}/sessions/{session_id}/rewind` | POST | Rewind to an event, by `steps`, or to before an invocation (`beforeInvocationId`) |
+| `/api/apps/{app_name}/users/{user_id}/sessions/{session_id}/history/edit` | POST | Replace or remove events; refused while a turn runs or a call is held |
 
 Session errors map to their status: `404` not found, `409` already exists, `400` invalid identifiers, `503` unavailable backend.
 
