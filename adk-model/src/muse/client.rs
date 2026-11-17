@@ -398,7 +398,8 @@ impl Llm for MuseClient {
             let request = self.responses_request(request, stream)?;
             return responses.generate_content(request, stream).await;
         }
-        let usage_span = adk_telemetry::llm_generate_span("muse", &self.config.model, stream);
+        let usage_span =
+            crate::telemetry::inference_span("muse", &self.config.model, stream, &request);
         let api_url = self.api_url();
         let api_key = self.config.api_key.clone();
         let chat_request = self.build_request(&request, stream)?;

@@ -1,61 +1,70 @@
-//! Content event emitter for opt-in prompt/completion capture.
+//! The `gen_ai.client.inference.operation.details` event: an inference's content recorded
+//! apart from its span attributes, under [`CaptureContent::EventOnly`] or
+//! [`CaptureContent::SpanAndEvent`].
 //!
-//! Emits span events containing prompt or completion text when
-//! [`SemconvConfig::capture_content`](crate::config::SemconvConfig::capture_content)
-//! is enabled.
+//! The event is a `tracing` event at `DEBUG` inside the inference span; the OpenTelemetry
+//! layer exports it as a span event of that name.
+//!
+//! [`CaptureContent::EventOnly`]: crate::config::CaptureContent::EventOnly
+//! [`CaptureContent::SpanAndEvent`]: crate::config::CaptureContent::SpanAndEvent
 
 use tracing::Span;
 
 use crate::config::SemconvConfig;
 
-/// Emits opt-in content events on the current span.
-///
-/// Only emits when [`SemconvConfig::capture_content`] is `true`.
-/// When content capture is disabled (the default), these methods are no-ops.
+/// The content of one inference, each field JSON in the conventions' message schema.
 ///
 /// # Example
 /// ```
-/// use adk_telemetry::config::SemconvConfig;
-/// use adk_telemetry::events::ContentEventEmitter;
+/// use adk_telemetry::events::InferenceDetails;
 ///
-/// let config = SemconvConfig { capture_content: true };
-/// ContentEventEmitter::emit_prompt(&config, "What is the weather?");
-/// ContentEventEmitter::emit_completion(&config, "The weather is sunny.");
+/// let details = InferenceDetails {
+///     input_messages: Some(r#"[{"role":"user","parts":[{"type":"text","content":"hi"}]}]"#.into()),
+///     ..Default::default()
+/// };
+/// assert!(details.output_messages.is_none());
 /// ```
+#[derive(Debug, Clone, Default)]
+pub struct InferenceDetails {
+    /// `gen_ai.system_instructions`.
+    pub system_instructions: Option<String>,
+    /// `gen_ai.input.messages`.
+    pub input_messages: Option<String>,
+    /// `gen_ai.output.messages`.
+    pub output_messages: Option<String>,
+    /// `gen_ai.tool.definitions`.
+    pub tool_definitions: Option<String>,
+}
+
+/// Emits the `gen_ai.client.inference.operation.details` event.
 pub struct ContentEventEmitter;
 
 impl ContentEventEmitter {
-    /// Emit a `gen_ai.content.prompt` span event with the prompt text.
+    /// Emits `details` as a `gen_ai.client.inference.operation.details` event inside `span`,
+    /// when `config` captures content on events.
     ///
-    /// Only emits when `config.capture_content` is `true`.
-    pub fn emit_prompt(config: &SemconvConfig, prompt: &str) {
-        if !config.capture_content {
-            return;
-        }
-        let span = Span::current();
-        if span.is_none() {
-            tracing::debug!("content event emitter: no active span for prompt event");
-            return;
-        }
-        span.in_scope(|| {
-            tracing::info!(event_name = "gen_ai.content.prompt", content = prompt);
-        });
-    }
-
-    /// Emit a `gen_ai.content.completion` span event with the completion text.
+    /// # Example
+    /// ```
+    /// use adk_telemetry::config::{CaptureContent, SemconvConfig};
+    /// use adk_telemetry::events::{ContentEventEmitter, InferenceDetails};
     ///
-    /// Only emits when `config.capture_content` is `true`.
-    pub fn emit_completion(config: &SemconvConfig, completion: &str) {
-        if !config.capture_content {
+    /// let config = SemconvConfig { capture_content: CaptureContent::EventOnly };
+    /// let span = adk_telemetry::llm_generate_span("anthropic", "claude-sonnet-5-5", false);
+    /// ContentEventEmitter::emit_inference_details(&config, &span, &InferenceDetails::default());
+    /// ```
+    pub fn emit_inference_details(config: &SemconvConfig, span: &Span, details: &InferenceDetails) {
+        if !config.capture_content.on_events() || span.is_none() {
             return;
         }
-        let span = Span::current();
-        if span.is_none() {
-            tracing::debug!("content event emitter: no active span for completion event");
-            return;
-        }
+        let field = |value: &Option<String>| value.clone().unwrap_or_default();
         span.in_scope(|| {
-            tracing::info!(event_name = "gen_ai.content.completion", content = completion);
+            tracing::debug!(
+                gen_ai.system_instructions = field(&details.system_instructions),
+                gen_ai.input.messages = field(&details.input_messages),
+                gen_ai.output.messages = field(&details.output_messages),
+                gen_ai.tool.definitions = field(&details.tool_definitions),
+                "gen_ai.client.inference.operation.details"
+            );
         });
     }
 }
@@ -65,16 +74,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_emit_prompt_disabled_is_noop() {
+    fn emitting_without_capture_is_a_noop() {
         let config = SemconvConfig::default();
-        // Should not panic even without an active span
-        ContentEventEmitter::emit_prompt(&config, "test prompt");
-    }
-
-    #[test]
-    fn test_emit_completion_disabled_is_noop() {
-        let config = SemconvConfig::default();
-        // Should not panic even without an active span
-        ContentEventEmitter::emit_completion(&config, "test completion");
+        ContentEventEmitter::emit_inference_details(
+            &config,
+            &Span::none(),
+            &InferenceDetails::default(),
+        );
     }
 }

@@ -379,7 +379,7 @@ add_context_attributes("user-456", "sess-789");
 
 ### LLM Token Usage Tracking
 
-Track token consumption across all LLM providers with OpenTelemetry GenAI semantic conventions. The `llm_generate_span` creates a span with pre-declared `gen_ai.usage.*` fields, and `record_llm_usage` populates them after the response arrives:
+Track token consumption across all LLM providers with the OpenTelemetry GenAI semantic conventions. `llm_generate_span` creates the inference span, named `chat gpt-5.6-terra` in export, with the `gen_ai.*` fields pre-declared, and `record_llm_usage` populates the usage after the response arrives:
 
 ```rust
 use adk_telemetry::{llm_generate_span, record_llm_usage, LlmUsage};
@@ -397,22 +397,65 @@ record_llm_usage(&LlmUsage {
 });
 ```
 
-The `adk-model` provider clients (Gemini, OpenAI, Anthropic, Ollama, Bedrock, DeepSeek, Groq, Azure AI, OpenRouter, and OpenAI-compatible endpoints) open a `gen_ai.generate` span, with `gen_ai.system`, `gen_ai.request.model`, and `gen_ai.request.stream`, for every `generate_content` call and record the usage the provider reports. No manual instrumentation is needed.
+The `adk-model` provider clients (Gemini, OpenAI, Anthropic, Ollama, Bedrock, DeepSeek, Groq, Azure AI, OpenRouter, Muse, and OpenAI-compatible endpoints) open this span for every `generate_content` call (`adk_model::telemetry::inference_span`), record the request's parameters, and record the response model, finish reason, usage and `error.type` when the response arrives. No manual instrumentation is needed.
 
-Recorded span fields follow [OpenTelemetry GenAI conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/):
+### GenAI semantic conventions
 
-| Field | Description |
+ADK-Rust's spans follow the OpenTelemetry GenAI conventions of the
+[`semantic-conventions-genai`](https://github.com/open-telemetry/semantic-conventions-genai)
+repository, where the conventions moved in core semantic conventions v1.42.0. That repository
+has no tagged release; ADK-Rust follows its `main` branch as of 2026-11-18
+(`adk_telemetry::semconv::SCHEMA_URL`, `https://opentelemetry.io/schemas/gen-ai-dev/1.42.0-dev`).
+The conventions are in Development status, so names can still change upstream.
+
+| Span (OpenTelemetry name) | Kind | Emitted by | Attributes |
+|---|---|---|---|
+| `invoke_agent {agent}` | Internal | `Runner`, for the agent it runs | `gen_ai.operation.name` `invoke_agent`, `gen_ai.agent.name`, `gen_ai.agent.description`, `gen_ai.conversation.id` (the session) |
+| `{operation} {model}`, such as `chat claude-sonnet-5-5` or `generate_content gemini-3.7-flash` | Client | Every `adk-model` provider client | `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.request.stream` (when streaming), `gen_ai.request.temperature`, `top_p`, `top_k`, `max_tokens`, `frequency_penalty`, `presence_penalty`, `seed`, `stop_sequences`, `gen_ai.output.type`, `gen_ai.response.model`, `gen_ai.response.finish_reasons`, usage, `error.type` |
+| `execute_tool {tool}` | Internal | `LlmAgent`, for each tool it runs | `gen_ai.operation.name` `execute_tool`, `gen_ai.tool.name`, `gen_ai.tool.type` `function`, `gen_ai.tool.call.id` (when the model supplied one), `gen_ai.tool.description`, `gen_ai.agent.name`, `gen_ai.conversation.id`, `error.type` |
+
+The tracing names stay `agent.execute`, `gen_ai.generate` and `execute_tool`, so the
+in-process debug exporter and the SQLite exporter keep their keys; `otel.name` gives the
+exported span its conventions name.
+
+| Usage attribute | Meaning |
 |-------|-------------|
-| `gen_ai.usage.input_tokens` | Prompt / input token count |
-| `gen_ai.usage.output_tokens` | Completion / output token count |
-| `gen_ai.usage.total_tokens` | Total token count |
-| `gen_ai.usage.cache_read_tokens` | Tokens read from prompt cache |
-| `gen_ai.usage.cache_creation_tokens` | Tokens used to create cache |
-| `gen_ai.usage.thinking_tokens` | Chain-of-thought reasoning tokens |
-| `gen_ai.usage.audio_input_tokens` | Audio input token count |
-| `gen_ai.usage.audio_output_tokens` | Audio output token count |
+| `gen_ai.usage.input_tokens` | Input tokens, cached tokens included |
+| `gen_ai.usage.output_tokens` | Output tokens, reasoning tokens included |
+| `gen_ai.usage.cache_read.input_tokens` | Tokens read from the prompt cache |
+| `gen_ai.usage.cache_write.input_tokens` | Tokens written to the prompt cache |
+| `gen_ai.usage.reasoning.output_tokens` | Reasoning (thinking) tokens |
+| `gen_ai.usage.audio.input_tokens`, `gen_ai.usage.audio.output_tokens` | Audio tokens |
 
-Optional fields are only recorded when the provider reports them (non-None).
+Optional fields are recorded only when the provider reports them. `gen_ai.response.finish_reasons`
+takes `stop`, `length`, `content_filter`, `tool_call` or `error`; with feature `otlp` it and
+`gen_ai.request.stop_sequences` are exported as string arrays.
+
+#### Capturing the conversation
+
+The conversation is not recorded by default: prompts, answers and tool payloads can hold
+personal data and secrets. `OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT`, the variable the
+conventions name, or `adk_telemetry::config::set_capture_content`, turns it on:
+
+| Value (`CaptureContent`) | Records |
+|---|---|
+| `NO_CONTENT` (default) | Nothing |
+| `SPAN_ONLY` | `gen_ai.system_instructions`, `gen_ai.input.messages`, `gen_ai.output.messages` and `gen_ai.tool.definitions` on the inference span; `gen_ai.tool.call.arguments` and `gen_ai.tool.call.result` on the tool span |
+| `EVENT_ONLY` | The same content on a `gen_ai.client.inference.operation.details` event inside the inference span |
+| `SPAN_AND_EVENT` | Both |
+
+```rust
+use adk_telemetry::config::{CaptureContent, set_capture_content};
+
+fn main() {
+    set_capture_content(CaptureContent::SpanOnly);
+}
+```
+
+The messages are JSON in the conventions' message schema (`text`, `reasoning`, `tool_call`,
+`tool_call_response`, `blob`, `uri`, `server_tool_call` parts). The conventions type them as
+structured values; the OpenTelemetry Rust span API takes no map-valued attribute, so they are
+exported as JSON strings.
 
 ## Manual Span Creation
 

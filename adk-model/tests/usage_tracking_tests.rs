@@ -121,12 +121,12 @@ async fn test_records_all_fields() {
     let m = field_map(&fields);
     assert_eq!(m.get("gen_ai.usage.input_tokens"), Some(&100));
     assert_eq!(m.get("gen_ai.usage.output_tokens"), Some(&50));
-    assert_eq!(m.get("gen_ai.usage.total_tokens"), Some(&150));
-    assert_eq!(m.get("gen_ai.usage.cache_read_tokens"), Some(&80));
-    assert_eq!(m.get("gen_ai.usage.cache_creation_tokens"), Some(&20));
-    assert_eq!(m.get("gen_ai.usage.thinking_tokens"), Some(&10));
-    assert_eq!(m.get("gen_ai.usage.audio_input_tokens"), Some(&30));
-    assert_eq!(m.get("gen_ai.usage.audio_output_tokens"), Some(&15));
+    assert_eq!(m.get("gen_ai.usage.total_tokens"), None, "the conventions define no total");
+    assert_eq!(m.get("gen_ai.usage.cache_read.input_tokens"), Some(&80));
+    assert_eq!(m.get("gen_ai.usage.cache_write.input_tokens"), Some(&20));
+    assert_eq!(m.get("gen_ai.usage.reasoning.output_tokens"), Some(&10));
+    assert_eq!(m.get("gen_ai.usage.audio.input_tokens"), Some(&30));
+    assert_eq!(m.get("gen_ai.usage.audio.output_tokens"), Some(&15));
 }
 
 /// Verify that partial responses without usage metadata don't record anything.
@@ -168,7 +168,7 @@ async fn test_last_write_wins_for_streaming() {
     let m = field_map(&fields);
     assert_eq!(m.get("gen_ai.usage.input_tokens"), Some(&200));
     assert_eq!(m.get("gen_ai.usage.output_tokens"), Some(&100));
-    assert_eq!(m.get("gen_ai.usage.total_tokens"), Some(&300));
+    assert_eq!(m.get("gen_ai.usage.total_tokens"), None, "the conventions define no total");
 }
 
 /// Verify that optional fields (cache, thinking, audio) are omitted when None.
@@ -188,12 +188,12 @@ async fn test_omits_none_optional_fields() {
     let names: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
     assert!(names.contains(&"gen_ai.usage.input_tokens"));
     assert!(names.contains(&"gen_ai.usage.output_tokens"));
-    assert!(names.contains(&"gen_ai.usage.total_tokens"));
-    assert!(!names.contains(&"gen_ai.usage.cache_read_tokens"));
-    assert!(!names.contains(&"gen_ai.usage.cache_creation_tokens"));
-    assert!(!names.contains(&"gen_ai.usage.thinking_tokens"));
-    assert!(!names.contains(&"gen_ai.usage.audio_input_tokens"));
-    assert!(!names.contains(&"gen_ai.usage.audio_output_tokens"));
+    assert!(!names.contains(&"gen_ai.usage.total_tokens"));
+    assert!(!names.contains(&"gen_ai.usage.cache_read.input_tokens"));
+    assert!(!names.contains(&"gen_ai.usage.cache_write.input_tokens"));
+    assert!(!names.contains(&"gen_ai.usage.reasoning.output_tokens"));
+    assert!(!names.contains(&"gen_ai.usage.audio.input_tokens"));
+    assert!(!names.contains(&"gen_ai.usage.audio.output_tokens"));
 }
 
 /// Verify that error responses in the stream don't cause panics.
@@ -266,10 +266,12 @@ async fn test_span_has_correct_static_fields() {
     let m: std::collections::HashMap<&str, &str> =
         fields.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
 
-    assert_eq!(m.get("gen_ai.system"), Some(&"openai"));
+    assert_eq!(m.get("gen_ai.provider.name"), Some(&"openai"));
+    assert_eq!(m.get("gen_ai.operation.name"), Some(&"chat"));
     assert_eq!(m.get("gen_ai.request.model"), Some(&"gpt-5-mini"));
-    assert_eq!(m.get("gen_ai.request.stream"), Some(&"true"));
+    assert_eq!(m.get("otel.name"), Some(&"chat gpt-5-mini"));
     assert_eq!(m.get("otel.kind"), Some(&"client"));
+    assert!(!m.contains_key("gen_ai.system"), "deprecated since the conventions' v1.37");
 }
 
 /// Verify audio-only usage (no cache/thinking) records correctly.
@@ -289,10 +291,10 @@ async fn test_audio_tokens_only() {
     let m = field_map(&fields);
     assert_eq!(m.get("gen_ai.usage.input_tokens"), Some(&10));
     assert_eq!(m.get("gen_ai.usage.output_tokens"), Some(&20));
-    assert_eq!(m.get("gen_ai.usage.audio_input_tokens"), Some(&500));
-    assert_eq!(m.get("gen_ai.usage.audio_output_tokens"), Some(&400));
-    assert!(!m.contains_key("gen_ai.usage.cache_read_tokens"));
-    assert!(!m.contains_key("gen_ai.usage.thinking_tokens"));
+    assert_eq!(m.get("gen_ai.usage.audio.input_tokens"), Some(&500));
+    assert_eq!(m.get("gen_ai.usage.audio.output_tokens"), Some(&400));
+    assert!(!m.contains_key("gen_ai.usage.cache_read.input_tokens"));
+    assert!(!m.contains_key("gen_ai.usage.reasoning.output_tokens"));
 }
 
 /// Verify multiple usage updates in a stream accumulate correctly (last wins).
@@ -318,9 +320,9 @@ async fn test_multiple_usage_updates_last_wins() {
     // Last write wins — final_usage values
     assert_eq!(m.get("gen_ai.usage.input_tokens"), Some(&100));
     assert_eq!(m.get("gen_ai.usage.output_tokens"), Some(&50));
-    assert_eq!(m.get("gen_ai.usage.total_tokens"), Some(&150));
-    assert_eq!(m.get("gen_ai.usage.cache_read_tokens"), Some(&30));
-    assert_eq!(m.get("gen_ai.usage.thinking_tokens"), Some(&5));
-    assert_eq!(m.get("gen_ai.usage.audio_input_tokens"), Some(&10));
-    assert_eq!(m.get("gen_ai.usage.audio_output_tokens"), Some(&8));
+    assert_eq!(m.get("gen_ai.usage.total_tokens"), None, "the conventions define no total");
+    assert_eq!(m.get("gen_ai.usage.cache_read.input_tokens"), Some(&30));
+    assert_eq!(m.get("gen_ai.usage.reasoning.output_tokens"), Some(&5));
+    assert_eq!(m.get("gen_ai.usage.audio.input_tokens"), Some(&10));
+    assert_eq!(m.get("gen_ai.usage.audio.output_tokens"), Some(&8));
 }

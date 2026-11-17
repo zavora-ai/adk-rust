@@ -198,6 +198,7 @@ mod sse;
     feature = "openrouter"
 ))]
 mod stream_error;
+pub mod telemetry;
 #[cfg(any(
     feature = "openai",
     feature = "anthropic",

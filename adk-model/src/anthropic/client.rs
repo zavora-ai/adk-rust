@@ -809,7 +809,8 @@ impl Llm for AnthropicClient {
             &mut request.contents,
             &adk_core::history::ProviderOrigin::new("anthropic", &self.model),
         );
-        let usage_span = adk_telemetry::llm_generate_span("anthropic", &self.model, stream);
+        let usage_span =
+            crate::telemetry::inference_span("anthropic", &self.model, stream, &request);
         let model = self.model.clone();
         let max_tokens = self.max_tokens;
         let client = self.client.clone();
