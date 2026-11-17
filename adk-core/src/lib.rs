@@ -230,9 +230,10 @@ pub use acting::{
     SubjectDelegationPolicy, SubjectDelegationRequest, subject_mismatch_error,
 };
 pub use action_ledger::{
-    ActionLedger, ActionOutcome, ActionRecord, InMemoryActionLedger, NOT_RUN_PREFIX,
-    OUTCOME_UNKNOWN_STATUS, is_not_run, is_outcome_unknown, json_digest, not_run_text,
-    outcome_unknown_response,
+    ActionLedger, ActionOutcome, ActionRecord, InMemoryActionLedger, LedgerAnswer, LedgeredCall,
+    NOT_RUN_PREFIX, OUTCOME_UNKNOWN_STATUS, begin_ledgered_call, held_call_ledger_key,
+    interrupted_call_response, is_not_run, is_outcome_unknown, json_digest, not_run_text,
+    outcome_unknown_response, record_outcome_unknown,
 };
 pub use agent::{
     Agent, AgentCapabilities, AgentInteractionMode, AgentKind, AgentProfile, AgentRelationshipKind,
