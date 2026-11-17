@@ -148,6 +148,9 @@ pub mod conformance;
 pub mod context;
 /// Agent credentials, identity sources, and resource-scoped token brokers.
 pub mod credential;
+/// Typed decisions: a model picks one of a fixed set of options, with a rationale and a
+/// confidence.
+pub mod decision;
 pub mod egress;
 /// Unified structured error type and result alias.
 pub mod error;
@@ -264,6 +267,7 @@ pub use credential::{
     AgentCredential, CredentialBroker, CredentialKind, CredentialSecret, IdentitySource,
     RevocationScope, ScopedToken, StaticIdentitySource, resource_indicator,
 };
+pub use decision::{Choice, ChoiceOption, Decider, Decision, decide};
 pub use error::{
     AdkError, ErrorCategory, ErrorComponent, ErrorDetails, ErrorDiagnostics, Result, RetryHint,
     UPSTREAM_EXCERPT_BYTES, json_error_summary, upstream_excerpt,

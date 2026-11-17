@@ -528,6 +528,25 @@ impl AnthropicClient {
         {
             params.stop_sequences = Some(config.stop_sequences.clone());
         }
+        // A response schema becomes structured outputs, never a forced tool call: Claude Fable
+        // 5.1 and later, Opus 5.5 and Sonnet 5.5 reject a forced `tool_choice`.
+        if let Some(schema) = config.and_then(|c| c.response_schema.as_ref()) {
+            match super::schema_adapter::structured_output_schema(schema) {
+                Some(schema) => {
+                    let format = adk_anthropic::OutputFormat::json_schema(schema);
+                    match &mut params.output_config {
+                        Some(output) => output.format = Some(format),
+                        None => {
+                            params.output_config = Some(adk_anthropic::OutputConfig::new(format))
+                        }
+                    }
+                }
+                None => tracing::debug!(
+                    model.name = %model,
+                    "response schema has an open object; it is not sent as structured output"
+                ),
+            }
+        }
         Ok(params)
     }
 }
@@ -1141,6 +1160,41 @@ mod tests {
             assert_eq!(params.tool_choice, None, "{model}");
             assert_eq!(params.tools.as_ref().map(Vec::len), Some(1), "{model}");
         }
+    }
+
+    #[test]
+    fn a_response_schema_is_sent_as_structured_output_beside_the_effort() {
+        let mut request = make_request(vec![Content::new("user").with_text("route this")]);
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "choice": {"type": "string", "enum": ["a", "b"]},
+                "confidence": {"type": "number", "minimum": 0}
+            },
+            "required": ["choice", "confidence"]
+        });
+        request.config = Some(GenerateContentConfig {
+            response_schema: Some(schema),
+            effort: Some(adk_core::Effort::Low),
+            ..Default::default()
+        });
+        let params = AnthropicClient::build_message_params(
+            "claude-sonnet-5-5",
+            4096,
+            &request,
+            &AnthropicConfig::new("test", "claude-sonnet-5-5"),
+        )
+        .expect("request should build");
+        let output = serde_json::to_value(params.output_config).unwrap();
+        assert_eq!(output["format"]["type"], "json_schema");
+        assert_eq!(output["format"]["schema"]["additionalProperties"], false);
+        assert_eq!(
+            output["format"]["schema"]["properties"]["confidence"],
+            json!({"type": "number"})
+        );
+        assert!(output.get("effort").is_some(), "{output}");
+        assert!(params.tool_choice.is_none());
+        assert!(params.tools.is_none());
     }
 
     #[test]

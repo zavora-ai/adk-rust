@@ -95,6 +95,7 @@ pub mod checkpointers;
 pub mod child;
 #[cfg(feature = "conformance")]
 pub mod conformance;
+pub mod decision;
 pub mod deferred;
 pub mod edge;
 pub mod error;
@@ -141,6 +142,7 @@ pub use functional::{
 // Re-exports
 pub use agent::{GraphAgent, GraphAgentBuilder};
 pub use checkpoint::{Checkpointer, Durability, MemoryCheckpointer, RetentionPolicy};
+pub use decision::DecisionNode;
 pub use deferred::{DeferredNodeConfig, FanInTracker, MergeStrategy};
 pub use edge::{END, Edge, EdgeTarget, Router, START};
 pub use error::{GraphError, InterruptedExecution, Result};

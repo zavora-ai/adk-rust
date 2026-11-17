@@ -365,6 +365,15 @@ fn params() -> MessageCreateParams {
 }
 ```
 
+`AnthropicClient` sends a request's `response_schema` (from `LlmAgentBuilder::output_schema`,
+the `adk-eval` judges, or `adk_core::decide`) as `output_config.format`, beside any
+`output_config.effort`. The schema is closed with `additionalProperties: false` on every
+object, and `minimum`, `maximum`, `minLength`, `maxLength` and the other bounds structured
+outputs reject are dropped, so the caller checks them on the reply. A schema whose object
+leaves `additionalProperties` open, a map type, is not sent. The client never forces a
+`tool_choice`, which Claude Fable 5.1 and later, Mythos 5.1 and later, Opus 5.5 and Sonnet 5.5
+reject.
+
 ### Token Pricing
 
 ```rust

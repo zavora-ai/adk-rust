@@ -916,6 +916,52 @@ use adk_graph::edge::Router;
 ])
 ```
 
+### Decision Nodes
+
+`DecisionNode` is a router node a model decides: it reads its input from a state key, asks
+for a typed decision with structured output (a `choice` among its options, a `rationale` and a
+`confidence`), and writes the option's name to its output key for `Router::by_field`:
+
+```rust,no_run
+use std::sync::Arc;
+
+use adk_graph::node::FunctionNode;
+use adk_graph::{CompiledGraph, DecisionNode, END, NodeOutput, Router, START, StateGraph, StateSchema};
+
+fn triage_graph(model: Arc<dyn adk_core::Llm>) -> adk_graph::Result<CompiledGraph> {
+    let triage = DecisionNode::new("triage", model)
+        .instruction("Route the support ticket.")
+        .option("billing", "Invoices, refunds and payment problems")
+        .option("technical", "Errors, outages and how-to questions")
+        .input_key("ticket")
+        .output_key("route");
+    StateGraph::new(StateSchema::simple(&["ticket", "route"]))
+        .add_node(triage)
+        .add_node(FunctionNode::new("billing", |_| async { Ok(NodeOutput::new()) }))
+        .add_node(FunctionNode::new("technical", |_| async { Ok(NodeOutput::new()) }))
+        .add_edge(START, "triage")
+        .add_conditional_edges(
+            "triage",
+            Router::by_field("route"),
+            [("billing", "billing"), ("technical", "technical")],
+        )
+        .add_edge("billing", END)
+        .add_edge("technical", END)
+        .compile()
+}
+```
+
+| Setting | Effect |
+|---|---|
+| `option(name, description)`, or `DecisionNode::for_choice::<T>` | The options the model sees |
+| `input_key(key)` | The state key decided about (default `input`); a non-string value is sent as JSON |
+| `output_key(key)` | The state key the option's name goes to (default `route`); `<key>_decision` holds `{option, rationale, confidence, followed}` |
+| `min_confidence(x)`, `fallback(route)` | Below `x` the node writes `fallback`, or fails without one |
+
+With a `RunConfig` (a graph agent under a runner, or `invoke_with_run_config`), the call runs in
+the run's `ModelCallScope` and counts against its budget and spend ledger. A model error, such
+as a refused budget, fails the node as `GraphError::AgentFailed` with the model's code.
+
 ## Parallel Execution
 
 Multiple edges from a single node execute in parallel:

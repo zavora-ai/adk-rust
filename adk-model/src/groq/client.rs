@@ -178,6 +178,12 @@ impl GroqClient {
             frequency_penalty: config.and_then(|c| c.frequency_penalty),
             presence_penalty: config.and_then(|c| c.presence_penalty),
             reasoning_effort,
+            response_format: config.and_then(|c| c.response_schema.as_ref()).map(|schema| {
+                serde_json::json!({
+                    "type": "json_schema",
+                    "json_schema": {"name": "response", "schema": schema},
+                })
+            }),
         })
     }
 }
@@ -553,5 +559,29 @@ mod tests {
             )
             .expect_err("Groq models do not return log probabilities");
         assert_eq!(error.code, "model.unsupported_config");
+    }
+
+    #[test]
+    fn a_response_schema_is_sent_as_a_json_schema_response_format() {
+        let client = GroqClient::new(GroqConfig::new("test-key", "qwen/qwen3.8-27b")).unwrap();
+        let schema =
+            serde_json::json!({"type": "object", "properties": {"choice": {"type": "string"}}});
+        let built = client
+            .build_request(
+                &request(GenerateContentConfig {
+                    response_schema: Some(schema.clone()),
+                    ..Default::default()
+                }),
+                false,
+            )
+            .unwrap();
+        let wire = serde_json::to_value(built).unwrap();
+        assert_eq!(
+            wire["response_format"],
+            serde_json::json!({"type": "json_schema", "json_schema": {"name": "response", "schema": schema}})
+        );
+        let plain =
+            client.build_request(&request(GenerateContentConfig::default()), false).unwrap();
+        assert!(serde_json::to_value(plain).unwrap().get("response_format").is_none());
     }
 }

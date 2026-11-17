@@ -27,6 +27,7 @@ mod checkpointer_conformance_redis;
 mod checkpointer_from_pool_tests;
 mod child_invocation_tests;
 mod concurrency_bound_tests;
+mod decision_node_tests;
 mod declared_api_tests;
 mod deferred_property_tests;
 mod delta_property_tests;

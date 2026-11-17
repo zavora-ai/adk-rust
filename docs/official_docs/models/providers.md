@@ -118,6 +118,23 @@ fn normalized(model: &dyn Llm) -> Value {
 
 See [Schema Normalization](../tools/schema-normalization.md) for what each adapter changes.
 
+### Structured output by provider
+
+`GenerateContentConfig::response_schema`, which `LlmAgentBuilder::output_schema`, the
+`adk-eval` judges and `adk_core::decide` set, reaches each provider as its own structured-output
+control. No client turns it into a forced tool call.
+
+| Client | Sent as |
+|--------|---------|
+| `GeminiModel` | `responseSchema` with `responseMimeType: application/json`, normalized by `GeminiSchemaAdapter` |
+| `OpenAIClient`, `AzureOpenAIClient`, `OpenAICompatible` | strict `response_format` (`json_schema`) on Chat Completions; `text.format` on the Responses API |
+| `AnthropicClient` | `output_config.format` (`json_schema`): every object closed with `additionalProperties: false`, numeric and length bounds dropped; a schema with an open map is not sent |
+| `GroqClient`, `AzureAIClient` | `response_format` (`json_schema`) |
+| `OpenRouterClient`, `MuseClient` | `response_format` (`json_schema`) |
+| `DeepSeekClient` | `response_format` `json_object`; the schema joins the prompt as a system message unless the prompt already mentions JSON |
+| `OllamaModel` | `format` |
+| `BedrockClient`, `MistralRsModel` | not sent; the prompt asks for the format and the caller validates the reply |
+
 ---
 
 ## Gemini
