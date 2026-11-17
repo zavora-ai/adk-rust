@@ -67,6 +67,7 @@ mod cache;
 #[cfg(feature = "context-compaction")]
 pub mod compaction;
 mod context;
+pub mod history;
 pub mod intra_compaction;
 mod launcher;
 mod runner;
@@ -77,6 +78,7 @@ pub mod tool_concurrency;
 
 pub use builder::RunnerConfigBuilder;
 pub use context::{InvocationContext, MutableSession};
+pub use history::{ActivityGuard, HistoryControl, RewindTarget, SessionActivity};
 pub use launcher::Launcher;
 pub use runner::{Runner, RunnerConfig, RunnerInvocation};
 pub use spend::LlmSpendEstimate;
