@@ -1906,9 +1906,11 @@ impl HarnessAgentBuilder {
             &instruction_state,
         )?;
         #[cfg_attr(not(feature = "team"), allow(unused_mut))]
-        let mut registry = ToolClassRegistry::harness_defaults(&self.name).with_web_allowlist(
-            self.web.as_ref().map(|web| web.allowed_domains.clone()).unwrap_or_default(),
-        );
+        let mut registry = ToolClassRegistry::harness_defaults(&self.name)
+            .with_web_allowlist(
+                self.web.as_ref().map(|web| web.allowed_domains.clone()).unwrap_or_default(),
+            )
+            .with_fetch_domains(self.web.as_ref().and_then(|web| web.fetch_domains.clone()));
         for classes in &self.origin_classes {
             registry = registry.with_origin_classes(classes.clone());
         }
@@ -2223,7 +2225,11 @@ impl HarnessAgentBuilder {
         // Governed web tools (spec 3.1 §7.20): `web_search` only with a provider.
         #[cfg(feature = "web")]
         if let Some(config) = self.web.clone() {
-            let runtime = crate::web::WebRuntime::new(config, self.web_signer.clone());
+            let runtime = crate::web::WebRuntime::new(
+                config,
+                self.web_signer.clone(),
+                Some((mode_store.clone(), self.mode)),
+            );
             tools.push(Arc::new(crate::tools::WebFetchTool::new(runtime.clone())));
             if let Some(provider) = &self.search_provider {
                 tools.push(Arc::new(crate::tools::WebSearchTool::new(runtime, provider.clone())));
@@ -2261,7 +2267,9 @@ impl HarnessAgentBuilder {
         // The browser pack's tools join the harness tools under the harness's web
         // configuration (spec 3.1 §7.24).
         #[cfg(feature = "browser")]
-        let browser = browser.map(|pack| pack.into_runtime(self.web.clone().unwrap_or_default()));
+        let browser = browser.map(|pack| {
+            pack.into_runtime(self.web.clone().unwrap_or_default(), (mode_store.clone(), self.mode))
+        });
         #[cfg(feature = "browser")]
         if let Some(browser) = &browser {
             tools.extend(browser.tools.iter().cloned());

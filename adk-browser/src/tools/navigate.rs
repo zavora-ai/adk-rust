@@ -1,11 +1,14 @@
 //! Navigate tool for browser navigation.
 
 use crate::session::BrowserSession;
-use adk_core::egress::is_non_public;
+use adk_core::egress::{ContextUrls, UrlSources, is_non_public};
 use adk_core::{Result, Tool, ToolContext};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Arc;
+
+/// Error code of a navigation refused because its URL did not appear in the conversation.
+pub const URL_NOT_IN_CONTEXT_CODE: &str = "browser.url_not_in_context";
 
 /// URL schemes the navigation tools accept unless configured otherwise.
 ///
@@ -32,6 +35,8 @@ pub(crate) struct UrlPolicy {
     pub(crate) allowed_schemes: Vec<String>,
     pub(crate) allow_private_network: bool,
     pub(crate) allow_unresolved_hosts: bool,
+    /// With sources, a URL is opened only when it appeared in them (the exfiltration rule).
+    pub(crate) url_sources: Option<UrlSources>,
 }
 
 impl Default for UrlPolicy {
@@ -40,6 +45,7 @@ impl Default for UrlPolicy {
             allowed_schemes: default_allowed_schemes(),
             allow_private_network: false,
             allow_unresolved_hosts: false,
+            url_sources: None,
         }
     }
 }
@@ -53,6 +59,26 @@ enum HostRefusal {
 }
 
 impl UrlPolicy {
+    /// Refuses `url` when the exfiltration rule is on and the URL did not appear in the
+    /// conversation `ctx` belongs to, so a model cannot carry data out in a URL it composed.
+    ///
+    /// Runs before any lookup, since a composed host name carries data to the resolver.
+    pub(crate) fn check_in_context(&self, url: &str, ctx: &dyn ToolContext) -> Result<()> {
+        let Some(sources) = &self.url_sources else { return Ok(()) };
+        if ContextUrls::from_tool_context(ctx, sources).contains(url) {
+            return Ok(());
+        }
+        Err(adk_core::AdkError::new(
+            adk_core::ErrorComponent::Tool,
+            adk_core::ErrorCategory::Forbidden,
+            URL_NOT_IN_CONTEXT_CODE,
+            "The URL did not appear earlier in the conversation, so the browser does not open \
+             it: only a URL a user message or a tool result already holds is opened, exactly as \
+             written there (query string included). Open a URL exactly as it appeared, or ask \
+             the user for the URL.",
+        ))
+    }
+
     /// Rejects a URL that does not parse, whose scheme is not allowed, or — unless private
     /// network access is enabled — whose host is loopback, private, link-local, or a cloud
     /// metadata endpoint.
@@ -258,6 +284,30 @@ impl NavigateTool {
         self.policy.allowed_schemes = schemes.into_iter().map(Into::into).collect();
         self
     }
+
+    /// Opens only a URL that already appeared in the conversation's `sources`: a user
+    /// message or a tool result, exactly as written there. Off by default.
+    ///
+    /// A model that has read untrusted text can be told to put data it holds into a URL and
+    /// open it; under this rule a URL found only in what the model wrote is refused with
+    /// [`URL_NOT_IN_CONTEXT_CODE`] before the browser moves or any name is resolved. See
+    /// [`ContextUrls`] for the sources and the matching rule.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_browser::{BrowserSession, NavigateTool};
+    /// use adk_core::egress::UrlSources;
+    /// use std::sync::Arc;
+    ///
+    /// let browser = Arc::new(BrowserSession::with_defaults());
+    /// let tool = NavigateTool::new(browser).with_url_provenance(Some(UrlSources::default()));
+    /// ```
+    #[must_use]
+    pub fn with_url_provenance(mut self, sources: Option<UrlSources>) -> Self {
+        self.policy.url_sources = sources;
+        self
+    }
 }
 
 #[async_trait]
@@ -295,12 +345,13 @@ impl Tool for NavigateTool {
         }))
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let url = args
             .get("url")
             .and_then(|v| v.as_str())
             .ok_or_else(|| adk_core::AdkError::tool("Missing 'url' parameter"))?;
 
+        self.policy.check_in_context(url, ctx.as_ref())?;
         self.policy.check(url).await?;
 
         // Navigate

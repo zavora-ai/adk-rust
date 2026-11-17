@@ -15,8 +15,11 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+pub use adk_core::egress::{ToolResultSources, UrlSources};
 use adk_core::{Result, async_trait};
 use serde::{Deserialize, Serialize};
+
+use crate::mode::HarnessMode;
 
 pub mod domain;
 pub use domain::fixture;
@@ -41,7 +44,7 @@ pub use fetch::{
     TRUNCATION_MARKER, hex_sha256,
 };
 #[cfg(feature = "web")]
-pub use html::{TextShape, decode_entities, html_to_text};
+pub use html::{TextShape, decode_entities, html_to_text, html_to_text_at};
 #[cfg(feature = "web")]
 pub use screen::{
     INJECTION_LABEL, INJECTION_PHRASES, NOT_SCREENED, SECRET_REDACTION, Screened, has_secret,
@@ -55,18 +58,23 @@ pub use search::{DeepSeekSearch, SearxngSearch};
 /// | Setting | Meaning |
 /// |---|---|
 /// | `allowed_domains` | hosts `web_fetch` and the browser pack's navigation reach without approval; never forwarded to a search |
+/// | `fetch_domains` | the fetch filter: the only hosts, or the hosts never, `web_fetch` and navigation reach, redirect hops included; no approval widens it |
+/// | `url_provenance` | when a fetched URL must already appear in the conversation, so a model cannot carry data out in a URL it composed |
+/// | `url_sources` | which parts of the conversation count for `url_provenance` |
 /// | `search_domains` | the search filter: forwarded to the provider's search where it takes one, applied to the governed `web_search`'s results; `None` searches every domain |
 ///
 /// # Example
 ///
 /// ```rust
-/// use adk_harness::web::{SearchDomains, WebConfig};
+/// use adk_harness::web::{SearchDomains, UrlProvenance, WebConfig};
 ///
 /// let config = WebConfig {
 ///     allowed_domains: vec!["docs.rs".into()],
+///     fetch_domains: Some(SearchDomains::Blocked(vec!["pastebin.com".into()])),
 ///     search_domains: Some(SearchDomains::Allowed(vec!["docs.rs".into(), "rust-lang.org".into()])),
 ///     ..WebConfig::default()
 /// };
+/// assert_eq!(config.url_provenance, UrlProvenance::Unattended);
 /// assert_eq!(config.max_bytes, 1024 * 1024);
 /// assert_eq!(config.max_url_len, 2048);
 /// assert_eq!(config.max_query_len, 512);
@@ -80,6 +88,19 @@ pub struct WebConfig {
     /// Hosts `web_fetch` and the browser pack reach without approval: exact hosts or
     /// `*.example.com`, the `DomainIn` grammar. Never forwarded to a search (I73).
     pub allowed_domains: Vec<String>,
+    /// The fetch filter: `web_fetch` and the browser pack's navigation reach only the
+    /// allowed domains, or never the blocked ones, each covering its subdomains. It applies
+    /// to the URL and every redirect hop, and no approval or standing rule widens it: the
+    /// policy denies a call outside it before anyone is asked. `None` filters nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetch_domains: Option<SearchDomains>,
+    /// When `web_fetch` and the browser pack's navigation fetch only URLs that already
+    /// appeared in the conversation ([`UrlProvenance`]).
+    pub url_provenance: UrlProvenance,
+    /// The parts of the conversation a URL may come from under `url_provenance`: user
+    /// messages and every tool result except the shell's, by default, since a shell prints
+    /// whatever URL a command builds.
+    pub url_sources: UrlSources,
     /// The search filter (spec 3.1 §7.32): forwarded where the provider's search takes one
     /// (Anthropic both lists, OpenAI an allowed list), applied to the governed
     /// `web_search`'s results, and named in the banner where the provider takes none
@@ -108,6 +129,9 @@ impl Default for WebConfig {
     fn default() -> Self {
         Self {
             allowed_domains: Vec::new(),
+            fetch_domains: None,
+            url_provenance: UrlProvenance::default(),
+            url_sources: UrlSources::default().except_tools(SHELL_TOOLS),
             search_domains: None,
             max_bytes: 1024 * 1024,
             max_url_len: 2048,
@@ -123,8 +147,70 @@ impl Default for WebConfig {
     }
 }
 
-/// What a web search may return, by domain (spec 3.1 §7.32): a filter separate from the
-/// fetch allowlist.
+/// The harness's shell tools, whose results are not URL sources by default: a shell prints
+/// whatever URL the command it ran built.
+pub const SHELL_TOOLS: [&str; 2] = ["bash", "shell_output"];
+
+/// When the web tools fetch only URLs that already appeared in the conversation
+/// (the exfiltration rule).
+///
+/// A model that read untrusted text can be told to put data it holds into a URL and fetch
+/// it. Under the rule, `web_fetch` and the browser pack's navigation take a URL only when it
+/// appeared, exactly, in a user message or a tool result ([`WebConfig::url_sources`]);
+/// a URL found only in what the model wrote is refused with
+/// `harness.web.url_not_in_context`, before any DNS lookup. A redirect the server sends is
+/// not the model's choice, so it is checked against the fetch filter and the egress policy,
+/// not the rule; a redirect to another host comes back as `redirect_to`, a tool result, so
+/// the next call may fetch it.
+///
+/// | Value | The rule applies |
+/// |---|---|
+/// | `Off` | never |
+/// | `Unattended` (default) | in Auto mode, where no person sees a call before it runs: edits run unasked, a held web call may be answered by the auto reviewer (a model), and kernel partitions and goals run unwatched |
+/// | `Always` | in every mode, as Anthropic's server-side `web_fetch` applies it |
+///
+/// In Ask, Plan and Read-only modes every fetch outside `allowed_domains` waits for a person
+/// who sees the URL, so `Unattended` leaves those modes as they were; an allowlisted host
+/// still receives a composed URL there without asking, which `Always` closes.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_harness::HarnessMode;
+/// use adk_harness::web::UrlProvenance;
+///
+/// assert!(UrlProvenance::default().applies(HarnessMode::Auto));
+/// assert!(!UrlProvenance::default().applies(HarnessMode::Ask));
+/// assert!(UrlProvenance::Always.applies(HarnessMode::ReadOnly));
+/// assert!(!UrlProvenance::Off.applies(HarnessMode::Auto));
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum UrlProvenance {
+    /// Never: any URL the policy admits is fetched.
+    Off,
+    /// In Auto mode.
+    #[default]
+    Unattended,
+    /// In every mode.
+    Always,
+}
+
+impl UrlProvenance {
+    /// Whether the rule applies to a call made in `mode`.
+    pub fn applies(self, mode: HarnessMode) -> bool {
+        match self {
+            Self::Off => false,
+            Self::Unattended => mode == HarnessMode::Auto,
+            Self::Always => true,
+        }
+    }
+}
+
+/// What a web search may return, by domain (spec 3.1 §7.32), and as
+/// [`WebConfig::fetch_domains`] what a fetch may reach: a filter separate from the fetch
+/// allowlist.
 ///
 /// Each entry is a domain such as `docs.rs`; it covers the domain and its subdomains, as
 /// Anthropic's and OpenAI's search filters read it, and a leading `*.` is dropped. A
@@ -519,6 +605,8 @@ fn escape_attr(value: &str) -> String {
 pub(crate) struct WebRuntime {
     pub(crate) config: WebConfig,
     pub(crate) fetcher: Fetcher,
+    /// The session's mode, for [`UrlProvenance::Unattended`]; `None` reads as Ask.
+    modes: Option<(Arc<dyn crate::mode::ModeStore>, HarnessMode)>,
     /// Fetches per (session, invocation), bounded.
     turns: std::sync::Mutex<std::collections::VecDeque<(String, u32)>>,
 }
@@ -527,7 +615,11 @@ pub(crate) struct WebRuntime {
 impl WebRuntime {
     const TURNS_CAP: usize = 1024;
 
-    pub(crate) fn new(config: WebConfig, signer: Option<Arc<dyn RequestSigner>>) -> Arc<Self> {
+    pub(crate) fn new(
+        config: WebConfig,
+        signer: Option<Arc<dyn RequestSigner>>,
+        modes: Option<(Arc<dyn crate::mode::ModeStore>, HarnessMode)>,
+    ) -> Arc<Self> {
         let fetcher = Fetcher::new(config.clone());
         Arc::new(Self {
             fetcher: match signer {
@@ -535,8 +627,15 @@ impl WebRuntime {
                 None => fetcher,
             },
             config,
+            modes,
             turns: std::sync::Mutex::new(std::collections::VecDeque::new()),
         })
+    }
+
+    /// Whether [`WebConfig::url_provenance`] applies to this call: by the session's mode as
+    /// the policy reads it, and as Auto when the mode store cannot be read.
+    pub(crate) async fn provenance_applies(&self, ctx: &dyn adk_core::ToolContext) -> bool {
+        provenance_applies(self.config.url_provenance, self.modes.as_ref(), ctx).await
     }
 
     /// Counts one fetch of the turn; `Err(cap)` once the turn reached
@@ -567,14 +666,42 @@ impl WebRuntime {
     }
 }
 
+/// Whether `provenance` applies to a call in `ctx`, the session's mode read from `modes`
+/// (`None` reads as Ask), and as Auto when the store cannot be read.
+#[cfg(feature = "web")]
+pub(crate) async fn provenance_applies(
+    provenance: UrlProvenance,
+    modes: Option<&(Arc<dyn crate::mode::ModeStore>, HarnessMode)>,
+    ctx: &dyn adk_core::ToolContext,
+) -> bool {
+    let mode = match modes {
+        _ if matches!(provenance, UrlProvenance::Off | UrlProvenance::Always) => HarnessMode::Ask,
+        None => HarnessMode::Ask,
+        Some((store, default_mode)) => {
+            match store.get(ctx.app_name(), ctx.user_id(), ctx.session_id()).await {
+                Ok(Some(record)) => record.mode_for_invocation(ctx.invocation_id()),
+                Ok(None) => *default_mode,
+                Err(error) => {
+                    tracing::warn!(error = %error, "mode store unavailable; applying the url rule");
+                    HarnessMode::Auto
+                }
+            }
+        }
+    };
+    provenance.applies(mode)
+}
+
 #[cfg(all(test, feature = "web"))]
 mod tests {
     use super::*;
 
     #[test]
     fn fetches_are_counted_per_turn_and_capped() {
-        let runtime =
-            WebRuntime::new(WebConfig { max_fetches_per_turn: 2, ..WebConfig::default() }, None);
+        let runtime = WebRuntime::new(
+            WebConfig { max_fetches_per_turn: 2, ..WebConfig::default() },
+            None,
+            None,
+        );
         assert_eq!(runtime.count_fetch("s1", "inv-1"), Ok(1));
         assert_eq!(runtime.count_fetch("s1", "inv-1"), Ok(2));
         assert_eq!(runtime.count_fetch("s1", "inv-1"), Err(2));

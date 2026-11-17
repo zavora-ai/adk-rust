@@ -25,6 +25,10 @@
 //! [`EgressPolicy::narrow`] intersects two policies: a destination passes the result only when
 //! it passes both. An operator's policy is the ceiling, and every lower layer narrows it.
 //!
+//! [`ContextUrls`] answers a different question: whether a URL a model chose already appeared
+//! in the conversation, so a fetch tool can refuse a URL the model composed to carry data out
+//! (see [`provenance`](ContextUrls) for the sources and the matching rule).
+//!
 //! [`GuardedClient`] (feature `egress-client`) is an HTTP client that enforces a policy on
 //! every request URL, every resolved address and every redirect hop, ignores the environment's
 //! proxy settings, and is never replaced by an unguarded client when it cannot be built.
@@ -64,6 +68,7 @@
 mod address;
 #[cfg(feature = "egress-client")]
 mod client;
+mod provenance;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -76,6 +81,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub use address::{AddressClass, classify, is_non_public};
 #[cfg(feature = "egress-client")]
 pub use client::{EgressClientError, EgressResolver, GuardedClient, GuardedClientBuilder};
+pub use provenance::{ContextUrls, ToolResultSources, UrlSources, normalize_url};
 
 /// Which host names a [`EgressRule::Host`] admits.
 ///
