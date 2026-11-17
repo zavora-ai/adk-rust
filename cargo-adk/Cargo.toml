@@ -18,12 +18,19 @@ exclude = ["tests/"]
 name = "cargo-adk"
 path = "src/main.rs"
 
+[features]
+default = []
+# `cargo adk bench`: performance benchmarks against real LLM APIs through `adk-bench`. Off by
+# default because adk-bench links an agent runtime the other subcommands do not use.
+bench = ["dep:adk-bench", "dep:tracing-subscriber"]
+
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
 adk-deploy = { workspace = true }
 adk-core = { workspace = true }
 adk-eval = { workspace = true, features = ["ci-helpers"] }
-adk-bench = { workspace = true }
+# `cargo adk bench` (feature `bench`).
+adk-bench = { workspace = true, optional = true }
 adk-model = { workspace = true, features = ["gemini", "openai", "anthropic"] }
 async-trait = { workspace = true }
 futures = { workspace = true }
@@ -38,7 +45,7 @@ tar = { workspace = true }
 hex = { workspace = true }
 syn = { version = "2", features = ["full", "parsing"] }
 serde-saphyr.workspace = true
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 
 [dev-dependencies]
 proptest = "1.4"
