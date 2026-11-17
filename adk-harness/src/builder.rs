@@ -976,7 +976,8 @@ impl HarnessAgentBuilder {
     /// use adk_harness::{HarnessAgent, HarnessMode};
     /// use adk_model::{ScriptedLlm, ScriptedResponse};
     ///
-    /// let reviewer = Arc::new(ScriptedLlm::new("claude-haiku-5-5", vec![]));
+    /// let responses: Vec<ScriptedResponse> = Vec::new();
+    /// let reviewer = Arc::new(ScriptedLlm::new("claude-haiku-5-5", responses));
     /// let builder = HarnessAgent::builder("harness")
     ///     .mode(HarnessMode::Auto)
     ///     .auto_review(Arc::new(

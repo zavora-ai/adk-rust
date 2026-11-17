@@ -128,7 +128,7 @@ async fn an_approval_runs_the_held_call_and_is_filed_and_audited() {
         .records()
         .into_iter()
         .find(|record| {
-            record.kind == AuditRecordKind::Approval && record.ext.get("verdict").is_some()
+            record.kind == AuditRecordKind::Approval && record.ext.contains_key("verdict")
         })
         .expect("the verdict is recorded");
     assert_eq!(verdict.decision, Some(AuditDecision::Approved));

@@ -1,5 +1,5 @@
 //! The tools that let a model run background sub-agents through a
-//! [`SubagentHost`](adk_core::SubagentHost).
+//! [`SubagentHost`].
 //!
 //! | Tool | Effect | Does |
 //! |---|---|---|

@@ -435,10 +435,15 @@ impl AgentProcess {
         let mut line = serde_json::to_string(request)
             .map_err(|e| format!("failed to encode the request: {e}"))?;
         line.push('\n');
-        if let Err(e) = self.stdin.write_all(line.as_bytes()).await {
-            return Err(self.exited(&format!("could not be written to ({e})")));
-        }
-        if let Err(e) = self.stdin.flush().await {
+        let written = match self.stdin.write_all(line.as_bytes()).await {
+            Ok(()) => self.stdin.flush().await,
+            Err(e) => Err(e),
+        };
+        // A process that exits before reading closes stdin first; whether the write sees the
+        // closed pipe depends on timing, so stdout decides what the agent did.
+        if let Err(e) = written
+            && e.kind() != std::io::ErrorKind::BrokenPipe
+        {
             return Err(self.exited(&format!("could not be written to ({e})")));
         }
         let reply = match self.stdout.next_line().await {

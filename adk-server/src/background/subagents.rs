@@ -1,5 +1,5 @@
 //! Background sub-agents as durable runs: [`DurableSubagents`], the
-//! [`SubagentHost`] over any [`DurableRunStore`] and the [`DurableWorker`] that claims its
+//! [`SubagentHost`] over any [`DurableRunStore`] and the [`DurableWorker`](super::DurableWorker) that claims its
 //! queue.
 //!
 //! A sub-agent is a run of its target in a session of its own, `subagent-<id>`; every run
@@ -17,7 +17,7 @@
 //! | A run parks on a held call ([`DurableSubagents::run_parked`]) | The backend reports `waitingForHuman`; a parent turn in flight is told |
 //! | Start ([`DurableSubagents::reconcile`]) | Tells every parent about finished runs it was not told about, after a crash |
 //!
-//! [`SubagentHooks`] wires the last three into a plain [`DurableWorker`]; `adk-kernel` calls
+//! [`SubagentHooks`] wires the last three into a plain [`DurableWorker`](super::DurableWorker); `adk-kernel` calls
 //! them from its own worker hooks.
 //!
 //! # Example

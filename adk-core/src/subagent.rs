@@ -3,8 +3,8 @@
 //!
 //! A sub-agent is one or more durable runs ([`DurableRunStore`](crate::DurableRunStore))
 //! of a target agent in a session of its own. Its first run's input carries a
-//! [`SubagentLaunch`] under [`SUBAGENT_INPUT_KEY`], and its budget slice and the parent's
-//! tool names as [`RunLimits`] under [`RUN_LIMITS_INPUT_KEY`], so every backend of the run
+//! [`SubagentLaunch`] under [`SUBAGENT_INPUT_KEY`](crate::subagent::SUBAGENT_INPUT_KEY), and its budget slice and the parent's
+//! tool names as [`RunLimits`] under [`RUN_LIMITS_INPUT_KEY`](crate::subagent::RUN_LIMITS_INPUT_KEY), so every backend of the run
 //! store holds everything a worker needs to run, resume and report it. A follow-up message the parent queues is another run of the same session
 //! carrying the same launch.
 //!
@@ -15,7 +15,7 @@
 //! | Budget | [`BudgetTracker::carve`](crate::BudgetTracker::carve): the slice comes out of what the parent's run has left, and is the sub-agent's for all its runs |
 //! | Identity | The run acts as the target's own agent for the parent's user, with the parent agent appended to its delegation chain ([`SubagentParent::child_acting`]) |
 //! | Tool ceiling | [`ToolCeiling`]: a call to a tool the parent did not have is denied, a layer under the runner's own policy |
-//! | Notification | [`subagent_notice`]: the text a parent's turn receives — as a steering message while its turn runs, as the user turn of a new parent run otherwise |
+//! | Notification | [`subagent_notice`](crate::subagent::subagent_notice): the text a parent's turn receives — as a steering message while its turn runs, as the user turn of a new parent run otherwise |
 //!
 //! Hosts: `adk-server`'s `DurableSubagents` (feature `background`) over any run store and a
 //! `DurableWorker`; `adk-kernel`'s `Kernel::subagents`, which runs each sub-agent as a
