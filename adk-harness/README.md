@@ -193,7 +193,9 @@ A hook is a command that runs on a tool event — `pre_tool`, `post_tool`, `post
 event as JSON on stdin. It can deny a call, fail or annotate a result, or notify the user; it
 can never allow a call, change the mode, create a rule or answer a call, and
 `{"decision":"allow"}` is ignored and audited. Workspace hooks (`.adk/harness.toml`) run
-only under the workspace's content-keyed trust. Every run is a `harness.hook.ran` record.
+only under the workspace's content-keyed trust. A `pre_tool` hook that fails — exits
+non-zero, crashes, times out — blocks the call unless it sets `on_failure = "continue"`.
+Every run is a `harness.hook.ran` record.
 `adk-rust` builds the crate with this feature: `--no-hooks` runs none, `/hooks` lists the
 effective set, and `on_hold` and `on_stop` notes are shown at the console. See
 `docs/official_docs/harness/hooks.md`.
