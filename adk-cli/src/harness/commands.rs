@@ -396,7 +396,10 @@ fn hooks(shared: &Shared) -> String {
             hook.source.as_str(),
             hook.isolation.as_str(),
             hook.timeout.as_secs(),
-            if hook.fail_closed { " · fail-closed" } else { "" }
+            match hook.failure() {
+                adk_harness::hooks::HookFailure::Block => " · blocks on failure",
+                _ => "",
+            }
         );
     }
     let _ = write!(

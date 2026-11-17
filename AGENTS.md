@@ -260,7 +260,7 @@ adk-gcp/           Google Cloud REST plumbing: ADC credentials, bounded HTTP tra
 adk-anthropic/     Anthropic client: streaming, thinking, prompt caching, Managed Agents and Files APIs
 adk-tool/          FunctionTool, MCP client and server, built-in tool wrappers, Slack/BigQuery/Spanner
 adk-runner/        Execution runtime: event streaming, budgets, ledgers, cancellation and recovery
-adk-server/        Axum server, A2A v1.0.0, background runs and cron (`background`), AWP edge (`awp`)
+adk-server/        Axum server, A2A v1.0.0, background runs and cron (`background`), AWP edge (`awp`), agents over MCP (`mcp`)
 adk-session/       Sessions on SQLite, PostgreSQL, Redis, MongoDB, Firestore, Neo4j, Vertex; durable stores
 adk-artifact/      Versioned binary artifacts: in-memory, file, GCS (`gcs`)
 adk-memory/        Semantic memory and search on seven backends, SQLite knowledge graph (`graph-memory`)

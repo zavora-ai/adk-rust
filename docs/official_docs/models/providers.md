@@ -118,6 +118,23 @@ fn normalized(model: &dyn Llm) -> Value {
 
 See [Schema Normalization](../tools/schema-normalization.md) for what each adapter changes.
 
+### Structured output by provider
+
+`GenerateContentConfig::response_schema`, which `LlmAgentBuilder::output_schema`, the
+`adk-eval` judges and `adk_core::decide` set, reaches each provider as its own structured-output
+control. No client turns it into a forced tool call.
+
+| Client | Sent as |
+|--------|---------|
+| `GeminiModel` | `responseSchema` with `responseMimeType: application/json`, normalized by `GeminiSchemaAdapter` |
+| `OpenAIClient`, `AzureOpenAIClient`, `OpenAICompatible` | strict `response_format` (`json_schema`) on Chat Completions; `text.format` on the Responses API |
+| `AnthropicClient` | `output_config.format` (`json_schema`): every object closed with `additionalProperties: false`, numeric and length bounds dropped; a schema with an open map is not sent |
+| `GroqClient`, `AzureAIClient` | `response_format` (`json_schema`) |
+| `OpenRouterClient`, `MuseClient` | `response_format` (`json_schema`) |
+| `DeepSeekClient` | `response_format` `json_object`; the schema joins the prompt as a system message unless the prompt already mentions JSON |
+| `OllamaModel` | `format` |
+| `BedrockClient`, `MistralRsModel` | not sent; the prompt asks for the format and the caller validates the reply |
+
 ---
 
 ## Gemini
@@ -1313,6 +1330,9 @@ configures: Gemini on Vertex AI when `GOOGLE_GENAI_USE_ENTERPRISE` or
 `GOOGLE_GENAI_USE_VERTEXAI` is `1` or `true` (needs `gemini-vertex`), then
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `GOOGLE_API_KEY`.
 
+To move to another provider when one fails at run time, wrap the models in a `FallbackLlm`
+([Model fallback](./fallback.md)).
+
 ---
 
 ## Content Bedrock Cannot Carry
@@ -1395,6 +1415,7 @@ are in the [adk-playground](https://github.com/zavora-ai/adk-playground) reposit
 - [Anthropic](./anthropic.md) - The `adk-anthropic` client
 - [Gemini Interactions API](./gemini-interactions.md) - Stateful Gemini transport
 - [OpenCode Go and Zen](./opencode.md) - Per-model routing for OpenCode services
+- [Model Fallback](./fallback.md) - An ordered chain of models across providers
 - [Ollama (Local)](./ollama.md) - Run models locally with Ollama
 - [Local Models (mistral.rs)](./mistralrs.md) - Native Rust inference
 - [LlmAgent](../agents/llm-agent.md) - Using models with agents

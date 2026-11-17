@@ -1,6 +1,6 @@
 # Tool Authorization
 
-Control which tools an agent can execute and when human approval is required. ADK-Rust provides five mechanisms — from a run-wide default-deny policy to full RBAC — that work across the CLI, web server, and A2A protocol, plus an organisation-wide kill switch.
+Control which tools an agent can execute and when human approval is required. ADK-Rust provides five mechanisms — from a run-wide default-deny policy to full RBAC — that work across the CLI, web server, and A2A protocol, an opt-in model reviewer that decides held calls before a person, and an organisation-wide kill switch.
 
 ## Quick Comparison
 
@@ -8,6 +8,7 @@ Control which tools an agent can execute and when human approval is required. AD
 |-----------|----------|-------------|---------|
 | [Tool Policy](#tool-policy) | Run-wide allow, deny, or require approval | Per tool name and argument | Decides before execution; for [built-in tools](#built-in-tools), before the request |
 | [Tool Confirmation Policy](#tool-confirmation-policy) | Interactive approval in CLI/web | Per-tool or all tools | Pauses execution, emits event |
+| [Model Reviewer](#model-reviewer) | A model approves, denies or escalates held calls (opt-in) | Per app, partition class, agent and tool | Decides before the person; never overrides a deny |
 | [BeforeToolCallback](#beforetoolcallback) | Programmatic gate / audit | Custom logic per call | Sync decision, no pause |
 | [Access Control (RBAC)](#access-control) | Role-based enterprise security | Per-user, per-tool | Deny before execution |
 | [Graph Interrupts](#graph-interrupts) | Complex approval workflows | Per-node checkpoint | Persists state, resumes later |
@@ -602,6 +603,76 @@ written to the store, where the next run takes it. An approver may edit the argu
 edited call is a new call and passes the `ToolPolicy` and the tool screen again before it
 executes. A rejection or response is reported to the model as the call's refusal. See
 [Approval Service](approval-service.md).
+
+### Model Reviewer
+
+`RunConfig::tool_reviewer` adds one more approver before a person: a `ToolReviewer` that
+approves, denies, or escalates a call the `ToolPolicy` holds for approval. `ModelApprover` is
+the reviewer backed by a model — ADK-Rust's counterpart to OpenAI's `auto_review` and the
+`auto` permission policy of Claude Managed Agents. It is off by default.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::{ModelApprover, ReviewScope, RunConfig};
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
+
+fn main() -> adk_core::Result<()> {
+    let api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
+    let reviewer = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-haiku-5-5"))?;
+    let approver = ModelApprover::new(Arc::new(reviewer))
+        // Money and deletions stay with a person.
+        .scope(ReviewScope::default().excluding_tools(["pay_*", "delete_*"]))
+        .min_confidence(0.9)
+        .guidance("This agent maintains a Rust workspace; builds and tests are routine.");
+    let config = RunConfig::builder().tool_reviewer(Arc::new(approver)).build();
+    assert!(config.tool_reviewer.is_some());
+    Ok(())
+}
+```
+
+| Verdict | Effect |
+|---------|--------|
+| Approve | The call runs, as if an approver approved it |
+| Deny | The call is refused; the model is told `<reviewer>: <rationale>` |
+| Escalate | The handler asks a person or, without one, the call is held for the approval inbox, with the reviewer's note in its reason |
+
+What the reviewer never decides:
+
+| Call | Why |
+|------|-----|
+| One the policy, the egress policy, the consent gate or a guardrail refuses | Refused before any approver is asked; nothing a model says overrides a deny |
+| One a `ToolConfirmationPolicy` holds | That policy asks a person by definition |
+| One a person asked for, and a held call being resumed | Only a person's decision answers it |
+| One already pending for a person in the `ApprovalStore` | An escalated call stays the person's; the same call again is not reviewed again |
+| One outside its `ReviewScope` (apps, partition classes, agents, tool globs) | Left to a person, with no verdict recorded |
+
+A reviewer that fails, answers late (`ToolReviewer::timeout`, 60 seconds by default), or
+answers anything but a verdict escalates; it never approves by default. A freeze of the kill
+switch while it decides refuses the call. Every verdict is recorded in the run's audit trail
+before it takes effect, with the reviewer (`model:<model id>`) as the actor, the verdict and a
+digest of its rationale; an approval or a denial is also filed in the run's approval inbox as
+a request the reviewer decided (`ApprovalService::record_review`), so the inbox's history shows
+`decided by model:<model id>`.
+
+`ModelApprover` sends one request per held call in a context of its own: a fixed system prompt,
+then the call, its fingerprint digest, the policy's reason and the user's three most recent
+messages, cut to `max_context_chars`. It declares no tools and sees no session history or tool
+results. It approves or denies only at `min_confidence` (0.8 by default) and escalates below
+it; `deny_only()` removes approval altogether. Its model call goes through the run's
+`ModelCallScope`, so it counts against the run budget and the spend ledger, and a budget that
+refuses it escalates the call.
+
+> **Important:** A model reviewer is one more surface a prompt injection can aim at: text the
+> agent read can steer it into a harmful call and then try to talk the reviewer into approving
+> it. The mitigations are structural — only held calls, no tool results, the arguments and
+> messages wrapped as untrusted data, a strict JSON verdict, a confidence floor, fingerprint
+> binding, an audited verdict, and a scope that keeps tools moving money or deleting data
+> with a person. None makes the reviewer immune; a deployment that cannot accept a wrong
+> approval keeps those tools out of its scope or uses `deny_only()`.
+
+The harness applies a reviewer only to what Auto mode holds; see
+[Auto review](../harness/modes-and-approvals.md#auto-review).
 
 ### Decisions Keyed by Call ID
 
@@ -1295,7 +1366,8 @@ Order of evaluation in `LlmAgent` and `CodeActAgent`:
    is answered with `not run` responses and the run ends with a `ResourceExhausted` error
 2. Enhanced plugins (`before_tool_call`) — may rewrite the arguments
 3. The runner's plugin `before_tool` callbacks, then the agent's `BeforeToolCallback`s — the
-   first to return content skips the tool
+   first to return content skips the tool; one that errs or panics answers the call `not run`
+   (`callback.panicked` for a panic), so a broken authorization callback fails closed
 4. Circuit breaker
 5. The governed path (`adk_core::authorize_tool_call`) on the final arguments:
    1. Kill switch — a frozen run's call is answered `not run` and the run ends with a
@@ -1317,7 +1389,8 @@ Order of evaluation in `LlmAgent` and `CodeActAgent`:
    6. Tool guardrails (`ToolGuardrailSet`) — a denial becomes the call's result; a revision is
       checked against the policy again
    7. Confirmation, when the agent or the policy requires it — a call-ID decision, a fingerprint
-      approval, the `ApprovalStore`, the `ToolConfirmationHandler`, or a hold
+      approval, the `ApprovalStore`, the run's `ToolReviewer` for a call the policy holds (see
+      [Model Reviewer](#model-reviewer)), the `ToolConfirmationHandler`, or a hold
 6. Action ledger (`ToolEffect::NonIdempotent` tools, `RunConfig::action_ledger`) — a recorded
    call is answered from its record without executing (`CodeActAgent` raises the answer into
    the script); otherwise the call is begun under its `ToolContext::idempotency_key()`. The kill

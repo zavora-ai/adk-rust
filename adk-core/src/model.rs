@@ -19,6 +19,64 @@ pub trait Llm: Send + Sync {
     /// Generates content from the given request, optionally streaming.
     async fn generate_content(&self, req: LlmRequest, stream: bool) -> Result<LlmResponseStream>;
 
+    /// Generates content with every provider call it makes metered against `scope`.
+    ///
+    /// [`ModelCallScope::generate`](crate::ModelCallScope::generate) calls this for every
+    /// metered call, after checking the scope's kill switches. The default meters the call as
+    /// one model call ([`ModelCallScope::generate_one_call`](crate::ModelCallScope::generate_one_call)):
+    /// one hold in the spend ledger, reserved under the vendor of `req.model`, and one model
+    /// call in the run budget.
+    ///
+    /// A model that sends one request to several providers, such as a fallback chain,
+    /// overrides it to call each of them through `scope.generate`, so every provider call is
+    /// reserved, counted and committed under the provider and model that served it. A
+    /// wrapper that only changes the request or the stream keeps the default and is metered
+    /// as one call.
+    ///
+    /// # Errors
+    ///
+    /// Returns what [`ModelCallScope::generate`](crate::ModelCallScope::generate) returns.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::{
+    ///     InMemorySpendLedger, Llm, LlmRequest, LlmResponseStream, ModelCallScope, SpendKey,
+    ///     SpendLedger, SpendPeriod,
+    /// };
+    ///
+    /// struct Local;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Llm for Local {
+    ///     fn name(&self) -> &str {
+    ///         "gemini-local"
+    ///     }
+    ///     async fn generate_content(&self, _: LlmRequest, _: bool) -> adk_core::Result<LlmResponseStream> {
+    ///         Ok(Box::pin(futures::stream::empty()))
+    ///     }
+    /// }
+    ///
+    /// # futures::executor::block_on(async {
+    /// let ledger = Arc::new(InMemorySpendLedger::default());
+    /// let scope = ModelCallScope::new().with_spend_ledger(ledger.clone(), "acme");
+    /// // The default meters the call as one; a call with no response commits nothing.
+    /// let request = LlmRequest::new("gemini-local", vec![]);
+    /// let _ = Local.generate_content_metered(&scope, request, false).await?;
+    /// assert_eq!(ledger.spent(&SpendKey::org("acme"), SpendPeriod::Day).await?, 0);
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// # }).unwrap();
+    /// ```
+    async fn generate_content_metered(
+        &self,
+        scope: &crate::ModelCallScope,
+        req: LlmRequest,
+        stream: bool,
+    ) -> Result<LlmResponseStream> {
+        scope.generate_one_call(self, req, stream).await
+    }
+
     /// Returns the schema adapter for this provider.
     ///
     /// The schema adapter normalizes raw JSON Schema from MCP tools into the

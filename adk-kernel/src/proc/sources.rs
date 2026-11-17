@@ -123,6 +123,9 @@ pub fn activity_for_event(event: &KernelEvent) -> Option<Activity> {
         KernelEvent::Agent { id, change, .. } => kernel(LedgerKind::Audit)
             .with_effect(format!("agent.{change}"))
             .with_subject(id.clone()),
+        KernelEvent::Subagent { id, status, .. } => kernel(LedgerKind::Audit)
+            .with_effect(format!("subagent.{status}"))
+            .with_subject(id.clone()),
         KernelEvent::Governance { frozen, .. } => {
             kernel(LedgerKind::Governance).with_effect(if *frozen { "frozen" } else { "unfrozen" })
         }
@@ -137,7 +140,8 @@ fn event_pid(event: &KernelEvent) -> Option<&str> {
         KernelEvent::Process { pid, .. }
         | KernelEvent::Held { pid, .. }
         | KernelEvent::Decided { pid, .. }
-        | KernelEvent::RuleHit { pid, .. } => Some(pid),
+        | KernelEvent::RuleHit { pid, .. }
+        | KernelEvent::Subagent { pid, .. } => Some(pid),
         KernelEvent::Wake { pid, .. } => pid.as_deref(),
         KernelEvent::Spend { .. }
         | KernelEvent::Agenda { .. }

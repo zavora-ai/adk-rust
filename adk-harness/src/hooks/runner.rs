@@ -43,7 +43,7 @@ pub(crate) type TrustCheck = Arc<dyn Fn() -> bool + Send + Sync>;
 /// | Same bounds as `bash` | the hook's timeout is capped by the workspace's bash timeout; stdout and stderr by its output cap; the process runs in a new session with no terminal and its group is killed when it exits or times out |
 /// | Trust | a `Workspace` hook runs only while the trust check passes; an untrusted one is skipped and never recorded as run |
 /// | Host isolation | needs workspace trust for a workspace hook, and in Auto an operator hook |
-/// | Failure | a hook that exits non-zero, crashes or times out is `Continue`, recorded `outcome: error`; with `fail_closed` a `PreTool` hook's failure is `Deny` |
+/// | Failure | a hook that exits non-zero, crashes, times out or cannot be launched applies its [`HookFailure`](super::HookFailure): by default a `PreTool` hook's failure denies the call (recorded `outcome: deny`) and every other event's is `Continue` (recorded `outcome: error`); `on_failure = "continue"` opts a `PreTool` hook out, `"block"` makes a `PostTool` or `PostEdit` hook's failure fail the result |
 /// | Budget | `max_per_event` hooks run per event; once the hooks of a turn have used `max_time_per_turn`, a `PreTool` dispatch denies and a `PostTool` one fails with the reason |
 /// | Audit | `harness.hook.ran` per run, written before the outcome takes effect; an outcome whose record cannot be written is `error` |
 ///
@@ -514,20 +514,20 @@ impl HookRunner {
             let parsed = if failed { None } else { Some(HookOutcome::parse(&run.stdout)) };
             let outcome = match &parsed {
                 Some(parsed) => event.narrow(parsed.outcome.clone()),
-                None if hook.fail_closed && event == HookEvent::PreTool => HookOutcome::Deny {
-                    reason: format!(
-                        "the {} hook failed and is fail-closed: {}",
+                None => blocked(
+                    hook,
+                    &format!(
+                        "the {} hook failed ({}), and a failed {} hook blocks",
                         hook.event,
-                        run.error.clone().unwrap_or_else(|| describe_failure(&run))
+                        run.error.clone().unwrap_or_else(|| describe_failure(&run)),
+                        hook.event
                     ),
-                },
-                None => HookOutcome::Continue,
+                ),
             };
             let recorded_outcome = match (&parsed, &outcome) {
                 (Some(parsed), _) if parsed.ignored_grant => "ignored_grant",
-                (None, HookOutcome::Deny { .. }) => "deny",
-                (None, _) => "error",
-                (Some(_), outcome) => outcome.as_str(),
+                (None, HookOutcome::Continue) => "error",
+                (_, outcome) => outcome.as_str(),
             };
             if parsed.as_ref().is_some_and(|parsed| parsed.ignored_grant) {
                 tracing::warn!(
@@ -544,7 +544,8 @@ impl HookRunner {
                     hook.exit_code = ?run.exit_code,
                     hook.timed_out = run.timed_out,
                     error = run.error.as_deref().unwrap_or(""),
-                    "hook did not complete; treated as continue"
+                    hook.on_failure = hook.failure().as_str(),
+                    "hook did not complete; its on_failure applies"
                 );
             }
 
@@ -591,14 +592,7 @@ impl HookRunner {
                         Ok(()) => outcome,
                         Err(error) => {
                             tracing::warn!(error = %error, "could not record harness.hook.ran; the hook's outcome does not apply");
-                            if hook.fail_closed && event == HookEvent::PreTool {
-                                HookOutcome::Deny {
-                                    reason: "the hook's audit record could not be written"
-                                        .to_string(),
-                                }
-                            } else {
-                                HookOutcome::Continue
-                            }
+                            blocked(hook, "the hook's audit record could not be written")
                         }
                     }
                 }
@@ -732,9 +726,23 @@ impl HookRunner {
 }
 
 fn describe_failure(run: &HookRun) -> String {
-    match run.exit_code {
-        Some(code) => format!("exited with status {code}"),
-        None => "ended without an exit status".to_string(),
+    match (run.timed_out, run.exit_code) {
+        (true, _) => format!("timed out after {} ms", run.duration.as_millis()),
+        (false, Some(code)) => format!("exited with status {code}"),
+        (false, None) => "crashed: it ended without an exit status".to_string(),
+    }
+}
+
+/// What `hook`'s failure, described by `why`, does under its [`HookFailure`]: a `PreTool`
+/// hook that blocks denies, a `PostTool` or `PostEdit` one fails the result, and anything
+/// else continues.
+fn blocked(hook: &HookSpec, why: &str) -> HookOutcome {
+    match hook.failure() {
+        super::HookFailure::Block => hook.event.narrow(match hook.event {
+            HookEvent::PreTool => HookOutcome::Deny { reason: why.to_string() },
+            _ => HookOutcome::Fail { message: why.to_string() },
+        }),
+        super::HookFailure::Continue => HookOutcome::Continue,
     }
 }
 
@@ -1080,7 +1088,7 @@ impl ToolContext for HookScope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hooks::{HookEvent, HookSpec};
+    use crate::hooks::{HookEvent, HookFailure, HookSpec, PRE_TOOL_HOOK_TIMEOUT};
 
     fn workspace() -> Workspace {
         let dir = tempfile::tempdir().unwrap();
@@ -1126,7 +1134,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn an_allow_is_continue_and_a_failure_is_continue_unless_fail_closed() {
+    async fn an_allow_is_continue_and_a_failed_pre_tool_hook_blocks_by_default() {
         let scope = HookScope::new("app", "alice", "s1", "inv", "harness");
         let args = json!({});
         let allow =
@@ -1135,30 +1143,61 @@ mod tests {
             allow.pre_tool(&call("bash", &args), HarnessMode::Ask, &scope, None).await,
             PreToolVerdict::Continue
         );
-        let crash = runner(vec![HookSpec::new(
-            HookEvent::PreTool,
-            r#"echo '{"decision":"deny"}'; exit 3"#,
-        )]);
+        // An error (a non-zero exit, whose stdout is discarded), a crash (killed by a
+        // signal) and a timeout each deny the call, naming the failure.
+        for (command, timeout, named) in [
+            (
+                r#"echo '{"decision":"continue"}'; exit 3"#,
+                PRE_TOOL_HOOK_TIMEOUT,
+                "exited with status 3",
+            ),
+            ("kill -9 $$", PRE_TOOL_HOOK_TIMEOUT, "crashed"),
+            ("sleep 5", Duration::from_millis(200), "timed out"),
+        ] {
+            let failing = HookSpec::new(HookEvent::PreTool, command).timeout(timeout);
+            let started = Instant::now();
+            let verdict = runner(vec![failing.clone()])
+                .pre_tool(&call("bash", &args), HarnessMode::Ask, &scope, None)
+                .await;
+            assert!(
+                matches!(&verdict, PreToolVerdict::Deny { reason } if reason.contains(named)),
+                "{command}: {verdict:?}"
+            );
+            assert!(started.elapsed() < Duration::from_secs(3), "the timeout kills the hook");
+            // An explicit opt-out fails open.
+            let open = runner(vec![failing.on_failure(HookFailure::Continue)]);
+            assert_eq!(
+                open.pre_tool(&call("bash", &args), HarnessMode::Ask, &scope, None).await,
+                PreToolVerdict::Continue,
+                "{command}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_post_tool_hook_continues_unless_it_blocks() {
+        let scope = HookScope::new("app", "alice", "s1", "inv", "harness");
+        let args = json!({});
+        let value = json!({ "ok": true });
+        let result = HookResult {
+            result: &value,
+            is_error: false,
+            exit_code: Some(0),
+            duration: Duration::ZERO,
+        };
+        let observer = runner(vec![HookSpec::new(HookEvent::PostTool, "exit 2")]);
         assert_eq!(
-            crash.pre_tool(&call("bash", &args), HarnessMode::Ask, &scope, None).await,
-            PreToolVerdict::Continue,
-            "a non-zero exit discards stdout"
+            observer.post_tool(&call("bash", &args), &result, HarnessMode::Ask, &scope, None).await,
+            PostToolVerdict::Continue
         );
-        let closed = runner(vec![HookSpec::new(HookEvent::PreTool, "exit 3").fail_closed(true)]);
-        assert!(matches!(
-            closed.pre_tool(&call("bash", &args), HarnessMode::Ask, &scope, None).await,
-            PreToolVerdict::Deny { .. }
-        ));
-        let slow = runner(vec![
-            HookSpec::new(HookEvent::PreTool, "sleep 5; echo '{\"decision\":\"deny\"}'")
-                .timeout(Duration::from_millis(200)),
+        let blocking = runner(vec![
+            HookSpec::new(HookEvent::PostTool, "exit 2").on_failure(HookFailure::Block),
         ]);
-        let started = Instant::now();
-        assert_eq!(
-            slow.pre_tool(&call("bash", &args), HarnessMode::Ask, &scope, None).await,
-            PreToolVerdict::Continue
-        );
-        assert!(started.elapsed() < Duration::from_secs(3), "the timeout kills the hook");
+        assert!(matches!(
+            blocking.post_tool(&call("bash", &args), &result, HarnessMode::Ask, &scope, None).await,
+            PostToolVerdict::Fail { message } if message.contains("exited with status 2")
+        ));
     }
 
     #[cfg(unix)]
@@ -1240,8 +1279,7 @@ mod tests {
         let host_user = runner(vec![
             HookSpec::new(HookEvent::PreTool, r#"echo '{"decision":"deny"}'"#)
                 .isolation(HookIsolation::Host)
-                .source(HookSource::User)
-                .fail_closed(true),
+                .source(HookSource::User),
         ]);
         let in_auto =
             host_user.pre_tool(&call("bash", &args), HarnessMode::Auto, &scope, None).await;

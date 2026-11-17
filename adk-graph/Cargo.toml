@@ -28,6 +28,8 @@ chrono.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+# Interrupt answers are checked against the pause's `response_schema` on resume.
+jsonschema = { workspace = true }
 
 # Optional SQLite and PostgreSQL checkpointers
 sqlx = { workspace = true, features = ["runtime-tokio"], optional = true }
@@ -39,7 +41,8 @@ neo4rs = { version = "0.8", optional = true }
 firestore = { version = "0.48", optional = true }
 # Already a dependency of `firestore`; named directly for the emulator token source.
 gcloud-sdk = { version = "0.29", optional = true, default-features = false }
-sha2 = { workspace = true, optional = true }
+# Interrupt ids are a digest of the pause.
+sha2 = { workspace = true }
 
 # Optional node caching dependencies
 blake3 = { version = "1", optional = true }
@@ -65,7 +68,7 @@ postgres = ["dep:sqlx", "sqlx/postgres", "sqlx/chrono", "sqlx/tls-rustls-aws-lc-
 redis = ["dep:fred", "fred/i-scripts"]
 mongodb = ["dep:mongodb"]
 neo4j = ["dep:neo4rs"]
-firestore = ["dep:firestore", "dep:gcloud-sdk", "dep:sha2"]
+firestore = ["dep:firestore", "dep:gcloud-sdk"]
 node-cache = ["dep:blake3"]
 redis-cache = ["node-cache", "dep:fred"]
 delta-checkpoint = ["dep:similar"]
@@ -78,7 +81,7 @@ conformance = []
 action = ["dep:adk-action", "dep:regex"]
 action-trigger = ["action", "dep:tokio-cron-scheduler"]
 # `adk-core/egress-client` supplies the public-only address check and resolver.
-action-http = ["action", "dep:reqwest", "dep:sha2", "adk-core/egress-client"]
+action-http = ["action", "dep:reqwest", "adk-core/egress-client"]
 action-db = ["action"]
 action-email = ["action"]
 action-rss = ["action-http"]

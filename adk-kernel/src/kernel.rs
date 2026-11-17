@@ -45,8 +45,8 @@ use adk_core::{
 };
 use adk_runner::Runner;
 use adk_server::background::{
-    DurableScheduler, DurableWorker, DurableWorkerConfig, WorkflowExecutor, WorkflowRunContext,
-    WorkflowState,
+    DurableScheduler, DurableSubagents, DurableWorker, DurableWorkerConfig, SubagentBackend,
+    SubagentConfig, WorkflowExecutor, WorkflowRunContext, WorkflowState,
 };
 use adk_server::rest::{FreezeDelegate, FreezeReport};
 use adk_session::SessionService;
@@ -441,7 +441,7 @@ pub struct Kernel {
     inner: Arc<KernelInner>,
 }
 
-struct KernelInner {
+pub(crate) struct KernelInner {
     config: KernelConfig,
     sup: Arc<Supervision>,
     processes: ProcessTable,
@@ -473,6 +473,8 @@ struct KernelInner {
     status: Arc<RwLock<Status>>,
     #[cfg(feature = "proc")]
     ledger: Option<Ledger>,
+    /// The background sub-agent host ([`KernelBuilder::subagents`]).
+    subagents: Option<DurableSubagents>,
 }
 
 /// What a started kernel runs besides its claim loops.
@@ -818,6 +820,19 @@ impl Kernel {
             tracing::warn!(error = %error, "could not host the added agents yet; the next tick retries");
         }
         self.spawn_workers();
+        if let Some(subagents) = self.inner.subagents.clone() {
+            // A parent is told about a sub-agent that finished while no kernel ran.
+            tasks.push(tokio::spawn(async move {
+                match subagents.reconcile().await {
+                    Ok(looked) => {
+                        tracing::debug!(subagents.looked = looked, "sub-agent notices reconciled")
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "could not reconcile sub-agent notices")
+                    }
+                }
+            }));
+        }
         if let Some(schedules) = &self.inner.schedules {
             let scheduler = DurableScheduler::new(Arc::clone(schedules), Arc::clone(&sup.runs))
                 .with_governance(governance.clone())
@@ -1250,6 +1265,16 @@ impl Kernel {
     /// The process table.
     pub fn processes(&self) -> &ProcessTable {
         &self.inner.processes
+    }
+
+    /// The background sub-agent host, when the kernel was built with
+    /// [`KernelBuilder::subagents`].
+    pub fn subagents(&self) -> Option<&DurableSubagents> {
+        self.inner.subagents.as_ref()
+    }
+
+    pub(crate) fn from_inner(inner: Arc<KernelInner>) -> Self {
+        Self { inner }
     }
 
     /// The agenda (spec 3.2 §7.5).
@@ -1957,6 +1982,8 @@ pub struct KernelBuilder {
     #[cfg(feature = "charter")]
     signal_stores: BTreeMap<PartitionId, Arc<dyn crate::charter::SignalStore>>,
     inventory_warnings: Vec<InventoryWarning>,
+    subagents: Option<SubagentConfig>,
+    subagent_handles: Vec<crate::subagents::SubagentHandle>,
 }
 
 impl fmt::Debug for KernelBuilder {
@@ -2253,6 +2280,50 @@ impl KernelBuilder {
     #[must_use]
     pub fn agenda_handle(mut self, handle: AgendaHandle) -> Self {
         self.agenda_handles.push(handle);
+        self
+    }
+
+    /// Hosts background sub-agents (`adk_core::subagent`): a parent agent's
+    /// `start_subagent` runs another agent as a process of this kernel's `background`
+    /// queue — or of the queue `config` names, when the kernel has it — with a budget slice
+    /// carved from the parent's run, the parent's tools as its ceiling, and its status on
+    /// the bus. Off by default, since a sub-agent works without a person watching it.
+    ///
+    /// Needs a [`session_service`](Self::session_service): a fork copies the parent's
+    /// session, and a parent is told once by the notice its session holds.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    /// use adk_core::{InMemoryRunStore, RunBudget};
+    /// use adk_kernel::{Kernel, SubagentHandle};
+    /// use adk_server::background::SubagentConfig;
+    ///
+    /// # fn example(runner: Arc<adk_runner::Runner>, sessions: Arc<dyn adk_session::SessionService>) -> adk_kernel::Result<()> {
+    /// let handle = SubagentHandle::new(); // give the lead agent `SubagentTools::new(Arc::new(handle.clone()))`
+    /// let kernel = Kernel::builder()
+    ///     .run_store(Arc::new(InMemoryRunStore::new()))
+    ///     .session_service(sessions)
+    ///     .agent("lead", runner)
+    ///     .subagents(SubagentConfig::default().with_default_budget(RunBudget::new().max_model_calls(20)))
+    ///     .subagent_handle(handle)
+    ///     .build()?;
+    /// assert!(kernel.subagents().is_some());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn subagents(mut self, config: SubagentConfig) -> Self {
+        self.subagents = Some(config);
+        self
+    }
+
+    /// Binds `handle` to the built kernel's sub-agent host, so the sub-agent tools of an
+    /// agent built before the kernel reach it.
+    #[must_use]
+    pub fn subagent_handle(mut self, handle: crate::subagents::SubagentHandle) -> Self {
+        self.subagent_handles.push(handle);
         self
     }
 
@@ -2712,8 +2783,47 @@ impl KernelBuilder {
             control: Arc::new(crate::control::LastRead::new(config.control.control_store.clone())),
         });
         let run_finished = Arc::new(RunFinishedWakeSource::new());
-        let hooks =
-            Arc::new(KernelHooks { sup: Arc::clone(&sup), run_finished: run_finished.clone() });
+        let subagent_backend = self.subagents.is_some().then(|| {
+            Arc::new(crate::subagents::KernelSubagentBackend {
+                processes: ProcessTable::supervised(Arc::clone(&sup), spend.clone()),
+                sup: Arc::clone(&sup),
+                kernel: std::sync::OnceLock::new(),
+            })
+        });
+        let subagents = match (self.subagents, &subagent_backend) {
+            (Some(mut sub_config), Some(backend)) => {
+                let Some(sessions) = self.sessions.clone() else {
+                    return Err(KernelError::Config {
+                        reason: "background sub-agents need a session service; call \
+                                 KernelBuilder::session_service"
+                            .into(),
+                    });
+                };
+                // A sub-agent runs on one of this kernel's queues.
+                if !config.queues.iter().any(|queue| queue.as_str() == sub_config.queue) {
+                    sub_config.queue = config
+                        .queues
+                        .iter()
+                        .find(|queue| queue.as_str() == QueueClass::BACKGROUND)
+                        .unwrap_or(&config.queues[0])
+                        .as_str()
+                        .to_string();
+                }
+                let backend: Arc<dyn SubagentBackend> = backend.clone();
+                Some(DurableSubagents::new(runs.clone(), sessions, backend, sub_config))
+            }
+            _ => None,
+        };
+        for handle in &self.subagent_handles {
+            if let Some(subagents) = &subagents {
+                handle.bind(subagents);
+            }
+        }
+        let hooks = Arc::new(KernelHooks {
+            sup: Arc::clone(&sup),
+            run_finished: run_finished.clone(),
+            subagents: subagents.clone(),
+        });
         let mut chain = self.workflows;
         #[cfg(feature = "charter")]
         if !self.kpi_trackers.is_empty() {
@@ -2798,7 +2908,7 @@ impl KernelBuilder {
         for handle in &self.agents_handles {
             handle.bind(&agent_table);
         }
-        Ok(Kernel {
+        let kernel = Kernel {
             inner: Arc::new(KernelInner {
                 config,
                 sup,
@@ -2826,8 +2936,13 @@ impl KernelBuilder {
                 status: Arc::new(RwLock::new(Status::default())),
                 #[cfg(feature = "proc")]
                 ledger,
+                subagents,
             }),
-        })
+        };
+        if let Some(backend) = subagent_backend {
+            let _ = backend.kernel.set(Arc::downgrade(&kernel.inner));
+        }
+        Ok(kernel)
     }
 }
 

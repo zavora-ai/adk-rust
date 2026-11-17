@@ -90,6 +90,7 @@
 
 pub mod cron;
 pub mod scheduler;
+pub mod subagents;
 pub mod table;
 pub mod worker;
 
@@ -118,6 +119,10 @@ pub use cron::{
     cron_jobs_router, cron_jobs_router_with_state, start_cron_scheduler, validate_cron_expression,
 };
 pub use scheduler::{DurableScheduler, SchedulerTick};
+pub use subagents::{
+    DurableSubagents, RunStoreBackend, SubagentBackend, SubagentConfig, SubagentHooks,
+    WeakSubagents,
+};
 pub use table::AgentTable;
 pub use worker::{
     DurableWorker, DurableWorkerConfig, FREEZE_PAUSED_NOTICE, FREEZE_RESUMED_ACTION,

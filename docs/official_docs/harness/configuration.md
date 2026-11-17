@@ -40,6 +40,7 @@ required; everything else has a default.
 | `confirmation_handler(handler)` | the prompting handler | Replaces the confirmation handler |
 | `approval_store(store)` | in memory | Where held calls and decisions are kept |
 | `approval_service(service)` | none | The approval inbox held calls are submitted to |
+| `auto_review(reviewer)` | off | In `auto`, a `ToolReviewer` such as `ModelApprover` decides the calls the mode holds before a person; see [Auto review](modes-and-approvals.md#auto-review) |
 | `confirmation_timeout(duration)` | 300 s | How long a person may take; a call nobody decides in time waits in the approval store |
 | `trust_mcp_read_only_hints(bool)` | `false` | Trusts an MCP server's `readOnlyHint` for external tools |
 | `require_authenticated_identity()` | off | Standing rules and `auto` apply only to authenticated users (served harnesses) |
@@ -121,7 +122,7 @@ works in, so it may only tighten (spec 3.1 §9.2 I3):
 | `[deploy]` | Not by the harness: deployment tooling reads it |
 | `[ultracode]` | Not by the harness: `adk-rust ultracode` reads it, tighten-only — see below |
 | `[compaction]` | Not by the harness: the CLI reads it — see below; in code, use `intra_compaction` |
-| `yes`, `allow_unsandboxed`, `trust`, `packs`, `members` | Never: they would loosen what the agent may do. Set them in code |
+| `yes`, `allow_unsandboxed`, `auto_review`, `trust`, `packs`, `members` | Never: they would loosen what the agent may do. Set them in code |
 
 Ignored keys and a looser mode are logged as warnings and listed in `HarnessConfig::notes`.
 A missing file is the default configuration.

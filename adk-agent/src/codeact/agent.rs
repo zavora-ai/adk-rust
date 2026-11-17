@@ -1252,7 +1252,8 @@ async fn run_authorized_tool(
             args.clone(),
         ));
         for callback in policy.hooks.before_tool.iter().chain(policy.before_tool) {
-            match callback(cb_ctx.clone()).await {
+            // A panic fails the call closed, as an error does.
+            match adk_core::guard_callback("before-tool callback", callback(cb_ctx.clone())).await {
                 Ok(Some(content)) => {
                     return Ok(ToolRun::Finished(Ok(content_to_tool_value(&content)), None));
                 }

@@ -1650,6 +1650,92 @@ impl ToolPolicy for HarnessPolicy {
     }
 }
 
+/// Auto review: the harness's reviewer, asked only about a call the harness itself holds
+/// in Auto mode that a standing rule could answer (autonomy parity item 2).
+///
+/// A call that is non-waivable — by the table, by tool name, or by a protected path in its
+/// arguments — and every call in another mode, including Auto decided as Ask without
+/// authenticated identity, is left to a person without a verdict.
+pub(crate) struct AutoReview {
+    inner: Arc<dyn adk_core::ToolReviewer>,
+    policy: HarnessPolicy,
+    non_waivable_tools: BTreeSet<String>,
+    non_waivable_prefixes: Vec<String>,
+    root: std::path::PathBuf,
+}
+
+impl std::fmt::Debug for AutoReview {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AutoReview").field("inner", &self.inner).finish_non_exhaustive()
+    }
+}
+
+impl AutoReview {
+    pub(crate) fn new(
+        inner: Arc<dyn adk_core::ToolReviewer>,
+        policy: HarnessPolicy,
+        non_waivable_tools: BTreeSet<String>,
+        non_waivable_prefixes: Vec<String>,
+        root: std::path::PathBuf,
+    ) -> Self {
+        Self { inner, policy, non_waivable_tools, non_waivable_prefixes, root }
+    }
+}
+
+#[async_trait]
+impl adk_core::ToolReviewer for AutoReview {
+    fn reviewer(&self) -> adk_core::principal::SubjectRef {
+        self.inner.reviewer()
+    }
+
+    fn timeout(&self) -> std::time::Duration {
+        self.inner.timeout()
+    }
+
+    async fn covers(&self, review: &adk_core::ToolReview) -> bool {
+        if crate::agent::names_non_waivable(
+            &review.fingerprint,
+            &self.non_waivable_tools,
+            &self.non_waivable_prefixes,
+            &self.root,
+        ) {
+            return false;
+        }
+        let mut request =
+            ToolPolicyRequest::new(review.request.tool_name.clone(), review.request.args.clone())
+                .with_effect(review.effect)
+                .with_agent_name(review.agent_name.clone())
+                .with_identity(
+                    review.scope.app_name.clone(),
+                    review.scope.user_id.clone(),
+                    review.scope.session_id.clone(),
+                )
+                .with_invocation_id(review.invocation_id.clone());
+        request.acting = review.request.acting.as_deref().cloned();
+        // The re-check records nothing and runs no hooks, as the prompting handler's does.
+        let evaluated = self
+            .policy
+            .evaluate_full(
+                &request,
+                review.request.origin.as_ref(),
+                review.request.function_call_id.as_deref(),
+                false,
+            )
+            .await;
+        evaluated.mode == HarnessMode::Auto
+            && matches!(evaluated.decision, PolicyDecision::RequireApproval { .. })
+            && !evaluated.base.is_non_waivable()
+            && self.inner.covers(review).await
+    }
+
+    async fn review(
+        &self,
+        review: &adk_core::ToolReview,
+    ) -> adk_core::Result<adk_core::ReviewVerdict> {
+        self.inner.review(review).await
+    }
+}
+
 #[cfg(all(test, feature = "sandbox"))]
 mod tests {
     use std::sync::Arc;

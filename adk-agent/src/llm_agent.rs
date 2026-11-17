@@ -3029,7 +3029,13 @@ impl ToolExecutor<'_> {
                 .chain(self.before_tool_callbacks.iter())
                 .enumerate()
             {
-                match callback(tool_ctx.clone() as Arc<dyn CallbackContext>).await {
+                // A panic fails the call closed, as an error does.
+                let decided = adk_core::guard_callback(
+                    "before-tool callback",
+                    callback(tool_ctx.clone() as Arc<dyn CallbackContext>),
+                )
+                .await;
+                match decided {
                     Ok(Some(c)) => {
                         let answered_by = if position < hooks {
                             SHORT_CIRCUIT_BY_INVOCATION_HOOK

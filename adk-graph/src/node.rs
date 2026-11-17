@@ -32,6 +32,15 @@ pub struct ExecutionConfig {
     /// node that runs again later, such as in the next pass of a loop or on the
     /// next turn of a [`GraphAgent`](crate::agent::GraphAgent), pauses again.
     pub resume_values: HashMap<String, Value>,
+    /// Answers bind to interrupt ids only (LangGraph's strict resume).
+    ///
+    /// With it, every key of [`resume_values`](Self::resume_values) must be the id of a
+    /// pause pending in the thread ([`Interrupt::id`](crate::interrupt::Interrupt::id)):
+    /// an answer to a pause already answered, to a node by name, or to a question the
+    /// node no longer asks is refused with
+    /// [`GraphError::ResumeRejected`](crate::error::GraphError::ResumeRejected) before any
+    /// node runs. Off by default, where a node name answers that node's pause too.
+    pub strict_resume: bool,
     /// How many super-steps one run may take before it fails with
     /// [`GraphError::RecursionLimitExceeded`](crate::error::GraphError::RecursionLimitExceeded).
     ///
@@ -80,6 +89,7 @@ impl ExecutionConfig {
             thread_id: thread_id.to_string(),
             resume_from: None,
             resume_values: HashMap::new(),
+            strict_resume: false,
             recursion_limit: None,
             metadata: HashMap::new(),
             parent_context: None,
@@ -196,6 +206,26 @@ impl ExecutionConfig {
     #[must_use]
     pub fn with_resume_value(mut self, key: impl Into<String>, value: Value) -> Self {
         self.resume_values.insert(key.into(), value);
+        self
+    }
+
+    /// Accepts answers only under the ids of pending pauses; see
+    /// [`ExecutionConfig::strict_resume`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::node::ExecutionConfig;
+    /// use serde_json::json;
+    ///
+    /// let config = ExecutionConfig::new("refund-42")
+    ///     .strict_resume()
+    ///     .with_resume_value("int_3f2a9c0d41b7e6a85c1d2e3f4a5b6c7d", json!({ "approved": true }));
+    /// assert!(config.strict_resume);
+    /// ```
+    #[must_use]
+    pub fn strict_resume(mut self) -> Self {
+        self.strict_resume = true;
         self
     }
 
@@ -546,6 +576,33 @@ impl NodeOutput {
     pub fn interrupt_with_data(message: &str, data: Value) -> Self {
         Self::new().with_interrupt(crate::interrupt::interrupt_with_data(message, data))
     }
+
+    /// Declares the JSON Schema the answer to this output's dynamic interrupt must
+    /// satisfy; checked when the run resumes, before the node runs again.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::node::{NodeContext, NodeOutput};
+    /// use serde_json::json;
+    ///
+    /// async fn review(ctx: NodeContext) -> adk_graph::Result<NodeOutput> {
+    ///     match ctx.resume_value() {
+    ///         Some(answer) if answer["approved"] == true => Ok(NodeOutput::new()),
+    ///         Some(_) => Ok(NodeOutput::new().with_goto(["rejected"])),
+    ///         None => Ok(NodeOutput::interrupt("approve this refund?").with_response_schema(json!({
+    ///             "type": "object",
+    ///             "properties": { "approved": { "type": "boolean" } },
+    ///             "required": ["approved"]
+    ///         }))),
+    ///     }
+    /// }
+    /// ```
+    #[must_use]
+    pub fn with_response_schema(mut self, schema: Value) -> Self {
+        self.interrupt = self.interrupt.map(|interrupt| interrupt.with_response_schema(schema));
+        self
+    }
 }
 
 /// A node in the graph
@@ -755,11 +812,12 @@ pub trait Node: Send + Sync {
                         yield Ok(StreamEvent::route_dispatched(&name, targets));
                     }
                     if let Some(interrupt) = output.interrupt {
-                        let (message, data) = match interrupt {
-                            crate::interrupt::Interrupt::Dynamic { message, data } => (message, data),
-                            other => (other.to_string(), None),
-                        };
-                        yield Ok(StreamEvent::node_interrupt(&name, &message, data));
+                        yield Ok(match interrupt {
+                            crate::interrupt::Interrupt::Dynamic {
+                                message, data, response_schema, ..
+                            } => StreamEvent::NodeInterrupt { node: name.clone(), message, data, response_schema },
+                            other => StreamEvent::node_interrupt(&name, &other.to_string(), None),
+                        });
                     }
                     yield Ok(StreamEvent::Updates { node: name, updates: output.updates });
                 }

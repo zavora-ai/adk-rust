@@ -29,6 +29,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 - [OpenAI Responses API](models/openai-responses.md) - The dedicated `/v1/responses` client
 - [Gemini Interactions API](models/gemini-interactions.md) - The Beta Interactions client and its `GeminiModel` transport
 - [OpenCode Go and Zen](models/opencode.md) - Per-model routing across four wire APIs with conversation headers
+- [Model Fallback](models/fallback.md) - `FallbackLlm`: an ordered chain of models across providers, metered per attempt
 - [Ollama](models/ollama.md) - Local inference with Ollama
 - [mistral.rs Integration](models/mistralrs.md) - Native mistral.rs for high-performance local inference
 
@@ -38,6 +39,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 - [CodeAgent (CodeAct)](agents/code-agent.md) - Acts by writing and running code via a `CodeRuntime`
 - [Workflow Agents](agents/workflow-agents.md) - Deterministic agents: Sequential, Parallel, Loop
 - [Multi-Agent Systems](agents/multi-agent.md) - Building agent hierarchies with sub-agents
+- [Background Sub-Agents](agents/background-subagents.md) - Sub-agents a parent starts and does not wait for: notified on completion, follow-ups, cancel, fork mode, budget slices, crash resume
 - [Graph Agents](agents/graph-agents.md) - LangGraph-style workflow orchestration
 - [Graph Checkpointing](agents/graph-checkpointing.md) - Checkpointer backends, the version rule, durability modes, pending writes, and the conformance suite
 - [Functional API](agents/functional-api.md) - Workflows as async functions with `#[entrypoint]`/`#[task]`, background runs, and cron scheduling
@@ -148,6 +150,7 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 - [MCP client](mcp/client.md) - Tools, resources, prompts, completion, subscriptions, elicitation, tasks, and HTTP
 - [Dynamic MCP server manager](mcp/manager.md) - Runtime local-server registry, persistence, monitoring, and restart
 - [MCP server authoring](mcp/server.md) - Publish tools and other capabilities with the aligned official Rust SDK
+- [Serve an agent over MCP](mcp/agent-server.md) - Agents as MCP tools: durable runs as tasks, held calls as elicitations
 - [MCP security](mcp/security.md) - Authentication, visibility, authorization, approval, and secret handling
 - [MCP testing](mcp/testing.md) - Deterministic gates and deployment verification
 - [Browser Tools](tools/browser-tools.md) - 46 WebDriver tools for web automation

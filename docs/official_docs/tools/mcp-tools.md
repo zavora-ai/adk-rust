@@ -2,8 +2,8 @@
 
 > **Documentation map:** [Overview and architecture](../mcp/index.md) ·
 > [Client](../mcp/client.md) · [Dynamic manager](../mcp/manager.md) ·
-> [Server authoring](../mcp/server.md) · [Security](../mcp/security.md) ·
-> [Testing](../mcp/testing.md)
+> [Server authoring](../mcp/server.md) · [Agent server](../mcp/agent-server.md) ·
+> [Security](../mcp/security.md) · [Testing](../mcp/testing.md)
 
 MCP gives an AI application a standard way to discover and use capabilities
 owned by another process or service. A server can publish:
@@ -320,6 +320,11 @@ the extension, so two settings are needed:
 |------|-----|
 | `AdkClientHandler::with_tasks()` | Declares the extension during the handshake; without it the server answers inline |
 | `McpToolset::with_task_support(config)` | Lets the toolset poll a task and sets how |
+
+Over Streamable HTTP, `McpHttpClientBuilder::with_task_support(config)` does both for
+`connect_with_elicitation`; `connect` refuses it, since a task may ask for input. An agent
+another ADK-Rust server publishes over MCP answers every call with a task backed by a durable
+run ([Serve an agent over MCP](../mcp/agent-server.md)).
 
 ```rust
 use adk_tool::mcp::rmcp::{ServiceExt, transport::TokioChildProcess};

@@ -916,6 +916,52 @@ use adk_graph::edge::Router;
 ])
 ```
 
+### Decision Nodes
+
+`DecisionNode` is a router node a model decides: it reads its input from a state key, asks
+for a typed decision with structured output (a `choice` among its options, a `rationale` and a
+`confidence`), and writes the option's name to its output key for `Router::by_field`:
+
+```rust,no_run
+use std::sync::Arc;
+
+use adk_graph::node::FunctionNode;
+use adk_graph::{CompiledGraph, DecisionNode, END, NodeOutput, Router, START, StateGraph, StateSchema};
+
+fn triage_graph(model: Arc<dyn adk_core::Llm>) -> adk_graph::Result<CompiledGraph> {
+    let triage = DecisionNode::new("triage", model)
+        .instruction("Route the support ticket.")
+        .option("billing", "Invoices, refunds and payment problems")
+        .option("technical", "Errors, outages and how-to questions")
+        .input_key("ticket")
+        .output_key("route");
+    StateGraph::new(StateSchema::simple(&["ticket", "route"]))
+        .add_node(triage)
+        .add_node(FunctionNode::new("billing", |_| async { Ok(NodeOutput::new()) }))
+        .add_node(FunctionNode::new("technical", |_| async { Ok(NodeOutput::new()) }))
+        .add_edge(START, "triage")
+        .add_conditional_edges(
+            "triage",
+            Router::by_field("route"),
+            [("billing", "billing"), ("technical", "technical")],
+        )
+        .add_edge("billing", END)
+        .add_edge("technical", END)
+        .compile()
+}
+```
+
+| Setting | Effect |
+|---|---|
+| `option(name, description)`, or `DecisionNode::for_choice::<T>` | The options the model sees |
+| `input_key(key)` | The state key decided about (default `input`); a non-string value is sent as JSON |
+| `output_key(key)` | The state key the option's name goes to (default `route`); `<key>_decision` holds `{option, rationale, confidence, followed}` |
+| `min_confidence(x)`, `fallback(route)` | Below `x` the node writes `fallback`, or fails without one |
+
+With a `RunConfig` (a graph agent under a runner, or `invoke_with_run_config`), the call runs in
+the run's `ModelCallScope` and counts against its budget and spend ledger. A model error, such
+as a refused budget, fails the node as `GraphError::AgentFailed` with the model's code.
+
 ## Parallel Execution
 
 Multiple edges from a single node execute in parallel:
@@ -1336,7 +1382,80 @@ it treats every later pause as already answered.
 
 When several nodes of one step pause, `InterruptedExecution::interrupts` holds
 every pause in node-name order; `interrupt` is the first. Supply an answer under
-each paused node's name.
+each paused node's name, or each pause's id.
+
+### Interrupt Ids, Typed Answers and Strict Resume
+
+Every dynamic pause has an id, `Interrupt::id()`: `int_` and 32 hex characters of a
+SHA-256 over the thread, the step, the node, the message, the data and the answer schema.
+The same pause, re-raised because the run resumed without an answer, keeps its id; the
+node's next pause — a later pass of a loop, or the same step asking about other data — gets
+another. The id is on `InterruptedExecution::interrupts`, on `StreamEvent::Interrupted`
+(`interrupt_id`) and on `GraphInterruptPayload` (`interrupt_id`), and the checkpoint keeps it
+with the pause, so another process can resume it.
+
+A node declares the shape of the answer with `NodeOutput::with_response_schema` (or
+`Interrupt::with_response_schema`): a JSON Schema the answer must satisfy. The answer is
+checked when the run resumes, before any node runs; one that does not fit is refused with
+`GraphError::ResumeRejected` (`graph.resume_rejected`), the checkpoint is unchanged, and a
+valid answer still resumes the pause.
+
+```rust
+use adk_graph::checkpoint::MemoryCheckpointer;
+use adk_graph::edge::{END, START};
+use adk_graph::error::GraphError;
+use adk_graph::graph::StateGraph;
+use adk_graph::node::{ExecutionConfig, NodeOutput};
+use adk_graph::state::State;
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let graph = StateGraph::with_channels(&["decision"])
+        .add_node_fn("review", |ctx| async move {
+            match ctx.resume_value() {
+                Some(answer) => Ok(NodeOutput::new().with_update("decision", answer.clone())),
+                None => Ok(NodeOutput::interrupt("approve this refund?").with_response_schema(json!({
+                    "type": "object",
+                    "properties": { "approved": { "type": "boolean" } },
+                    "required": ["approved"]
+                }))),
+            }
+        })
+        .add_edge(START, "review")
+        .add_edge("review", END)
+        .compile()?
+        .with_checkpointer(MemoryCheckpointer::new());
+
+    let Err(GraphError::Interrupted(paused)) =
+        graph.invoke(State::new(), ExecutionConfig::new("refund-7")).await
+    else {
+        panic!("the review pauses");
+    };
+    let id = paused.interrupt.id().expect("a dynamic pause has an id").to_string();
+
+    // Refused before anything runs: `approved` must be a boolean.
+    let wrong = ExecutionConfig::new("refund-7").with_resume_value(&id, json!({ "approved": "yes" }));
+    assert!(matches!(graph.invoke(State::new(), wrong).await, Err(GraphError::ResumeRejected { .. })));
+
+    // Strict resume: only the id of a pending pause answers it.
+    let config = ExecutionConfig::new("refund-7")
+        .strict_resume()
+        .with_resume_value(&id, json!({ "approved": true }));
+    let state = graph.invoke(State::new(), config).await?;
+    assert_eq!(state.get("decision"), Some(&json!({ "approved": true })));
+    Ok(())
+}
+```
+
+| Resume | An answer under the pause's id | An answer under the node's name | An answer under any other key |
+|---|---|---|---|
+| Default | Answers the pause | Answers the pause, when no id-keyed answer does | Ignored |
+| `ExecutionConfig::strict_resume()` | Answers the pause | Refused: `ResumeRejected` | Refused: `ResumeRejected` — an id already answered, or the id of a question the node no longer asks, is stale |
+
+Strict resume is LangGraph's: an answer binds to the pause it was given for, as an approval
+binds to its call's fingerprint, so replaying an earlier approval cannot approve the next
+request. It is opt-in per run.
 
 ### Static Interrupts
 

@@ -100,6 +100,12 @@ pub(crate) fn build_request_body(
         if let Some(penalty) = cfg.presence_penalty {
             body["presence_penalty"] = serde_json::json!(penalty);
         }
+        if let Some(schema) = &cfg.response_schema {
+            body["response_format"] = serde_json::json!({
+                "type": "json_schema",
+                "json_schema": {"name": "response", "schema": schema},
+            });
+        }
     }
 
     Ok(body)
@@ -462,6 +468,22 @@ mod tests {
         assert_eq!(body["temperature"], 0.5);
         assert_eq!(body["top_p"], 0.5);
         assert_eq!(body["max_tokens"], 1024);
+        assert!(body.get("response_format").is_none());
+    }
+
+    #[test]
+    fn a_response_schema_is_sent_as_a_json_schema_response_format() {
+        let schema =
+            serde_json::json!({"type": "object", "properties": {"choice": {"type": "string"}}});
+        let config =
+            GenerateContentConfig { response_schema: Some(schema.clone()), ..Default::default() };
+        let body =
+            build_request_body("m", &[], &adk_core::ToolDeclarations::new(), Some(&config), false)
+                .unwrap();
+        assert_eq!(
+            body["response_format"],
+            serde_json::json!({"type": "json_schema", "json_schema": {"name": "response", "schema": schema}})
+        );
     }
 
     #[test]

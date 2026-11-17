@@ -146,6 +146,76 @@ fn can_nest(value: &Value) -> bool {
     }
 }
 
+/// Keywords Anthropic's structured outputs reject: numeric, length and count bounds.
+const UNSUPPORTED_OUTPUT_KEYWORDS: [&str; 10] = [
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "multipleOf",
+    "minLength",
+    "maxLength",
+    "maxItems",
+    "minProperties",
+    "maxProperties",
+];
+
+/// `schema` as Anthropic's structured outputs (`output_config.format`) take it, or `None`
+/// when it cannot be expressed there.
+///
+/// Every object is closed with `additionalProperties: false` unless it sets the key itself;
+/// bounds the API rejects are dropped, so the reply is checked against them by the caller,
+/// as Anthropic's SDKs do; a `minItems` above 1 is dropped likewise. An object that leaves
+/// `additionalProperties` open, a map type, cannot be constrained, so the schema is not sent
+/// and the prompt alone asks for the format.
+pub(super) fn structured_output_schema(schema: &Value) -> Option<Value> {
+    fn close(node: &mut Value) -> bool {
+        match node {
+            Value::Array(items) => items.iter_mut().all(close),
+            Value::Object(fields) => {
+                for keyword in UNSUPPORTED_OUTPUT_KEYWORDS {
+                    fields.remove(keyword);
+                }
+                if fields.get("minItems").and_then(Value::as_u64).is_some_and(|min| min > 1) {
+                    fields.remove("minItems");
+                }
+                let is_object = fields.contains_key("properties")
+                    || fields.get("type").and_then(Value::as_str) == Some("object");
+                if is_object {
+                    match fields.get("additionalProperties") {
+                        None => {
+                            fields.insert("additionalProperties".to_string(), Value::Bool(false));
+                        }
+                        Some(Value::Bool(false)) => {}
+                        Some(_) => return false,
+                    }
+                }
+                for (key, value) in fields.iter_mut() {
+                    let ok = match key.as_str() {
+                        "properties" | "$defs" | "definitions" | "patternProperties" => {
+                            value.as_object_mut().is_none_or(|map| map.values_mut().all(close))
+                        }
+                        "items" | "prefixItems" | "anyOf" | "allOf" | "oneOf" | "not" => {
+                            close(value)
+                        }
+                        _ => true,
+                    };
+                    if !ok {
+                        return false;
+                    }
+                }
+                true
+            }
+            _ => true,
+        }
+    }
+    let mut schema = schema.clone();
+    schema_utils::strip_schema_keyword(&mut schema);
+    schema_utils::strip_conditional_keywords(&mut schema);
+    schema_utils::add_implicit_object_type(&mut schema);
+    close(&mut schema).then_some(schema)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -644,5 +714,44 @@ mod tests {
 
         let all_of = result["allOf"].as_array().expect("allOf must be preserved");
         assert_eq!(all_of.len(), 2);
+    }
+
+    #[test]
+    fn a_response_schema_is_closed_and_unbounded_for_structured_outputs() {
+        let schema = json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+                "score": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "tags": {"type": "array", "items": {"type": "string", "maxLength": 9}, "minItems": 2},
+                "owner": {"properties": {"name": {"type": "string"}}}
+            },
+            "required": ["score"]
+        });
+        assert_eq!(
+            structured_output_schema(&schema).unwrap(),
+            json!({
+                "type": "object",
+                "properties": {
+                    "score": {"type": "number"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "owner": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "additionalProperties": false
+                    }
+                },
+                "required": ["score"],
+                "additionalProperties": false
+            })
+        );
+    }
+
+    #[test]
+    fn an_open_map_is_not_sent_as_structured_output() {
+        let map = json!({"type": "object", "additionalProperties": {"type": "string"}});
+        assert_eq!(structured_output_schema(&map), None);
+        let nested = json!({"type": "object", "properties": {"labels": map}});
+        assert_eq!(structured_output_schema(&nested), None);
     }
 }

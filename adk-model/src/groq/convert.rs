@@ -82,6 +82,9 @@ pub struct ChatCompletionRequest {
     /// Reasoning effort of a GPT-OSS model (spec 3.1 §7.23).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// `{"type": "json_schema", ...}` from the request's response schema.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<serde_json::Value>,
 }
 
 /// Groq chat completion response.

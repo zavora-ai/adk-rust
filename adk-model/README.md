@@ -25,6 +25,7 @@ Every client implements the `adk_core::Llm` trait, so agents and runners accept 
 | OpenCode Go and Zen | `opencode::OpenCodeClient` | `opencode` | `deepseek-v4.1-flash` |
 | Amazon Bedrock | `bedrock::BedrockClient` | `bedrock` | account- and region-specific |
 | Azure AI Inference | `azure_ai::AzureAIClient` | `azure-ai` | endpoint-specific |
+| Fallback chain over any of the above | `FallbackLlm` | always available | none |
 | Test doubles | `ScriptedLlm`, `MockLlm` | always available | none |
 
 The catalog default is what `adk_model::catalog::recommended_model(provider)` returns. The
@@ -671,6 +672,7 @@ with a spend cap refuses a model call that has no bound.
 | Streaming | A stream that ends before its terminal event, ends mid tool call, or carries an error frame fails with an `AdkError` instead of returning a truncated answer. See "Stream Termination" in [providers.md](../docs/official_docs/models/providers.md#stream-termination) |
 | Tool calls | Text-encoded tool calls (Qwen/Hermes, Llama, Mistral Nemo, DeepSeek, DeepSeek-V3 native tokens, Gemma 4, action tags) are recognized only for tools the request declares. Arguments that are not a JSON object are marked with `adk_core::invalid_tool_arguments` instead of becoming `{}`, so the agent answers the call with an error and the model can retry. Chat Completions clients send one `tool` message per function response, and images a tool returns reach every provider |
 | Generation config | Temperature, `top_p`, `top_k`, max tokens, stop sequences, seed, penalties, and log probabilities reach the provider where it supports them. The Responses, Anthropic, Bedrock, Groq, Azure AI Inference, DeepSeek, and Muse clients fail with `model.unsupported_config`, naming the field, when a request sets one they cannot honour; the OpenAI-compatible Chat Completions clients send all of them |
+| Structured output | `GenerateContentConfig::response_schema` reaches each provider as its own structured-output control: Gemini `responseSchema`, OpenAI strict `response_format` and Responses `text.format`, Anthropic `output_config.format` (objects closed, unsupported bounds dropped), Groq, Azure AI Inference, OpenRouter and Muse `json_schema` `response_format`, DeepSeek `json_object`, Ollama `format`. Bedrock and mistral.rs leave it to the prompt. No client forces a `tool_choice` for it. See [structured output by provider](../docs/official_docs/models/providers.md#structured-output-by-provider) |
 | Reasoning effort | `GenerateContentConfig::effort` (`Low`, `Medium`, `High`) sets one call's effort over the client's: Anthropic `output_config.effort` with adaptive thinking, OpenAI `reasoning_effort` and Responses `reasoning.effort`, Gemini `thinking_level`, OpenRouter `reasoning.effort`, DeepSeek `reasoning_effort`, Groq GPT-OSS `reasoning_effort`. A model without the control, Ollama, Bedrock, and Azure AI Inference ignore it with a debug log. See "Per-Call Reasoning Effort" in [providers.md](../docs/official_docs/models/providers.md#per-call-reasoning-effort) |
 | Timeouts | `HttpTimeouts` bounds connecting (30 seconds) and every wait for data (10 minutes) on the OpenAI, OpenAI-compatible, Azure OpenAI, Responses, Azure AI Inference, Groq, DeepSeek, Muse, OpenRouter, OpenCode, Ollama, and Bedrock clients; `with_timeouts` changes both. `GeminiModel::new` applies the same defaults. Anthropic requests are bounded at 10 minutes (`AnthropicConfig::with_request_timeout`) |
 | Retry | Exponential backoff for 408, 429, 500, 502–504, 520–524, and 529 (`RetryConfig`); a `Retry-After` delay, or on Gemini a `google.rpc.RetryInfo` `retryDelay`, is honoured up to `RetryConfig::max_server_delay` |
@@ -684,6 +686,30 @@ with a spend cap refuses a model call that has no bound.
 Provider adapters keep native search and reasoning history, citations, usage, and multimodal tool
 results. A streaming snapshot with `provider_metadata.content_complete` set to `true` replaces the
 deltas before it.
+
+## Model fallback
+
+`FallbackLlm` tries an ordered list of models of any provider, moving to the next one on a
+configured `FallbackTrigger`: by default rate limits, timeouts, outages, unknown or retired model
+ids and spent quotas; refusals, context overflow and auth failures on request. A model that has
+streamed a response keeps the turn. Under a run, every attempt counts against the run budget and
+is committed in the spend ledger under its own provider, and a fallback is marked in
+`provider_metadata["fallback"]`. See [Model fallback](../docs/official_docs/models/fallback.md).
+
+```rust
+use std::sync::Arc;
+use adk_model::{FallbackLlm, FallbackTrigger, ScriptedLlm, ScriptedResponse};
+
+fn main() {
+    let primary = Arc::new(ScriptedLlm::new("claude-sonnet-5-5", Vec::<ScriptedResponse>::new()));
+    let backup = Arc::new(ScriptedLlm::new("gemini-3.7-flash", Vec::<ScriptedResponse>::new()));
+    let model = FallbackLlm::builder(primary)
+        .fallback(backup)
+        .fall_back_on(FallbackTrigger::Refusal)
+        .build();
+    assert_eq!(model.models().len(), 2);
+}
+```
 
 ## Test doubles
 
