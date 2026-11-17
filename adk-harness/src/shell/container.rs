@@ -987,7 +987,7 @@ impl Tool for ContainerBashTool {
         let budget = match &config.budget_tracker {
             Some(tracker) => {
                 tracker.check().map_err(AdkError::from)?;
-                tracker.wall_time_remaining()
+                tracker.remaining().max_wall_time
             }
             None => None,
         };

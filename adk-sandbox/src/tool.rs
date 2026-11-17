@@ -258,7 +258,7 @@ impl adk_core::Tool for SandboxTool {
             config.check_governance()?;
             if let Some(tracker) = &config.budget_tracker {
                 tracker.check().map_err(adk_core::AdkError::from)?;
-                budget_left = tracker.wall_time_remaining();
+                budget_left = tracker.remaining().max_wall_time;
                 if let Some(left) = budget_left {
                     timeout = timeout.min(left);
                 }
