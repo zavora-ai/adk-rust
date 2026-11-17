@@ -374,6 +374,96 @@ leaves `additionalProperties` open, a map type, is not sent. The client never fo
 `tool_choice`, which Claude Fable 5.1 and later, Mythos 5.1 and later, Opus 5.5 and Sonnet 5.5
 reject.
 
+### Computer Use and Browser Use
+
+Claude's client toolsets declare a fixed set of member tools in one `tools` entry, and the
+application runs every call. `adk-anthropic` has the toolsets, the earlier computer use
+versions, and the `browser_state` result block:
+
+| Entry | `ToolUnionParam` variant | Beta header | Models |
+|-------|--------------------------|-------------|--------|
+| `computer_toolset_20260801` | `ComputerToolset20260801` | none | Fable and Mythos, Opus 4.8 and later, Sonnet 5 and later, Haiku 5.5 |
+| `computer_20251124` | `Computer20251124` | `computer-use-2025-11-24` | Opus 4.5–4.7, Sonnet 4.6 |
+| `computer_20250124` | `Computer20250124` | `computer-use-2025-01-24` | Haiku 4.5, Sonnet 4.5, Sonnet 4, Opus 4.1 |
+| `browser_toolset_20260801` | `BrowserToolset20260801` | none | Fable and Mythos, Opus 4.8 and later, Sonnet 5 and later, Haiku 5.5 |
+
+On the Claude API, Claude Opus 5.5, Sonnet 5.5, Haiku 5.5 and Fable 5.2 reject
+`computer_20251124` with `does not support tool types`. `ComputerToolVersion::for_model` names
+the version a model accepts, and `supports_browser_toolset` says whether it takes the browser
+toolset. The client adds the beta header an earlier version needs.
+
+A member call is a `tool_use` block whose `name` is the member and whose `toolset_name` is
+`computer` or `browser`; several in one turn form a batch that runs in order and stops at the
+first failure. Each result echoes `toolset_name`:
+
+```rust
+use adk_anthropic::{
+    COMPUTER_BATCH_HALT_TEXT, ComputerMember, ComputerToolset20260801, ContentBlock, Message,
+    ToolResultBlock, ToolUnionParam,
+};
+
+fn tools() -> Vec<ToolUnionParam> {
+    // An environment that cannot produce zoom images withholds the member.
+    vec![ToolUnionParam::ComputerToolset20260801(
+        ComputerToolset20260801::new().with_member(ComputerMember::Zoom, false),
+    )]
+}
+
+fn answer(response: &Message) -> Vec<ToolResultBlock> {
+    let mut failed = false;
+    let mut results = Vec::new();
+    for block in &response.content {
+        let ContentBlock::ToolUse(call) = block else { continue };
+        let Some(toolset) = call.toolset_name.as_deref() else { continue };
+        let result = ToolResultBlock::new(call.id.clone()).with_toolset_name(toolset);
+        results.push(if failed {
+            result.with_string_content(COMPUTER_BATCH_HALT_TEXT.into()).with_error(true)
+        } else {
+            match ComputerMember::from_name(&call.name) {
+                // Run the member here; a failure sets `failed`.
+                Some(_) => result.with_string_content("OK".into()),
+                None => {
+                    failed = true;
+                    result.with_string_content(format!("Error: {} is not implemented", call.name))
+                        .with_error(true)
+                }
+            }
+        });
+    }
+    results
+}
+```
+
+Through `adk-model`, `AnthropicClient` puts every computer use entry in the form the model
+accepts: a declared `computer_20251124` becomes the toolset for Claude Sonnet 5.5, and a toolset
+built from member tools becomes `computer_20251124` for Claude Opus 4.7. Member calls reach the
+agent as function calls named `computer.<member>` and `browser.<member>` (`computer.left_click`,
+`browser.navigate`) with the member's input as arguments, whichever version the model used, and
+the history goes back in the declared version's form.
+
+An ADK tool implements a member by naming it in its declaration under
+`x-adk-anthropic-toolset-member`. The client collapses the members of each toolset into one
+entry that offers exactly the members declared:
+
+```json
+{
+  "name": "computer.left_click",
+  "description": "Click at a coordinate",
+  "x-adk-anthropic-toolset-member": {
+    "toolset": "computer",
+    "member": "left_click",
+    "display_width_px": 1280,
+    "display_height_px": 800
+  }
+}
+```
+
+The display size is needed only for a model that takes an earlier computer use version; without
+it that request fails with guidance, as does a browser toolset for a model without one. A member
+tool answers with a string, or with `{"text": ..., "browser_state": {...}}`, and returns a
+screenshot as inline image data; a tab-management result is the `browser_state` alone, and an
+error result drops it.
+
 ### Token Pricing
 
 ```rust
