@@ -45,8 +45,10 @@
 //! | `sandbox-native` | All three enforcers; only the target platform's compiles | ❌ |
 //! | `process-tree` | `process_tree::JobObject`, the Job Object that holds a process tree on Windows (implied by `sandbox-windows`), and `process_tree::ProcessGroup`, the session and process group that holds one on Unix | ❌ |
 //! | `egress-proxy` | `egress_proxy::EgressProxy`, the HTTP egress proxy that admits a `Proxied` sandbox's connections by an `adk_core::egress::EgressPolicy` | ❌ |
-//! | `workspace` | Workspace lifecycle and `LocalUnixClient` | ❌ |
+//! | `workspace` | Workspace lifecycle, `LocalUnixClient`, and `SessionBackend`, the `SandboxBackend` over any `SandboxClient` | ❌ |
 //! | `workspace-docker` | `DockerClient` (implies `workspace`) | ❌ |
+//! | `remote-e2b` | `E2bClient`, a `SandboxClient` over E2B Firecracker microVMs (implies `workspace`) | ❌ |
+//! | `remote-daytona` | `DaytonaClient`, a `SandboxClient` over Daytona sandboxes (implies `workspace`) | ❌ |
 //!
 //! [`SandboxError`] is `#[non_exhaustive]`; its workspace variants exist only with the
 //! `workspace` feature.
@@ -99,10 +101,16 @@ pub use wasm::WasmBackend;
 // Workspace lifecycle re-exports
 #[cfg(feature = "workspace")]
 pub use workspace::{
-    Capability, DirEntry, EntryType, ExecOutput, LocalUnixClient, LocalUnixSession, Manifest,
-    ManifestEntry, SandboxClient, SandboxConfig, SandboxConfigSpec, SandboxSession, SessionHandle,
-    SnapshotId,
+    Capability, ClientCapabilities, CommandRequest, DirEntry, EntryType, ExecOutput,
+    LocalUnixClient, LocalUnixSession, Manifest, ManifestEntry, SandboxClient, SandboxConfig,
+    SandboxConfigSpec, SandboxSession, SessionBackend, SessionHandle, SnapshotId,
 };
+
+#[cfg(feature = "remote-e2b")]
+pub use workspace::remote::{E2bClient, E2bConfig};
+
+#[cfg(feature = "remote-daytona")]
+pub use workspace::remote::{DaytonaClient, DaytonaConfig};
 
 #[cfg(feature = "workspace-docker")]
 pub use workspace::{DockerClient, DockerSession};

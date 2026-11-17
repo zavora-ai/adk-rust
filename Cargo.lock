@@ -1191,12 +1191,14 @@ version = "3.0.0"
 dependencies = [
  "adk-core",
  "async-trait",
+ "base64 0.22.1",
  "bollard",
  "chrono",
  "find-msvc-tools",
  "futures",
  "libc",
  "proptest",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "tar",
@@ -1208,6 +1210,7 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "windows-sys 0.61.2",
+ "wiremock",
 ]
 
 [[package]]

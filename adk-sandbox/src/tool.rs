@@ -25,6 +25,13 @@ use crate::types::{ExecRequest, Language};
 /// making sandbox execution available to LLM agents. The tool accepts
 /// `language`, `code`, optional `stdin`, and optional `timeout_secs` parameters.
 ///
+/// # Governance
+///
+/// Inside a run, a frozen [`GovernanceControl`](adk_core::GovernanceControl) refuses the
+/// call, and a freeze while the code runs ends it and returns the freeze error. The
+/// timeout is cut to the wall time left in the run's budget, and a run whose budget is
+/// spent is refused.
+///
 /// # Error Handling
 ///
 /// Backend errors are **never** propagated as `ToolError`. Instead, they are
@@ -155,6 +162,11 @@ fn sandbox_error_to_json(err: &SandboxError) -> Value {
             "stderr": format!("session timed out after {timeout:?}. Consider increasing session_timeout in SandboxConfig."),
             "duration_ms": timeout.as_millis() as u64,
         }),
+        #[cfg(feature = "workspace")]
+        SandboxError::Unsupported { .. } | SandboxError::Remote { .. } => json!({
+            "status": "error",
+            "stderr": err.to_string(),
+        }),
     }
 }
 
@@ -202,7 +214,7 @@ impl adk_core::Tool for SandboxTool {
         }))
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
         // Parse language (required)
         let language = match args.get("language") {
             Some(v) => match parse_language(v) {
@@ -239,16 +251,39 @@ impl adk_core::Tool for SandboxTool {
                 secs.clamp(MIN_TIMEOUT_SECS as f64, MAX_TIMEOUT_SECS as f64) as u64
             });
 
+        let mut timeout = Duration::from_secs(timeout_secs);
+        let config = ctx.run_config();
+        if let Some(config) = config {
+            config.check_governance()?;
+            // The run's wall-time budget bounds the call, remote round trips included.
+            if let Some(tracker) = &config.budget_tracker {
+                tracker.check().map_err(adk_core::AdkError::from)?;
+                if let Some(remaining) = tracker.wall_time_remaining() {
+                    timeout = timeout.min(remaining);
+                }
+            }
+        }
+
         let request = ExecRequest {
             language,
             code,
             stdin,
-            timeout: Duration::from_secs(timeout_secs),
+            timeout,
             memory_limit_mb: None,
             env: HashMap::new(),
         };
 
-        match self.backend.execute(request).await {
+        // A freeze ends the call where it stands: dropping the backend's future ends a local
+        // process, and a `SessionBackend` destroys its environment, which ends a remote one.
+        let outcome = match config {
+            Some(config) => tokio::select! {
+                outcome = self.backend.execute(request) => outcome,
+                frozen = config.governance_refused() => return Err(frozen),
+            },
+            None => self.backend.execute(request).await,
+        };
+
+        match outcome {
             Ok(result) => Ok(json!({
                 "status": "success",
                 "stdout": result.stdout,

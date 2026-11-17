@@ -45,6 +45,9 @@ graph = ["dep:adk-graph", "adk-graph/time-travel", "adk-graph/action"]
 sandbox = ["dep:adk-sandbox", "adk-sandbox/sandbox-native", "adk-sandbox/egress-proxy"]
 # Container isolation for the shell.
 docker = ["sandbox", "adk-sandbox/workspace-docker"]
+# The remote shell: `bash` in an environment any `adk_sandbox::workspace::SandboxClient`
+# provides, such as adk-sandbox's E2B (`remote-e2b`) and Daytona (`remote-daytona`) clients.
+remote-shell = ["sandbox", "adk-sandbox/workspace"]
 # Spans, spend and the loop guard (spec 3.1 §7.13).
 observe = []
 # RBAC wrappers, credential broker and signed audit (spec 3.1 §7.14).
