@@ -29,15 +29,15 @@ The crate provides:
 
 ```toml
 [dependencies]
-adk-code = "3.0"
-adk-sandbox = "3.0"
+adk-code = "3.0.0"
+adk-sandbox = "3.0.0"
 ```
 
 Or use the meta-crate, where the `code` feature (included in `full`) re-exports it:
 
 ```toml
 [dependencies]
-adk-rust = { version = "3.0", features = ["code"] }
+adk-rust = { version = "3.0.0", features = ["code"] }
 ```
 
 ## Architecture
@@ -98,10 +98,10 @@ User code must provide `fn run(input: serde_json::Value) -> serde_json::Value`. 
 | Feature       | Description                              | Default |
 |---------------|------------------------------------------|---------|
 | (none)        | Core types, `RustExecutor`, `RustSandboxExecutor`, `ContainerCommandExecutor`, `WasmGuestExecutor`, `CodeTool`, `Workspace` | — |
-| `embedded-js` | `EmbeddedJsExecutor` via `boa_engine`    | ❌      |
-| `embedded-python` | `MontyOneShotExecutor` / `MontyReplExecutor` via the Monty interpreter | ❌ |
-| `docker`      | `DockerExecutor` via `bollard` (persistent Docker containers) | ❌ |
-| `vertex-sandbox` | `VertexSandboxClient` / `SandboxCodeExecutor` / `VertexSandboxTool` — Vertex AI Agent Engine managed sandboxes | ❌ |
+| `embedded-js` | `EmbeddedJsExecutor` via `boa_engine`    | off |
+| `embedded-python` | `MontyOneShotExecutor` / `MontyReplExecutor` via the Monty interpreter | off |
+| `docker`      | `DockerExecutor` via `bollard` (persistent Docker containers) | off |
+| `vertex-sandbox` | `VertexSandboxClient` / `SandboxCodeExecutor` / `VertexSandboxTool` — Vertex AI Agent Engine managed sandboxes | off |
 
 No feature is enabled by default.
 
@@ -111,14 +111,14 @@ No feature is enabled by default.
 
 | Backend | Isolation | Timeout | Network | Filesystem | Environment | Persistent |
 |---------|-----------|---------|---------|------------|-------------|------------|
-| `RustSandboxExecutor` | HostLocal | ✅ | ❌ | ❌ | ✅ | ❌ |
-| `RustExecutor` | Delegated | ✅ | Delegated | Delegated | Delegated | ❌ |
-| `EmbeddedJsExecutor` | InProcess | ✅† | ✅* | ✅* | ✅* | ❌ |
-| `MontyOneShotExecutor` | InProcess | ✅ | ✅* | ✅ | ✅ | ❌ |
-| `MontyReplExecutor` | InProcess | ✅ | ✅* | ✅ | ✅ | ✅ |
-| `WasmGuestExecutor` | InProcess | ✅ | ✅* | ✅* | ✅* | ❌ |
-| `ContainerCommandExecutor` | ContainerEphemeral | ✅ | ✅ | ✅ | ✅ | ❌ |
-| `DockerExecutor` | ContainerPersistent | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `RustSandboxExecutor` | HostLocal | Yes | No | No | Yes | No |
+| `RustExecutor` | Delegated | Yes | Delegated | Delegated | Delegated | No |
+| `EmbeddedJsExecutor` | InProcess | Yes† | Yes* | Yes* | Yes* | No |
+| `MontyOneShotExecutor` | InProcess | Yes | Yes* | Yes | Yes | No |
+| `MontyReplExecutor` | InProcess | Yes | Yes* | Yes | Yes | Yes |
+| `WasmGuestExecutor` | InProcess | Yes | Yes* | Yes* | Yes* | No |
+| `ContainerCommandExecutor` | ContainerEphemeral | Yes | Yes | Yes | Yes | No |
+| `DockerExecutor` | ContainerPersistent | Yes | Yes | Yes | Yes | Yes |
 
 *Enforcement by omission — the engine has no APIs for these operations.
 
@@ -132,7 +132,7 @@ Host-local Rust compilation and execution. Compiles with `rustc`, runs the binar
 
 | Process | Environment |
 |---------|-------------|
-| `rustc` | Cleared, plus the toolchain allowlist from `ProcessBackend::toolchain_env()` (`PATH`, `HOME`, `RUSTUP_HOME`, `CARGO_HOME`, `RUSTUP_TOOLCHAIN`, `TMPDIR`, and on Windows `LIB`, `SystemRoot`, and similar) |
+| `rustc` | Cleared, plus the toolchain allowlist from `ProcessBackend::toolchain_env()`: `PATH`, `HOME`, `TMPDIR`, `RUSTUP_HOME`, `CARGO_HOME`, `RUSTUP_TOOLCHAIN`, `DEVELOPER_DIR` and `SDKROOT` on Unix; `PATH`, `LIB`, `LIBPATH`, `INCLUDE`, `SystemRoot`, `TEMP`, `TMP`, `USERPROFILE`, `RUSTUP_HOME` and `RUSTUP_TOOLCHAIN` on Windows |
 | Compiled binary | Cleared, plus the variables named by `EnvironmentPolicy::AllowList` (and `SystemRoot` on Windows) |
 
 `env!` and `option_env!` in user code therefore cannot embed host credentials into the binary, and `std::env::var` sees only allowlisted variables.

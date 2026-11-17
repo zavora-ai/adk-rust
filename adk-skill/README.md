@@ -12,8 +12,9 @@ AgentSkills parser, index, matcher, and runtime injection helpers for ADK-Rust.
 
 This crate is provider-agnostic and can be used through:
 
-- `adk-agent` (`LlmAgentBuilder::with_skills`, `with_auto_skills`, `with_skills_from_root`)
-- `adk-runner` (`Runner::with_auto_skills`)
+- `adk-agent` with its `skills` feature (`LlmAgentBuilder::with_skills`, `with_auto_skills`,
+  `with_skills_from_root`)
+- `adk-runner` with its `skills` feature (`Runner::with_auto_skills`)
 - `adk-cli` (`adk-rust skills list`, `validate`, `match`, and, with `vertex-skill-registry`, `search` and `pull`)
 - Direct API calls from custom runtimes
 
@@ -21,14 +22,15 @@ This crate is provider-agnostic and can be used through:
 
 ```toml
 [dependencies]
-adk-skill = "3.0"
+adk-skill = "3.0.0"
 ```
 
-Or use the meta-crate, where the `skills` feature (included in `standard`) re-exports it:
+Or use the meta-crate, where the `skills` feature (included in `standard`) re-exports it and turns
+on the `skills` features of `adk-agent` and `adk-runner`:
 
 ```toml
 [dependencies]
-adk-rust = { version = "3.0", features = ["skills"] }
+adk-rust = { version = "3.0.0", features = ["skills"] }
 ```
 
 | Feature | Description |
@@ -377,7 +379,7 @@ activation by default and reject path traversal. Set
 `ResourceAccessPolicy::GoogleCompatible` only when direct resource reads are
 required for interoperability.
 
-The block is `ignore` because it needs the `progressive-disclosure` feature.
+The block is `ignore` because it needs the `progressive-disclosure` feature and `adk-agent`.
 
 ```rust,ignore
 use adk_agent::{LlmAgent, LlmAgentBuilder};
@@ -419,13 +421,18 @@ Creating, updating, and deleting skills is left to platform tooling.
 Main error type: `SkillError`
 
 - `Io`
-- `Yaml`
+- `Yaml { message }` — the YAML library's message; frontmatter is read with `serde-saphyr`, and no
+  YAML library type appears in the API
 - `InvalidFrontmatter { path, message }`
 - `MissingField { path, field }`
 - `InvalidSkillsRoot(path)`
 - `Validation(message)`
 - `IndexError(message)`
-- `Registry(AdkError)` (with `vertex-skill-registry`)
+- With `vertex-skill-registry`: `Registry(Box<AdkError>)`, `RegistryPayloadDecode`,
+  `RegistryChecksumMismatch`, and the `Archive*` variants for archives that break an extraction
+  bound
+
+`SkillError` converts into `AdkError` with a `skill.*` error code.
 
 Type alias: `SkillResult<T> = Result<T, SkillError>`
 

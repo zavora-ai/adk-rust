@@ -1210,12 +1210,15 @@ impl GeminiModel {
                 | adk_gemini::FinishReason::ImageSafety
                 | adk_gemini::FinishReason::ModelArmor => FinishReason::Safety,
                 adk_gemini::FinishReason::Recitation => FinishReason::Recitation,
+                // https://ai.google.dev/api/generate-content#FinishReason: the function call is
+                // invalid, or names a tool when no tools were enabled.
+                adk_gemini::FinishReason::MalformedFunctionCall
+                | adk_gemini::FinishReason::UnexpectedToolCall => FinishReason::MalformedToolCall,
                 adk_gemini::FinishReason::FinishReasonUnspecified
                 | adk_gemini::FinishReason::Language
                 | adk_gemini::FinishReason::Other
-                | adk_gemini::FinishReason::MalformedFunctionCall
-                | adk_gemini::FinishReason::UnexpectedToolCall
                 | adk_gemini::FinishReason::TooManyToolCalls => FinishReason::Other,
+                _ => FinishReason::Other,
             });
         // A blocked prompt has no candidates: it ends the turn as a safety stop, and
         // `error_code` marks it as a failure rather than an empty answer.

@@ -61,25 +61,26 @@ Choose only the features you need:
 
 ```toml
 [dependencies]
-adk-payments = { version = "3.0", features = ["acp"] }
+adk-payments = { version = "3.0.0", features = ["acp"] }
 ```
 
 ```toml
 [dependencies]
-adk-payments = { version = "3.0", features = ["ap2", "ap2-a2a", "ap2-mcp"] }
+adk-payments = { version = "3.0.0", features = ["ap2", "ap2-a2a", "ap2-mcp"] }
 ```
 
 ```toml
 [dependencies]
-adk-payments = { version = "3.0", features = ["acp", "acp-experimental", "ap2"] }
+adk-payments = { version = "3.0.0", features = ["acp", "acp-experimental", "ap2"] }
 ```
 
-Or use the meta-crate, where the `payments` feature (included in `enterprise`) re-exports the
-crate with its default features; enable the protocol features on `adk-payments` itself:
+Or use the meta-crate, where the `payments` feature (in `enterprise` and `full`) re-exports the
+crate as `adk_rust::payment` with its default features; enable the protocol features on
+`adk-payments` itself:
 
 ```toml
 [dependencies]
-adk-rust = { version = "3.0", features = ["payments"] }
+adk-rust = { version = "3.0.0", features = ["payments"] }
 ```
 
 ## Core Concepts
@@ -350,9 +351,45 @@ approver's message is recorded with the decision), and
 unreachable. `GovernedCheckoutService::with_auditor` records each decision with a
 `PaymentAuditor` before the backend is reached. Wrap the backend handed to the ACP adapter in
 a `GovernedCheckoutService` to govern ACP protocol traffic too; the AP2 adapter governs its own
-checkouts and payment mandates. A custom `PaymentPolicy` is an `#[async_trait]` whose
-`evaluate` receives a context carrying the operation, the paying app and agent, and the spend
-ledger.
+checkouts and payment mandates.
+
+A custom policy implements `PaymentPolicyGuardrail`, an `#[async_trait]` whose `evaluate`
+receives a `PaymentPolicyContext` carrying the operation, the paying app and agent, and the
+spend ledger:
+
+```rust
+use adk_payments::domain::{ProtocolDescriptor, TransactionRecord};
+use adk_payments::guardrail::{
+    PaymentPolicyContext, PaymentPolicyDecision, PaymentPolicyGuardrail, PaymentPolicySet,
+};
+use async_trait::async_trait;
+
+/// Refuses every transaction with the merchant `test`.
+struct NoTestMerchant;
+
+#[async_trait]
+impl PaymentPolicyGuardrail for NoTestMerchant {
+    fn name(&self) -> &str {
+        "no_test_merchant"
+    }
+
+    async fn evaluate(
+        &self,
+        record: &TransactionRecord,
+        _protocol: &ProtocolDescriptor,
+        _context: &PaymentPolicyContext,
+    ) -> PaymentPolicyDecision {
+        if record.merchant_of_record.merchant_id == "test" {
+            return PaymentPolicyDecision::deny(Vec::new());
+        }
+        PaymentPolicyDecision::allow()
+    }
+}
+
+fn policies() -> PaymentPolicySet {
+    PaymentPolicySet::new().with(NoTestMerchant)
+}
+```
 
 With the `ap2` feature, `with_ap2_adapter` adds `payments_ap2_payment_submit`
 (`payments:payment:execute`), which submits an AP2 payment mandate through the adapter
@@ -428,6 +465,18 @@ Use these as the starting point for real implementations:
 - [`adk-payments/tests/cross_protocol_correlation_tests.rs`](https://github.com/zavora-ai/adk-rust/blob/main/adk-payments/tests/cross_protocol_correlation_tests.rs)
 - the `payments` example in [adk-playground](https://github.com/zavora-ai/adk-playground)
 - [`docs/official_docs/security/payments.md`](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/security/payments.md)
+
+## Changes in 3.0
+
+| Change | Migration |
+|--------|-----------|
+| `PaymentPolicyGuardrail::evaluate` and `PaymentPolicySet::evaluate` are async and take a `PaymentPolicyContext` | Add `#[async_trait]`, make `evaluate` async and add the context parameter |
+| `PaymentToolsetBuilder::build` wraps every tool in a `ScopeGuard` | Grant the declared scopes, or supply a resolver with `with_scope_guard` |
+| Checkout creation and completion go through `GovernedCheckoutService` | An escalation needs the run's approval (`payments.policy.approval_required`) |
+| `auth::PaymentOperation` gains `ExecutePayment` (`payments:payment:execute`) | Add the arm to an exhaustive `match` |
+| The tools record the acting agent as the commerce actor | — |
+
+See the [2.x to 3.0 migration guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/migration/2.x-to-3.0.md#adk-payments).
 
 ## Related Modules
 

@@ -1,8 +1,9 @@
 //! Realtime connects install the process-level rustls crypto provider themselves.
 //!
-//! The `gemini` feature compiles in both the `ring` and `aws-lc-rs` providers, so rustls
-//! cannot choose one on its own and panics when the first TLS connection is built. Under
-//! nextest every test runs in its own process, so each starts with no provider installed.
+//! A binary that also links `ring` — the `livekit` feature does, through livekit-api — has
+//! two providers, so rustls cannot choose one on its own and panics when the first TLS
+//! connection is built. Under nextest every test runs in its own process, so each starts
+//! with no provider installed.
 
 #![cfg(any(feature = "gemini", feature = "openai"))]
 

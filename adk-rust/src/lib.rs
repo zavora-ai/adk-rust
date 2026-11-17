@@ -1412,7 +1412,10 @@ pub fn provider_from_env() -> Result<std::sync::Arc<dyn Llm>> {
 /// High-level single-turn agent invocation.
 ///
 /// Creates an agent with the given instructions, sends the input, and returns
-/// the text response. Uses [`provider_from_env`] to auto-detect the LLM provider.
+/// the text response. Detects the provider from `ANTHROPIC_API_KEY`, then
+/// `OPENAI_API_KEY`, then `GOOGLE_API_KEY` (Gemini on AI Studio), among the
+/// providers compiled in. Unlike [`provider_from_env`], it does not read the
+/// Vertex AI flags.
 ///
 /// This is the fastest way to get started with ADK — a single function call
 /// that handles provider selection, session creation, agent building, and

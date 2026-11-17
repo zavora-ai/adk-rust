@@ -14,7 +14,7 @@ Native Rust SDK for the ADK-Rust Enterprise Managed Agent Service.
 
 ## Key Capabilities
 
-- **Any model** — Gemini, OpenAI, Anthropic, DeepSeek, Ollama, or any OpenAI-compatible endpoint via `ModelRef`
+- **Any model** — Gemini, OpenAI, Anthropic, Ollama, or any OpenAI-compatible endpoint such as DeepSeek via `ModelRef`
 - **Auto-reconnect SSE** — tracks `seq` via SSE `id:` field, reconnects transparently with `Last-Event-ID`
 - **Automatic retry** — exponential backoff with jitter on 429/5xx, respects `Retry-After` headers
 - **Idempotency** — UUID v4 keys on all create operations, reused across retries
@@ -111,49 +111,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Handle tools that the agent invokes but you execute locally:
 
-```rust,no_run
+```rust
 use adk_enterprise::*;
 use futures::StreamExt;
 use serde_json::json;
 
 async fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
-let client = EnterpriseClient::from_env()?;
+    let client = EnterpriseClient::from_env()?;
 
-let agent = client.create_agent(CreateAgentParams {
-    name: "Tool Agent".into(),
-    model: "gpt-5.6-terra".into(),
-    tools: vec![
-        ToolConfig::builtin("bash"),
-        ToolConfig::custom("get_weather", "Get weather for a city", json!({
-            "type": "object",
-            "properties": { "city": { "type": "string" } },
-            "required": ["city"]
-        })),
-    ],
-    ..Default::default()
-}).await?;
+    let agent = client.create_agent(CreateAgentParams {
+        name: "Tool Agent".into(),
+        model: "gpt-5.6-terra".into(),
+        tools: vec![
+            ToolConfig::builtin("bash"),
+            ToolConfig::custom("get_weather", "Get weather for a city", json!({
+                "type": "object",
+                "properties": { "city": { "type": "string" } },
+                "required": ["city"]
+            })),
+        ],
+        ..Default::default()
+    }).await?;
 
-let session = client.create_session(&agent.id, None).await?;
-let mut stream = client.stream_events(&session.id).await?;
-client.send_message(&session.id, "What's the weather in Tokyo?").await?;
+    let session = client.create_session(&agent.id, None).await?;
+    let mut stream = client.stream_events(&session.id).await?;
+    client.send_message(&session.id, "What's the weather in Tokyo?").await?;
 
-while let Some(event) = stream.next().await {
-    match event? {
-        SessionEvent::CustomToolUse { custom_tool_use_id, name, input, .. } => {
-            let result = match name.as_str() {
-                "get_weather" => format!("22°C, sunny in {}", input["city"]),
-                _ => "unknown tool".into(),
-            };
-            client
-                .custom_tool_result(&session.id, &custom_tool_use_id, vec![ContentBlock::text(result)])
-                .await?;
+    while let Some(event) = stream.next().await {
+        match event? {
+            SessionEvent::CustomToolUse { custom_tool_use_id, name, input, .. } => {
+                let result = match name.as_str() {
+                    "get_weather" => format!("22°C, sunny in {}", input["city"]),
+                    _ => "unknown tool".into(),
+                };
+                client
+                    .custom_tool_result(&session.id, &custom_tool_use_id, vec![ContentBlock::text(result)])
+                    .await?;
+            }
+            SessionEvent::Message { .. } => { /* print the response */ }
+            SessionEvent::StatusIdle { .. } => break,
+            _ => {}
         }
-        SessionEvent::Message { .. } => { /* print the response */ }
-        SessionEvent::StatusIdle { .. } => break,
-        _ => {}
     }
-}
-Ok(())
+    Ok(())
 }
 ```
 
@@ -178,7 +178,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 Same agent definition, any model:
 
-```rust,no_run
+```rust
 use adk_enterprise::{CreateAgentParams, EnterpriseClient, ModelRef, Provider};
 
 async fn run(client: &EnterpriseClient) -> Result<(), Box<dyn std::error::Error>> {
@@ -201,7 +201,7 @@ async fn run(client: &EnterpriseClient) -> Result<(), Box<dyn std::error::Error>
     // OpenAI-compatible endpoint (DeepSeek, Together, etc.)
     client
         .create_agent(CreateAgentParams {
-            model: ModelRef::compatible("deepseek-v4-flash", "https://api.deepseek.com"),
+            model: ModelRef::compatible("deepseek-flash", "https://api.deepseek.com"),
             ..Default::default()
         })
         .await?;

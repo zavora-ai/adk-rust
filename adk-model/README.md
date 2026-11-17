@@ -161,7 +161,13 @@ which needs the `gemini-vertex` feature; otherwise it uses `GOOGLE_API_KEY` or `
 
 A Gemini error object inside a successful response fails the call, a stream that ends without a
 `finishReason` fails with `model.gemini.unfinished_stream`, and a blocked prompt ends the turn
-with `FinishReason::Safety`, instead of reading as an empty answer.
+with `FinishReason::Safety`, instead of reading as an empty answer. `MALFORMED_FUNCTION_CALL` and
+`UNEXPECTED_TOOL_CALL` finish with `FinishReason::MalformedToolCall`.
+
+Every adapter reports a model that declined — an Anthropic `refusal` stop reason, an OpenAI or
+OpenRouter `refusal` — as `FinishReason::Refusal`, with the refusal as the response's text, and a
+tool call the provider reports as invalid as `FinishReason::MalformedToolCall`. `LlmAgent` and
+`CodeActAgent` end the run on either, with `model.refusal` or `model.malformed_tool_call`.
 
 ### OpenAI
 
@@ -365,6 +371,8 @@ request, and an unknown stop reason maps to `FinishReason::Other`.
 
 ### DeepSeek
 
+The snippet needs the `deepseek` feature.
+
 ```rust
 use adk_core::{Content, Llm, LlmRequest};
 use adk_model::deepseek::DeepSeekClient;
@@ -402,6 +410,8 @@ and `deepseek-v4-pro`: DeepSeek retired `deepseek-chat` and `deepseek-reasoner` 
 
 ### Groq
 
+The snippet needs the `groq` feature.
+
 ```rust
 use adk_core::{Content, Llm, LlmRequest};
 use adk_model::groq::{GroqClient, GroqConfig};
@@ -435,6 +445,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Ollama
 
+The snippet needs the `ollama` feature.
+
 ```rust
 use adk_model::ollama::{OllamaConfig, OllamaModel};
 
@@ -452,7 +464,8 @@ cost zero.
 
 ### OpenRouter
 
-`OpenRouterClient` implements `Llm` for agents and also exposes OpenRouter's native APIs.
+`OpenRouterClient` implements `Llm` for agents and also exposes OpenRouter's native APIs. The
+snippet needs the `openrouter` feature.
 
 ```rust
 use adk_core::{Content, Llm, LlmRequest};
@@ -585,6 +598,8 @@ newer vLLM deployments read. Thinking stays separate from the visible message te
 
 ### Amazon Bedrock
 
+The snippet needs the `bedrock` feature.
+
 ```rust
 use adk_model::bedrock::{BedrockClient, BedrockConfig};
 
@@ -602,6 +617,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `BedrockClient::from_client` wraps an `aws_sdk_bedrockruntime::Client` the application built.
 
 ### Azure AI Inference
+
+The snippet needs the `azure-ai` feature.
 
 ```rust
 use adk_model::azure_ai::{AzureAIClient, AzureAIConfig};
@@ -624,8 +641,8 @@ Every provider sets `LlmResponse::provider` and `LlmResponse::model`, and fills
 `UsageMetadata::cost` (USD) from `pricing::PricingCatalog` when the provider reports no cost.
 Cached prompt tokens are billed once, Anthropic cache writes by TTL, and long-context tiers apply
 where the vendor publishes them. The catalog carries Gemini, OpenAI, Anthropic, DeepSeek, Groq,
-xAI, and Mistral list prices, verified on `pricing::PRICING_EFFECTIVE_DATE`; local Ollama models
-cost zero, and unpriced models keep `cost: None`. Built-in tool uses the provider reports (web
+Meta Muse, xAI, and Mistral list prices, verified on `pricing::PRICING_EFFECTIVE_DATE`; local
+Ollama models cost zero, and unpriced models keep `cost: None`. Built-in tool uses the provider reports (web
 search, file search, Google Search grounding) land in `UsageMetadata::builtin_tool_uses`, and their
 published per-use fees are added to `cost`.
 
@@ -653,10 +670,11 @@ with a spend cap refuses a model call that has no bound.
 |------|-----------|
 | Streaming | A stream that ends before its terminal event, ends mid tool call, or carries an error frame fails with an `AdkError` instead of returning a truncated answer. See "Stream Termination" in [providers.md](../docs/official_docs/models/providers.md#stream-termination) |
 | Tool calls | Text-encoded tool calls (Qwen/Hermes, Llama, Mistral Nemo, DeepSeek, DeepSeek-V3 native tokens, Gemma 4, action tags) are recognized only for tools the request declares. Arguments that are not a JSON object are marked with `adk_core::invalid_tool_arguments` instead of becoming `{}`, so the agent answers the call with an error and the model can retry. Chat Completions clients send one `tool` message per function response, and images a tool returns reach every provider |
-| Generation config | Temperature, `top_p`, `top_k`, max tokens, stop sequences, seed, penalties, and log probabilities reach the provider where it supports them. The Responses, Anthropic, Bedrock, Groq, Azure AI Inference, and DeepSeek clients fail with `model.unsupported_config`, naming the field, when a request sets one they cannot honour; the OpenAI-compatible Chat Completions clients send all of them |
+| Generation config | Temperature, `top_p`, `top_k`, max tokens, stop sequences, seed, penalties, and log probabilities reach the provider where it supports them. The Responses, Anthropic, Bedrock, Groq, Azure AI Inference, DeepSeek, and Muse clients fail with `model.unsupported_config`, naming the field, when a request sets one they cannot honour; the OpenAI-compatible Chat Completions clients send all of them |
 | Reasoning effort | `GenerateContentConfig::effort` (`Low`, `Medium`, `High`) sets one call's effort over the client's: Anthropic `output_config.effort` with adaptive thinking, OpenAI `reasoning_effort` and Responses `reasoning.effort`, Gemini `thinking_level`, OpenRouter `reasoning.effort`, DeepSeek `reasoning_effort`, Groq GPT-OSS `reasoning_effort`. A model without the control, Ollama, Bedrock, and Azure AI Inference ignore it with a debug log. See "Per-Call Reasoning Effort" in [providers.md](../docs/official_docs/models/providers.md#per-call-reasoning-effort) |
-| Timeouts | `HttpTimeouts` bounds connecting (30 seconds) and every wait for data (10 minutes) on the OpenAI, OpenAI-compatible, Azure OpenAI, Responses, Azure AI Inference, Groq, DeepSeek, OpenRouter, Ollama, and Bedrock clients; `with_timeouts` changes both. Anthropic requests are bounded at 10 minutes (`AnthropicConfig::with_request_timeout`) |
-| Retry | Exponential backoff for 408, 429, 500, 502, 503, 504, and 529 (`RetryConfig`); a `Retry-After` delay, or on Gemini a `google.rpc.RetryInfo` `retryDelay`, is honoured up to `RetryConfig::max_server_delay` |
+| Timeouts | `HttpTimeouts` bounds connecting (30 seconds) and every wait for data (10 minutes) on the OpenAI, OpenAI-compatible, Azure OpenAI, Responses, Azure AI Inference, Groq, DeepSeek, Muse, OpenRouter, OpenCode, Ollama, and Bedrock clients; `with_timeouts` changes both. `GeminiModel::new` applies the same defaults. Anthropic requests are bounded at 10 minutes (`AnthropicConfig::with_request_timeout`) |
+| Retry | Exponential backoff for 408, 429, 500, 502–504, 520–524, and 529 (`RetryConfig`); a `Retry-After` delay, or on Gemini a `google.rpc.RetryInfo` `retryDelay`, is honoured up to `RetryConfig::max_server_delay` |
+| Quota and credit | An account out of quota or credit fails with `ErrorCategory::ResourceExhausted` and is not retried: OpenAI `insufficient_quota` and spend-limit errors (sent as HTTP 429), Anthropic `billing_error`, and any HTTP 402 |
 | Credentials | Provider configs redact the API key in `Debug` output and omit it when serialized |
 | Error privacy | An error message quotes at most 512 bytes of an upstream error body, and clients log a failure's code, category, and status, never its message or a response body. See [Errors in spans and logs](../docs/official_docs/observability/telemetry.md#errors-in-spans-and-logs) |
 | Telemetry | Token usage is recorded on `gen_ai.usage.*` span fields through `adk-telemetry` |

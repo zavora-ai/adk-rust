@@ -412,7 +412,7 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
         | StopReason::PauseTurn
         | StopReason::PauseRun => FinishReason::Stop,
         StopReason::MaxTokens | StopReason::ModelContextWindowExceeded => FinishReason::MaxTokens,
-        StopReason::Refusal => FinishReason::Safety,
+        StopReason::Refusal => FinishReason::Refusal,
         StopReason::Unknown(reason) => {
             tracing::warn!(
                 anthropic.stop_reason = %reason,
@@ -427,6 +427,27 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
 
     let cache_meta = extract_cache_usage(&message.usage);
 
+    // A classifier refusal arrives as HTTP 200; any text before it is not an answer, so the
+    // turn ends as a failure that names the category and explanation from `stop_details`.
+    let refused = matches!(message.stop_reason, Some(StopReason::Refusal));
+    let details = message.stop_details.as_ref();
+    let refusal_message = refused.then(|| {
+        let category = details.and_then(|details| details.category.as_deref());
+        let explanation = details.and_then(|details| details.explanation.as_deref());
+        match (category, explanation) {
+            (Some(category), Some(explanation)) => {
+                format!("Claude declined the request (category {category}): {explanation}")
+            }
+            (Some(category), None) => format!("Claude declined the request (category {category})"),
+            (None, Some(explanation)) => format!("Claude declined the request: {explanation}"),
+            (None, None) => "Claude declined the request".to_string(),
+        }
+    });
+    let mut provider_metadata = paused.then(|| serde_json::json!({"continue_turn": true}));
+    if let Some(details) = details.and_then(|details| serde_json::to_value(details).ok()) {
+        provider_metadata.get_or_insert_with(|| serde_json::json!({}))["stop_details"] = details;
+    }
+
     (
         LlmResponse {
             content,
@@ -436,9 +457,9 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
             partial: false,
             turn_complete: !tool_call_turn && !paused,
             interrupted: false,
-            error_code: None,
-            error_message: None,
-            provider_metadata: paused.then(|| serde_json::json!({"continue_turn": true})),
+            error_code: refused.then(|| "refusal".to_string()),
+            error_message: refusal_message,
+            provider_metadata,
             interaction_id: None,
             model: Some(message.model.to_string()).filter(|model| !model.is_empty()),
             provider: None,
@@ -605,6 +626,9 @@ pub fn build_message_params(
         }
         Some(super::config::ThinkingMode::Adaptive) => {
             params.thinking = Some(adk_anthropic::ThinkingConfig::adaptive());
+        }
+        Some(super::config::ThinkingMode::BetweenTools) => {
+            params.thinking = Some(adk_anthropic::ThinkingConfig::between_tools());
         }
         None => {}
     }
@@ -1116,6 +1140,7 @@ mod tests {
             ],
             stop_reason: Some(StopReason::EndTurn),
             stop_sequence: None,
+            stop_details: None,
             r#type: "message".to_string(),
             usage: Usage {
                 input_tokens: 10,
@@ -1159,6 +1184,7 @@ mod tests {
             ],
             stop_reason: Some(StopReason::EndTurn),
             stop_sequence: None,
+            stop_details: None,
             r#type: "message".to_string(),
             usage: Usage {
                 input_tokens: 5,
@@ -1194,6 +1220,7 @@ mod tests {
             ))],
             stop_reason: Some(StopReason::ToolUse),
             stop_sequence: None,
+            stop_details: None,
             r#type: "message".to_string(),
             usage: Usage {
                 input_tokens: 10,

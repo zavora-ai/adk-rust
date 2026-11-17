@@ -218,6 +218,7 @@ Enhanced plugins run before the governed authorization path, so the tool policy,
 | `on_model_error` runs for a failed model call or stream, and its response answers the turn | — |
 | `after_run` runs once, after the run's last event, however the run ends | — |
 | An `AdaptedPlugin`'s legacy `before_tool` refusal stops the tool | — |
+| An `EnhancedPluginManager` gives each invocation its own `PluginContext` | Keep state that spans invocations in `plugin_ctx.shared()` |
 
 See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
 

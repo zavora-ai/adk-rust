@@ -19,6 +19,11 @@ pub enum ThinkingMode {
     /// Control depth via `effort` on `AnthropicConfig`, and whether the thinking text is
     /// returned via [`AnthropicConfig::with_thinking_display`].
     Adaptive,
+    /// No thinking before the response, only short updates between tool calls: the way to
+    /// turn thinking off on Claude Sonnet 5.5, which rejects disabled thinking. The API
+    /// accepts it at effort `high` or below; Claude Fable 5.x and Opus 5.5 always think, so
+    /// lower `effort` on those instead.
+    BetweenTools,
 }
 
 /// Effort level controlling response thoroughness.

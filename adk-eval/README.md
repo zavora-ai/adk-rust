@@ -8,7 +8,7 @@ Agent evaluation framework for Rust Agent Development Kit (ADK-Rust).
 
 ## Overview
 
-`adk-eval` provides comprehensive tools for testing and validating agent behavior, enabling developers to ensure their agents perform correctly and consistently. Unlike traditional software testing, agent evaluation must account for the probabilistic nature of LLMs while still providing meaningful quality signals.
+`adk-eval` provides tools for testing and validating agent behavior. Unlike traditional software testing, agent evaluation must account for the probabilistic nature of LLMs while still providing meaningful quality signals.
 
 ## Features
 
@@ -17,7 +17,7 @@ Agent evaluation framework for Rust Agent Development Kit (ADK-Rust).
 - **Response Quality**: Assess final output quality using multiple algorithms
 - **LLM-Judged Evaluation**: Semantic matching, rubric-based scoring, and safety checks
 - **Multiple Criteria**: Ground truth, similarity-based, and configurable thresholds
-- **Detailed Reporting**: Comprehensive results with failure analysis
+- **Detailed Reporting**: Per-case results, scores, and failure details
 - **Structured LLM Judge**: Typed verdicts (pass/fail/partial) with scores and reasoning
 - **Embedding Similarity**: Cosine similarity between embedding vectors (feature: `embedding`)
 - **Cost & Latency Tracking**: Token usage extraction, dollar cost estimation, latency recording
@@ -352,11 +352,16 @@ adk-eval = { version = "3.0.0", features = ["embedding", "ci-helpers", "statisti
 | `embedding` | `adk-memory` | Embedding-based semantic similarity |
 | `ci-helpers` | `quick-xml` | JUnit XML report generation |
 | `statistics` | `libm` | Wilcoxon signed-rank for A/B comparison |
-| `vertex-eval` | `adk-gcp` | Vertex AI Gen AI Evaluation Service bridge (`VertexEvalClient`, `VertexEvalJudge`) |
+| `vertex-eval` | `adk-gcp`, `google-cloud-auth`, `reqwest` | Vertex AI Gen AI Evaluation Service bridge (`VertexEvalClient`, `VertexEvalJudge`) |
 | `personas` | none | The `personas` module: simulated users for multi-turn evaluation |
 | `experiments` | `libm` | `ExperimentAnalyzer`: sequential analysis of web experiments with guardrails |
 
 All other features (structured judge, cost tracker, trace analyzer, baselines, annotations, test generator, conversation scorer) work without extra feature flags.
+
+The optional dependencies are not features of their own: enable `vertex-eval`, not `adk-gcp`,
+`google-cloud-auth`, or `reqwest`. Through the `adk-rust` umbrella, its `eval` feature enables this
+crate's `personas`, and its `vertex-eval` feature enables `vertex-eval`; `adk-rust` has no
+`personas` feature.
 
 ### Structured LLM Judge
 

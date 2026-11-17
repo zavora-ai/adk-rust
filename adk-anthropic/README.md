@@ -16,6 +16,7 @@ This project is an **unofficial** community-maintained library. It is not affili
 - **Messages API** — non-streaming and SSE streaming with all content block types
 - **Adaptive thinking** — `ThinkingConfig::adaptive()` for Opus 4.8 / Opus 4.7 / Opus 4.6 / Sonnet 4.6
 - **Budget-based thinking** — `ThinkingConfig::enabled(budget)` for older models (rejected on Opus 4.8 / Opus 4.7)
+- **Thinking off** — `ThinkingConfig::disabled()`, and `ThinkingConfig::between_tools()` on Claude Sonnet 5.5, which rejects `disabled`; Claude Fable 5.x, Mythos 5.x and Opus 5.5 always think
 - **Effort parameter** — `OutputConfig::with_effort()` with `low`, `medium`, `high`, `xhigh`, `max` levels
 - **Structured outputs** — JSON schema via `OutputConfig` / `OutputFormat`
 - **Tool calling** — custom function tools, server tools (web search, web fetch, bash, text editor, code execution, memory); `WebSearchTool20260209` and `WebFetchTool20260209` declare the dynamic-filtering tool versions
@@ -25,7 +26,8 @@ This project is an **unofficial** community-maintained library. It is not affili
 - **Vision** — URL and base64 image analysis
 - **PDF processing** — URL, base64, and Files API PDF analysis with citations
 - **Token counting** — `/v1/messages/count_tokens` endpoint
-- **Fast mode** — `speed: "fast"` (`SpeedMode::Fast`, research preview)
+- **Fast mode** — `speed: "fast"` (`SpeedMode::Fast`) on Claude Opus 5.5, Fable 5.2 and Mythos 5.2; research preview on Opus 5 and Opus 4.8
+- **Refusals** — `Message::stop_details` carries the category and explanation of a `refusal` stop, streamed and unary
 - **Request customization** — caller-selected beta headers, bearer auth, API-version overrides, and exact per-request headers
 - **Server-side fallback** — typed default or explicit safety-refusal routing with fallback-aware responses and SSE events
 - **Batches API** — create, get, results, cancel, delete, list
@@ -264,7 +266,7 @@ not restrict them.
 
 Webhook deliveries are signed with [Standard Webhooks](https://www.standardwebhooks.com/).
 Pass the raw body and the `webhook-id`, `webhook-timestamp`, and `webhook-signature`
-headers to `WebhookVerifier`:
+headers to `WebhookVerifier`. The snippet needs the `managed-agents` feature.
 
 ```rust
 use adk_anthropic::HeaderMap;
@@ -298,7 +300,7 @@ Anthropic, Claude, and the Anthropic logo are trademarks of Anthropic, PBC. All 
 
 ## Acknowledgments
 
-This crate was forked from [claudius](https://github.com/crisogray/claudius) v0.19 by [@crisogray](https://github.com/crisogray), a comprehensive Rust SDK for the Anthropic API licensed under Apache-2.0.
+This crate was forked from [claudius](https://github.com/crisogray/claudius) v0.19 by [@crisogray](https://github.com/crisogray), a Rust SDK for the Anthropic API licensed under Apache-2.0.
 
 The following components originate from claudius and form the foundation of `adk-anthropic`:
 
@@ -306,13 +308,13 @@ The following components originate from claudius and form the foundation of `adk
 - **SSE streaming** (`sse.rs`) — Server-Sent Events parser for streaming responses
 - **Accumulating stream** (`accumulating_stream.rs`) — stream accumulator for assembling complete messages from SSE deltas
 - **Backoff** (`backoff.rs`) — exponential backoff with jitter for retryable errors
-- **Error types** (`error.rs`) — comprehensive error enum with typed variants for all API error classes
+- **Error types** (`error.rs`) — error enum with typed variants for all API error classes
 - **Core type system** (`types/`) — `Message`, `MessageCreateParams`, `MessageParam`, `ContentBlock`, `TextBlock`, `ToolUseBlock`, `ToolResultBlock`, `ImageBlock`, `DocumentBlock`, `ThinkingBlock`, `SystemPrompt`, `Usage`, `StopReason`, `ToolChoice`, `ToolParam`, `CacheControlEphemeral`, and all serde serialization/deserialization logic
 - **Client logger** (`client_logger.rs`) — `ClientLogger` trait for capturing API interactions
 - **Cache control** (`cache_control.rs`) — cache breakpoint management utilities
 - **JSON schema** (`json_schema.rs`) — schema utilities
 
-We stripped claudius's agent framework, CLI tools, chat session management, and observability modules (all handled by other ADK crates), then extended the retained code with adaptive thinking, effort parameter, structured outputs, context management, fast mode, citations, Files API, Skills API, Models API with capabilities, token pricing, and updated model definitions.
+The fork drops claudius's agent framework, CLI tools, chat session management, and observability modules (other ADK crates handle them), and extends the retained code with adaptive thinking, effort parameter, structured outputs, context management, fast mode, citations, Files API, Skills API, Models API with capabilities, token pricing, and updated model definitions.
 
 ## Tool Search
 

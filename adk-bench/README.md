@@ -46,7 +46,12 @@ the model the run called (`BenchConfig::model`).
 
 ## Usage
 
-`cargo adk bench` (from `cargo-adk`) drives this crate.
+`cargo adk bench` (from `cargo-adk`) drives this crate. It needs `cargo-adk`'s `bench` feature,
+off by default:
+
+```bash
+cargo install cargo-adk --features bench
+```
 
 ### Basic run
 
@@ -164,6 +169,11 @@ work or when a turn copies the history more often than it did.
 
 ## Library use
 
+```toml
+[dependencies]
+adk-bench = "3.0.0"
+```
+
 ```rust
 use adk_bench::{BenchConfig, BenchRunner};
 
@@ -182,6 +192,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+### Features
+
+| Feature | Default | Adds |
+|---------|---------|------|
+| `tau2` | no | `adapters::tau2::Tau2Adapter`, a τ²-bench task-quality adapter |
+| `bfcl` | no | `adapters::bfcl::BfclAdapter`, a Berkeley Function Calling Leaderboard adapter |
 
 ## External Benchmark Protocol (EBP)
 

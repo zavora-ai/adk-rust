@@ -6,14 +6,14 @@ Shared Google Cloud REST plumbing for [ADK-Rust](https://github.com/zavora-ai/ad
 [![Documentation](https://docs.rs/adk-gcp/badge.svg)](https://docs.rs/adk-gcp)
 [![License](https://img.shields.io/crates/l/adk-gcp.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
 
-Every Vertex integration in the workspace — sessions, memory, artifact storage, RAG, evaluation, code sandboxes, the example store and registries, the Agent Engine server and deployment — needs the same three pieces. This crate holds the single copy.
+The workspace's Vertex AI REST integrations — sessions, memory, artifact storage, RAG, evaluation, code sandboxes, the example store and registries, the Agent Engine server and deployment — need the same three pieces. This crate holds the single copy.
 
 ## Installation
 
 ```toml
 [dependencies]
-adk-gcp = "3.0"
-adk-core = "3.0"
+adk-gcp = "3.0.0"
+adk-core = "3.0.0"
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 serde_json = "1"
 ```

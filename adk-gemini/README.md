@@ -40,6 +40,8 @@ adk-gemini = "3.0.0"
 | `interactions` | The Interactions API module and client methods |
 | `backtrace` | `snafu`'s `backtraces-impl-backtrace-crate` feature |
 
+The AI Studio backend has no feature flag and is always compiled; no feature is on by default.
+
 `adk-model` uses this crate for `GeminiModel`:
 
 ```toml
@@ -544,6 +546,9 @@ instead of decoding it as an empty response. Through `adk_model::GeminiModel`, a
 before any chunk carries `finishReason` fails with `model.gemini.unfinished_stream`, and a blocked
 prompt (`promptFeedback.blockReason`) ends the turn with `FinishReason::Safety`.
 
+`FinishReason` is `#[non_exhaustive]`, so a `match` on it needs a wildcard arm; a value this
+version does not know deserializes as `FinishReason::Other`.
+
 ## API modules
 
 | Module | Contents |
@@ -607,7 +612,8 @@ cargo run -p adk-gemini --features interactions --example interactions_basic
 The fork keeps the MIT notice because the MIT licence requires it in every copy; ADK-Rust's own
 work is Apache-2.0. Redistributing the crate means keeping both files.
 
-Original work Copyright (c) 2024 [@flachesis](https://github.com/flachesis)
+Original work Copyright (c) 2025 Michael Yang, as stated in [`LICENSE-MIT`](LICENSE-MIT)
+
 Modifications Copyright (c) 2024 Zavora AI
 
 ## Part of ADK-Rust
@@ -618,23 +624,20 @@ This crate is part of the [ADK-Rust](https://adk-rust.com) framework for buildin
 
 ## Attribution
 
-This crate is a fork of the [gemini-rust](https://github.com/flachesis/gemini-rust) library by [@flachesis](https://github.com/flachesis). We are grateful for their work in creating and maintaining this Gemini API client.
+This crate is a fork of the [gemini-rust](https://github.com/flachesis/gemini-rust) library by
+[@flachesis](https://github.com/flachesis), and keeps its MIT notice (see [License](#license)).
 
-**Upstream Project**
-- Repository: [github.com/flachesis/gemini-rust](https://github.com/flachesis/gemini-rust)
-- Crates.io: [crates.io/crates/gemini-rust](https://crates.io/crates/gemini-rust)
-- Original Author: [@flachesis](https://github.com/flachesis)
+| Upstream | |
+|----------|---|
+| Repository | [github.com/flachesis/gemini-rust](https://github.com/flachesis/gemini-rust) |
+| Crates.io | [crates.io/crates/gemini-rust](https://crates.io/crates/gemini-rust) |
+| Original author | [@flachesis](https://github.com/flachesis) |
 
-**Why a Fork?**
-
-The ADK-Rust project requires certain extensions for deep integration with the Agent Development Kit — exporting additional types (e.g., `GroundingMetadata`, `GroundingChunk`) for grounding support, future ADK-specific extensions for agent workflows, and workspace-level version management. We regularly sync with upstream to incorporate improvements and fixes.
-
-**Our Commitment**
-1. Staying aligned with the upstream gemini-rust project as much as possible
-2. Contributing back any general improvements that benefit the broader community
-3. Maintaining attribution and respecting the original MIT license
-4. Minimizing divergence — only adding ADK-specific extensions when necessary
+ADK-Rust forked the client to export additional types (such as `GroundingMetadata` and
+`GroundingChunk`) for grounding support, to add ADK-specific extensions, and to version it with
+the workspace.
 
 **Acknowledgments**
-- [@flachesis](https://github.com/flachesis) — Creator and maintainer of the original gemini-rust library
-- [@npatsakula](https://github.com/npatsakula) — Major contributions to the upstream project
+
+- [@flachesis](https://github.com/flachesis) — creator and maintainer of the original gemini-rust library
+- [@npatsakula](https://github.com/npatsakula) — major contributions to the upstream project

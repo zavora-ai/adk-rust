@@ -17,6 +17,8 @@ enum Reply {
     Text(String),
     Call(Call),
     Calls(Vec<Call>),
+    /// The model declines: the text with `FinishReason::Refusal`.
+    Refusal(String),
 }
 
 #[derive(Debug, Deserialize)]
@@ -29,6 +31,9 @@ struct Call {
 
 /// The model `--model-script` describes: a JSON array of replies, inline or in a file.
 ///
+/// A `{"refusal": "..."}` reply is the model declining, as a provider reports it: the text,
+/// finished with `FinishReason::Refusal`.
+///
 /// Every reply reports a nominal 20 tokens of usage, as a provider does, so token budgets
 /// such as the `ultracode` router's can be held to it. A reply costs nothing unless it names
 /// its price in USD, `{"text": "Done.", "cost": 0.0125}`, which the kernel's spending then
@@ -40,8 +45,8 @@ pub fn model(script: &str) -> Result<Arc<dyn Llm>> {
         std::fs::read_to_string(script)
             .with_context(|| format!("failed to read the model script {script}"))?
     };
-    let shape = "--model-script must be a JSON array of {\"text\"}, {\"call\"} or {\"calls\"} \
-                 replies, each with an optional \"cost\" in USD";
+    let shape = "--model-script must be a JSON array of {\"text\"}, {\"call\"}, {\"calls\"} or \
+                 {\"refusal\"} replies, each with an optional \"cost\" in USD";
     let steps: Vec<serde_json::Map<String, Value>> = serde_json::from_str(&json).context(shape)?;
     let usage = adk_core::UsageMetadata {
         prompt_token_count: 10,
@@ -63,6 +68,12 @@ pub fn model(script: &str) -> Result<Arc<dyn Llm>> {
             Reply::Calls(calls) => ScriptedResponse::function_calls(
                 calls.into_iter().map(|call| (call.name, call.args)),
             ),
+            Reply::Refusal(text) => {
+                let mut refused =
+                    adk_core::LlmResponse::new(adk_core::Content::new("model").with_text(text));
+                refused.finish_reason = Some(adk_core::FinishReason::Refusal);
+                ScriptedResponse::response(refused)
+            }
         };
         script.push(
             response.with_usage(adk_core::UsageMetadata { cost: Some(cost), ..usage.clone() }),

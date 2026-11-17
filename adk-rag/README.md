@@ -20,7 +20,7 @@ RAG stands for Retrieval-Augmented Generation. Instead of relying only on what a
 
 ## Quick Start
 
-The fastest way to get a working RAG pipeline. Uses Gemini for embeddings (free API key from [Google AI Studio](https://aistudio.google.com/apikey)).
+A RAG pipeline with Gemini embeddings and the in-memory vector store. The program needs a `GOOGLE_API_KEY` from [Google AI Studio](https://aistudio.google.com/apikey).
 
 ```toml
 [dependencies]
@@ -180,17 +180,17 @@ Query → [EmbeddingProvider] → [VectorStore search] → [Reranker] → Result
 | Component | What it does | Built-in options |
 |-----------|-------------|-----------------|
 | **Chunker** | Splits documents into smaller pieces | `FixedSizeChunker`, `RecursiveChunker`, `MarkdownChunker` |
-| **EmbeddingProvider** | Converts text to vector embeddings | `GeminiEmbeddingProvider`¹, `OpenAIEmbeddingProvider`² |
-| **VectorStore** | Stores and searches embeddings | `InMemoryVectorStore`, `QdrantVectorStore`³, `LanceDBVectorStore`⁴, `PgVectorStore`⁵ |
+| **EmbeddingProvider** | Converts text to vector embeddings | `GeminiEmbeddingProvider`¹, `OpenAIEmbeddingProvider`², `OnnxEmbeddingProvider`⁶ |
+| **VectorStore** | Stores and searches embeddings | `InMemoryVectorStore`, `QdrantVectorStore`³, `LanceDBVectorStore`⁴, `PgVectorStore`⁵, `AgentRetrievalStore`⁷ |
 | **Reranker** | Re-scores results after search | `NoOpReranker` (default), or write your own |
 
-¹ `gemini` feature  ² `openai` feature  ³ `qdrant` feature  ⁴ `lancedb` feature  ⁵ `pgvector` feature
+¹ `gemini` feature  ² `openai` feature  ³ `qdrant` feature  ⁴ `lancedb` feature  ⁵ `pgvector` feature  ⁶ `onnx` feature  ⁷ `agent-retrieval` feature
 
-The `RagPipeline` wires these together. The `RagTool` wraps the pipeline as an `adk_core::Tool` so any ADK agent can call it. `AgentRetrievalStore` (`agent-retrieval` feature) is a managed `VectorStore` on Google's Agent Retrieval service.
+The `RagPipeline` wires these together. The `RagTool` wraps the pipeline as an `adk_core::Tool` so any ADK agent can call it. `AgentRetrievalStore` is a managed `VectorStore` on Google's Agent Retrieval service.
 
 ## Embedding Providers
 
-### Gemini (recommended)
+### Gemini
 
 Uses Google's `gemini-embedding-2` model (3072 dimensions).
 
@@ -281,7 +281,7 @@ fn main() {
 
 ### Qdrant
 
-Production-ready vector database with filtering, snapshots, and clustering.
+Connects to a Qdrant server over gRPC (`QdrantVectorStore::default_url()` uses `http://localhost:6334`).
 
 ```toml
 adk-rag = { version = "3.0.0", features = ["qdrant"] }
@@ -311,7 +311,8 @@ adk-rag = { version = "3.0.0", features = ["lancedb"] }
 
 > Requires `protoc` installed: `brew install protobuf` (macOS), `apt install protobuf-compiler` (Ubuntu).
 
-```rust
+<!-- ignore: the `lancedb` feature needs `protoc` at build time -->
+```rust,ignore
 use adk_rag::LanceDBVectorStore;
 
 #[tokio::main]
@@ -564,7 +565,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 # Core only (in-memory store, all chunkers, no external deps)
 adk-rag = "3.0.0"
 
-# With Gemini embeddings (recommended)
+# With Gemini embeddings
 adk-rag = { version = "3.0.0", features = ["gemini"] }
 
 # With OpenAI embeddings
@@ -583,11 +584,11 @@ adk-rag = { version = "3.0.0", features = ["full"] }
 | `gemini` | `GeminiEmbeddingProvider` | `adk-gemini` |
 | `openai` | `OpenAIEmbeddingProvider` | `reqwest` |
 | `onnx` | `OnnxEmbeddingProvider`: a sentence-transformer ONNX model (default `BAAI/bge-small-en-v1.5`, 384 dimensions) run in process, fetched once into the Hugging Face hub cache; `ort` downloads the onnxruntime binary at build time | `ort`, `tokenizers`, `hf-hub` |
-| `qdrant` | `QdrantVectorStore` | `qdrant-client` |
-| `lancedb` | `LanceDBVectorStore` | `lancedb`, `arrow` |
+| `qdrant` | `QdrantVectorStore` | `qdrant-client`, `uuid` |
+| `lancedb` | `LanceDBVectorStore` | `lancedb` (arrow types come from its re-exports), `futures` |
 | `pgvector` | `PgVectorStore` | `sqlx` |
-| `agent-retrieval` | `AgentRetrievalStore` (Agent Retrieval, formerly Vector Search 2.0) | `adk-gcp`, `google-cloud-auth` |
-| `vertex-rag` | `VertexRagEngineClient`, `VertexAiRagRetrievalTool` | `adk-gcp`, `google-cloud-auth` |
+| `agent-retrieval` | `AgentRetrievalStore` (Agent Retrieval, formerly Vector Search 2.0) | `adk-gcp`, `google-cloud-auth`, `reqwest`, `uuid` |
+| `vertex-rag` | `VertexRagEngineClient`, `VertexAiRagRetrievalTool` | `adk-gcp`, `google-cloud-auth`, `reqwest` |
 | `full` | `gemini`, `openai`, `qdrant`, `lancedb`, `pgvector` | all of those |
 
 ## Testing Without API Keys
@@ -781,14 +782,18 @@ The scope and policy filter are configuration, never model arguments, so the mod
 results but never reach another scope or widen past the policy. Keys of the policy filter and
 model-filterable keys must be declared filterable on the collection.
 
-```rust,ignore
-use adk_rag::{Field, Filter, RagTool};
+```rust
+use std::sync::Arc;
 
-let tool = RagTool::new(pipeline, "kb")
-    .with_scope_per_user()
-    .with_policy_filter(Filter::eq(Field::metadata("visibility"), "public"))
-    .with_model_filterable(["section"]);
-// The model may call: {"query": "refund window", "filter": {"section": ["billing", "refunds"]}}
+use adk_rag::{Field, Filter, RagPipeline, RagTool};
+
+fn support_search(pipeline: Arc<RagPipeline>) -> RagTool {
+    // The model may call: {"query": "refund window", "filter": {"section": ["billing", "refunds"]}}
+    RagTool::new(pipeline, "kb")
+        .with_scope_per_user()
+        .with_policy_filter(Filter::eq(Field::metadata("visibility"), "public"))
+        .with_model_filterable(["section"])
+}
 ```
 
 Each result with a `source_uri` is recorded as an `adk_core::GroundingSource` on the call's

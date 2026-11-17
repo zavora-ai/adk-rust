@@ -352,6 +352,9 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
         {
             parts.push(Part::Text { text: text.clone() });
         }
+        if let Some(refusal) = choice.message.refusal.as_ref().filter(|r| !r.is_empty()) {
+            parts.push(Part::Text { text: refusal.clone() });
+        }
 
         // Add tool calls with IDs
         if let Some(tool_calls) = &choice.message.tool_calls {
@@ -393,7 +396,12 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
         meta
     });
 
+    let refused = resp
+        .choices
+        .first()
+        .is_some_and(|c| c.message.refusal.as_ref().is_some_and(|r| !r.is_empty()));
     let finish_reason = resp.choices.first().and_then(|c| c.finish_reason).map(|fr| match fr {
+        _ if refused => FinishReason::Refusal,
         OaiFinishReason::Stop => FinishReason::Stop,
         OaiFinishReason::Length => FinishReason::MaxTokens,
         OaiFinishReason::ToolCalls => FinishReason::Stop,
@@ -440,8 +448,8 @@ pub(crate) fn from_raw_openai_response(
     declared_tools: &HashSet<String>,
 ) -> LlmResponse {
     let choice = json.get("choices").and_then(|c| c.get(0));
-    // The model declined in `message.refusal`: the refusal is the answer text, and the turn
-    // finishes with `Safety`.
+    // The model declined in `message.refusal`: the refusal is the response's text, and the turn
+    // finishes with `Refusal` (https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
     let refusal = choice
         .and_then(|choice| choice.pointer("/message/refusal"))
         .and_then(serde_json::Value::as_str)
@@ -511,7 +519,7 @@ pub(crate) fn from_raw_openai_response(
 
     // Parse finish reason
     let finish_reason = if refusal.is_some() {
-        Some(FinishReason::Safety)
+        Some(FinishReason::Refusal)
     } else {
         choice.and_then(|c| c.get("finish_reason")).and_then(|v| v.as_str()).map(|fr| match fr {
             "stop" | "tool_calls" | "function_call" => FinishReason::Stop,

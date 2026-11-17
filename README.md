@@ -88,8 +88,8 @@ adk-rust = "3.0.0"                                        # Gemini, agents, runn
 |------|----------|----------|
 | `minimal` (default) | Gemini provider, agents, runner, sessions | Fast starter agents |
 | `standard` | minimal + OpenAI, Anthropic, tools, memory, telemetry, server, auth, graph, eval, guardrail, plugins, artifacts, skills, computer use | Serving an agent over HTTP |
-| `enterprise` | standard + realtime, browser, RAG, payments, AWP | Voice, retrieval and payments |
-| `full` | enterprise + audio, code execution, sandbox, code tools, the harness and its kernel, the AWP website, and the functional, node-cache, delta, and time-travel graph capabilities | Everything that needs no external infrastructure |
+| `enterprise` | standard + realtime, browser, RAG, payments, AWP, and `autonomy`: the harness and its kernel, background runs with cron and webhook wake-ups, approvals, SQLite stores, and the signed audit log | Voice, retrieval, payments, and unattended agents |
+| `full` | enterprise + audio, code execution, sandbox, code tools, the AWP website, and the functional, node-cache, delta, and time-travel graph capabilities | Everything that needs no external infrastructure |
 
 A tier is a starting point, not a ceiling. Add any single capability on top of one
 without moving to the next tier, so `features = ["minimal", "audio"]` gives you the

@@ -17,6 +17,14 @@ Llama 4, GPT-OSS, and the other architectures listed under [Supported models](#s
 adk-mistralrs = "3.0.0"
 ```
 
+The `adk-rust` umbrella re-exports the crate as `adk_rust::mistralrs` under its `mistralrs`
+feature, which no tier enables because of the build weight:
+
+```toml
+[dependencies]
+adk-rust = { version = "3.0.0", features = ["mistralrs"] }
+```
+
 ### Feature flags
 
 No feature is enabled by default, so the default build runs on the CPU.
@@ -59,7 +67,8 @@ implement `adk_core::Llm`, so they work with `LlmAgent` and the runner.
 
 ## Quick start
 
-```rust
+<!-- ignore: adk-mistralrs is outside the adk-rust `full` tier -->
+```rust,ignore
 use adk_core::{Content, Llm, LlmRequest};
 use adk_mistralrs::MistralRsModel;
 use futures::StreamExt;
@@ -90,7 +99,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Loading models
 
-```rust
+<!-- ignore: adk-mistralrs is outside the adk-rust `full` tier -->
+```rust,ignore
 use adk_mistralrs::{MistralRsConfig, MistralRsModel, ModelSource, QuantizationLevel};
 
 #[tokio::main]
@@ -123,7 +133,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Tools go in `LlmRequest::tools`, keyed by name, with a `description` and JSON Schema
 `parameters`:
 
-```rust
+<!-- ignore: adk-mistralrs is outside the adk-rust `full` tier -->
+```rust,ignore
 use adk_core::{Content, Llm, LlmRequest};
 use adk_mistralrs::MistralRsModel;
 use serde_json::json;
@@ -155,7 +166,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## LoRA adapters
 
-```rust
+<!-- ignore: adk-mistralrs is outside the adk-rust `full` tier -->
+```rust,ignore
 use adk_mistralrs::{AdapterConfig, MistralRsAdapterModel, MistralRsConfig, ModelSource};
 
 #[tokio::main]
@@ -177,7 +189,8 @@ an X-LoRA model.
 
 ## Multimodal models
 
-```rust
+<!-- ignore: adk-mistralrs is outside the adk-rust `full` tier -->
+```rust,ignore
 use adk_mistralrs::{
     DiffusionParams, MistralRsDiffusionModel, MistralRsEmbeddingModel, MistralRsSpeechModel,
     MistralRsVisionModel, image_from_path,
@@ -214,7 +227,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `MistralRsMultiModel` holds several models and routes each request by name; its `Llm`
 implementation uses the default model.
 
-```rust
+<!-- ignore: adk-mistralrs is outside the adk-rust `full` tier -->
+```rust,ignore
 use adk_core::{Content, LlmRequest};
 use adk_mistralrs::{MistralRsConfig, MistralRsMultiModel, ModelSource};
 
@@ -236,7 +250,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Multi-GPU splitting
 
-```rust
+<!-- ignore: adk-mistralrs is outside the adk-rust `full` tier -->
+```rust,ignore
 use adk_mistralrs::{Device, DeviceConfig, LayerDeviceRange, MistralRsConfig, ModelSource};
 
 fn main() {
@@ -254,7 +269,8 @@ fn main() {
 
 ## MCP client
 
-```rust
+<!-- ignore: adk-mistralrs is outside the adk-rust `full` tier -->
+```rust,ignore
 use adk_mistralrs::{McpClientConfig, McpServerConfig, MistralRsConfig, ModelSource};
 
 fn main() {
@@ -358,7 +374,6 @@ The crate logs through `tracing`: `info` for model loading and inference complet
 ## Further reading
 
 - [mistral.rs guide](../docs/official_docs/models/mistralrs.md) in the ADK-Rust documentation
-- The [adk-playground](https://github.com/zavora-ai/adk-playground) `mistral_quickstart` example
 
 ## License
 

@@ -104,12 +104,24 @@ builds a kernel from a harness (`Harness::kernel`).
 adk-kernel = "3.0.0"
 ```
 
+Or use the umbrella crate: `harness-kernel` re-exports this crate as `adk_rust::kernel` with the
+harness, and `autonomy` adds durable and background runs, cron and signed-webhook wake-ups, the
+approvals service, SQLite stores and the signed audit log. Both are in the `enterprise` and
+`full` tiers; the
+[autonomous agent guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/autonomy/index.md)
+builds an agent on `autonomy` end to end.
+
+```toml
+[dependencies]
+adk-rust = { version = "3.0.0", features = ["autonomy"] }
+```
+
 ## Example
 
 A kernel over one SQLite file runs a Gemini agent. One process sleeps until `Cargo.lock`
 changes; the kernel drains and stops on `SIGTERM` or Ctrl-C.
 
-```rust,ignore
+```rust
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -325,21 +337,21 @@ approved by mounting it (spec 3.2 §7.7, K-I13, K-I14):
 | Parked calls | A call the server answers with a question parks as a held call, its `DriverPark` stored as the run's checkpoint; the decision, in this process or after a restart, re-issues it once |
 | Partitions | `toolset_for(partition, drivers)` serves a driver when its manifest lists the partition and the partition's list names it; `toolset_for_manifests(partition)` by the manifest alone |
 
-```rust,no_run
+```rust
 use std::sync::Arc;
+
+use adk_core::{DurableRunStore, Toolset};
 use adk_kernel::drivers::{DriverManifest, DriverSupervisor};
 use adk_kernel::stores::InMemoryDriverStore;
 use adk_kernel::{Kernel, PartitionId};
 
-# async fn example(runs: Arc<dyn adk_core::DurableRunStore>) -> adk_kernel::Result<()> {
-let drivers = DriverSupervisor::builder(Arc::new(InMemoryDriverStore::new())).build();
-let kernel = Kernel::builder().run_store(runs).drivers(drivers.clone()).build()?;
-kernel.start().await?;
-drivers.mount(DriverManifest::from_file("email.toml")?, "alice").await?;
-let tools = drivers.toolset_for(&PartitionId::new("work"), &["email".to_string()]);
-# let _ = tools;
-# Ok(())
-# }
+async fn mount_email(runs: Arc<dyn DurableRunStore>) -> adk_kernel::Result<Arc<dyn Toolset>> {
+    let drivers = DriverSupervisor::builder(Arc::new(InMemoryDriverStore::new())).build();
+    let kernel = Kernel::builder().run_store(runs).drivers(drivers.clone()).build()?;
+    kernel.start().await?;
+    drivers.mount(DriverManifest::from_file("email.toml")?, "alice").await?;
+    Ok(drivers.toolset_for(&PartitionId::new("work"), &["email".to_string()]))
+}
 ```
 
 ## Local transport and service installation
@@ -445,20 +457,20 @@ those stores use, so one client serves them all.
 | `CronWatermarkStore` | `MongoCronWatermarkStore` | `FirestoreCronWatermarkStore` | `Neo4jCronWatermarkStore` |
 | Opened with | `connect(url, database)` or `from_database(db)` | `connect(project)` or `from_db(db)` | `connect(uri, user, password)` or `from_graph(graph)` |
 
-```rust,no_run
+```rust
 use adk_kernel::{MongoAgendaStore, MongoProcessStore};
 use adk_session::MongoRunStore;
 
-# async fn example() -> Result<(), Box<dyn std::error::Error>> {
-let processes = MongoProcessStore::connect("mongodb://localhost:27017", "adk").await?;
-let db = processes.database().clone();
-let runs = MongoRunStore::from_database(db.clone());
-let agenda = MongoAgendaStore::from_database(db);
-runs.migrate().await?;
-processes.migrate().await?;
-agenda.migrate().await?;
-# Ok(())
-# }
+async fn open_stores() -> Result<(), Box<dyn std::error::Error>> {
+    let processes = MongoProcessStore::connect("mongodb://localhost:27017", "adk").await?;
+    let db = processes.database().clone();
+    let runs = MongoRunStore::from_database(db.clone());
+    let agenda = MongoAgendaStore::from_database(db);
+    runs.migrate().await?;
+    processes.migrate().await?;
+    agenda.migrate().await?;
+    Ok(())
+}
 ```
 
 `adk-rust serve --store` and `adk-rust up --store` take PostgreSQL and Redis URLs only:

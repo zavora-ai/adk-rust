@@ -510,6 +510,13 @@ The generation config fields the API has no place for (`stop_sequences`, `seed`,
 `frequency_penalty`, `presence_penalty`) fail with `model.unsupported_config` before the
 request is sent; see [Generation Config Fields](./providers.md#generation-config-fields).
 
+### Refusals
+
+A completed response whose message carries a `refusal` content part returns the refusal as
+the response's text and finishes with `FinishReason::Refusal`, streamed or not. `LlmAgent`
+emits that event and then ends the run with `model.refusal`; see
+[finish reasons](../events/events.md).
+
 ### Failed and unfinished responses
 
 A response that does not complete successfully ends the turn with an error, in streaming

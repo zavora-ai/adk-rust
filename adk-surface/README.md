@@ -31,8 +31,10 @@ with `default-features = false` to leave it out.
 | `website` | Experimental, implies `web`: a prebuilt website's setup code, onboarding, charter cards, site view, weekly review and web editor at `/ui/website`, over `adk-website`'s desk (spec 3.5 §8.2) | `web::website::router`, `web::website::setup_router` |
 | `verb-ui` | Experimental: screen actions people and agents share — Snooze in Coming up from the home, the terminal, voice and an agent, always through the governed path; an agent's request waits for the person every time (spec 3.3 §2 item 7) | `verbs::VerbRegistry`, `verbs::VerbGate`, `web::verbs::router` |
 | `workflow` | Beta: the workflow observer — a graph agent's runs, steps and forks, card hints and a money route for its governed nodes, the fork command; with `web`, the developer panel's Runs tab and its routes under `/api/surface/workflow` (spec 3.3 §12) | `workflow::Workflows`, `web::workflow::router` |
-| `genui` | Agent-drawn UI: forms, cards, tables and screens an agent draws in a thread (A2UI v0.9.1 on the `forms` 1.0 catalog), checked so they never contain approval controls; a form's Send asks the drawing agent for the call, held for the person (spec 3.3 §6.1, §7.4 rule 5) | `genui::DrawToolset`, `genui::Validator`, `web::genui::router` |
+| `genui` | Agent-drawn UI: forms, cards, tables and screens an agent draws in a thread (A2UI v0.9.1 on the `forms` 1.0 catalog), checked so they never contain approval controls; a form's Send asks the drawing agent for the call, held for the person; charts; extension catalogs that add another crate's display-only components under their own id, registered with `SurfaceEngineBuilder::with_catalog` (spec 3.3 §6.1, §7.4 rule 5) | `genui::DrawToolset`, `genui::Validator`, `genui::Catalog::extend`, `web::genui::router` |
 | `genui-apps` | Apps from MCP servers in a thread, implies `genui` and `web`: framed sandboxed on their own origin, blocked when they show a decision's words or reach this computer, and their tool calls held for the person; also the React package `@zavora-ai/adk-surface-react` in `react/` (spec 3.3 §6.1) | `genui::McpAppsHost`, `web::genui::apps_router`, `web::genui::refuse_apps_origin` |
+
+`genui` replaces the retired `adk-ui` crate, and `workflow` the retired `adk-studio` app.
 
 ## Sources
 
@@ -50,38 +52,42 @@ adk-surface = { version = "3.0.0", features = ["web"] }
 
 ```rust,no_run
 use std::sync::Arc;
+
+use adk_core::ApprovalService;
+use adk_kernel::Kernel;
+use adk_server::ServerBuilder;
+use adk_session::SessionService;
 use adk_surface::{Caller, LocalSource, Origin, Place, SurfaceEngine, SurfaceKind};
 
-# async fn example(
-#     kernel: adk_kernel::Kernel,
-#     sessions: Arc<dyn adk_session::SessionService>,
-#     approvals: Arc<dyn adk_core::ApprovalService>,
-#     builder: adk_server::ServerBuilder,
-# ) -> adk_surface::Result<()> {
-let source = LocalSource::builder("adk-rust")
-    .sessions(sessions)
-    .approvals(approvals)
-    .kernel(kernel.clone(), "adk-rust")
-    .build()?;
-let engine = SurfaceEngine::builder(Arc::new(source))
-    .places([Place::phone(), Place::chat("Telegram")])
-    .build();
+async fn mount(
+    kernel: Kernel,
+    sessions: Arc<dyn SessionService>,
+    approvals: Arc<dyn ApprovalService>,
+    builder: ServerBuilder,
+) -> adk_surface::Result<ServerBuilder> {
+    let source = LocalSource::builder("adk-rust")
+        .sessions(sessions)
+        .approvals(approvals)
+        .kernel(kernel.clone(), "adk-rust")
+        .build()?;
+    let engine = SurfaceEngine::builder(Arc::new(source))
+        .places([Place::phone(), Place::chat("Telegram")])
+        .build();
 
-// The web home's API beside the kernel's own routes, behind the server's auth middleware,
-// and its page at `/ui/`.
-let builder = builder
-    .add_api_routes(adk_kernel::control::router(kernel))
-    .add_api_routes(adk_surface::web::router(engine.clone()))
-    .add_root_routes(adk_surface::web::home());
+    // The web home's API beside the kernel's own routes, behind the server's auth middleware,
+    // and its page at `/ui/`.
+    let builder = builder
+        .add_api_routes(adk_kernel::control::router(kernel))
+        .add_api_routes(adk_surface::web::router(engine.clone()))
+        .add_root_routes(adk_surface::web::home());
 
-// A chat adapter answers in process, with its channel as the origin.
-let me = Caller::human("ana", SurfaceKind::Chat, Origin::Chat { channel: "Telegram".into() });
-for card in engine.decisions(&me).await? {
-    println!("{} · {} · {}", card.heading, card.agent.display_name, card.risk_text);
+    // A chat adapter answers in process, with its channel as the origin.
+    let me = Caller::human("ana", SurfaceKind::Chat, Origin::Chat { channel: "Telegram".into() });
+    for card in engine.decisions(&me).await? {
+        println!("{} · {} · {}", card.heading, card.agent.display_name, card.risk_text);
+    }
+    Ok(builder)
 }
-# let _ = builder;
-# Ok(())
-# }
 ```
 
 ## What each surface may decide (spec 3.3 §7.2)
@@ -181,7 +187,9 @@ See [The Web Home](../docs/official_docs/surfaces/web-home.md).
 | `voice` | Voice and video (`adk_surface::voice`): the voice view with `web`, the voice line with `tui`; `voice-live` adds Gemini Live and the OpenAI Realtime API for the live test and the `voice_home` example | Beta |
 | `workflow` | The workflow observer (`adk_surface::workflow`): a graph agent's runs, steps and forks; the Runs tab and its routes with `web` | Beta |
 | `genui` | Agent-drawn UI (`adk_surface::genui`): the render tools, the validator, the routes with `web`, the box and fill-in pane with `tui` | Beta |
-| `genui-apps` | Apps from MCP servers (`adk_surface::genui::McpAppsHost`), with `adk-harness/mcp` and `adk-tool/mcp-apps` | Beta |
+| `genui-apps` | Apps from MCP servers (`adk_surface::genui::McpAppsHost`), with `adk-harness/mcp` and `adk-tool/mcp-apps`; implies `genui` and `web` | Beta |
+| `verb-ui` | Screen actions (`adk_surface::verbs`): Snooze in Coming up, through the governed path; its web, terminal and voice parts compile with `web`, `tui` and `voice` | Experimental |
+| `website` | A prebuilt website's views on the web home over `adk-website`'s desk; implies `web` | Experimental |
 
 The desktop tray is a separate, unpublished app in `desktop/`, not a feature. See
 [the terminal](../docs/official_docs/surfaces/terminal.md) for its keys, modes and exit codes,
@@ -192,24 +200,31 @@ and [the phone](../docs/official_docs/surfaces/phone.md) for serving it.
 `TelegramAdapter` is a Telegram bot as the person's chat thread with their agents (spec 3.3
 §5.3). It is the kernel's `ChannelSink` for the channel `telegram` and reads the bot's
 updates by long polling, handing each to `ChannelGateway::receive`; the gateway pairs
-accounts, starts turns, answers decisions and stops everything.
+accounts, starts turns, answers decisions and stops everything. It needs the `channels`
+feature.
 
 ```rust,no_run
 use std::sync::Arc;
+
+use adk_kernel::Kernel;
 use adk_kernel::channels::{ChannelDoorbell, ChannelGateway, InMemoryChannelBindingStore};
 use adk_surface::channels::TelegramAdapter;
 
-# async fn example(kernel: adk_kernel::Kernel, doorbell: Arc<ChannelDoorbell>) -> Result<(), Box<dyn std::error::Error>> {
-let telegram = TelegramAdapter::builder(std::env::var("TELEGRAM_BOT_TOKEN")?).build()?;
-let gateway = ChannelGateway::builder(Arc::new(kernel), Arc::new(InMemoryChannelBindingStore::new()))
-    .sink(Arc::new(telegram.clone()))
-    .home_url("http://127.0.0.1:8080/ui/")
-    .doorbell(doorbell)
-    .build();
-gateway.start().await?;
-telegram.start(gateway).join().await?;
-# Ok(())
-# }
+async fn telegram(
+    kernel: Kernel,
+    doorbell: Arc<ChannelDoorbell>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let telegram = TelegramAdapter::builder(std::env::var("TELEGRAM_BOT_TOKEN")?).build()?;
+    let gateway =
+        ChannelGateway::builder(Arc::new(kernel), Arc::new(InMemoryChannelBindingStore::new()))
+            .sink(Arc::new(telegram.clone()))
+            .home_url("http://127.0.0.1:8080/ui/")
+            .doorbell(doorbell)
+            .build();
+    gateway.start().await?;
+    telegram.start(gateway).join().await?;
+    Ok(())
+}
 ```
 
 A card carries "Waiting for you · since 18:00", the call in plain words ("Write file", as the

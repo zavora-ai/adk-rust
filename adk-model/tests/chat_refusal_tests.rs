@@ -1,5 +1,6 @@
-//! A Chat Completions `refusal` (with `content: null`) is the turn's answer text, and the turn
-//! finishes with `FinishReason::Safety`, streamed and unary.
+//! A Chat Completions `refusal` (with `content: null`) is the turn's text, and the turn finishes
+//! with `FinishReason::Refusal`, streamed and unary. The adapter reports it without an
+//! `error_code`; `LlmAgent` ends the run on the finish reason.
 #![cfg(feature = "openai")]
 
 use adk_core::{AdkError, Content, FinishReason, Llm, LlmRequest, LlmResponse, Part};
@@ -20,7 +21,7 @@ async fn turn(template: ResponseTemplate, stream: bool) -> Vec<LlmResponse> {
         LlmRequest::new("scripted", vec![Content::new("user").with_text("Help me with this.")]);
     let items: Vec<Result<LlmResponse, AdkError>> =
         client.generate_content(request, stream).await.expect("request").collect().await;
-    items.into_iter().map(|item| item.expect("a refusal is not a failure")).collect()
+    items.into_iter().map(|item| item.expect("a refusal is not a transport failure")).collect()
 }
 
 fn text(responses: &[LlmResponse]) -> String {
@@ -43,7 +44,7 @@ fn chunk(delta: Value, finish_reason: Option<&str>) -> Value {
 }
 
 #[tokio::test]
-async fn streamed_refusal_is_the_answer_and_finishes_with_safety() {
+async fn streamed_refusal_is_the_text_and_finishes_with_refusal() {
     let body: String = [
         chunk(json!({"role": "assistant", "content": null, "refusal": ""}), None),
         chunk(json!({"refusal": "I'm sorry, but "}), None),
@@ -59,12 +60,12 @@ async fn streamed_refusal_is_the_answer_and_finishes_with_safety() {
     assert_eq!(text(&responses), REFUSAL);
     let last = responses.last().expect("a final response");
     assert!(!last.partial && last.turn_complete, "{last:?}");
-    assert_eq!(last.finish_reason, Some(FinishReason::Safety));
+    assert_eq!(last.finish_reason, Some(FinishReason::Refusal));
     assert_eq!(last.error_code, None);
 }
 
 #[tokio::test]
-async fn unary_refusal_is_the_answer_and_finishes_with_safety() {
+async fn unary_refusal_is_the_text_and_finishes_with_refusal() {
     let body = json!({
         "id": "chatcmpl-1",
         "object": "chat.completion",
@@ -81,7 +82,7 @@ async fn unary_refusal_is_the_answer_and_finishes_with_safety() {
     let content = response.content.as_ref().expect("the refusal is the content");
     assert_eq!(content.role, "model");
     assert_eq!(content.parts, vec![Part::Text { text: REFUSAL.into() }]);
-    assert_eq!(response.finish_reason, Some(FinishReason::Safety));
+    assert_eq!(response.finish_reason, Some(FinishReason::Refusal));
     assert!(response.turn_complete);
     assert_eq!(response.error_code, None);
 }

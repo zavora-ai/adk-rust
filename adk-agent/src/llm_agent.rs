@@ -956,6 +956,60 @@ fn empty_response_error(finish_reason: Option<adk_core::FinishReason>) -> adk_co
     .with_details(details)
 }
 
+/// The error that ends a run whose model turn finished with [`FinishReason::Refusal`] or
+/// [`FinishReason::MalformedToolCall`], or `None` for any other finish.
+///
+/// A refusal's text is the model declining, not an answer, and a malformed tool call names
+/// no call that can run, so neither may read as a finished turn. `description` is the
+/// provider's own message when it sent one, otherwise the turn's text; `provider_code` is the
+/// provider's `error_code`, kept in `details.metadata["provider_error_code"]`.
+///
+/// [`FinishReason::Refusal`]: adk_core::FinishReason::Refusal
+/// [`FinishReason::MalformedToolCall`]: adk_core::FinishReason::MalformedToolCall
+pub(crate) fn finish_error(
+    finish_reason: Option<adk_core::FinishReason>,
+    description: Option<&str>,
+    provider_code: Option<&str>,
+) -> Option<adk_core::AdkError> {
+    let reason = finish_reason?;
+    let description = description
+        .map(|text| adk_core::upstream_excerpt(text).trim_end_matches('.'))
+        .filter(|text| !text.is_empty())
+        .map(|text| format!(": {text}"))
+        .unwrap_or_default();
+    let (category, code, message) = match reason {
+        adk_core::FinishReason::Refusal => (
+            adk_core::ErrorCategory::Forbidden,
+            "model.refusal",
+            format!(
+                "the model declined the request{description}. Rephrase the request, or retry \
+                 it on another model"
+            ),
+        ),
+        adk_core::FinishReason::MalformedToolCall => (
+            adk_core::ErrorCategory::Internal,
+            "model.malformed_tool_call",
+            format!(
+                "the model produced a tool call the provider reports as invalid{description}. \
+                 Retry the run; if it recurs, simplify the tool's parameter schema or offer \
+                 fewer tools"
+            ),
+        ),
+        _ => return None,
+    };
+    let mut details = adk_core::ErrorDetails::default();
+    details.metadata.insert("finish_reason".to_string(), serde_json::json!(format!("{reason:?}")));
+    if let Some(provider_code) = provider_code {
+        details
+            .metadata
+            .insert("provider_error_code".to_string(), serde_json::json!(provider_code));
+    }
+    Some(
+        adk_core::AdkError::new(adk_core::ErrorComponent::Model, category, code, message)
+            .with_details(details),
+    )
+}
+
 /// Extract the text content from a series of events.
 ///
 /// Scans events in reverse order for the last non-empty text content
@@ -4921,6 +4975,34 @@ impl Agent for LlmAgent {
                     // In this workspace `error_code` marks a genuine failure —
                     // truncation is reported through `finish_reason`
                     // (`FinishReason::MaxTokens`), not through `error_code`.
+                    //
+                    // A refusal or a malformed tool call ends the turn the same way, with
+                    // or without an `error_code`: the event above keeps the refusal text
+                    // and finish reason, and no tool call of the turn runs.
+                    let finish_failure = finish_error(
+                        last_turn_finish_reason,
+                        last_chunk
+                            .as_ref()
+                            .and_then(|last| last.error_message.clone())
+                            .or_else(|| {
+                                accumulated_content.as_ref().map(|content| {
+                                    content.parts.iter().filter_map(Part::text).collect::<String>()
+                                })
+                            })
+                            .as_deref(),
+                        last_chunk.as_ref().and_then(|last| last.error_code.as_deref()),
+                    );
+                    if let Some(error) = finish_failure {
+                        llm_span.in_scope(|| {
+                            tracing::error!(
+                                error = %error.diagnostics(),
+                                agent = %agent_name,
+                                "model turn ended without an answer it can act on"
+                            )
+                        });
+                        yield Err(error);
+                        return;
+                    }
                     if let Some(ref last) = last_chunk
                         && let Some(ref code) = last.error_code
                     {

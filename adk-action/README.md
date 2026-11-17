@@ -6,7 +6,7 @@ Shared action node types for ADK-Rust graph workflows.
 [![Documentation](https://docs.rs/adk-action/badge.svg)](https://docs.rs/adk-action)
 [![License](https://img.shields.io/crates/l/adk-action.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
 
-This crate provides the type definitions, error types, and variable interpolation utilities used by both [`adk-studio`](https://github.com/zavora-ai/adk-studio) (visual builder) and `adk-graph` (runtime engine) for deterministic, non-LLM workflow operations.
+This crate provides the type definitions, error types, and variable interpolation utilities for deterministic, non-LLM workflow operations. `adk-graph` is the runtime that executes them.
 
 ## Overview
 
@@ -51,7 +51,7 @@ The last column is the node's status in `adk-graph` 3.0.
 
 ```toml
 [dependencies]
-adk-action = "3.0"
+adk-action = "3.0.0"
 ```
 
 ## Usage
@@ -90,7 +90,7 @@ fn main() {
         env_vars: None,
     });
 
-    // Serialize to JSON (same format as adk-studio projects)
+    // Serialize to the workflow JSON format
     let json = serde_json::to_string_pretty(&config).unwrap();
     assert!(json.contains(r#""type": "set""#));
 }
@@ -118,13 +118,13 @@ fn main() {
 }
 ```
 
-### JSON round-trip (adk-studio ↔ adk-graph)
+### JSON round-trip
 
 ```rust
 use adk_action::ActionNodeConfig;
 
 fn main() {
-    // Deserialize from adk-studio JSON
+    // Deserialize a node from workflow JSON
     let json = r#"{"type":"set","id":"my_node","name":"Set Vars",
       "errorHandling":{"mode":"stop"},"tracing":{"enabled":true,"logLevel":"debug"},
       "callbacks":{},"execution":{"timeout":30000},
@@ -171,7 +171,7 @@ error code, such as `action.timeout` (`Timeout`) or `action.missing_credential` 
 ## Design Principles
 
 - **Lean**: Only types, errors, and interpolation. No runtime, no HTTP clients, no database drivers.
-- **Shared**: Identical types used by adk-studio (visual builder) and adk-graph (runtime engine).
+- **Shared**: One definition of each node configuration; `adk-graph` deserializes workflow JSON into these types and executes them.
 - **Serialization-first**: All types derive `Serialize`/`Deserialize` with `camelCase` field naming and `skip_serializing_if` for optional fields.
 - **Tagged union**: `ActionNodeConfig` uses `#[serde(tag = "type")]` so the JSON `"type"` field determines the variant.
 

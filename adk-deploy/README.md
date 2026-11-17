@@ -13,23 +13,23 @@ Deployment manifest, bundling, and control-plane client for ADK-Rust agents.
 - **Deployment manifests** — TOML-based configuration covering agent identity, build settings, scaling, health checks, deployment strategy, service bindings, secrets, telemetry, auth, guardrails, realtime, A2A, graph/HITL, plugins, skills, and interaction triggers
 - **Bundle builder** — compiles the agent binary, packages it with assets into a `.tar.gz` archive, and generates SHA-256 integrity checksums
 - **Control-plane client** — HTTP client for push deployments, status checks, rollbacks, promotions, secret management, and dashboard queries
-- **Comprehensive validation** — manifests are validated before build or push (unique bindings, secret refs, auth mode consistency, graph checkpoint requirements, trigger field completeness)
+- **Validation** — manifests are validated before build or push (unique bindings, secret refs, auth mode consistency, graph checkpoint requirements, trigger field completeness)
 
 ## Installation
 
 ```toml
 [dependencies]
-adk-deploy = "3.0"
+adk-deploy = "3.0.0"
 
 # Or, with the Agent Engine (ReasoningEngine) deployment client:
-# adk-deploy = { version = "3.0", features = ["gcp"] }
+# adk-deploy = { version = "3.0.0", features = ["gcp"] }
 ```
 
 | Feature | Description |
 |---------|-------------|
 | `gcp` | `gcp::GcpDeployClient` for Gemini Enterprise Agent Platform ReasoningEngine BYOC deployment; forwarded by `adk-rust` as `gcp-deploy` |
 
-No feature is enabled by default.
+No feature is enabled by default. 3.0.0 removes the features named after optional dependencies (`adk-core`, `adk-gcp`, `google-cloud-auth`); enable `gcp` instead.
 
 ## Manifest Format
 
@@ -252,7 +252,7 @@ async fn secrets(client: &DeployClient) -> DeployResult<()> {
 | `plugins` | Plugin references |
 | `skills` | Skills directory, hot reload |
 | `interaction` | Manual input config, webhook/schedule/event triggers |
-| `source` | Source metadata (Studio project ID, etc.) |
+| `source` | Source metadata: kind, project ID and project name |
 
 ## Service Binding Kinds
 

@@ -70,6 +70,29 @@ adk-rust memory accept <id>
 With the `kernel` feature, the same harness runs as long-lived processes under `adk-rust up`;
 see [`adk-kernel`](https://github.com/zavora-ai/adk-rust/blob/main/adk-kernel/README.md).
 
+## Installation
+
+```toml
+[dependencies]
+adk-harness = "3.0.0"
+```
+
+Or use the umbrella crate:
+
+| `adk-rust` feature | What it adds | Tiers |
+|---|---|---|
+| `harness` | `adk_rust::harness`: this crate, and with `cli` the `HarnessLauncher` | `enterprise`, `full` |
+| `harness-kernel` | `harness`, the `kernel` feature and `adk_rust::kernel` | `enterprise`, `full` |
+| `autonomy` | `harness-kernel`, durable and background runs with cron and signed-webhook wake-ups, the approvals service, SQLite stores (this crate's `sqlite`) and the signed audit log | `enterprise`, `full` |
+
+```toml
+[dependencies]
+adk-rust = { version = "3.0.0", features = ["autonomy"] }
+```
+
+The [autonomous agent guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/autonomy/index.md)
+builds an unattended harness agent on the `autonomy` feature end to end.
+
 ## How it is built
 
 `HarnessAgent` is configuration and policy over an `LlmAgent`. Its `configure_run` composes
@@ -86,7 +109,7 @@ agent tool — and the harness refuses to run without it.
 | Change sets | Two or more held edits of one model turn are shown as one diff (per file, with before and after sha256 and a digest) and decided once; each approved edit runs bound to the content shown (`ChangeSet`, `ApprovalPrompter::prompt_change_set`) |
 | Prompts | `PromptingConfirmationHandler` serializes prompts, caps them per turn of each session, escapes control characters, refuses a truncated call approved unexpanded, and returns edited arguments for the policy to check again. It re-checks a held call against the run's whole policy, so an operator policy's approval always reaches the person and a standing rule answers only the harness's own |
 | Durability | An action ledger on every run (in memory by default, `HarnessAgentBuilder::action_ledger` for a durable one, or the run's own): `bash`, `write_file`, `edit_file` and `apply_patch` are recorded before they execute and a re-issued or resumed call is answered from its record, never run twice. `Harness::send` and `Harness::resume` first settle a held call whose process stopped before saving its result: answered from the ledger, or held again |
-| Shell | `bash` on the host behind approval, or opt-in under the OS sandbox (Seatbelt, bubblewrap, or on Windows the restricted token, which leaves the network open, runs MSYS2 from a private runtime per command while holding the user's namespaces of the installations on its `PATH`, and denies `bash` in Plan) through `SandboxLauncher`: workspace read-write with protected paths read-only (read-only in Plan), scratch `HOME`, no network, the enforcer probed at build and per call (`Degraded` or `harness.sandbox_unavailable`, never a host fallback); a failure hint and a once-only, non-waivable unsandboxed retry; `auto_allow_sandboxed` gated on the S3 conformance probe and the protected paths, with no host file tool running beside an unapproved command; a 250 ms kill-switch poll; `harness.bash.*` audit records. At most 30,000 characters of output per result, the whole output kept for `shell_output`. Background shells: `run_in_background` returns a `shell_id`, decided as the foreground command; a timed-out call moves to the background; `shell_output` reads and `shell_kill` stops one; a reminder names each that ends; every shell dies on a freeze, at its output or lifetime limit, at session end and on `Harness::close`, and a crash's leftovers are reaped at the next start (`ShellSupervisor`, `ShellPidRegistry`). With `docker`, a container per session through `ContainerBashTool`: the workspace bind-mounted at `/workspace` with protected paths read-only, kept across runs, stopped on idle TTL or `Harness::close` |
+| Shell | `bash` on the host behind approval, or opt-in under the OS sandbox (Seatbelt, bubblewrap, or on Windows the restricted token, which leaves the network open, runs MSYS2 from a private runtime per command while holding the user's namespaces of the installations on its `PATH`, and denies `bash` in Plan) through `SandboxLauncher`: workspace read-write with protected paths read-only (read-only in Plan), scratch `HOME`, toolchain homes (`CARGO_HOME`, `RUSTUP_HOME`, `PYENV_ROOT`, `NVM_DIR`) granted entry by entry so credential files stay unreadable, no network unless `OsSandboxConfig::egress` (or `[network] allow` in `.adk/harness.toml`) admits hosts through one egress proxy per command, the enforcer probed at build and per call (`Degraded` or `harness.sandbox_unavailable`, never a host fallback); a failure hint and a once-only, non-waivable unsandboxed retry; `auto_allow_sandboxed` gated on the S3 conformance probe and the protected paths, with no host file tool running beside an unapproved command; a 250 ms kill-switch poll; `harness.bash.*` audit records. At most 30,000 characters of output per result, the whole output kept for `shell_output`. Background shells: `run_in_background` returns a `shell_id`, decided as the foreground command; a timed-out call moves to the background; `shell_output` reads and `shell_kill` stops one; a reminder names each that ends; every shell dies on a freeze, at its output or lifetime limit, at session end and on `Harness::close`, and a crash's leftovers are reaped at the next start (`ShellSupervisor`, `ShellPidRegistry`). With `docker`, a container per session through `ContainerBashTool`: the workspace bind-mounted at `/workspace` with protected paths read-only, kept across runs, stopped on idle TTL or `Harness::close` |
 | Edits | `write_file`, `edit_file` (several replacements as `edits`) and `apply_patch` for every model; an edit of a file changed since the agent read it is refused as stale, and an `apply_patch` is judged on every path of its patch. Read records persist with `read_records` (`SqliteReadRecords`, `PostgresReadRecords`, `RedisReadRecords`), so a held edit approved after a restart runs |
 | Todos | `write_todos` / `update_todo` in session state, one list per session |
 | Instructions | `AGENTS.md` from the git root down to the workspace, verbatim, hashed, delimited as untrusted, after a workspace trust decision bound to the files' content (an edited file asks again and records `harness.instructions.changed`); nested files listed, never inlined |
@@ -132,10 +155,10 @@ governance sources of `adk-core/src`, `adk-harness/src/{policy.rs,approvals/**,s
 
 ## Example
 
-```rust,ignore
+```rust
 use std::sync::Arc;
 
-use adk_core::{SessionId, UserId};
+use adk_core::UserId;
 use adk_harness::{HarnessAgent, HarnessMode};
 use adk_model::gemini::GeminiModel;
 use adk_session::InMemorySessionService;
@@ -191,7 +214,7 @@ control plane, then builds and starts the kernel.
 | Drivers | `HarnessAgentBuilder::kernel_drivers(drivers, partition, ids)` attaches a partition's kernel drivers: their tools classed by the approved manifest (`driver_tool_kind`: `read` a trusted read-only `External`, every other class a trusted `External` with effects, whatever the server's `readOnlyHint`), under the kernel's `DriverPolicy` composed with the harness's. `Harness::driver_rule_pins` moves a person's standing rules onto the declarations they re-approve (spec 3.2 §7.7) |
 | Partitions | `HarnessAgentBuilder::partition(partition, partitions)` builds one partition's harness: its mode, its class and tenant on every agent's principal, its `memory_scope` as the project of every long-term fact and of its working notes, its drivers (`partition_drivers`: only those its own list names and whose manifests serve it), and its `PartitionPolicy`; `partition_coordinator` marks the one harness that may cross into another partition, under a non-waivable approval, and `partition_driver_crossings` offers it other partitions' drivers as crossings `<partition>__<tool>` (spec 3.2 §7.8, K-I15). `host_partition` adds a partition's harness to a kernel as `<app>@<partition>` and `harness.goal@<partition>`, with its progress source for the partition's processes, so its ledger rows carry its partition; its `observation_audience` answers its own partition's observations only and remembers them in its memory scope. `HarnessResolver` builds one harness per partition of a managed definition (`PartitionAgentResolver`), mounting the tenant's drivers per partition and the coordinator's crossings into the others |
 
-```rust,ignore
+```rust
 use std::sync::Arc;
 
 use adk_kernel::{InMemoryProcessStore, KernelConfig};
@@ -236,15 +259,15 @@ See `docs/official_docs/harness/website.md`.
 | `skills` | on | `adk-skill/progressive-disclosure` |
 | `team` | on | `adk-tool`, `adk-agent/team-tools` |
 | `graph` | on | `adk-graph`: the plan graph and the `Graph` goal engine, checkpointed in the store `plan_checkpoint_store(url)` names (`checkpointer_from_url`), in memory without one |
-| `sandbox` | on | `adk-sandbox/sandbox-native` |
+| `sandbox` | on | `adk-sandbox/sandbox-native`, `adk-sandbox/egress-proxy` |
 | `observe` | on | `adk-eval` |
-| `auth` | on | `adk-auth` |
+| `auth` | on | `adk-auth`, `adk-auth/signed-audit` |
 | `memory` | on | working notes and long-term facts (`adk-memory`, `adk-guardrail`) |
 | `memory-embeddings` | off | `RagEmbedder`: `adk-rag`'s OpenAI and Gemini embedders for long-term facts |
 | `web` | off | `web_fetch`; web search through the model provider's built-in search by default, or the governed `web_search` over a `SearchProvider` (`SearxngSearch`, `DeepSeekSearch`), filtered by `WebConfig::search_domains` and never by the fetch allowlist; screening and `ProviderWebTools` (`reqwest`, `adk-guardrail`); on in `adk-rust` |
 | `mcp` | off | MCP elicitation, sampling and resource bridges (`adk-tool/mcp`, `adk-tool/mcp-sampling`); on in `adk-rust` |
 | `web-fixture` | off | a loopback HTTP server stands in for the web in tests; never on in `adk-rust` |
-| `hooks` | off | `toml`; `[[hooks]]` from `.adk/harness.toml`, the user config and the builder, run through the shell's launcher (spec 3.1 §7.22) |
+| `hooks` | off | no extra dependency; `[[hooks]]` from `.adk/harness.toml`, the user config and the builder, run through the shell's launcher (spec 3.1 §7.22) |
 | `memory-embeddings-local` | off | `RagEmbedder::onnx`: `adk-rag`'s in-process ONNX embedder (`BAAI/bge-small-en-v1.5`), no network and no key; `ort` downloads the onnxruntime binary at build time |
 | `encrypted` | off | The store envelope of spec 3.1 §7.12: `StoreKeyring`, `StoreKeySource` (secret provider, OS keychain, environment), sessions, approvals and the SQLite stores sealed at rest, key rotation |
 | `sqlite` | off | SQLite mode, rule, shell-ledger and goal stores, and `sqlite://` plan checkpoints |

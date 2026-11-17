@@ -25,6 +25,11 @@ Or through the umbrella crate:
 adk-rust = { version = "3.0.0", features = ["audio"] }
 ```
 
+`audio` enables the default `tts` and `stt` features. The umbrella's `audio-tts`, `audio-stt`,
+`audio-fx`, `audio-mlx`, and `audio-all` enable `tts`, `stt`, `fx`, `mlx`, and `all`; `kokoro`,
+`qwen3-tts`, and `all-onnx` keep their names; and `audio-onnx` enables `onnx` with the
+`whisper-onnx`, `distil-whisper`, `moonshine`, and `chatterbox` models.
+
 ## Feature flags
 
 | Feature | Enables | Key dependencies |
@@ -175,7 +180,9 @@ Models download from Hugging Face Hub into `LocalModelRegistry`'s cache
 
 ### ONNX TTS
 
-```rust
+Needs the `onnx` feature.
+
+```rust,ignore
 use adk_audio::{OnnxTtsProvider, TtsProvider};
 
 #[tokio::main]
@@ -199,7 +206,9 @@ over a `Preprocessor`: `TokenizerPreprocessor` uses a Hugging Face `tokenizer.js
 | `SttBackend::DistilWhisper` | `distil-whisper` | `DistilWhisperVariant::{DistilSmallEn, DistilMediumEn, DistilLargeV3}` |
 | `SttBackend::Moonshine` | `moonshine` | `MoonshineVariant::{Tiny, Base}` |
 
-```rust
+The example needs the `whisper-onnx` feature.
+
+```rust,ignore
 use adk_audio::{LocalModelRegistry, OnnxSttConfig, OnnxSttProvider, SttBackend, WhisperModelSize};
 
 #[tokio::main]
@@ -220,9 +229,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `MlxTtsProvider` and `MlxSttProvider` load models with tokenizers and Hugging Face Hub, configured
 by `MlxTtsConfig`, `MlxSttConfig`, and `MlxQuantization`. Metal GPU inference through `mlx-rs` is
-not implemented.
+not implemented. The example needs the `mlx` feature.
 
-```rust
+```rust,ignore
 use adk_audio::MlxTtsProvider;
 
 #[tokio::main]
@@ -235,9 +244,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Qwen3-TTS
 
-Candle-based TTS for 10 languages with predefined speakers, on CPU, Metal, or CUDA.
+Candle-based TTS for 10 languages with predefined speakers, on CPU, Metal, or CUDA. Needs the
+`qwen3-tts` feature.
 
-```rust
+```rust,ignore
 use adk_audio::{Qwen3TtsNativeProvider, Qwen3TtsVariant, TtsProvider, TtsRequest};
 
 #[tokio::main]
@@ -418,7 +428,7 @@ on an output device, and `VadTurnManager` turns a `VadProcessor`'s decisions int
 Behind `livekit`, `RealtimeBridge` converts between `adk-realtime` base64 PCM16 audio streams and
 pipeline inputs and outputs:
 
-```rust
+```rust,ignore
 use std::pin::Pin;
 
 use adk_audio::{AudioResult, PipelineInput, PipelineOutput, RealtimeBridge};
