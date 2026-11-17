@@ -124,6 +124,9 @@ fn clear_cache_control_on_block(block: &mut ContentBlock) {
         | ContentBlock::RedactedThinking(_)
         | ContentBlock::CodeExecutionResult(_)
         | ContentBlock::ProgrammaticToolUse(_) => {}
+        ContentBlock::Compaction(compaction) => {
+            compaction.extra.remove("cache_control");
+        }
         ContentBlock::Unknown(value) => {
             if let Some(object) = value.as_object_mut() {
                 object.remove("cache_control");
@@ -163,6 +166,12 @@ fn set_cache_control_on_block(block: &mut ContentBlock) {
         ContentBlock::ToolUse(tool_use) => {
             tool_use.cache_control = Some(CacheControlEphemeral::new());
         }
+        // A breakpoint on the block caches the summary.
+        ContentBlock::Compaction(compaction) => {
+            if let Ok(cache_control) = serde_json::to_value(CacheControlEphemeral::new()) {
+                compaction.extra.insert("cache_control".to_string(), cache_control);
+            }
+        }
         // Other block types don't support cache_control in user messages.
         ContentBlock::Image(_)
         | ContentBlock::Document(_)
@@ -199,6 +208,7 @@ fn block_has_cache_control(block: &ContentBlock) -> bool {
         ContentBlock::CodeExecutionToolResult(result)
         | ContentBlock::BashCodeExecutionToolResult(result)
         | ContentBlock::TextEditorCodeExecutionToolResult(result) => result.cache_control.is_some(),
+        ContentBlock::Compaction(compaction) => compaction.extra.contains_key("cache_control"),
         ContentBlock::Unknown(value) => value.get("cache_control").is_some(),
     }
 }

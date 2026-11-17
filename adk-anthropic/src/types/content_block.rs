@@ -3,9 +3,10 @@ use serde_json::Value;
 
 use crate::types::unknown::tagged_with_unknown;
 use crate::types::{
-    CodeExecutionResultBlock, CodeExecutionToolResultBlock, DocumentBlock, ImageBlock,
-    ProgrammaticToolUseBlock, RedactedThinkingBlock, ServerToolUseBlock, TextBlock, ThinkingBlock,
-    ToolResultBlock, ToolUseBlock, WebFetchToolResultBlock, WebSearchToolResultBlock,
+    CodeExecutionResultBlock, CodeExecutionToolResultBlock, CompactionBlock, DocumentBlock,
+    ImageBlock, ProgrammaticToolUseBlock, RedactedThinkingBlock, ServerToolUseBlock, TextBlock,
+    ThinkingBlock, ToolResultBlock, ToolUseBlock, WebFetchToolResultBlock,
+    WebSearchToolResultBlock,
 };
 
 /// A block of content in a message.
@@ -76,6 +77,11 @@ pub enum ContentBlock {
     #[serde(rename = "text_editor_code_execution_tool_result")]
     TextEditorCodeExecutionToolResult(CodeExecutionToolResultBlock),
 
+    /// A signed summary that takes the place of the messages it summarizes
+    /// (beta `compact-2026-09-04`).
+    #[serde(rename = "compaction")]
+    Compaction(CompactionBlock),
+
     /// A block type this client does not know, kept as the raw JSON the API
     /// sent, `type` field included. It serializes back to that JSON unchanged.
     #[serde(skip)]
@@ -101,6 +107,7 @@ tagged_with_unknown!(
         "code_execution_tool_result",
         "bash_code_execution_tool_result",
         "text_editor_code_execution_tool_result",
+        "compaction",
     ]
 );
 
@@ -153,6 +160,15 @@ impl ContentBlock {
     /// Returns true if this block is a redacted thinking block
     pub fn is_redacted_thinking(&self) -> bool {
         matches!(self, ContentBlock::RedactedThinking(_))
+    }
+
+    /// Returns a reference to the inner CompactionBlock if this is a Compaction variant,
+    /// or None otherwise.
+    pub fn as_compaction(&self) -> Option<&CompactionBlock> {
+        match self {
+            ContentBlock::Compaction(block) => Some(block),
+            _ => None,
+        }
     }
 
     /// Returns true if this block's type is one this client does not know

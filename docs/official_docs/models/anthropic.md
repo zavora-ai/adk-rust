@@ -346,6 +346,33 @@ fn build(api_key: String) -> Result<AnthropicClient, adk_core::AdkError> {
 reported as `usage.cache_creation_input_tokens_1h`, at the 1-hour rate and the remainder at
 the 5-minute rate.
 
+### On-Demand Compaction
+
+Claude summarizes a conversation when a request sets `compaction`, and returns one signed
+`compaction` block in place of a reply, with `stop_reason` `"compaction"`. Every later request
+sends the block first in `messages`, exactly as returned, in place of the turns it summarizes.
+The client adds the `compact-2026-09-04` beta header to both
+(`MessageCreateParams::requires_compaction_beta`).
+
+```rust
+use adk_anthropic::{CompactionParam, MessageCreateParams, MessageParam, Model};
+
+fn compaction_request(conversation: Vec<MessageParam>) -> MessageCreateParams {
+    let mut params = MessageCreateParams::new(4_096, conversation, Model::claude_sonnet_5_5());
+    params.compaction = Some(
+        CompactionParam::summarize()
+            .with_instructions("Keep every file name. Do not call tools; reply with the summary only."),
+    );
+    params
+}
+```
+
+Through `adk-model`, `AnthropicClient` reports `Llm::native_compaction` for the models that
+compact on demand on the Claude API, so the runner's auto-compaction has Claude write the summary
+and keeps the signed block in the agent's history; see
+[Provider-Native Compaction](../sessions/context-compaction.md#provider-native-compaction).
+The summarization call's usage comes from `usage.iterations`.
+
 ### Structured Output
 
 ```rust
@@ -534,7 +561,7 @@ Run with `cargo run -p adk-anthropic --example <name>`:
 | `structured_output` | JSON schema output |
 | `caching` | Multi-turn caching with costs |
 | `context_editing` | Tool and thinking clearing (beta) |
-| `compaction` | Server-side compaction |
+| `compaction` | On-demand compaction: a signed summary in place of a reply, then the conversation continued from it (beta) |
 | `token_counting` | Token counting before sending |
 | `stop_reasons` | Every stop reason |
 | `fast_mode` | Fast mode (beta) |

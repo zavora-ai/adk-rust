@@ -636,16 +636,14 @@ fn drive_codeact(
                         if let Some(compactor) =
                             invocation_ctx.run_config().history_compactor.clone()
                         {
-                            let request = adk_core::HistoryCompactionRequest {
-                                preamble: &transcript[..1],
-                                history: &transcript[1..],
-                                reported_prompt_tokens: None,
-                                trigger: if rejection.is_some() {
-                                    adk_core::CompactionTrigger::ContextLimitExceeded
-                                } else {
-                                    adk_core::CompactionTrigger::BeforeModelCall
-                                },
+                            let trigger = if rejection.is_some() {
+                                adk_core::CompactionTrigger::ContextLimitExceeded
+                            } else {
+                                adk_core::CompactionTrigger::BeforeModelCall
                             };
+                            let request =
+                                adk_core::HistoryCompactionRequest::new(&transcript[1..], trigger)
+                                    .with_preamble(&transcript[..1]);
                             match compactor
                                 .compact(invocation_ctx.clone(), model.clone(), request)
                                 .await

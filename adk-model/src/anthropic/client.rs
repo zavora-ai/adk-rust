@@ -72,6 +72,38 @@ impl AnthropicClient {
         .any(|prefix| model.starts_with(prefix))
     }
 
+    /// Whether `model` compacts on demand (beta `compact-2026-09-04`), per the Claude API's
+    /// "Compaction on demand" model list: the identifier itself or a dated snapshot of it.
+    fn compacts_on_demand(model: &str) -> bool {
+        const MODELS: [&str; 16] = [
+            "claude-fable-5-2",
+            "claude-mythos-5-2",
+            "claude-fable-5-1",
+            "claude-mythos-5-1",
+            "claude-fable-5",
+            "claude-mythos-5",
+            "claude-mythos-preview",
+            "claude-opus-5-5",
+            "claude-opus-5",
+            "claude-sonnet-5-5",
+            "claude-sonnet-5",
+            "claude-haiku-5-5",
+            "claude-opus-4-8",
+            "claude-opus-4-7",
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+        ];
+        let model = claude_id(model);
+        MODELS.iter().any(|id| {
+            model.strip_prefix(id).is_some_and(|rest| {
+                rest.is_empty()
+                    || rest.strip_prefix('-').is_some_and(|date| {
+                        date.len() == 8 && date.bytes().all(|byte| byte.is_ascii_digit())
+                    })
+            })
+        })
+    }
+
     fn supports_fast_mode(model: &str) -> bool {
         let model = claude_id(model);
         ["claude-opus-5", "claude-opus-4-8", "claude-fable-5-2", "claude-mythos-5-2"]
@@ -551,7 +583,43 @@ impl AnthropicClient {
                 ),
             }
         }
+        if let Some(ask) = adk_core::intra_compaction::NativeCompactionRequest::of(request) {
+            let compaction = adk_anthropic::CompactionParam::summarize();
+            params.compaction = Some(match ask.instructions {
+                Some(instructions) => compaction.with_instructions(instructions),
+                None => compaction,
+            });
+            // The API rejects these on a compaction request, where they would do nothing.
+            params.stop_sequences = None;
+            params.output_format = None;
+            params.context_management = None;
+            if let Some(output) = &mut params.output_config {
+                output.format = None;
+            }
+        }
+        keep_compaction_block_first(&mut params.messages);
         Ok(params)
+    }
+}
+
+/// Keeps a compaction block only where the API accepts one — first in the first message — and
+/// sends any other as its summary's text, so a history that placed it elsewhere still reads
+/// the summary instead of failing every request.
+fn keep_compaction_block_first(messages: &mut [adk_anthropic::MessageParam]) {
+    for (message_index, message) in messages.iter_mut().enumerate() {
+        let adk_anthropic::MessageParamContent::Array(blocks) = &mut message.content else {
+            continue;
+        };
+        for (block_index, block) in blocks.iter_mut().enumerate() {
+            if let ContentBlock::Compaction(compaction) = block
+                && (message_index, block_index) != (0, 0)
+            {
+                tracing::debug!("a compaction block that is not first is sent as its summary");
+                *block = ContentBlock::Text(adk_anthropic::TextBlock::new(
+                    adk_core::intra_compaction::compaction_summary_text(&compaction.content),
+                ));
+            }
+        }
     }
 }
 
@@ -797,6 +865,16 @@ impl Llm for AnthropicClient {
                 _ => None,
             },
         }
+    }
+
+    // On-demand compaction is documented for the Claude API; a custom endpoint may not serve
+    // the beta.
+    fn native_compaction(&self) -> Option<adk_core::NativeCompaction> {
+        let first_party = self.config.base_url.as_deref().is_none_or(|url| {
+            crate::provider::url_host(url).as_deref() == Some("api.anthropic.com")
+        });
+        (first_party && Self::compacts_on_demand(&self.model))
+            .then(|| adk_core::NativeCompaction::new("anthropic").keeping_thinking())
     }
 
     #[tracing::instrument(
@@ -1051,6 +1129,127 @@ mod tests {
                 .max_tokens,
             None
         );
+    }
+
+    fn native_compaction_turn() -> Content {
+        let message = {
+            let mut message = adk_anthropic::Message::new(
+                "msg_compaction".into(),
+                vec![ContentBlock::Compaction(adk_anthropic::CompactionBlock::new(
+                    "Recipe app entities agreed.",
+                    "sig-1",
+                ))],
+                adk_anthropic::Model::Custom("claude-sonnet-5-5".into()),
+                adk_anthropic::Usage::new(0, 0),
+            );
+            message.stop_reason = Some(adk_anthropic::StopReason::Compaction);
+            message
+        };
+        convert::from_anthropic_message(&message).0.content.unwrap()
+    }
+
+    #[test]
+    fn a_native_compaction_request_asks_for_a_summary_without_reply_settings() {
+        let mut request = make_request(vec![
+            Content::new("system").with_text("You plan recipes."),
+            Content::new("user").with_text("Name the entities."),
+            Content::new("model").with_text("Recipe, Ingredient, Step."),
+        ]);
+        request.config = Some(GenerateContentConfig {
+            stop_sequences: vec!["END".to_string()],
+            response_schema: Some(json!({
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+                "additionalProperties": false
+            })),
+            ..Default::default()
+        });
+        adk_core::intra_compaction::NativeCompactionRequest::new()
+            .with_instructions("Keep every entity name.")
+            .apply(&mut request);
+        let config = AnthropicConfig::new("test", "claude-sonnet-5-5");
+
+        let params =
+            AnthropicClient::build_message_params("claude-sonnet-5-5", 4096, &request, &config)
+                .unwrap();
+
+        assert_eq!(
+            params.compaction,
+            Some(
+                adk_anthropic::CompactionParam::summarize()
+                    .with_instructions("Keep every entity name.")
+            )
+        );
+        assert_eq!(params.stop_sequences, None);
+        assert!(params.output_config.as_ref().is_none_or(|output| output.format.is_none()));
+        assert!(params.requires_compaction_beta());
+        assert!(params.system.is_some(), "the summarizer reads the agent's instructions");
+    }
+
+    #[test]
+    fn a_native_compaction_goes_first_as_its_signed_block() {
+        let request = make_request(vec![
+            native_compaction_turn(),
+            Content::new("model").with_text("Recipe needs a title."),
+            Content::new("user").with_text("Now Ingredient."),
+        ]);
+        let config = AnthropicConfig::new("test", "claude-sonnet-5-5");
+
+        let params =
+            AnthropicClient::build_message_params("claude-sonnet-5-5", 4096, &request, &config)
+                .unwrap();
+
+        let json = serde_json::to_value(&params).unwrap();
+        assert_eq!(
+            json["messages"][0]["content"][0],
+            json!({"type": "compaction", "content": "Recipe app entities agreed.", "signature": "sig-1"})
+        );
+        assert_eq!(json["messages"][0]["role"], "assistant");
+        assert!(params.compaction.is_none());
+        assert!(params.requires_compaction_beta());
+    }
+
+    #[test]
+    fn a_compaction_block_that_is_not_first_is_sent_as_its_summary() {
+        let request = make_request(vec![
+            Content::new("user").with_text("Earlier question."),
+            native_compaction_turn(),
+            Content::new("user").with_text("Now Ingredient."),
+        ]);
+        let config = AnthropicConfig::new("test", "claude-sonnet-5-5");
+
+        let params =
+            AnthropicClient::build_message_params("claude-sonnet-5-5", 4096, &request, &config)
+                .unwrap();
+
+        assert!(!params.requires_compaction_beta());
+        let json = serde_json::to_value(&params).unwrap();
+        assert_eq!(
+            json["messages"][1]["content"][0]["text"],
+            adk_core::intra_compaction::compaction_summary_text("Recipe app entities agreed.")
+        );
+    }
+
+    #[test]
+    fn only_first_party_models_that_compact_on_demand_report_native_compaction() {
+        let native = |model: &str, base_url: Option<&str>| {
+            let mut config = AnthropicConfig::new("test-key", model);
+            if let Some(url) = base_url {
+                config = config.with_base_url(url);
+            }
+            AnthropicClient::new(config).unwrap().native_compaction()
+        };
+        assert_eq!(
+            native("claude-sonnet-5-5", None),
+            Some(adk_core::NativeCompaction::new("anthropic").keeping_thinking())
+        );
+        assert!(native("claude-haiku-5-5", None).is_some());
+        assert!(native("claude-opus-4-6-20260101", None).is_some());
+        assert!(native("claude-opus-5-1", None).is_none(), "not a listed model");
+        assert!(native("claude-haiku-4-5", None).is_none());
+        assert!(native("claude-sonnet-5-5", Some("https://api.anthropic.com")).is_some());
+        assert!(native("claude-sonnet-5-5", Some("https://api.deepseek.com/anthropic")).is_none());
     }
 
     #[test]

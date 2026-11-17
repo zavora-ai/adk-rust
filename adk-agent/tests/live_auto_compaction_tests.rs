@@ -1,17 +1,22 @@
 //! Auto-compaction against a live model: an `LlmAgent` on Anthropic reads a record one page
 //! per tool call, with a low threshold so the run is cheap, and compacts between its calls.
+//! Claude writes the summary itself (on-demand compaction), and the signed block it returns
+//! opens every later request.
 //!
 //! Requires `ANTHROPIC_API_KEY`; run with `--run-ignored only`.
 
 use adk_agent::LlmAgentBuilder;
-use adk_core::{Content, Event, IntraCompactionConfig, Llm, SessionId, ToolContext, UserId};
+use adk_core::{
+    BudgetTracker, Content, Event, IntraCompactionConfig, Llm, RunBudget, RunConfig, SessionId,
+    ToolContext, UserId,
+};
 use adk_runner::Runner;
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use adk_tool::FunctionTool;
 use futures::StreamExt;
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 const PAGES: u64 = 12;
 
@@ -104,9 +109,14 @@ async fn a_live_tool_loop_compacts_mid_run_and_completes() {
     println!("step | event | prompt tokens");
     for event in &events {
         let event: &Event = event.as_ref().expect("no run error");
-        if event.actions.compaction.is_some() {
+        if let Some(compaction) = &event.actions.compaction {
             compactions += 1;
-            println!("     | compaction recorded |");
+            // Claude Sonnet 5.5 compacts on demand, so Claude writes the summary.
+            assert!(
+                adk_core::intra_compaction::is_native_compaction(&compaction.compacted_content),
+                "the provider wrote the summary"
+            );
+            println!("     | compaction recorded (native) |");
         }
         if event.llm_response.partial {
             continue;
@@ -132,6 +142,220 @@ async fn a_live_tool_loop_compacts_mid_run_and_completes() {
     );
     assert!(compactions >= 1, "the run compacted between its model calls");
     assert!(!answer.trim().is_empty(), "the run completed with an answer");
+}
+
+/// What one run of the ledger audit came to.
+struct Audit {
+    events: Vec<Event>,
+    answer: String,
+}
+
+async fn audit(runner: &Runner, text: &str, config: RunConfig) -> Audit {
+    let events: Vec<Event> = runner
+        .run_with_config(
+            UserId::try_from("u").unwrap(),
+            SessionId::try_from("s").unwrap(),
+            Content::new("user").with_text(text),
+            Some(config),
+        )
+        .await
+        .unwrap()
+        .map(|event| event.expect("no run error"))
+        .collect()
+        .await;
+    let answer = events
+        .iter()
+        .rev()
+        .filter(|event| !event.llm_response.partial)
+        .filter_map(|event| event.content())
+        .map(|content| content.parts.iter().filter_map(|part| part.text()).collect::<String>())
+        .find(|text| !text.trim().is_empty())
+        .unwrap_or_default();
+    Audit { events, answer }
+}
+
+/// Whether a captured Messages request body opens with a compaction block.
+fn opens_with_compaction(body: &Value) -> bool {
+    body["messages"][0]["content"][0]["type"] == "compaction"
+}
+
+#[tokio::test]
+#[ignore = "calls the Anthropic API; needs ANTHROPIC_API_KEY"]
+async fn a_live_native_compaction_keeps_the_run_and_its_thinking() {
+    dotenvy::dotenv().ok();
+    let key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY");
+    const MODEL: &str = "claude-haiku-5-5";
+    // Every request body and its headers, as sent.
+    let sent: Arc<Mutex<Vec<(Value, reqwest::header::HeaderMap)>>> = Arc::default();
+    let capture = sent.clone();
+    let model = adk_model::anthropic::AnthropicClient::new(
+        // Adaptive thinking at high effort, so turns carry thinking for the kept-thinking check.
+        adk_model::anthropic::AnthropicConfig::new(key.clone(), MODEL)
+            .with_max_tokens(4_096)
+            .with_thinking_mode(adk_model::anthropic::ThinkingMode::Adaptive)
+            .with_effort(adk_model::anthropic::Effort::High),
+    )
+    .unwrap()
+    .with_request_adapter(Arc::new(move |body, headers| {
+        capture.lock().unwrap().push((body.clone(), headers.clone()));
+        Ok(())
+    }));
+    assert!(model.native_compaction().is_some(), "{MODEL} compacts on demand");
+    let read_page = FunctionTool::new(
+        "read_page",
+        "Reads one page of the ledger. Page 1 takes the cursor \"start\"; each page gives the \
+         cursor of the next.",
+        |_ctx: Arc<dyn ToolContext>, args: Value| async move {
+            Ok(page(args["page"].as_u64().unwrap_or(1), args["cursor"].as_str().unwrap_or("")))
+        },
+    )
+    .with_parameters_schema::<PageArgs>();
+    let agent = LlmAgentBuilder::new("auditor")
+        .instruction(format!(
+            "You audit a ledger of {PAGES} pages. Read them in order with read_page, starting \
+             at page 1 with cursor \"start\"; each page gives the cursor of the next. Keep a \
+             running sum of each page's page_total. After the last page, reply with only the sum."
+        ))
+        .model(Arc::new(model) as Arc<dyn Llm>)
+        .tool(Arc::new(read_page))
+        .max_iterations(40)
+        .build()
+        .unwrap();
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "live".to_string(),
+            user_id: "u".to_string(),
+            session_id: Some("s".to_string()),
+            state: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let runner = Runner::builder()
+        .app_name("live")
+        .agent(Arc::new(agent))
+        .session_service(sessions as Arc<dyn SessionService>)
+        // COMPACTION: a low threshold keeps the run cheap; the model's provider writes the summary.
+        .intra_compaction_config(
+            IntraCompactionConfig::at_tokens(5_000).with_overlap_event_count(4),
+        )
+        .build()
+        .unwrap();
+    let tracker = Arc::new(BudgetTracker::new(RunBudget::new()));
+    let config = RunConfig { budget_tracker: Some(tracker.clone()), ..Default::default() };
+
+    let first = audit(&runner, "Audit the ledger.", config.clone()).await;
+
+    let expected: u64 = (1..=PAGES).map(|number| number * 820).sum();
+    let compactions: Vec<&Event> =
+        first.events.iter().filter(|event| event.actions.compaction.is_some()).collect();
+    let bodies: Vec<Value> = sent.lock().unwrap().iter().map(|(body, _)| body.clone()).collect();
+    let asked = bodies.iter().filter(|body| body.get("compaction").is_some()).count();
+    let replayed = bodies.iter().filter(|body| opens_with_compaction(body)).count();
+    let agent_calls = bodies.len() - asked;
+    let thinking_blocks = bodies
+        .iter()
+        .filter_map(|body| body["messages"].as_array())
+        .flatten()
+        .filter_map(|message| message["content"].as_array())
+        .flatten()
+        .filter(|block| block["type"] == "thinking")
+        .count();
+    println!("thinking blocks replayed across all requests: {thinking_blocks}");
+    println!(
+        "requests: {} ({agent_calls} agent calls, {asked} compaction requests, {replayed} opening \
+         with the signed block); compactions recorded: {}; budget model calls: {}; answer: {:?}; \
+         expected: {expected}",
+        bodies.len(),
+        compactions.len(),
+        tracker.usage().model_calls,
+        first.answer
+    );
+    assert!(!compactions.is_empty(), "the run compacted natively");
+    for event in &compactions {
+        let content = &event.actions.compaction.as_ref().unwrap().compacted_content;
+        assert!(adk_core::intra_compaction::is_native_compaction(content), "{content:?}");
+        assert_eq!(
+            adk_core::history::ProviderOrigin::of_response(
+                event.llm_response.provider_metadata.as_ref()
+            ),
+            Some(adk_core::history::ProviderOrigin::new("anthropic", MODEL))
+        );
+    }
+    assert_eq!(asked, compactions.len(), "every compaction was the provider's");
+    assert!(replayed >= 1, "later requests open with the signed block");
+    assert_eq!(tracker.usage().model_calls, bodies.len() as u64, "compaction calls are metered");
+    assert!(
+        first.answer.contains(&expected.to_string()),
+        "the run kept working: {:?}",
+        first.answer
+    );
+
+    // The kept turns' thinking holds: the first request after a swap that replays thinking is
+    // sent again with the binding check set to fail on any mismatch.
+    let with_thinking = bodies
+        .iter()
+        .find(|body| {
+            opens_with_compaction(body)
+                && body["messages"].as_array().unwrap().iter().skip(1).any(|message| {
+                    message["content"].as_array().is_some_and(|blocks| {
+                        blocks.iter().any(|block| block["type"] == "thinking")
+                    })
+                })
+        })
+        .cloned();
+    match with_thinking {
+        Some(mut body) => {
+            body["thinking"] = json!({
+                "type": "adaptive",
+                "block_binding": {"prefix_mismatch_behavior": "error"}
+            });
+            body["max_tokens"] = json!(1_024);
+            body["stream"] = json!(false);
+            let headers = sent.lock().unwrap()[0].1.clone();
+            let response = reqwest::Client::new()
+                .post("https://api.anthropic.com/v1/messages")
+                .header("x-api-key", &key)
+                .header(
+                    "anthropic-version",
+                    headers.get("anthropic-version").unwrap().to_str().unwrap(),
+                )
+                .header("anthropic-beta", "compact-2026-09-04,thinking-binding-controls-2026-08-01")
+                .json(&body)
+                .send()
+                .await
+                .unwrap();
+            let status = response.status();
+            let reply: Value = response.json().await.unwrap();
+            println!(
+                "kept-thinking check: status {status}, input_transformations {}",
+                reply.get("input_transformations").cloned().unwrap_or(Value::Null)
+            );
+            assert!(status.is_success(), "kept thinking failed the binding check: {reply}");
+            assert!(
+                reply["input_transformations"].as_array().is_none_or(Vec::is_empty),
+                "no thinking block was dropped: {reply}"
+            );
+        }
+        None => println!("kept-thinking check: no request after a swap replayed thinking"),
+    }
+
+    // The next run starts from the signed block the session recorded and still answers.
+    let before = sent.lock().unwrap().len();
+    let second = audit(
+        &runner,
+        "Which page had the largest page_total, and what was it? Answer in one line.",
+        config,
+    )
+    .await;
+    let next = sent.lock().unwrap()[before].0.clone();
+    println!("second run answer: {:?}", second.answer);
+    assert!(opens_with_compaction(&next), "the next run opens with the signed block");
+    assert!(
+        second.answer.contains("12")
+            || second.answer.contains("9840")
+            || second.answer.contains("9,840")
+    );
 }
 
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]

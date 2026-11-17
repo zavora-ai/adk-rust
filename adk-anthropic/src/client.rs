@@ -1052,6 +1052,9 @@ impl Anthropic {
         if params.requires_advisor_beta() {
             Self::append_beta_header(&mut headers, crate::types::ADVISOR_TOOL_BETA)?;
         }
+        if params.requires_compaction_beta() {
+            Self::append_beta_header(&mut headers, crate::types::COMPACTION_BETA)?;
+        }
         for beta in extra_betas {
             Self::append_beta_header(&mut headers, beta)?;
         }

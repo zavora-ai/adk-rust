@@ -277,3 +277,59 @@ fn web_fetch_results_survive_the_adk_part_fallback() {
     });
     assert_eq!(wire(&replayed_blocks(&content)), web_fetch_turn_json());
 }
+
+/// The response of an on-demand compaction request, as the Claude API documents it.
+fn compaction_message() -> Message {
+    let mut message = Message::new(
+        "msg_compaction".into(),
+        vec![ContentBlock::Compaction(adk_anthropic::CompactionBlock::new(
+            "The user is designing a recipe app.",
+            "EuYBCkQY",
+        ))],
+        Model::Custom("claude-sonnet-5-5".into()),
+        Usage::try_from(json!({
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "iterations": [{"type": "compaction", "input_tokens": 144, "output_tokens": 276}]
+        }))
+        .unwrap(),
+    );
+    message.stop_reason = Some(StopReason::Compaction);
+    message
+}
+
+#[test]
+fn a_compaction_reads_as_its_summary_and_keeps_the_signed_block_for_replay() {
+    let response = convert::from_anthropic_message(&compaction_message()).0;
+
+    let content = response.content.unwrap();
+    assert!(adk_core::intra_compaction::is_native_compaction(&content));
+    assert_eq!(
+        content.parts[0],
+        Part::Text {
+            text: adk_core::intra_compaction::compaction_summary_text(
+                "The user is designing a recipe app."
+            )
+        }
+    );
+    assert_eq!(response.finish_reason, Some(adk_core::FinishReason::Stop));
+    assert!(response.turn_complete);
+    // The summarization call is counted from its iteration, not the zero top-level usage.
+    let usage = response.usage_metadata.unwrap();
+    assert_eq!((usage.prompt_token_count, usage.candidates_token_count), (144, 276));
+
+    assert_eq!(
+        restore(&content),
+        Some(vec![ContentBlock::Compaction(adk_anthropic::CompactionBlock::new(
+            "The user is designing a recipe app.",
+            "EuYBCkQY",
+        ))])
+    );
+}
+
+#[test]
+fn a_compaction_whose_summary_text_was_rewritten_is_sent_as_the_new_text() {
+    let mut content = convert::from_anthropic_message(&compaction_message()).0.content.unwrap();
+    content.parts[0] = Part::Text { text: "redacted by a guardrail".to_string() };
+    assert_eq!(restore(&content), None);
+}

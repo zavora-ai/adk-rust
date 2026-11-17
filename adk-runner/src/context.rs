@@ -148,15 +148,40 @@ impl MutableSession {
         // compacted content.
         let mut compaction_boundary = None;
         // Turns the compaction kept were answered with the history before it; a provider binds
-        // thinking to that history, so their thinking is not replayed after the summary.
+        // thinking to that history, so their thinking is not replayed after the summary, unless
+        // the provider wrote the summary itself and accepts it.
         let mut compacted_at = None;
         for event in events.iter().rev() {
             if let Some(ref compaction) = event.actions.compaction {
                 let mut content = compaction.compacted_content.clone();
-                adk_core::history::strip_native(&mut content);
+                // A provider's own compaction keeps its signed copy for the provider and model
+                // the runner recorded on the event; any other summary carries no native item.
+                let origin = adk_core::intra_compaction::is_native_compaction(&content)
+                    .then(|| {
+                        adk_core::history::ProviderOrigin::of_response(
+                            event.llm_response.provider_metadata.as_ref(),
+                        )
+                    })
+                    .flatten();
+                match &origin {
+                    Some(origin) => adk_core::history::mark_origin(&mut content, Some(origin)),
+                    None => adk_core::history::strip_native(&mut content),
+                }
+                let keeps_thinking = origin.is_some()
+                    && event
+                        .llm_response
+                        .provider_metadata
+                        .as_ref()
+                        .and_then(|metadata| {
+                            metadata.get(crate::intra_compaction::KEEPS_THINKING_KEY)
+                        })
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true);
+                if !keeps_thinking {
+                    compacted_at = Some(event.timestamp);
+                }
                 history.push(HistoryContent { content, invocation_id: None });
                 compaction_boundary = Some(compaction.end_timestamp);
-                compacted_at = Some(event.timestamp);
                 break;
             }
         }

@@ -447,6 +447,10 @@ impl Llm for ProviderSearchFallback {
     fn native_web_search(&self) -> Option<NativeWebSearch> {
         self.inner.native_web_search()
     }
+
+    fn native_compaction(&self) -> Option<adk_core::NativeCompaction> {
+        self.inner.native_compaction()
+    }
 }
 
 /// What a provider reported searching and citing in one model response.

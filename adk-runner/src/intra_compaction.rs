@@ -10,16 +10,19 @@
 //! The runner installs one per run over the run's session, so each compaction is also
 //! recorded as a compaction event and later runs start from the summary.
 
+use adk_core::history::ProviderOrigin;
 use adk_core::history::{balanced_content_cut, held_call_content_limit};
 use adk_core::intra_compaction::{
     CompactedHistory, CompactionTrigger, HistoryCompactionRequest, HistoryCompactor,
-    IntraCompactionConfig, compaction_summary, estimate_content_tokens, estimate_tokens,
+    IntraCompactionConfig, NativeCompactionRequest, compaction_summary, estimate_content_tokens,
+    estimate_tokens, is_native_compaction,
 };
 use adk_core::{
     BaseEventsSummarizer, Content, Event, EventCompaction, InvocationContext, Llm,
-    LlmEventSummarizer, Part, Result,
+    LlmEventSummarizer, LlmRequest, Part, Result,
 };
 use async_trait::async_trait;
+use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -252,7 +255,7 @@ impl IntraInvocationCompactor {
                 .within(self.compact_with_strategy(ctx.as_ref(), strategy, request.history))
                 .await;
         }
-        scope.within(self.summarize(ctx.as_ref(), model, request.history, threshold, session)).await
+        scope.within(self.summarize(ctx.as_ref(), model, &request, threshold, session)).await
     }
 
     /// Summarizes all but the most recent entries of `history`: at most `overlap_event_count`
@@ -262,10 +265,11 @@ impl IntraInvocationCompactor {
         &self,
         ctx: &dyn InvocationContext,
         model: Arc<dyn Llm>,
-        history: &[Content],
+        request: &HistoryCompactionRequest<'_>,
         threshold: u64,
         session: Option<&MutableSession>,
     ) -> Outcome {
+        let history = request.history;
         let chars_per_token = self.config.chars_per_token;
         let overlap = self.config.overlap_event_count.min(history.len());
         let mut within_budget = history.len();
@@ -295,6 +299,84 @@ impl IntraInvocationCompactor {
             return Outcome::NothingToCompact;
         }
         let summarized = &history[..cut];
+        // A model whose provider compacts natively writes the summary, unless the runner was
+        // given its own summarizer; a native summary that fails falls back to the summarizer.
+        let native = self
+            .summarizer
+            .is_none()
+            .then(|| self.config.native.then(|| model.native_compaction()).flatten())
+            .flatten();
+        if let Some(native) = native
+            && let Some(compaction) = native_summary(model.as_ref(), request, summarized).await
+        {
+            let summary_tokens = estimate_content_tokens(
+                std::slice::from_ref(&Content {
+                    role: compaction.content.role.clone(),
+                    parts: compaction
+                        .content
+                        .parts
+                        .iter()
+                        .filter(|part| matches!(part, Part::Text { .. }))
+                        .cloned()
+                        .collect(),
+                }),
+                chars_per_token,
+            );
+            let replaced_tokens = estimate_content_tokens(summarized, chars_per_token);
+            if summary_tokens < replaced_tokens {
+                // The provider accepts the kept turns' thinking after its own summary when the
+                // turns follow the summarized ones unchanged and the cut changes speaker.
+                let keep_thinking = native.keeps_thinking
+                    && history
+                        .get(cut)
+                        .is_some_and(|first| speaks(&history[cut - 1]) != speaks(first))
+                    && !history.iter().any(has_requested_call);
+                let kept: Vec<Content> = if keep_thinking {
+                    history[cut..].to_vec()
+                } else {
+                    without_thinking(&history[cut..]).collect()
+                };
+                let event = recorded.map(|recorded| {
+                    let mut event = Event::new(ctx.invocation_id());
+                    event.author = ctx.agent_name().to_string();
+                    event.branch = ctx.branch().to_string();
+                    // The origin is recorded where only the runner writes, so later runs
+                    // replay the signed copy to the provider that wrote it.
+                    if let Some(origin) = &compaction.origin {
+                        origin.record(&mut event.llm_response.provider_metadata);
+                        if keep_thinking
+                            && let Some(metadata) = event.llm_response.provider_metadata.as_mut()
+                        {
+                            metadata[KEEPS_THINKING_KEY] = serde_json::Value::Bool(true);
+                        }
+                    }
+                    event.actions.compaction = Some(EventCompaction {
+                        compacted_content: compaction.content.clone(),
+                        ..recorded.span
+                    });
+                    event
+                });
+                tracing::info!(
+                    agent.name = %ctx.agent_name(),
+                    compaction.provider = native.provider,
+                    summarized.entries = cut,
+                    kept.entries = history.len() - cut,
+                    kept.thinking = keep_thinking,
+                    summary.tokens = summary_tokens,
+                    replaced.tokens = replaced_tokens,
+                    recorded = event.is_some(),
+                    "history compacted by the provider"
+                );
+                let history = std::iter::once(compaction.content).chain(kept).collect();
+                return Outcome::Compacted(Box::new(CompactedHistory { history, event }));
+            }
+            tracing::info!(
+                summary.tokens = summary_tokens,
+                replaced.tokens = replaced_tokens,
+                "provider summary is not smaller than the history it replaces; keeping the history"
+            );
+            return Outcome::Kept;
+        }
         let events = as_events(ctx, summarized);
         let summarizer = self
             .summarizer
@@ -516,6 +598,116 @@ fn without_thinking(kept: &[Content]) -> impl Iterator<Item = Content> + '_ {
         let mut content = content.clone();
         content.parts.retain(|part| !matches!(part, Part::Thinking { .. }));
         (!content.parts.is_empty()).then_some(content)
+    })
+}
+
+/// Key of the flag a provider-native compaction event carries in its response metadata when the
+/// turns it kept keep their thinking.
+pub(crate) const KEEPS_THINKING_KEY: &str = "adk_compaction_keeps_thinking";
+
+/// The output room a provider-native compaction gets at least: the summary, and any thinking
+/// the model does before writing it.
+const NATIVE_SUMMARY_MAX_TOKENS: i32 = 16_384;
+
+/// A compaction the provider wrote, and the origin whose model reads its signed copy back.
+struct NativeSummary {
+    content: Content,
+    origin: Option<ProviderOrigin>,
+}
+
+/// Asks `model` for its provider's own compaction of `summarized`, with the agent's
+/// instructions, tools and config, so the provider reads the conversation as the agent sends
+/// it. `None` when the call fails or returns no compaction; the call is metered against the
+/// current scope.
+async fn native_summary(
+    model: &dyn Llm,
+    request: &HistoryCompactionRequest<'_>,
+    summarized: &[Content],
+) -> Option<NativeSummary> {
+    // The turns go as the agent sends them: generated call IDs and native items outside the
+    // agent's own turns never reach the provider.
+    let contents = request
+        .preamble
+        .iter()
+        .chain(summarized)
+        .cloned()
+        .map(|mut content| {
+            content.strip_generated_call_ids();
+            if !matches!(content.role.as_str(), "model" | "assistant") {
+                adk_core::history::strip_native(&mut content);
+            }
+            content
+        })
+        .collect();
+    let mut llm_request = LlmRequest::new(model.name(), contents);
+    if let Some(tools) = request.tools {
+        llm_request.tools = tools.clone();
+    }
+    let config = llm_request.config.insert(request.config.cloned().unwrap_or_default());
+    config.max_output_tokens =
+        Some(config.max_output_tokens.unwrap_or(0).max(NATIVE_SUMMARY_MAX_TOKENS));
+    config.response_schema = None;
+    config.stop_sequences.clear();
+    NativeCompactionRequest::new().apply(&mut llm_request);
+
+    let mut responses = match adk_core::generate_metered(model, llm_request, false).await {
+        Ok(responses) => responses,
+        Err(error) => {
+            tracing::warn!(
+                error = %error.diagnostics(),
+                "provider compaction failed; summarizing with the runner's summarizer"
+            );
+            return None;
+        }
+    };
+    let mut compaction = None;
+    while let Some(response) = responses.next().await {
+        match response {
+            Ok(response) if response.error_code.is_some() => {
+                tracing::warn!(
+                    error.code = response.error_code.as_deref().unwrap_or_default(),
+                    "provider compaction was declined; summarizing with the runner's summarizer"
+                );
+                return None;
+            }
+            Ok(response) => {
+                if let Some(content) = response.content.filter(is_native_compaction) {
+                    let origin = ProviderOrigin::of_response(response.provider_metadata.as_ref());
+                    compaction = Some((content, origin));
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = %error.diagnostics(),
+                    "provider compaction failed; summarizing with the runner's summarizer"
+                );
+                return None;
+            }
+        }
+    }
+    let Some((mut content, origin)) = compaction else {
+        tracing::warn!(
+            "the provider returned no compaction; summarizing with the runner's summarizer"
+        );
+        return None;
+    };
+    adk_core::history::mark_origin(&mut content, origin.as_ref());
+    Some(NativeSummary { content, origin })
+}
+
+/// Whether `content` is a model turn: the speaker a provider sees.
+fn speaks(content: &Content) -> bool {
+    matches!(content.role.as_str(), "model" | "assistant")
+}
+
+/// Whether `content` holds a call the person asked for, which an agent rewrites before the
+/// model reads it, so the turns around it are not sent as the provider produced them.
+fn has_requested_call(content: &Content) -> bool {
+    content.parts.iter().any(|part| match part {
+        Part::FunctionCall { id: Some(id), .. } | Part::FunctionResponse { id: Some(id), .. } => {
+            adk_core::RequestedCall::is_requested_id(id)
+        }
+        _ => false,
     })
 }
 
