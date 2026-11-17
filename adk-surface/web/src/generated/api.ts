@@ -1233,6 +1233,11 @@ export interface DrawnScene {
    * server: shown by "Show as text", where WebGL is missing, and in the terminal.
    */
   textView?: string | null;
+  /**
+   * What bar and grid heights stand for in the data's own numbers, for the summary and the
+   * home's readouts; heights are the data's numbers when not given.
+   */
+  values?: SceneValues | null;
 }
 
 /**
@@ -1900,6 +1905,17 @@ export interface SceneTick {
   axis: Axis;
   /** What it reads. */
   text: string;
+}
+
+/**
+ * How a scene's heights map to the data's numbers: a height `h` stands for
+ * `h * scale + offset`.
+ */
+export interface SceneValues {
+  /** What a height of 0 stands for. */
+  offset: number;
+  /** What one unit of height stands for; above 0. */
+  scale: number;
 }
 
 /** What asked for a `DrawnSent` call (spec 3.3 §6.1 `genui`, `genui-apps`). */

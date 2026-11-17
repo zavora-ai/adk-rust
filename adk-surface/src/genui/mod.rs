@@ -88,7 +88,7 @@ pub use scene::{
     Axis, CameraPreset, DepthEffect, DrawnDepth, DrawnScene, LabelSize, LightKind, LineEnds,
     MotionKind, SceneAxes, SceneCamera, SceneColor, SceneFinish, SceneKind, SceneLight,
     SceneLighting, SceneLook, SceneMotion, SceneObject, ScenePanel, SceneSelect, SceneShape,
-    SceneState, SceneTick, Xyz,
+    SceneState, SceneTick, SceneValues, Xyz,
 };
 pub use status::form_states;
 #[cfg(feature = "genui")]

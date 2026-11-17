@@ -72,6 +72,10 @@ pub struct DrawnScene {
     /// Its height in CSS pixels, 200 to 960; the home picks one when it is not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<u16>,
+    /// What bar and grid heights stand for in the data's own numbers, for the summary and the
+    /// home's readouts; heights are the data's numbers when not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<SceneValues>,
     /// One sentence that says what the scene shows, for screen readers and the terminal,
     /// written by the server: "3D bar chart of Revenue, 24 bars, from 3 to 98".
     #[serde(default)]
@@ -99,10 +103,34 @@ impl DrawnScene {
             motion: Vec::new(),
             select: None,
             height: None,
+            values: None,
             summary: String::new(),
             panels: Vec::new(),
             text_view: None,
         }
+    }
+}
+
+/// How a scene's heights map to the data's numbers: a height `h` stands for
+/// `h * scale + offset`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneValues {
+    /// What one unit of height stands for; above 0.
+    pub scale: Number,
+    /// What a height of 0 stands for.
+    #[serde(default = "zero")]
+    pub offset: Number,
+}
+
+fn zero() -> Number {
+    Number::from(0)
+}
+
+impl SceneValues {
+    /// The data's number a height stands for.
+    pub fn value(&self, height: f64) -> f64 {
+        height * self.scale.as_f64().unwrap_or(1.0) + self.offset.as_f64().unwrap_or(0.0)
     }
 }
 

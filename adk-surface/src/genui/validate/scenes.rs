@@ -61,8 +61,9 @@ impl Counts {
         self.high = self.high.max(value);
     }
 
-    fn range(&self) -> Option<(f64, f64)> {
-        (self.low <= self.high).then_some((self.low, self.high))
+    fn range(&self, values: Option<&crate::genui::scene::SceneValues>) -> Option<(f64, f64)> {
+        let map = |height: f64| values.map_or(height, |values| values.value(height));
+        (self.low <= self.high).then_some((map(self.low), map(self.high)))
     }
 }
 
@@ -92,6 +93,12 @@ impl Check {
             && !(200..=960).contains(&height)
         {
             return Err(refuse(format!("is {height} pixels tall; 200 to 960")));
+        }
+        if let Some(values) = &scene.values {
+            let (scale, offset) = (float(&values.scale), float(&values.offset));
+            if !(scale > 0.0 && scale.is_finite() && offset.is_finite()) {
+                return Err(refuse("maps its heights with a scale that is not above 0".into()));
+            }
         }
         let mut counts = Counts::new();
         let ids = self.scene_ids(&scene, &refuse)?;
@@ -718,7 +725,7 @@ fn summary(scene: &DrawnScene, counts: &Counts) -> String {
                 "3D bar chart",
                 &named,
                 &words::counted(counts.bars, "bar", "bars"),
-                counts.range(),
+                counts.range(scene.values.as_ref()),
             )
         }
         SceneKind::Points => {
@@ -739,7 +746,7 @@ fn summary(scene: &DrawnScene, counts: &Counts) -> String {
                 "3D surface",
                 &named,
                 &words::counted(counts.cells, "value", "values"),
-                counts.range(),
+                counts.range(scene.values.as_ref()),
             )
         }
         SceneKind::Network => words::scene_summary(
@@ -787,5 +794,26 @@ fn summary(scene: &DrawnScene, counts: &Counts) -> String {
                 None,
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::genui::scene::SceneValues;
+
+    #[test]
+    fn a_summary_speaks_the_datas_numbers_not_the_scenes_heights() {
+        let mut scene = DrawnScene::new(SceneKind::Bars);
+        scene.axes =
+            Some(crate::genui::SceneAxes { y: Some("Revenue".into()), ..Default::default() });
+        let mut counts = Counts::new();
+        counts.bars = 2;
+        counts.value(2.0);
+        counts.value(6.0);
+        assert_eq!(summary(&scene, &counts), "3D bar chart of Revenue, 2 bars, from 2 to 6");
+        scene.values =
+            Some(SceneValues { scale: Number::from_f64(1.05).unwrap(), offset: Number::from(0) });
+        assert_eq!(summary(&scene, &counts), "3D bar chart of Revenue, 2 bars, from 2.1 to 6.3");
     }
 }
