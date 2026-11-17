@@ -83,6 +83,7 @@
 //! assert!(err.to_string().contains("429"));
 //! ```
 
+mod advisor;
 mod client;
 mod config;
 mod convert;
