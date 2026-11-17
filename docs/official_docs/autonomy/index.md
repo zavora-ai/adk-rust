@@ -220,6 +220,35 @@ PID                                   STATE      KIND           QUEUE           
 0803e865-8337-40cf-bbb9-32a8d4cac6dc  completed  goal           background        0s    $0.0443        7/6  goal 1/8, check exit 0
 ```
 
+### Let a model decide first
+
+An unattended agent still stops at every call `auto` holds. A `ModelApprover` reviews those
+calls before they reach the inbox: it approves the routine ones, denies the ones the task does
+not call for, and escalates the rest to you. It never decides a call the policy denies or a
+non-waivable one — a protected path, an unsandboxed retry, a payment — and every verdict is an
+audited inbox decision by `model:<model id>` that counts against the run's budget.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::ModelApprover;
+use adk_harness::{HarnessAgent, HarnessMode};
+use adk_model::{ScriptedLlm, ScriptedResponse};
+
+fn main() {
+    let model = Arc::new(ScriptedLlm::new("scripted", vec![ScriptedResponse::text("done")]));
+    let builder = HarnessAgent::builder("status-agent")
+        .model(model.clone())
+        .mode(HarnessMode::Auto)
+        .auto_review(Arc::new(ModelApprover::new(model).min_confidence(0.9)));
+    let _ = builder;
+}
+```
+
+`adk-rust goal … --mode auto --auto-review` and `adk-rust up --auto-review` do the same with
+the session's model. Read [Model Reviewer](../security/tool-authorization.md#model-reviewer)
+for its prompt-injection risk before you rely on it.
+
 ## 5. Let it wake itself
 
 The template's trigger starts a run each weekday at 09:00 UTC:

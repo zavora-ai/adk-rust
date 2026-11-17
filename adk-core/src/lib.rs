@@ -184,6 +184,8 @@ pub mod principal;
 pub mod queue_source;
 /// HTTP request context extracted by auth middleware.
 pub mod request_context;
+/// Model-evaluated tool approval: a reviewer that decides held calls before a person.
+pub mod review;
 /// Durable runs: a queue of runs that workers claim under fenced leases.
 pub mod run_store;
 /// Schedules that enqueue durable runs, and the firing rule.
@@ -323,6 +325,10 @@ pub use queue_source::{
     InMemoryQueueSource, IngressReport, QueueIngress, QueueMessage, QueueSource,
 };
 pub use request_context::RequestContext;
+pub use review::{
+    DEFAULT_REVIEW_TIMEOUT, MODEL_REVIEWER_PREFIX, ModelApprover, REVIEW_SOURCE, ReviewScope,
+    ReviewVerdict, ToolReview, ToolReviewer,
+};
 pub use run_store::{
     ClaimedRun, DurableRunStore, Enqueued, InMemoryRunStore, NewRun, OnConflict, RetryBackoff,
     RunCheckpointRef, RunFilter, RunOutcome, RunRecord, RunState,
