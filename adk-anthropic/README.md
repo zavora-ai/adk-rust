@@ -16,6 +16,7 @@ This project is an **unofficial** community-maintained library. It is not affili
 - **Messages API** — non-streaming and SSE streaming with all content block types
 - **Adaptive thinking** — `ThinkingConfig::adaptive()` for Opus 4.8 / Opus 4.7 / Opus 4.6 / Sonnet 4.6
 - **Budget-based thinking** — `ThinkingConfig::enabled(budget)` for older models (rejected on Opus 4.8 / Opus 4.7)
+- **Thinking off** — `ThinkingConfig::disabled()`, and `ThinkingConfig::between_tools()` on Claude Sonnet 5.5, which rejects `disabled`; Claude Fable 5.x, Mythos 5.x and Opus 5.5 always think
 - **Effort parameter** — `OutputConfig::with_effort()` with `low`, `medium`, `high`, `xhigh`, `max` levels
 - **Structured outputs** — JSON schema via `OutputConfig` / `OutputFormat`
 - **Tool calling** — custom function tools, server tools (web search, web fetch, bash, text editor, code execution, memory); `WebSearchTool20260209` and `WebFetchTool20260209` declare the dynamic-filtering tool versions
@@ -25,7 +26,8 @@ This project is an **unofficial** community-maintained library. It is not affili
 - **Vision** — URL and base64 image analysis
 - **PDF processing** — URL, base64, and Files API PDF analysis with citations
 - **Token counting** — `/v1/messages/count_tokens` endpoint
-- **Fast mode** — `speed: "fast"` (`SpeedMode::Fast`, research preview)
+- **Fast mode** — `speed: "fast"` (`SpeedMode::Fast`) on Claude Opus 5.5, Fable 5.2 and Mythos 5.2; research preview on Opus 5 and Opus 4.8
+- **Refusals** — `Message::stop_details` carries the category and explanation of a `refusal` stop, streamed and unary
 - **Request customization** — caller-selected beta headers, bearer auth, API-version overrides, and exact per-request headers
 - **Server-side fallback** — typed default or explicit safety-refusal routing with fallback-aware responses and SSE events
 - **Batches API** — create, get, results, cancel, delete, list

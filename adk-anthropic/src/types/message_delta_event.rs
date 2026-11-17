@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::types::{MessageDeltaUsage, StopReason};
+use crate::types::{MessageDeltaUsage, RefusalDetails, StopReason};
 
 /// The delta information for a message delta event.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -13,12 +13,16 @@ pub struct MessageDelta {
     /// contains the specific stop sequence that was encountered.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_sequence: Option<String>,
+
+    /// Why a classifier declined the request, sent with a `refusal` stop reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_details: Option<RefusalDetails>,
 }
 
 impl MessageDelta {
     /// Create a new empty `MessageDelta`.
     pub fn new() -> Self {
-        Self { stop_reason: None, stop_sequence: None }
+        Self { stop_reason: None, stop_sequence: None, stop_details: None }
     }
 
     /// Set the stop reason.
