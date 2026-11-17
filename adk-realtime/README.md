@@ -77,7 +77,7 @@ adk-realtime = { version = "3.0.0", features = ["openai"] }
 
 ### Low-level session
 
-The program sends one text turn and prints the text reply.
+The program sends one text turn and prints the text reply. It needs the `openai` feature.
 
 ```rust
 use adk_realtime::openai::OpenAIRealtimeModel;
@@ -112,6 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### RealtimeAgent
 
 `RealtimeAgent` implements `adk_core::Agent`, so `adk_runner::Runner` runs it like any other agent.
+The example needs the `openai` feature.
 
 ```rust
 use adk_realtime::RealtimeAgent;
@@ -159,9 +160,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The `gemini` feature compiles in more than one rustls crypto provider, so `connect` installs
-`aws-lc-rs` as the process-level provider through `adk_core::ensure_crypto_provider()`; a
-provider the application installed first is kept.
+The Gemini Live, OpenAI Realtime, and LiveKit connects install `aws-lc-rs` as the process-level
+rustls provider through `adk_core::ensure_crypto_provider()`, so an application that also
+compiles `ring` (the `livekit` feature does) needs no setup; a provider the application
+installed first is kept.
 Gemini Live takes 16 kHz mono PCM16 input and returns 24 kHz mono PCM16 output.
 
 ### Vertex AI Live
@@ -223,7 +225,7 @@ adk-realtime = { version = "3.0.0", features = ["livekit", "openai"] }
 `LiveKitConfig` keeps the API key and secret as `secrecy::SecretString` and redacts them in
 `Debug` output.
 
-```rust
+```rust,ignore
 use adk_realtime::livekit::{LiveKitConfig, LiveKitRoomBuilder};
 
 #[tokio::main]
@@ -344,6 +346,9 @@ provider's reason.
 | Server event | Description |
 |--------------|-------------|
 | `SessionCreated`, `SessionUpdated` | Session established or updated |
+| `AudioCommitted`, `AudioCleared` | Input audio buffer committed or cleared |
+| `ItemCreated` | Conversation item created |
+| `OutputItemAdded`, `OutputItemDone` | Response output item added or completed |
 | `AudioDelta`, `AudioDone` | Output audio chunk, end of output audio |
 | `TextDelta`, `TextDone` | Text response chunk, end of text |
 | `TranscriptDelta`, `TranscriptDone` | Transcript of the output audio |
@@ -352,6 +357,7 @@ provider's reason.
 | `ResponseCreated`, `ResponseDone` | Response started, response completed |
 | `ToolConfirmationRequested` | A tool call held for a confirmation decision (emitted by the integrated runner, not a provider) |
 | `SpeechStarted`, `SpeechStopped` | VAD detected speech or silence (OpenAI `speech_started` / `speech_stopped`, Gemini Live `voiceActivity`) |
+| `RateLimitsUpdated` | Rate limit information |
 | `Error` | Provider error |
 | `Unknown` | An event type this version does not model |
 
@@ -362,6 +368,8 @@ provider's reason.
 | `ConversationItemCreate` | Send a text message or tool response |
 | `ResponseCreate`, `ResponseCancel` | Request or cancel a response |
 | `SessionUpdate` | Update the session configuration |
+| `Message` | A message with `adk_core` roles and parts |
+| `UpdateSession` | Mid-session instruction and tool update for the runner to intercept; never serialized to the provider |
 
 ## Audio formats
 

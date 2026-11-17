@@ -3,8 +3,8 @@
 //! Shared action node types for ADK-Rust graph workflows.
 //!
 //! This crate provides the type definitions, error types, and variable interpolation
-//! utilities used by both `adk-studio` (visual builder) and `adk-graph` (runtime engine)
-//! for deterministic, non-LLM workflow operations.
+//! utilities for deterministic, non-LLM workflow operations. `adk-graph` is the runtime
+//! that executes them.
 //!
 //! ## Contents
 //!

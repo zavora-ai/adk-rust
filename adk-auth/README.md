@@ -284,7 +284,7 @@ while a change to the newest line and lines cut from the end leave no broken lin
 
 Protected and scoped tools record the acting agent on every decision: `agent_id`,
 `on_behalf_of`, and the principal's tenant (`AuditEvent::with_acting_context`).
-`AuditFilter::agent_id` selects one agent's records.
+The `agent_id` field of `AuditFilter` selects one agent's records.
 
 ### Signed audit log (`signed-audit`)
 
@@ -419,6 +419,8 @@ See [Agent Identity](https://github.com/zavora-ai/adk-rust/blob/main/docs/offici
 | `PostgresAuditSink` writes `agent_id` and `on_behalf_of` columns | Call `migrate()` once before the first write; until then inserts fail and guarded tools are refused |
 | `PostgresAuditSink` uses SQLx 0.9 | See SQLx compatibility below |
 | HTTP requests to IdPs and token endpoints have connect and request timeouts | — |
+| The `adk-server` feature is removed | Drop it: `auth-bridge` no longer needs `adk-server` |
+| The optional dependencies `axum`, `base64`, `dashmap`, `jsonwebtoken`, and `reqwest` are no longer features | Enable the feature that uses them: `sso`, `auth-bridge`, `signed-audit`, `token-exchange`, or `web-bot-auth` |
 
 See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
 
@@ -435,19 +437,18 @@ See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.
 
 ## Examples
 
-Examples live in the [adk-playground](https://github.com/zavora-ai/adk-playground) repo:
+Teaching examples live in the [adk-playground](https://github.com/zavora-ai/adk-playground) repo.
+Two standalone examples in this repository run `adk-auth` against local stand-ins, with no
+identity provider:
+
+| Example | What it exercises |
+|---------|-------------------|
+| [`security_sessions_contracts`](https://github.com/zavora-ai/adk-rust/tree/main/examples/security_sessions_contracts) | `JwtValidator` over a local ES256 JWKS, `SsoAccessControl` with a failing audit sink, and `JwtRequestContextExtractor` in front of `adk-server` |
+| [`tools_hardening`](https://github.com/zavora-ai/adk-rust/tree/main/examples/tools_hardening) | Request timeouts of `JwksCache`, `OidcProvider::from_discovery`, and `TokenExchangeBroker`, and single-flight token exchange |
 
 ```bash
-git clone https://github.com/zavora-ai/adk-playground.git
-cd adk-playground
-
-cargo run --example auth_basic                  # RBAC basics
-cargo run --example auth_audit                  # Audit logging
-cargo run --example auth_bridge                 # Auth bridge with server
-cargo run --example auth_sso --features sso     # SSO integration
-cargo run --example auth_jwt --features sso     # JWT validation
-cargo run --example auth_oidc --features sso    # OIDC discovery
-cargo run --example auth_google --features sso  # Google Identity
+cargo run --manifest-path examples/security_sessions_contracts/Cargo.toml
+cargo run --manifest-path examples/tools_hardening/Cargo.toml
 ```
 
 ## Security Notes

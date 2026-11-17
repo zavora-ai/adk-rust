@@ -29,8 +29,8 @@ read-only or read-write paths and an explicit environment map (see
 
 ```toml
 [dependencies]
-adk-agent = { version = "3.0", features = ["codeact"] }
-adk-codeact-monty = "3.0"
+adk-agent = { version = "3.0.0", features = ["codeact"] }
+adk-codeact-monty = "3.0.0"
 ```
 
 Or use the meta-crate's `codeact-monty` feature, which implies `codeact` and is not part of any
@@ -38,7 +38,7 @@ tier:
 
 ```toml
 [dependencies]
-adk-rust = { version = "3.0", features = ["codeact-monty"] }
+adk-rust = { version = "3.0.0", features = ["codeact-monty"] }
 ```
 
 The crate has no feature flags of its own.

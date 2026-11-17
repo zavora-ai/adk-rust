@@ -250,7 +250,7 @@ Pre-composed combinations of a base template and addons. Patterns share the `--t
 | Pattern | Base | Addons | Use case |
 |---------|------|--------|----------|
 | `multi-agent` | sequential | telemetry | Multi-agent supervisor with observability |
-| `production` | llm | server, auth, sessions, telemetry | Production-ready agent service |
+| `production` | llm | server, auth, sessions, telemetry | Agent service with HTTP, auth, sessions and telemetry |
 | `pipeline` | sequential | sessions, telemetry | Sequential data processing pipeline |
 | `chatbot` | llm | sessions, memory, server | Conversational chatbot with memory and HTTP interface |
 | `a2a-server` (alias `a2a`) | llm | server, sessions | A2A protocol server with session management |
@@ -291,6 +291,9 @@ cargo adk build         # verify compilation
 | `cargo adk eval` runs an agent binary over a line protocol; `--agent-cmd` is required, and the command fails closed | Add `--agent-cmd`; the ignored `--model` and `--concurrency` flags are removed |
 | An eval set without cases is an error | — |
 | The `api` template and the `server` addon bind `BIND_HOST` (default `127.0.0.1`) | Set `BIND_HOST=0.0.0.0` where the server must be reachable from other machines |
+| `cargo adk bench --suite` is removed; it ran the ordinary workloads whatever suite it named | Drop the flag |
+| `cargo adk bench` is behind the `bench` feature, off by default; without it the subcommand exits 2 with the install command | `cargo install cargo-adk --features bench` |
+| New templates: `harness`, `autonomous` and `website` | — |
 
 See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
 

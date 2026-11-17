@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Validate user-facing Cargo examples in README and official docs.
+"""Validate user-facing Cargo examples in the READMEs and official docs.
 
 This intentionally validates the things a reader can copy directly:
 Cargo dependency snippets, feature names, package/example/bin references, and
-standalone example manifest paths. It does not execute commands that require
-API keys or external services; compile coverage is provided by the workspace
-example and cargo-adk template checks.
+standalone example manifest paths. It covers the root README, every crate
+README (crates.io and docs.rs show them), and docs/official_docs. It does not
+execute commands that require API keys or external services; compile coverage
+is provided by the workspace example and cargo-adk template checks.
 """
 
 from __future__ import annotations
@@ -19,7 +20,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DOC_PATHS = [ROOT / "README.md", *sorted((ROOT / "docs" / "official_docs").rglob("*.md"))]
+DOC_PATHS = [
+    ROOT / "README.md",
+    *sorted(path for path in ROOT.glob("*/README.md") if (path.parent / "Cargo.toml").exists()),
+    *sorted((ROOT / "docs" / "official_docs").rglob("*.md")),
+]
 IGNORED_EXTERNAL_CRATES = {
     "adk-studio",
     "adk-ui",

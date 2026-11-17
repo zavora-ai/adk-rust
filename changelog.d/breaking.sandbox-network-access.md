@@ -6,7 +6,7 @@
   `network_support()`, and an enforcer refuses a mode it cannot enforce with
   `SandboxError::Unenforceable` instead of warning and running: Seatbelt enforces all three,
   `Proxied` as an outbound grant to `localhost:<port>` only; bubblewrap enforces `Denied` and
-  `Open`, and under `Denied` refuses grants of `/run` paths holding sockets and of `/tmp`,
+  `Open` (and `Proxied` with the `egress-proxy` feature), and under `Denied` refuses grants of `/run` paths holding sockets and of `/tmp`,
   `/var/tmp` and `/dev/shm`, and covers them with empty read-only `tmpfs` mounts below a
   granted `/`; the Windows restricted-token enforcer refuses `Denied` and `Proxied` unless built
   with `acknowledge_open_network()`, which the harness shell and `ExternalGenerator` (with

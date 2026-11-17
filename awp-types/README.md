@@ -145,14 +145,14 @@ The `json-schema` feature derives `schemars::JsonSchema` for every 2.0 type and 
 
 ```toml
 [dependencies]
-awp-types = { version = "3.0", features = ["json-schema"] }
+awp-types = { version = "3.0.0", features = ["json-schema"] }
 ```
 
 ## Quick Start
 
 ```toml
 [dependencies]
-awp-types = "3.0"
+awp-types = "3.0.0"
 ```
 
 The only feature is `json-schema` (off by default).

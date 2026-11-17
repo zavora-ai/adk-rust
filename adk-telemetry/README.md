@@ -77,7 +77,7 @@ RUST_LOG=adk_agent=trace,adk_model=debug cargo run
 
 ## OpenTelemetry Export
 
-Configure OTLP export for distributed tracing (`otlp` feature; `adk-rust` forwards it as `telemetry-otlp`):
+Configure OTLP export for distributed tracing (`otlp` feature; `adk-rust` forwards it as `telemetry-otlp`, which no tier enables):
 
 ```rust
 use adk_telemetry::init_with_otlp;
@@ -102,7 +102,8 @@ adk-telemetry = { version = "3.0.0", features = ["sqlite"] }
 
 The exporter links the same `libsqlite3-sys` as SQLx's SQLite driver, so it shares a
 lockfile with `SqliteSessionService`, `SqliteMemoryService`, and the SQLite graph
-checkpointer.
+checkpointer. This block and the next need the `sqlite` feature, which no `adk-rust` tier
+enables:
 
 ```rust
 use adk_telemetry::init_with_sqlite;
@@ -151,6 +152,8 @@ and the `gemini-agent-platform` meta-feature includes it:
 ```toml
 adk-telemetry = { version = "3.0.0", features = ["gcp"] }
 ```
+
+This block needs the `gcp` feature, which no `adk-rust` tier enables:
 
 ```rust
 use adk_telemetry::init_with_gcp;
@@ -259,6 +262,8 @@ fn main() {}
 | `shutdown_telemetry` flushes and shuts down every provider this crate built | — |
 | Child spans carry `adk.app_name` and `adk.user_id` from `agent.execute` | — |
 | Model and tool payloads stay out of spans and logs unless `RunConfig::record_payloads` is set | — |
+| The `metrics` feature is removed | Enable `otlp`, which exports metrics |
+| The implicit `google-cloud-auth`, `http`, `tokio`, and `tonic` features are removed | Enable `gcp` |
 
 See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
 

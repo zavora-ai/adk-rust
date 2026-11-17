@@ -17,7 +17,7 @@ Agent execution runtime for ADK-Rust.
 - **Agent transfers** — runs transfer targets, enforcing each source agent's transfer restrictions
 - **Steering** — `Runner::steer` sends a screened message to a run in flight, which its agent takes at the next safe point
 - **Governance** — the run's tool policy, kill switch, budgets, spend ledger, action ledger, approval store, and audit trail
-- **Context compaction** — summarizes older events to bound model context
+- **Context compaction** — summarizes older session events after a run, and installs the auto-compaction agents apply before every model call
 - **`Launcher`** — a minimal stdin/stdout console loop
 
 ## Installation
@@ -108,6 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `run_config` | The base `RunConfig` for every run |
 | `budget` | A `RunBudget` applied to every run with fresh counters |
 | `tool_policy` | The `ToolPolicy` for every run |
+| `egress_policy` | The operator's network egress ceiling (`adk_core::egress::EgressPolicy`); a tool whose `Tool::egress` declaration it does not admit is refused before it runs, and a run's own policy only narrows it |
 | `governance` | Share a `GovernanceControl` (kill switch) across runners |
 | `action_ledger`, `approval_store`, `spend_ledger` | Durable stores installed on every run whose `RunConfig` leaves them unset |
 | `durable_run_store` | `interrupt` also requests cancellation of the session's durable runs on every replica |
@@ -226,9 +227,9 @@ See [Context Compaction](../docs/official_docs/sessions/context-compaction.md) f
 
 | Change | Migration |
 |--------|-----------|
-| `RunnerConfig` gains `tool_policy`, `governance`, `action_ledger`, `approval_store`, `spend_ledger`, `durable_runs`, `audit`, `identity_source`, and `subject_delegation` | Set them to `None` in struct literals, or use `Runner::builder()` |
+| `RunnerConfig` gains `tool_policy`, `egress_policy`, `governance`, `action_ledger`, `approval_store`, `spend_ledger`, `durable_runs`, `audit`, `identity_source`, and `subject_delegation` | Set them to `None` in struct literals, or use `Runner::builder()` |
+| Agents compact their history before every model call, on by default; the runner no longer compacts once before the agent runs or retries `agent.run()` on a token-limit error | `without_intra_compaction()` turns it off; `intra_compaction_config(IntraCompactionConfig::at_tokens(n))` keeps a fixed threshold |
 | `adk_runner::Callbacks` and its callback aliases are removed; runner plugins' agent, model, and tool callbacks now run | Register callbacks on the agent builder or as plugins |
-| `LlmSpendRecorder` is removed; model calls meter through `ModelCallScope` | `LlmSpendEstimate` is re-exported from `adk-core` |
 | Every transfer obeys the source agent's restrictions | — |
 | A cancelled run persists `outcome_unknown` answers to its in-flight calls | — |
 | Nested agents' input guardrails screen every user message before it is saved | — |

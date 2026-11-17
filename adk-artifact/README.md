@@ -362,6 +362,7 @@ The LLM can then call this tool to load artifacts by name into the conversation.
 | The session id `user` (`USER_SCOPE_SESSION_ID`) is rejected with `artifact.reserved_session_id` | Use another session id; artifacts saved earlier under session `user` are no longer reachable |
 | `FileArtifactService` encodes names injectively and stores user-scoped artifacts under `{app}/{user}/user/` | Tools reading the directory tree directly need the new paths; the earlier layout stays readable |
 | Concurrent saves each keep their own version; file writes are crash-safe | — |
+| `adk-gcp`, `google-cloud-auth`, `reqwest`, `serde`, and `tracing` are no longer implicit features | Enable `gcs` |
 
 See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
 

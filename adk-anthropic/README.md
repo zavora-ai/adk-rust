@@ -260,7 +260,7 @@ not restrict them.
 
 Webhook deliveries are signed with [Standard Webhooks](https://www.standardwebhooks.com/).
 Pass the raw body and the `webhook-id`, `webhook-timestamp`, and `webhook-signature`
-headers to `WebhookVerifier`:
+headers to `WebhookVerifier`. The snippet needs the `managed-agents` feature.
 
 ```rust
 use adk_anthropic::HeaderMap;
@@ -294,7 +294,7 @@ Anthropic, Claude, and the Anthropic logo are trademarks of Anthropic, PBC. All 
 
 ## Acknowledgments
 
-This crate was forked from [claudius](https://github.com/crisogray/claudius) v0.19 by [@crisogray](https://github.com/crisogray), a comprehensive Rust SDK for the Anthropic API licensed under Apache-2.0.
+This crate was forked from [claudius](https://github.com/crisogray/claudius) v0.19 by [@crisogray](https://github.com/crisogray), a Rust SDK for the Anthropic API licensed under Apache-2.0.
 
 The following components originate from claudius and form the foundation of `adk-anthropic`:
 
@@ -302,13 +302,13 @@ The following components originate from claudius and form the foundation of `adk
 - **SSE streaming** (`sse.rs`) — Server-Sent Events parser for streaming responses
 - **Accumulating stream** (`accumulating_stream.rs`) — stream accumulator for assembling complete messages from SSE deltas
 - **Backoff** (`backoff.rs`) — exponential backoff with jitter for retryable errors
-- **Error types** (`error.rs`) — comprehensive error enum with typed variants for all API error classes
+- **Error types** (`error.rs`) — error enum with typed variants for all API error classes
 - **Core type system** (`types/`) — `Message`, `MessageCreateParams`, `MessageParam`, `ContentBlock`, `TextBlock`, `ToolUseBlock`, `ToolResultBlock`, `ImageBlock`, `DocumentBlock`, `ThinkingBlock`, `SystemPrompt`, `Usage`, `StopReason`, `ToolChoice`, `ToolParam`, `CacheControlEphemeral`, and all serde serialization/deserialization logic
 - **Client logger** (`client_logger.rs`) — `ClientLogger` trait for capturing API interactions
 - **Cache control** (`cache_control.rs`) — cache breakpoint management utilities
 - **JSON schema** (`json_schema.rs`) — schema utilities
 
-We stripped claudius's agent framework, CLI tools, chat session management, and observability modules (all handled by other ADK crates), then extended the retained code with adaptive thinking, effort parameter, structured outputs, context management, fast mode, citations, Files API, Skills API, Models API with capabilities, token pricing, and updated model definitions.
+The fork drops claudius's agent framework, CLI tools, chat session management, and observability modules (other ADK crates handle them), and extends the retained code with adaptive thinking, effort parameter, structured outputs, context management, fast mode, citations, Files API, Skills API, Models API with capabilities, token pricing, and updated model definitions.
 
 ## Tool Search
 

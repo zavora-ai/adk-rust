@@ -41,6 +41,16 @@ adk-rust = { version = "3.0.0", features = ["memory"] }
 
 ## Quick Start
 
+The examples use these dependencies:
+
+```toml
+[dependencies]
+adk-core = "3.0.0"
+adk-memory = "3.0.0"
+chrono = "0.4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
 ```rust
 use adk_core::Content;
 use adk_memory::{InMemoryMemoryService, MemoryEntry, MemoryService, SearchRequest};
@@ -248,6 +258,8 @@ adk-memory = { version = "3.0.0", features = ["database-memory"] }
 
 The SQLite, PostgreSQL, MongoDB, and Neo4j backends include a versioned migration system. Migrations are forward-only, idempotent, and tracked in a registry table. `schema_version()` returns 0 only when the registry table does not exist; a failed read is an error. PostgreSQL `migrate()` holds the advisory lock `PostgresMemoryService::ADVISORY_LOCK_KEY` on one connection.
 
+The example below needs the `sqlite-memory` feature.
+
 | Version | Description |
 |---------|-------------|
 | v1 | Initial schema (tables, indexes, FTS) |
@@ -325,6 +337,7 @@ skipped and search returns nothing; deletes and exports always pass through. See
 | Change | Migration |
 |--------|-----------|
 | SQL backends use SQLx 0.9; `sqlx` and `pgvector` are no longer implicit features, and pgvector moves to 0.4.2 | Depend on SQLx 0.9 when sharing a pool; enable `sqlite-memory` or `database-memory` |
+| `adk-gcp`, `fred`, `google-cloud-auth`, and `reqwest` are no longer implicit features | Enable `redis-memory` or `vertex-memory` |
 | `schema_version()` returns read failures as errors | — |
 | Keyword search matches through punctuation and returns the best matches first | — |
 | PostgreSQL `migrate()` releases its advisory lock | — |

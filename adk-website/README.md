@@ -48,6 +48,7 @@ is for each kind of site.
 | `measurement` | KPI sources that are not drivers: the beacon, host logs, the commerce, action and spend ledgers, agent search at the edge, AEO | §7.12, §7.11 |
 | `workflows` | The probe, the upkeep watch, the weekly review, a push to the content repository and the weekly learning run as kernel runs | §7.20, §7.8.2, §7.15 |
 | `observability` | Spans, metrics and the site view | §7.24 |
+| `audit` | The product's audit records: onboarding, charter drafts, alarms, the weekly review, status changes and rollbacks, payments | §9.3 |
 | `ui` | `WebsiteDesk`: the setup code, onboarding, the charter cards, the site view, the weekly review and the web editor as views in plain words, and the decisions people make on them, saved across restarts with a `DeskStore`; `adk-surface`'s `website` feature serves them on the web home | §7.8.2, §7.16, §7.18, §7.21, §7.24, §8.2 |
 
 ## Site kinds

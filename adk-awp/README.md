@@ -29,19 +29,19 @@ Use `adk-awp` when you need to:
 
 ```toml
 [dependencies]
-adk-awp = "3.0"
-awp-types = "3.0"
+adk-awp = "3.0.0"
+awp-types = "3.0.0"
 async-trait = "0.1"
 axum = "0.8"
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
 ```
 
-Or use the meta-crate, where the `awp` feature (included in `enterprise`) re-exports it:
+Or use the meta-crate, where the `awp` feature (in `enterprise` and `full`) re-exports it as `adk_rust::awp`:
 
 ```toml
 [dependencies]
-adk-rust = { version = "3.0", features = ["awp"] }
+adk-rust = { version = "3.0.0", features = ["awp"] }
 ```
 
 | Feature | Default | Enables |
@@ -117,7 +117,7 @@ fn edge() -> axum::Router {
 
 ```toml
 [dependencies]
-adk-awp = { version = "3.0", features = ["verify"] }
+adk-awp = { version = "3.0.0", features = ["verify"] }
 ```
 
 ## Quick Start
