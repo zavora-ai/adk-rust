@@ -200,7 +200,8 @@ fn build(api_key: &str) -> adk_core::Result<GeminiModel> {
 | A prompt blocked through `promptFeedback.blockReason` | A final response with `FinishReason::Safety`, `error_code` set to the block reason (for example `PROHIBITED_CONTENT`), and no content; `LlmAgent` ends the run with `model.provider_error` |
 | `finishReason` `SAFETY`, `BLOCKLIST`, `PROHIBITED_CONTENT`, `SPII`, `IMAGE_SAFETY`, or `MODEL_ARMOR` | `FinishReason::Safety` |
 | `finishReason` `RECITATION` | `FinishReason::Recitation` |
-| `finishReason` `LANGUAGE`, `MALFORMED_FUNCTION_CALL`, `UNEXPECTED_TOOL_CALL`, `TOO_MANY_TOOL_CALLS`, or `OTHER` | `FinishReason::Other` |
+| `finishReason` `MALFORMED_FUNCTION_CALL` or `UNEXPECTED_TOOL_CALL` | `FinishReason::MalformedToolCall`; `LlmAgent` ends the run with `model.malformed_tool_call` |
+| `finishReason` `LANGUAGE`, `TOO_MANY_TOOL_CALLS`, `OTHER`, or a value this version does not know | `FinishReason::Other` |
 
 HTTP failures take their category from the status: 500, 502, and the other 5xx statuses are
 `Unavailable` and 504 is `Timeout`, all retried; 403 is `Forbidden`.
@@ -297,10 +298,11 @@ Strict mode requires `additionalProperties: false` on every object, nested objec
 
 When the model declines a request, Chat Completions sends the refusal in `message.refusal`
 (streamed as `delta.refusal`) with `content: null`. `OpenAIClient`, `OpenAICompatible` and
-its presets, `AzureOpenAIClient`, and OpenCode Chat return the refusal as the response's
-text and finish it with `FinishReason::Safety`. `error_code` stays unset, since a refusal is
-an answer, not a failure; with `output_schema` set, `LlmAgent` validates the refusal text
-like any other answer.
+its presets, `AzureOpenAIClient`, OpenCode Chat, and `OpenRouterClient` return the refusal as
+the response's text and finish it with `FinishReason::Refusal`, without an `error_code`.
+`LlmAgent` emits that event, so the session keeps the refusal, and then ends the run with
+`model.refusal` (`ErrorCategory::Forbidden`), the same outcome as an Anthropic refusal; see
+[finish reasons](../events/events.md).
 
 ### Reasoning Effort
 
@@ -1117,6 +1119,16 @@ state is not written, and no tool from the turn runs.
 - **SSE framing**: `data:` fields are read with or without the space after the colon, a
   last line without a line ending is read, and a UTF-8 character split across network
   chunks is decoded whole.
+- **OpenRouter refusals and malformed tool calls**: OpenRouter normalizes `finish_reason` and
+  keeps the provider's own value in `native_finish_reason`. A `native_finish_reason` of
+  `refusal` finishes with `FinishReason::Refusal`, and `MALFORMED_FUNCTION_CALL`,
+  `UNEXPECTED_TOOL_CALL`, or `malformed_tool_use` with `FinishReason::MalformedToolCall`. A chat
+  `refusal` or a Responses `refusal` content part is the response's text and finishes with
+  `FinishReason::Refusal`.
+- **Bedrock stop reasons**: `malformed_tool_use` finishes with `FinishReason::MalformedToolCall`,
+  `model_context_window_exceeded` with `FinishReason::MaxTokens`, `content_filtered` and
+  `guardrail_intervened` with `FinishReason::Safety`, and `malformed_model_output` with
+  `FinishReason::Other`.
 - **OpenRouter Responses**: `response.incomplete` for `max_output_tokens` finishes with
   `FinishReason::MaxTokens` and for `content_filter` with `FinishReason::Safety`; any other
   reason fails with `model.openrouter.response_incomplete`, and a `cancelled` status with

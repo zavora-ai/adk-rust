@@ -8,8 +8,12 @@ use crate::{
 };
 
 /// Reason why generation finished
+///
+/// The enum is `#[non_exhaustive]`: the API adds finish reasons, and a value this version does
+/// not know deserializes as [`Other`](Self::Other).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
 pub enum FinishReason {
     /// Default value. This value is unused.
     FinishReasonUnspecified,

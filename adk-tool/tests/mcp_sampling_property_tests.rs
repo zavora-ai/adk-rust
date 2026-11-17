@@ -56,6 +56,8 @@ fn arb_finish_reason() -> impl Strategy<Value = FinishReason> {
         Just(FinishReason::MaxTokens),
         Just(FinishReason::Safety),
         Just(FinishReason::Recitation),
+        Just(FinishReason::Refusal),
+        Just(FinishReason::MalformedToolCall),
         Just(FinishReason::Other),
     ]
 }
@@ -217,7 +219,10 @@ proptest! {
             Some(FinishReason::MaxTokens) => "maxTokens",
             Some(FinishReason::Safety) => "safety",
             Some(FinishReason::Recitation) => "recitation",
+            Some(FinishReason::Refusal) => "refusal",
+            Some(FinishReason::MalformedToolCall) => "malformedToolCall",
             Some(FinishReason::Other) => "other",
+            Some(_) => "other",
             None => "endTurn",
         };
 

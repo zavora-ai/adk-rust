@@ -412,7 +412,7 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
         | StopReason::PauseTurn
         | StopReason::PauseRun => FinishReason::Stop,
         StopReason::MaxTokens | StopReason::ModelContextWindowExceeded => FinishReason::MaxTokens,
-        StopReason::Refusal => FinishReason::Safety,
+        StopReason::Refusal => FinishReason::Refusal,
         StopReason::Unknown(reason) => {
             tracing::warn!(
                 anthropic.stop_reason = %reason,
