@@ -92,7 +92,7 @@ pub struct AnthropicConfig {
     /// yields an empty key.
     #[serde(skip_serializing, default)]
     pub api_key: String,
-    /// Model name (e.g., `"claude-opus-5"`, `"claude-sonnet-5"`).
+    /// Model name (e.g., `"claude-opus-5"`, `"claude-sonnet-5-5"`).
     pub model: String,
     /// Maximum tokens to generate. `None` uses
     /// [`anthropic_default_max_tokens`](crate::catalog::anthropic_default_max_tokens)
@@ -301,7 +301,7 @@ impl AnthropicConfig {
     /// ```rust
     /// use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
     ///
-    /// let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-5")
+    /// let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-5-5")
     ///     .allow_insecure_http()
     ///     .with_base_url("http://10.60.1.20:8080/api/v1/llm/anthropic");
     /// let client = AnthropicClient::new(config)?;

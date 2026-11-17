@@ -217,7 +217,7 @@ fn client(provider: Provider, base_url: &str) -> anyhow::Result<Arc<dyn Llm>> {
         Provider::Gemini => Arc::new(
             GeminiModel::new_with_base_url(
                 "scripted-key",
-                "gemini-3.7-flash",
+                "gemini-3.8-flash",
                 format!("{base_url}/v1beta/"),
             )?
             .with_retry_config(RetryConfig::disabled()),
@@ -225,7 +225,7 @@ fn client(provider: Provider, base_url: &str) -> anyhow::Result<Arc<dyn Llm>> {
         Provider::GeminiInteractions => Arc::new(
             GeminiModel::new_with_base_url(
                 "scripted-key",
-                "gemini-3.7-flash",
+                "gemini-3.8-flash",
                 format!("{base_url}/v1beta/"),
             )?
             .with_retry_config(RetryConfig::disabled())
@@ -469,7 +469,7 @@ async fn run_scenario(name: &str) -> anyhow::Result<Verdict> {
             .await
         }
         "live_gemini" => {
-            let model = std::env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-3.7-flash".into());
+            let model = std::env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-3.8-flash".into());
             live(
                 "GEMINI_API_KEY",
                 |key| Ok(Arc::new(GeminiModel::new(key, model)?)),

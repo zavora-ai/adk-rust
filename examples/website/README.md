@@ -14,7 +14,7 @@ cargo run --manifest-path examples/website/Cargo.toml
 # Some scenarios, with a report of every check and its evidence
 cargo run --manifest-path examples/website/Cargo.toml -- S1 S5 --report scenarios.md
 
-# Agent turns on claude-sonnet-5-5 (ANTHROPIC_API_KEY), or on gemini-3.7-flash (GOOGLE_API_KEY)
+# Agent turns on claude-sonnet-5-5 (ANTHROPIC_API_KEY), or on gemini-3.8-flash (GOOGLE_API_KEY)
 cargo run --manifest-path examples/website/Cargo.toml -- --live
 cargo run --manifest-path examples/website/Cargo.toml -- --live --provider gemini
 

@@ -61,7 +61,7 @@ use crate::peers::MULTIBYTE_TEXT;
 use crate::scripted::{SECRET_REASONING, ScriptedModel, THINKING_ANSWER};
 
 const GEMINI_FAST: &str = "gemini-3.5-flash-lite";
-const GEMINI_THINKING: &str = "gemini-3.7-flash";
+const GEMINI_THINKING: &str = "gemini-3.8-flash";
 const OPENAI_MODEL: &str = "gpt-5.6-terra";
 const REBIND_HOST: &str = "rebind.attacker.example";
 

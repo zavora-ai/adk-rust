@@ -152,7 +152,7 @@ async fn get_weather(_ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let model = GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?;
+    let model = GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.8-flash")?;
     let tool = FunctionTool::new("get_weather", "Get current weather for a city", get_weather)
         .with_parameters_schema::<WeatherParams>();
 

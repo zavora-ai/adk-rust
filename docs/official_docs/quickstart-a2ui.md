@@ -26,7 +26,7 @@ use adk_agent::LlmAgentBuilder;
 use adk_model::GeminiModel;
 use adk_surface::genui::DrawToolset;
 
-let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
+let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?);
 let agent = LlmAgentBuilder::new("finance")
     .model(model)
     .instruction("Show the person forms and tables with the render tools when they help.")

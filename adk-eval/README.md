@@ -54,7 +54,7 @@ use adk_model::GeminiModel;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model = GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?;
+    let model = GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.8-flash")?;
     let agent = LlmAgentBuilder::new("geography_agent")
         .instruction("Answer with the name of the city only.")
         .model(Arc::new(model))
@@ -199,7 +199,7 @@ use adk_eval::{EvaluationConfig, EvaluationCriteria, Evaluator};
 use adk_model::GeminiModel;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let judge_model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?);
+    let judge_model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.8-flash")?);
     let config = EvaluationConfig::with_criteria(
         EvaluationCriteria::semantic_match(0.85), // 85% semantic similarity required
     );
@@ -323,7 +323,7 @@ use adk_model::GeminiModel;
 #[tokio::test]
 #[ignore = "calls the Gemini API"]
 async fn geography_agent_passes_its_eval_set() {
-    let model = GeminiModel::new(std::env::var("GOOGLE_API_KEY").unwrap(), "gemini-3.7-flash").unwrap();
+    let model = GeminiModel::new(std::env::var("GOOGLE_API_KEY").unwrap(), "gemini-3.8-flash").unwrap();
     let agent = LlmAgentBuilder::new("geography_agent")
         .instruction("Answer with the name of the city only.")
         .model(Arc::new(model))
@@ -382,8 +382,8 @@ use adk_eval::CostTracker;
 
 fn main() {
     let tracker = CostTracker::new();
-    // gemini-3.7-flash: $0.00075 per 1K input tokens, $0.00375 per 1K output tokens.
-    let cost = tracker.compute_cost("gemini-3.7-flash", 2000, 800).unwrap();
+    // gemini-3.8-flash: $0.00075 per 1K input tokens, $0.00375 per 1K output tokens.
+    let cost = tracker.compute_cost("gemini-3.8-flash", 2000, 800).unwrap();
     assert!((cost - 0.0045).abs() < 1e-9);
 }
 ```

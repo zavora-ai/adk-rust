@@ -104,7 +104,7 @@ cargo adk bench --format table --confirm-cost                         # terminal
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--model` | `gemini-3.7-flash` | LLM model identifier |
+| `--model` | `gemini-3.8-flash` | LLM model identifier |
 | `--runs` | `5` | Measurement iterations per workload |
 | `--warmup` | `3` | Warm-up iterations (discarded) |
 | `--concurrency` | `1` | Agent concurrency level |

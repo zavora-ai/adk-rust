@@ -28,7 +28,7 @@ What an ADK-Rust server exposes, and what its A2A clients accept. Every scenario
 | `C4 held-call-input-required-v1` | scripted | The v1 `SendMessage` task is `InputRequired` |
 | `C5 held-call-input-required-live` | live | `gpt-5.6-terra` calls the held tool and the task is `input-required` |
 | `D1 thinking-private` | scripted | `reasoning_content` from the model reaches neither the sent nor the streamed A2A response; the answer does |
-| `D2 thinking-private-live` | live | No `gemini-3.7-flash` thought summary reaches the A2A response |
+| `D2 thinking-private-live` | live | No `gemini-3.8-flash` thought summary reaches the A2A response |
 | `E1` / `E3 split-char-intact` | scripted | A `ü` split across two reads arrives intact (pre-v1 / v1) |
 | `E2` / `E4 truncated-stream-error` | scripted | A stream that stops before a final status ends in an error (pre-v1 / v1) |
 | `E5 a2a-stream-live` | live | `gemini-3.5-flash-lite` behind a real A2A server streams multi-byte text to `RemoteA2aAgent` intact and without error |

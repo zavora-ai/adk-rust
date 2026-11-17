@@ -136,7 +136,7 @@ let mut turn = Content {
 mark_origin(&mut turn, Some(&anthropic));
 
 let mut for_gemini = vec![turn];
-retain_replayable(&mut for_gemini, &ProviderOrigin::new("gemini", "gemini-3.7-flash"));
+retain_replayable(&mut for_gemini, &ProviderOrigin::new("gemini", "gemini-3.8-flash"));
 assert!(for_gemini.is_empty());
 ```
 
@@ -615,7 +615,7 @@ use adk_core::{Content, GenerateContentConfig, LlmRequest};
 use serde_json::json;
 
 fn main() {
-    let request = LlmRequest::new("gemini-3.7-flash", vec![Content::new("user").with_text("Hello!")])
+    let request = LlmRequest::new("gemini-3.8-flash", vec![Content::new("user").with_text("Hello!")])
         .with_config(GenerateContentConfig {
             temperature: Some(0.7),
             max_output_tokens: Some(1024),

@@ -37,8 +37,8 @@ pub(crate) fn model_choices(
     let mut models: Vec<ModelChoice> = primary.into_iter().collect();
     for (provider, keys, model) in [
         ("anthropic", &["ANTHROPIC_API_KEY"][..], "claude-sonnet-5-5"),
-        ("openai", &["OPENAI_API_KEY"][..], "gpt-5.6-terra"),
-        ("gemini", &["GOOGLE_API_KEY", "GEMINI_API_KEY"][..], "gemini-3.7-flash"),
+        ("openai", &["OPENAI_API_KEY"][..], "gpt-6.1-sol"),
+        ("gemini", &["GOOGLE_API_KEY", "GEMINI_API_KEY"][..], "gemini-3.8-flash"),
     ] {
         if keys.iter().any(|key| has_key(key))
             && !models.iter().any(|known| known.provider == provider && known.model == model)
@@ -495,7 +495,7 @@ mod tests {
             choices,
             [
                 ModelChoice::new("anthropic", "claude-sonnet-5-5"),
-                ModelChoice::new("gemini", "gemini-3.7-flash")
+                ModelChoice::new("gemini", "gemini-3.8-flash")
             ]
         );
         assert!(model_choices(None, |_| false).is_empty());
@@ -550,8 +550,8 @@ mod tests {
         assert_eq!(error.to_string(), "No provider called acme");
         for (provider, model, label) in [
             ("anthropic", "claude-sonnet-5-5", "Anthropic"),
-            ("openai", "gpt-5.6-terra", "OpenAI"),
-            ("gemini", "gemini-3.7-flash", "Gemini"),
+            ("openai", "gpt-6.1-sol", "OpenAI"),
+            ("gemini", "gemini-3.8-flash", "Gemini"),
         ] {
             let agent = record(Some(ModelChoice::new(provider, model)));
             match model_of(&agent, false).await {

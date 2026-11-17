@@ -131,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let processes = SqliteProcessStore::new(sessions.pool().clone());
     processes.migrate().await?;
 
-    let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.8-flash")?);
     let agent = LlmAgentBuilder::new("auditor")
         .instruction("Summarise what changed in the lockfile.")
         .model(model)

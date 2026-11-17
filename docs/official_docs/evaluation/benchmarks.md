@@ -51,7 +51,7 @@ Requirements:
 
 ### Test Environment
 
-- Model: `--model`, default `gemini-3.7-flash`
+- Model: `--model`, default `gemini-3.8-flash`
 - Model calls use temperature 0, `top_p` 1.0, and seed 42 (`DeterministicConfig`)
 - `--runs` measurement iterations (default 5) after `--warmup` iterations (default 3), which
   are discarded

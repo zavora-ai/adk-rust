@@ -132,7 +132,7 @@ work for it.
 | `DeepgramStt` | `nova-3`, with diarization | WebSocket streaming: `Partial` for interim results, `Final` per finalized segment, `SpeechStarted`/`SpeechEnded` from voice activity, `Usage` from the closing metadata; dropping the stream closes the socket | `DEEPGRAM_API_KEY` |
 | `AssemblyAiStt` | asynchronous jobs | `AudioError::Stt` (not yet implemented) | `ASSEMBLYAI_API_KEY` |
 | `MuseStt` (`muse`) | `muse-voice-transcribe-1.0` | Realtime WebSocket: `Partial` per cumulative transcript, one `Final` per turn, `SpeechStarted`/`SpeechEnded`, `Speaker` with diarization, `Progress`, `Usage`; the 60-minute session limit ends the stream with `model.muse.session_limit` | `META_API_KEY` or `MODEL_API_KEY` |
-| `GeminiStt` | `gemini-3.7-flash` | `AudioError::Stt`; use the Gemini Live API through `adk-realtime` for live audio | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
+| `GeminiStt` | `gemini-3.8-flash` | `AudioError::Stt`; use the Gemini Live API through `adk-realtime` for live audio | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
 
 ```rust
 use adk_audio::{AudioFrame, SttOptions, SttProvider, WhisperApiStt};

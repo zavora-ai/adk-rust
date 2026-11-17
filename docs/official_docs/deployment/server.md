@@ -48,7 +48,7 @@ use std::sync::Arc;
 async fn main() -> Result<()> {
     let api_key = std::env::var("GOOGLE_API_KEY")
         .map_err(|_| AdkError::config("GOOGLE_API_KEY is not set"))?;
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?);
 
     let agent = LlmAgentBuilder::new("my_agent")
         .description("A helpful assistant")
@@ -79,7 +79,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
+    let model = GeminiModel::new(&api_key, "gemini-3.8-flash")?;
     let agent: Arc<dyn Agent> = Arc::new(
         LlmAgentBuilder::new("my_agent")
             .description("A helpful assistant")
@@ -200,7 +200,7 @@ POST /api/run_sse
   "partial": false,
   "turn_complete": true,
   "finish_reason": "Stop",
-  "model": "gemini-3.7-flash",
+  "model": "gemini-3.8-flash",
   "provider": "gemini",
   "usage_metadata": {
     "prompt_token_count": 56,
@@ -844,7 +844,7 @@ use std::sync::Arc;
 async fn main() -> Result<()> {
     let api_key = std::env::var("GOOGLE_API_KEY")
         .map_err(|_| AdkError::config("GOOGLE_API_KEY is not set"))?;
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?);
     let agent = LlmAgentBuilder::new("my_agent").model(model).build()?;
 
     Launcher::new(Arc::new(agent))

@@ -84,7 +84,7 @@ fn test_model_deserialization() {
 #[test]
 fn current_default_uses_future_proof_custom_model() {
     let model = Model::default();
-    assert_eq!(model.as_str(), "models/gemini-3.7-flash");
+    assert_eq!(model.as_str(), "models/gemini-3.8-flash");
     assert_eq!(Model::gemini_3_6_flash().as_str(), "models/gemini-3.6-flash");
 }
 

@@ -282,12 +282,15 @@ fn build(api_key: String) -> Result<OpenAIResponsesClient, adk_core::AdkError> {
 
 | Model | Catalog role |
 |-------|--------------|
-| `gpt-5.6-terra` | Default, balanced |
+| `gpt-6.1-sol` | Default, balanced |
+| `gpt-6-astra` | Flagship |
+| `gpt-6.1-terra` | Balanced |
+| `gpt-6-luna` | Economy |
+| `gpt-5.6-terra` | Balanced |
 | `gpt-5.6-sol` | Flagship |
 | `gpt-5.6-luna` | Economy |
-| `gpt-5.6` | Flagship |
 
-The client sends any other model ID as given, such as `gpt-4.1-nano` or `o4-mini` in
+The client sends any other model ID as given, such as `gpt-4.1-mini` in
 `examples/openai_responses`.
 
 ---
@@ -730,13 +733,13 @@ cargo run --manifest-path examples/openai_responses/Cargo.toml
 
 | Scenario | Model |
 |----------|-------|
-| 1. Non-streaming chat | `gpt-4.1-nano` |
-| 2. Streaming chat | `gpt-4.1-nano` |
-| 3. Reasoning with a summary | `o4-mini` |
-| 4. Function tool calling | `gpt-4.1-nano` |
-| 5. Multi-turn conversation | `gpt-4.1-nano` |
-| 6. System instruction | `gpt-4.1-nano` |
-| 7. Temperature and `top_p` | `gpt-4.1-nano` |
+| 1. Non-streaming chat | `gpt-5.6-luna` |
+| 2. Streaming chat | `gpt-5.6-luna` |
+| 3. Reasoning with a summary | `gpt-5.6-terra` |
+| 4. Function tool calling | `gpt-5.6-luna` |
+| 5. Multi-turn conversation | `gpt-5.6-luna` |
+| 6. System instruction | `gpt-5.6-luna` |
+| 7. Temperature and `top_p` | `gpt-4.1-mini` (a non-reasoning model; served until 2027-01-14) |
 
 ### Additional Examples
 

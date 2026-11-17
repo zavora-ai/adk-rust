@@ -394,10 +394,10 @@ pub struct BudgetUsage {
 /// use adk_core::{BudgetLimit, BudgetTracker, RunBudget};
 ///
 /// let tracker = Arc::new(BudgetTracker::new(RunBudget::new().max_model_calls(1)));
-/// let meter = tracker.begin_model_call("gemini-3.7-flash").unwrap();
+/// let meter = tracker.begin_model_call("gemini-3.8-flash").unwrap();
 /// drop(meter);
 ///
-/// let exceeded = tracker.begin_model_call("gemini-3.7-flash").unwrap_err();
+/// let exceeded = tracker.begin_model_call("gemini-3.8-flash").unwrap_err();
 /// assert_eq!(exceeded.limit(), BudgetLimit::ModelCalls);
 /// assert_eq!(tracker.usage().model_calls, 1);
 /// ```
@@ -484,7 +484,7 @@ impl BudgetTracker {
     /// };
     ///
     /// let tracker = Arc::new(BudgetTracker::new(RunBudget::new()));
-    /// let mut meter = tracker.begin_model_call("gemini-3.7-flash").unwrap();
+    /// let mut meter = tracker.begin_model_call("gemini-3.8-flash").unwrap();
     /// let mut response = LlmResponse::default();
     /// response.usage_metadata = Some(UsageMetadata {
     ///     prompt_token_count: 120,

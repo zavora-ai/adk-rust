@@ -337,8 +337,9 @@ async fn openai_responses_hosted_tool_items_add_their_fees() {
     let response = final_response(&model, "gpt-5.6-luna").await;
 
     assert_eq!(uses(&response), [("file_search".into(), 1), ("web_search".into(), 2)]);
-    // 1M input × $0.20 + 2 searches × $0.01 + 1 file search × $0.0025.
-    assert_cost(&response, 0.20 + 0.02 + 0.0025);
+    // 1M input at the long-context rate (over 272K) × $0.40 + 2 searches × $0.01 + 1 file
+    // search × $0.0025.
+    assert_cost(&response, 0.40 + 0.02 + 0.0025);
 }
 
 #[cfg(feature = "gemini")]

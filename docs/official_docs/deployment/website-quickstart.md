@@ -184,7 +184,7 @@ cargo run --manifest-path examples/website/Cargo.toml -- S1
 ```
 
 `--live` runs the Steward's interview and the launch on `claude-sonnet-5-5`, or on
-`gemini-3.7-flash` with `--provider gemini` ([`examples/website`](../../../examples/website/README.md)).
+`gemini-3.8-flash` with `--provider gemini` ([`examples/website`](../../../examples/website/README.md)).
 `adk-rust awp verify <domain>` checks a published site from anywhere
 ([Sites and AWP from the command line](site-cli.md#adk-rust-awp)).
 

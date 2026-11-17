@@ -127,9 +127,24 @@ impl Model {
         Self::Custom("claude-haiku-5-5".to_string())
     }
 
+    /// Return the Claude Fable 5.2 model identifier, the most capable widely released model.
+    pub fn claude_fable_5_2() -> Self {
+        Self::Custom("claude-fable-5-2".to_string())
+    }
+
+    /// Return the Claude Mythos 5.2 model identifier (verified organizations only).
+    pub fn claude_mythos_5_2() -> Self {
+        Self::Custom("claude-mythos-5-2".to_string())
+    }
+
     /// Return the Claude Fable 5.1 model identifier.
     pub fn claude_fable_5_1() -> Self {
         Self::Custom("claude-fable-5-1".to_string())
+    }
+
+    /// Return the Claude Mythos 5.1 model identifier (verified organizations only).
+    pub fn claude_mythos_5_1() -> Self {
+        Self::Custom("claude-mythos-5-1".to_string())
     }
 
     /// Return the Claude Sonnet 5 model identifier.
@@ -241,7 +256,10 @@ mod tests {
         assert_eq!(Model::claude_opus_5_5(), Model::Custom("claude-opus-5-5".to_string()));
         assert_eq!(Model::claude_sonnet_5_5(), Model::Custom("claude-sonnet-5-5".to_string()));
         assert_eq!(Model::claude_haiku_5_5(), Model::Custom("claude-haiku-5-5".to_string()));
+        assert_eq!(Model::claude_fable_5_2().to_string(), "claude-fable-5-2");
+        assert_eq!(Model::claude_mythos_5_2().to_string(), "claude-mythos-5-2");
         assert_eq!(Model::claude_fable_5_1(), Model::Custom("claude-fable-5-1".to_string()));
+        assert_eq!(Model::claude_mythos_5_1().to_string(), "claude-mythos-5-1");
         assert_eq!(Model::claude_sonnet_5().to_string(), "claude-sonnet-5");
         assert_eq!(Model::claude_opus_5().to_string(), "claude-opus-5");
         assert_eq!(Model::claude_fable_5().to_string(), "claude-fable-5");

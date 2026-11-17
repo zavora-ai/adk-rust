@@ -67,13 +67,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`Gemini::new` uses the default model, `gemini-3.7-flash`, on the `v1beta` API.
+`Gemini::new` uses the default model, `gemini-3.8-flash`, on the `v1beta` API.
 
 ## Client constructors
 
 | Constructor | Backend and model |
 |-------------|-------------------|
-| `Gemini::new(api_key)` | AI Studio, `gemini-3.7-flash`, `v1beta` |
+| `Gemini::new(api_key)` | AI Studio, `gemini-3.8-flash`, `v1beta` |
 | `Gemini::pro(api_key)` | AI Studio, `gemini-3.1-pro-preview` |
 | `Gemini::with_model(api_key, model)` | AI Studio, any model |
 | `Gemini::with_v1(api_key)`, `Gemini::with_model_v1(api_key, model)` | AI Studio on the stable `v1` API |
@@ -222,7 +222,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `ThinkingLevel` has `Minimal`, `Low`, `Medium`, and `High`; Gemini 3.1 Pro does not support
 `Minimal`. `with_thinking_budget(tokens)` is the budget-based control of Gemini 2.5 models, and
 a config that sets both a budget and a level is rejected. For `gemini-3.6-flash` and
-`gemini-3.7-flash`, a request that sets `temperature`, `top_p`, `top_k`, `candidate_count`, or a
+`gemini-3.8-flash`, a request that sets `temperature`, `top_p`, `top_k`, `candidate_count`, or a
 thinking budget fails with `ClientError::InvalidGenerationConfig` before it is sent.
 
 ### Thought signatures
@@ -508,12 +508,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A service account key.
     let key = std::fs::read_to_string("service-account.json")?;
     let service_account =
-        Gemini::with_google_cloud_service_account_json(&key, "my-project", "us-central1", "gemini-3.7-flash".to_string())?;
+        Gemini::with_google_cloud_service_account_json(&key, "my-project", "us-central1", "gemini-3.8-flash".to_string())?;
 
     // Workload Identity Federation.
     let wif = std::fs::read_to_string("wif-credentials.json")?;
     let federated =
-        Gemini::with_google_cloud_wif_json(&wif, "my-project", "us-central1", "gemini-3.7-flash".to_string())?;
+        Gemini::with_google_cloud_wif_json(&wif, "my-project", "us-central1", "gemini-3.8-flash".to_string())?;
 
     let _ = (regional, global, service_account, federated);
     Ok(())

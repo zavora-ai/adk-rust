@@ -112,7 +112,7 @@ fn main() -> anyhow::Result<()> {
     let api_key = std::env::var("GOOGLE_API_KEY")?;
     let agent = LlmAgentBuilder::new("rag-assistant")
         .description("Answers questions grounded in a Vertex AI RAG Engine corpus")
-        .model(Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?))
+        .model(Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?))
         .tool(Arc::new(retrieval))
         .instruction(
             "Answer using the vertex_rag_retrieval tool. Retrieve first, then \

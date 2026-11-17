@@ -46,7 +46,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
+    let model = GeminiModel::new(&api_key, "gemini-3.8-flash")?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .description("A helpful AI assistant")
@@ -199,9 +199,9 @@ Events form the conversation history and enable replay and debugging.
 
 The underlying LLM that powers LlmAgents. Gemini is the default provider, and every provider implements the `Llm` trait:
 
-- **Gemini**: `gemini-3.7-flash` (default), `gemini-3.6-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview`
-- **OpenAI**: `gpt-5.6-terra` (default), `gpt-5.6-sol`, `gpt-5.6-luna`, Azure OpenAI deployments
-- **Anthropic**: `claude-sonnet-5` (default), `claude-opus-5`, `claude-fable-5`, `claude-haiku-4-5`
+- **Gemini**: `gemini-3.8-flash` (default), `gemini-4-hydrogen`, `gemini-4-carbon`, `gemini-3.5-flash-lite`
+- **OpenAI**: `gpt-6.1-sol` (default), `gpt-6-astra`, `gpt-6-luna`, `gpt-5.6-terra`, Azure OpenAI deployments
+- **Anthropic**: `claude-sonnet-5-5` (default), `claude-fable-5-2`, `claude-opus-5-5`, `claude-haiku-5-5`
 - **DeepSeek**: `deepseek-flash` (default), `deepseek-v4-pro`
 - **Groq**: `openai/gpt-oss-120b` (default), `openai/gpt-oss-20b`
 - **Ollama**: Local inference, for example `qwen3.5` (default) or `llama3.2`
@@ -214,7 +214,7 @@ use adk_rust::{LlmRequest, LlmResponseStream, Result, async_trait};
 
 #[async_trait]
 pub trait Llm: Send + Sync {
-    /// The model identifier, such as "gemini-3.7-flash".
+    /// The model identifier, such as "gemini-3.8-flash".
     fn name(&self) -> &str;
 
     /// Sends one request; `stream` asks for partial responses as they arrive.

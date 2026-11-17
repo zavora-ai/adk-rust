@@ -7,9 +7,9 @@ the `adk_core::Llm` trait, so an agent takes any of them without other changes.
 
 | Provider | Client | `adk-model` feature | Key the samples read | Catalog default |
 |----------|--------|---------------------|----------------------|-----------------|
-| Gemini | `GeminiModel` | `gemini` (default) | `GOOGLE_API_KEY` | `gemini-3.7-flash` |
-| OpenAI | `OpenAIClient`, [`OpenAIResponsesClient`](./openai-responses.md) | `openai` | `OPENAI_API_KEY` | `gpt-5.6-terra` |
-| Anthropic | `AnthropicClient` ([details](./anthropic.md)) | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5` |
+| Gemini | `GeminiModel` | `gemini` (default) | `GOOGLE_API_KEY` | `gemini-3.8-flash` |
+| OpenAI | `OpenAIClient`, [`OpenAIResponsesClient`](./openai-responses.md) | `openai` | `OPENAI_API_KEY` | `gpt-6.1-sol` |
+| Anthropic | `AnthropicClient` ([details](./anthropic.md)) | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5-5` |
 | DeepSeek | `DeepSeekClient` | `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-flash` |
 | Groq | `GroqClient` | `groq` | `GROQ_API_KEY` | `openai/gpt-oss-120b` |
 | Meta Muse | `MuseClient` | `muse` | `META_API_KEY` | `muse-spark-1.3` |
@@ -31,9 +31,9 @@ and configs use. `adk-rust --provider` takes the same identifiers.
 
 | Identifier | Variant | `feature()` | `env_var()` | `default_model()` |
 |------------|---------|-------------|-------------|-------------------|
-| `gemini` | `Gemini` | `gemini` | `GOOGLE_API_KEY` (`alt_env_var()`: `GEMINI_API_KEY`) | `Some("gemini-3.7-flash")` |
-| `openai` | `Openai` | `openai` | `OPENAI_API_KEY` | `Some("gpt-5.6-terra")` |
-| `anthropic` | `Anthropic` | `anthropic` | `ANTHROPIC_API_KEY` | `Some("claude-sonnet-5")` |
+| `gemini` | `Gemini` | `gemini` | `GOOGLE_API_KEY` (`alt_env_var()`: `GEMINI_API_KEY`) | `Some("gemini-3.8-flash")` |
+| `openai` | `Openai` | `openai` | `OPENAI_API_KEY` | `Some("gpt-6.1-sol")` |
+| `anthropic` | `Anthropic` | `anthropic` | `ANTHROPIC_API_KEY` | `Some("claude-sonnet-5-5")` |
 | `deepseek` | `Deepseek` | `deepseek` | `DEEPSEEK_API_KEY` | `Some("deepseek-flash")` |
 | `groq` | `Groq` | `groq` | `GROQ_API_KEY` | `Some("openai/gpt-oss-120b")` |
 | `ollama` | `Ollama` | `ollama` | empty, no key | `Some("qwen3.5")` |
@@ -138,7 +138,7 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
+    let model = GeminiModel::new(&api_key, "gemini-3.8-flash")?;
 
     let agent = LlmAgentBuilder::new("gemini_assistant")
         .description("Gemini-powered assistant")
@@ -156,11 +156,18 @@ async fn main() -> anyhow::Result<()> {
 
 | Model | Catalog role |
 |-------|--------------|
-| `gemini-3.7-flash` | Default, balanced |
+| `gemini-3.8-flash` | Default, balanced |
+| `gemini-4-hydrogen` | Balanced |
+| `gemini-4-carbon` | Flagship |
+| `gemini-4-argon` | Flagship |
 | `gemini-3.6-flash` | Balanced |
-| `gemini-3.5-flash` | Balanced |
 | `gemini-3.5-flash-lite` | Economy |
 | `gemini-3.1-pro-preview` | Flagship (preview) |
+
+`gemini-3.7-flash` and `gemini-3.5-flash` are deprecated (the Gemini API routes them to
+`gemini-3.8-flash` and `gemini-3.6-flash`), and `gemini-2.5-pro` and `gemini-2.5-flash` shut down
+on 2026-12-01. Gemini 4 Hydrogen does not support explicit caching and rejects the `minimal`
+thinking level.
 
 `GeminiModel::new` logs a warning when the model is deprecated or retired in the catalog, naming
 its replacement.
@@ -175,7 +182,7 @@ use adk_gemini::{ThinkingConfig, ThinkingLevel};
 use adk_model::GeminiModel;
 
 fn build(api_key: &str) -> adk_core::Result<GeminiModel> {
-    Ok(GeminiModel::new(api_key, "gemini-3.7-flash")?.with_thinking_config(
+    Ok(GeminiModel::new(api_key, "gemini-3.8-flash")?.with_thinking_config(
         ThinkingConfig::new().with_thinking_level(ThinkingLevel::High).with_thoughts_included(true),
     ))
 }
@@ -186,7 +193,7 @@ fn build(api_key: &str) -> adk_core::Result<GeminiModel> {
 | Thought summaries | With `with_thoughts_included(true)`, they arrive as `Part::Thinking` |
 | Thought signatures | `thoughtSignature` values are kept on the parts that carry them and sent back on later turns |
 | `thinking_budget` | The token-budget control of earlier models; `ThinkingConfig::validate` rejects a config that sets it together with `thinking_level` |
-| `gemini-3.6-flash`, `gemini-3.7-flash` | A request with `temperature`, `top_p`, or `top_k` fails with `model.gemini.sampling_unsupported`, and a `thinking_budget` with `model.gemini.thinking_budget_unsupported` (`InvalidInput`), before anything is sent |
+| `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash` | A request with `temperature`, `top_p`, or `top_k` fails with `model.gemini.sampling_unsupported`, and a `thinking_budget` with `model.gemini.thinking_budget_unsupported` (`InvalidInput`), before anything is sent |
 
 ### Failed, Blocked, and Unfinished Responses
 
@@ -230,7 +237,7 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     let api_key = std::env::var("OPENAI_API_KEY")?;
-    let model = OpenAIClient::new(OpenAIConfig::new(&api_key, "gpt-5.6-terra"))?;
+    let model = OpenAIClient::new(OpenAIConfig::new(&api_key, "gpt-6.1-sol"))?;
 
     let agent = LlmAgentBuilder::new("openai_assistant")
         .description("OpenAI-powered assistant")
@@ -269,7 +276,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 fn build(api_key: &str) -> anyhow::Result<LlmAgent> {
-    let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-5.6-terra"))?;
+    let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-6.1-sol"))?;
 
     Ok(LlmAgentBuilder::new("data_extractor")
         .model(Arc::new(model))
@@ -309,7 +316,7 @@ use adk_model::openai::{OpenAIClient, OpenAIConfig, OpenAIReasoningEffort};
 
 fn build(api_key: &str) -> Result<OpenAIClient, adk_core::AdkError> {
     OpenAIClient::new_with_reasoning_effort(
-        OpenAIConfig::new(api_key, "gpt-5.6-terra"),
+        OpenAIConfig::new(api_key, "gpt-6.1-sol"),
         OpenAIReasoningEffort::XHigh,
     )
 }
@@ -378,7 +385,7 @@ use adk_model::{OpenAICompatible, OpenAICompatibleConfig};
 
 fn build() -> anyhow::Result<OpenAICompatible> {
     let api_key = std::env::var("GEMINI_API_KEY")?;
-    Ok(OpenAICompatible::new(OpenAICompatibleConfig::gemini(api_key, "gemini-3.7-flash"))?)
+    Ok(OpenAICompatible::new(OpenAICompatibleConfig::gemini(api_key, "gemini-3.8-flash"))?)
 }
 ```
 
@@ -398,7 +405,7 @@ cargo run -p adk-agent --example gemini_openai_compat_agent
 #### OrcaRouter
 
 `OpenAICompatibleConfig::orcarouter` targets `https://api.orcarouter.ai/v1`. Model IDs carry a
-vendor prefix (`openai/gpt-5.6-terra`, `anthropic/claude-sonnet-5`), so changing the model
+vendor prefix (`openai/gpt-5.6-terra`, `anthropic/claude-sonnet-5-5`), so changing the model
 string switches the upstream vendor:
 
 ```rust
@@ -434,10 +441,19 @@ fn build() -> anyhow::Result<OpenAICompatible> {
 
 | Model | Catalog role |
 |-------|--------------|
-| `gpt-5.6-terra` | Default, balanced |
+| `gpt-6.1-sol` | Default, balanced |
+| `gpt-6-astra` | Flagship |
+| `gpt-6.1-terra` | Balanced |
+| `gpt-6-sol` | Balanced |
+| `gpt-6-luna` | Economy |
+| `gpt-5.6-terra` | Balanced |
 | `gpt-5.6-sol` | Flagship |
 | `gpt-5.6-luna` | Economy |
-| `gpt-5.6` | Flagship |
+
+`gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5-pro` and `o3` shut down on 2026-12-11, and
+`gpt-4.1`, `gpt-4.1-mini`, `gpt-4o` and `gpt-4o-mini` on 2027-01-14; `gpt-4.1-nano`, `o4-mini`,
+`o3-mini` and `o1` were retired on 2026-10-23. `adk_model::catalog` lists the replacement for
+each.
 
 ---
 
@@ -458,7 +474,7 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     let api_key = std::env::var("ANTHROPIC_API_KEY")?;
-    let model = AnthropicClient::new(AnthropicConfig::new(&api_key, "claude-sonnet-5"))?;
+    let model = AnthropicClient::new(AnthropicConfig::new(&api_key, "claude-sonnet-5-5"))?;
 
     let agent = LlmAgentBuilder::new("anthropic_assistant")
         .description("Anthropic-powered assistant")
@@ -498,14 +514,18 @@ fn build() -> Result<AnthropicClient, adk_core::AdkError> {
 
 | Model | Catalog role |
 |-------|--------------|
-| `claude-sonnet-5` | Default, balanced |
-| `claude-fable-5-1` | Flagship |
+| `claude-sonnet-5-5` | Default, balanced |
+| `claude-fable-5-2` | Flagship |
+| `claude-mythos-5-2` | Flagship (verified organizations only) |
 | `claude-opus-5-5` | Flagship |
-| `claude-sonnet-5-5` | Balanced |
 | `claude-haiku-5-5` | Economy |
-| `claude-opus-5` | Flagship |
-| `claude-fable-5` | Flagship |
+| `claude-fable-5-1`, `claude-mythos-5-1`, `claude-fable-5`, `claude-mythos-5` | Flagship |
+| `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6` | Flagship |
+| `claude-sonnet-5`, `claude-sonnet-4-6` | Balanced |
 | `claude-haiku-4-5` | Economy |
+
+`claude-sonnet-4-5` is deprecated and retires on 2026-11-30; Claude Opus 4.1, Opus 4, Sonnet 4
+and the Claude 3 models are retired.
 
 ---
 
@@ -544,8 +564,10 @@ async fn main() -> anyhow::Result<()> {
 | `deepseek-flash` (default) | `DeepSeekClient::chat`, `DeepSeekClient::v4_flash` |
 | `deepseek-v4-pro` | `DeepSeekClient::reasoner` (thinking on), `DeepSeekClient::v4_pro` (thinking on, effort `High`) |
 
-DeepSeek retired `deepseek-chat`, `deepseek-reasoner`, and the `deepseek-v4-flash` alias on
-2026-07-24. With thinking on, the reasoning arrives as `Part::Thinking`.
+DeepSeek retired `deepseek-chat` and `deepseek-reasoner` on 2026-07-24. The
+`deepseek-v4-flash` model was retired on 2026-09-10; its name is still accepted and served by
+`deepseek-flash`, and the catalog marks it deprecated. With thinking on, the reasoning arrives
+as `Part::Thinking`.
 
 ### Web search
 
@@ -842,14 +864,14 @@ returns that verification date (`PRICING_EFFECTIVE_DATE`).
 |------|-----------|
 | Cached tokens | `prompt_token_count` includes cache reads and writes; each prompt token is billed once, at the uncached, cache-read or cache-write rate |
 | Anthropic cache writes | The 1-hour share of `cache_creation_input_tokens` bills at the 1-hour rate, the rest at the 5-minute rate |
-| Long context | Gemini Pro models (over 200K), OpenAI GPT-5.4/5.5 (272K and above) and Claude Haiku 5.5 (over 100K) switch the whole request to the long-context rates; GPT-5.6 long-context rates are not applied |
+| Long context | Gemini Pro models (over 200K), OpenAI GPT-6, GPT-5.6, GPT-5.5 and GPT-5.4 (over 272K), Claude Haiku 5.5 (over 100K) and Muse Ember (over 200K) switch the whole request to the long-context rates |
 | Dated aliases | `gpt-4.1-2025-04-14`, `claude-sonnet-4-5-20250929`, `claude-sonnet-4-5@20250929` and `us.anthropic.claude-sonnet-4-5-20250929-v1:0` resolve to the listed model |
 | Billing provider | A vendor's list price applies only to providers that bill it at that price; an OpenAI model name served by another gateway stays unpriced |
-| Gemini | `gemini-3.7-flash` requests are reported as `gemini-3.8-flash`; both are priced at the Gemini 3.8 Flash rates, which change on 2027-01-01 |
-| DeepSeek | `deepseek-flash` (and the retired `deepseek-v4-flash` alias) and `deepseek-v4-pro` at peak rates during 01:00–04:00 and 06:00–10:00 UTC on weekdays, half price otherwise; Chinese public holidays bill at peak; `deepseek-chat` and `deepseek-reasoner` are unpriced |
+| Gemini | `gemini-3.7-flash` is deprecated and its requests are reported as `gemini-3.8-flash`; both are priced at the Gemini 3.8 Flash rates, which change on 2027-01-01. Gemini 4 Carbon and Argon rates change on 2026-12-01 |
+| DeepSeek | `deepseek-flash` (and the deprecated `deepseek-v4-flash` alias) and `deepseek-v4-pro` at peak rates during 01:00–04:00 and 06:00–10:00 UTC on weekdays, half price otherwise; Chinese public holidays bill at peak; `deepseek-chat` and `deepseek-reasoner` are unpriced |
 | Groq | GPT-OSS and Qwen models at Groq's published rates; models Groq prices only on request (Llama, MiniMax) stay unpriced |
 | xAI | Grok models, with the whole request at the long-context rate once the prompt reaches 200K tokens |
-| Mistral | Current models and their `-latest` aliases; retired dated ids and Mistral Large 4 (sale price) stay unpriced |
+| Mistral | Current models and their `-latest` aliases, with `mistral-large-latest` at the Mistral Large 4 rate; retired dated ids stay unpriced |
 | Ollama | Local models cost zero; `*cloud*` models stay unpriced |
 | OpenCode | Responses are attributed to `opencode` / `opencode-go` and stay unpriced |
 | Unknown models | `cost` stays `None`, which means unknown, never free |
@@ -938,7 +960,7 @@ use adk_model::pricing::{BuiltinToolFee, ModelPrice, ModelRates, PriceVendor, Pr
 
 fn main() {
     let catalog = PricingCatalog::new("contract-2026")
-        .with_price(ModelPrice::new(PriceVendor::Google, "gemini-3.7-flash", ModelRates::new(0.75, 3.75)))
+        .with_price(ModelPrice::new(PriceVendor::Google, "gemini-3.8-flash", ModelRates::new(0.75, 3.75)))
         .with_builtin_tool_fee(
             BuiltinToolFee::per_use(PriceVendor::Google, "google_search", 0.010)
                 .for_models(["gemini-3*"]),
@@ -947,7 +969,7 @@ fn main() {
         builtin_tool_uses: vec![BuiltinToolUse::new("google_search", 3)],
         ..Default::default()
     };
-    let cost = catalog.cost_usd(Some("gemini"), "gemini-3.7-flash", &usage).unwrap();
+    let cost = catalog.cost_usd(Some("gemini"), "gemini-3.8-flash", &usage).unwrap();
     assert!((cost - 0.03).abs() < 1e-9);
 }
 ```
@@ -1024,7 +1046,7 @@ returns it; a streamed answer carries every token's entry on its final response.
 
 A model can still reject a field its API accepts: GPT-5 models answer `stop` with HTTP 400,
 so stop sequences on OpenAI need a model such as `gpt-4.1-mini`, and current Gemini models
-(`gemini-3.5-flash-lite`, `gemini-3.7-flash`) answer penalties and log probabilities with
+(`gemini-3.5-flash-lite`, `gemini-3.8-flash`) answer penalties and log probabilities with
 `INVALID_ARGUMENT` ("Penalty is not enabled for this model"), which fails the request with
 `ErrorCategory::InvalidInput`. `top_k` is not covered by this check, and `OllamaModel` does
 not send `max_output_tokens`.
@@ -1258,11 +1280,11 @@ use std::sync::Arc;
 
 fn model_for(provider: &str, api_key: &str) -> anyhow::Result<Arc<dyn Llm>> {
     Ok(match provider {
-        "openai" => Arc::new(OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-5.6-terra"))?),
-        "anthropic" => Arc::new(AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-5"))?),
+        "openai" => Arc::new(OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-6.1-sol"))?),
+        "anthropic" => Arc::new(AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-5-5"))?),
         "deepseek" => Arc::new(DeepSeekClient::chat(api_key)?),
         "groq" => Arc::new(GroqClient::new(GroqConfig::gpt_oss_120b(api_key))?),
-        _ => Arc::new(GeminiModel::new(api_key, "gemini-3.7-flash")?),
+        _ => Arc::new(GeminiModel::new(api_key, "gemini-3.8-flash")?),
     })
 }
 

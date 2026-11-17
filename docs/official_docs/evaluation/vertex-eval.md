@@ -118,7 +118,7 @@ fn build() -> adk_core::Result<VertexEvalClient> {
         .with_autorater_config(
             AutoraterConfig::new()
                 .with_autorater_model(
-                    "projects/p/locations/us-central1/publishers/google/models/gemini-3.7-flash",
+                    "projects/p/locations/us-central1/publishers/google/models/gemini-3.8-flash",
                 )
                 .with_sampling_count(1),
         );

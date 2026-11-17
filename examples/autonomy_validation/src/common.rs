@@ -108,7 +108,7 @@ impl Config {
             gemini_model: key("GEMINI_MODEL")
                 .unwrap_or_else(|| "gemini-3.5-flash-lite".to_string()),
             gemini_search_model: key("GEMINI_SEARCH_MODEL")
-                .unwrap_or_else(|| "gemini-3.7-flash".to_string()),
+                .unwrap_or_else(|| "gemini-3.8-flash".to_string()),
         }
     }
 

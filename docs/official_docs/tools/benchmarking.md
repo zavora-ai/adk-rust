@@ -40,7 +40,7 @@ cargo adk bench --workload simple_tool_call
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--model <MODEL>` | `gemini-3.7-flash` | Gemini model ID |
+| `--model <MODEL>` | `gemini-3.8-flash` | Gemini model ID |
 | `--runs <N>` | 5 | Measurement iterations per workload |
 | `--warmup <N>` | 3 | Iterations run first and discarded |
 | `--concurrency <N>` | 1 | Agents run concurrently |

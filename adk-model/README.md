@@ -11,12 +11,12 @@ Every client implements the `adk_core::Llm` trait, so agents and runners accept 
 
 | Provider | Client | Feature | Catalog default model |
 |----------|--------|---------|-----------------------|
-| Google Gemini (AI Studio, Vertex AI) | `GeminiModel` | `gemini` (default) | `gemini-3.7-flash` |
-| OpenAI Chat Completions | `openai::OpenAIClient` | `openai` | `gpt-5.6-terra` |
-| OpenAI Responses API | `openai::OpenAIResponsesClient` | `openai` | `gpt-5.6-terra` |
+| Google Gemini (AI Studio, Vertex AI) | `GeminiModel` | `gemini` (default) | `gemini-3.8-flash` |
+| OpenAI Chat Completions | `openai::OpenAIClient` | `openai` | `gpt-6.1-sol` |
+| OpenAI Responses API | `openai::OpenAIResponsesClient` | `openai` | `gpt-6.1-sol` |
 | Azure OpenAI | `openai::AzureOpenAIClient` | `openai` | deployment-specific |
 | OpenAI-compatible endpoints | `OpenAICompatible` | `openai` | per preset, see [OpenAI-compatible providers](#openai-compatible-providers) |
-| Anthropic Claude | `anthropic::AnthropicClient` | `anthropic` | `claude-sonnet-5` |
+| Anthropic Claude | `anthropic::AnthropicClient` | `anthropic` | `claude-sonnet-5-5` |
 | DeepSeek | `deepseek::DeepSeekClient` | `deepseek` | `deepseek-flash` |
 | Groq | `groq::GroqClient` | `groq` | `openai/gpt-oss-120b` |
 | Meta Muse | `muse::MuseClient` | `muse` | `muse-spark-1.3` |
@@ -40,9 +40,9 @@ its key variable, and its default model. `adk-rust --provider` takes the same id
 
 | Identifier | Variant | Feature | Key variable | `default_model()` |
 |------------|---------|---------|--------------|-------------------|
-| `gemini` | `Gemini` | `gemini` | `GOOGLE_API_KEY` or `GEMINI_API_KEY` | `gemini-3.7-flash` |
-| `openai` | `Openai` | `openai` | `OPENAI_API_KEY` | `gpt-5.6-terra` |
-| `anthropic` | `Anthropic` | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5` |
+| `gemini` | `Gemini` | `gemini` | `GOOGLE_API_KEY` or `GEMINI_API_KEY` | `gemini-3.8-flash` |
+| `openai` | `Openai` | `openai` | `OPENAI_API_KEY` | `gpt-6.1-sol` |
+| `anthropic` | `Anthropic` | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5-5` |
 | `deepseek` | `Deepseek` | `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-flash` |
 | `groq` | `Groq` | `groq` | `GROQ_API_KEY` | `openai/gpt-oss-120b` |
 | `ollama` | `Ollama` | `ollama` | none | `qwen3.5` |
@@ -102,10 +102,10 @@ use futures::StreamExt;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = GeminiModel::new(api_key, "gemini-3.7-flash")?;
+    let model = GeminiModel::new(api_key, "gemini-3.8-flash")?;
 
     let request = LlmRequest::new(
-        "gemini-3.7-flash",
+        "gemini-3.8-flash",
         vec![Content::new("user").with_text("Name one planet in a short sentence.")],
     );
     let mut responses = model.generate_content(request, false).await?;
@@ -132,7 +132,7 @@ use adk_model::GeminiModel;
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model = GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?;
+    let model = GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.8-flash")?;
     let agent = LlmAgentBuilder::new("assistant")
         .instruction("Answer in one sentence.")
         .model(Arc::new(model))
@@ -173,10 +173,10 @@ use futures::StreamExt;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("OPENAI_API_KEY")?;
-    let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-5.6-terra"))?;
+    let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-6.1-sol"))?;
 
     let request = LlmRequest::new(
-        "gpt-5.6-terra",
+        "gpt-6.1-sol",
         vec![Content::new("user").with_text("Name one planet in a short sentence.")],
     );
     let mut responses = model.generate_content(request, false).await?;
@@ -216,12 +216,12 @@ use futures::StreamExt;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("OPENAI_API_KEY")?;
-    let config = OpenAIResponsesConfig::new(api_key, "gpt-5.6-terra")
+    let config = OpenAIResponsesConfig::new(api_key, "gpt-6.1-sol")
         .with_reasoning_summary(ReasoningSummary::Auto);
     let model = OpenAIResponsesClient::new_with_reasoning_effort(config, OpenAIReasoningEffort::Low)?;
 
     let request = LlmRequest::new(
-        "gpt-5.6-terra",
+        "gpt-6.1-sol",
         vec![Content::new("user").with_text("Name one planet in a short sentence.")],
     );
     let mut responses = model.generate_content(request, false).await?;
@@ -324,10 +324,10 @@ use futures::StreamExt;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("ANTHROPIC_API_KEY")?;
-    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-5"))?;
+    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-5-5"))?;
 
     let request = LlmRequest::new(
-        "claude-sonnet-5",
+        "claude-sonnet-5-5",
         vec![Content::new("user").with_text("Name one planet in a short sentence.")],
     );
     let mut responses = model.generate_content(request, false).await?;
@@ -531,22 +531,22 @@ feature.
 
 | Provider | Preset | Catalog default model |
 |----------|--------|-----------------------|
-| xAI | `OpenAICompatibleConfig::xai` | `grok-4.6` |
-| Fireworks AI | `OpenAICompatibleConfig::fireworks` | `accounts/fireworks/models/kimi-k2p6` |
-| Together AI | `OpenAICompatibleConfig::together` | `MiniMaxAI/MiniMax-M2.7` |
-| Mistral AI | `OpenAICompatibleConfig::mistral` | `mistral-medium-latest` |
+| xAI | `OpenAICompatibleConfig::xai` | `grok-4.7` |
+| Fireworks AI | `OpenAICompatibleConfig::fireworks` | `accounts/fireworks/models/kimi-k3` |
+| Together AI | `OpenAICompatibleConfig::together` | `moonshotai/Kimi-K3.1-Pro` |
+| Mistral AI | `OpenAICompatibleConfig::mistral` | `mistral-large-latest` |
 | Perplexity | `OpenAICompatibleConfig::perplexity` | `sonar-pro` |
 | Cerebras | `OpenAICompatibleConfig::cerebras` | `gpt-oss-120b` |
 | SambaNova | `OpenAICompatibleConfig::sambanova` | `gpt-oss-120b` |
 | OrcaRouter | `OpenAICompatibleConfig::orcarouter` | none; model IDs carry a vendor prefix such as `openai/gpt-5.6-terra` |
 | Vultr Serverless Inference | `OpenAICompatibleConfig::vultr` | `qwen3.8-27b`; `GET /v1/models` lists the IDs a subscription can use |
 | API Route | `OpenAICompatibleConfig::api_route` | none; `GET /v1/models` lists the IDs a key can use |
-| MiniMax | `OpenAICompatibleConfig::minimax` | `MiniMax-M2.7` |
-| Zhipu AI | `OpenAICompatibleConfig::zhipu` | `glm-5.2` |
+| MiniMax | `OpenAICompatibleConfig::minimax` | `MiniMax-M3` |
+| Zhipu AI | `OpenAICompatibleConfig::zhipu` | `glm-5.3` |
 | Baidu ERNIE (Qianfan) | `OpenAICompatibleConfig::baidu` | `ernie-5.1` |
 | Cohere | `OpenAICompatibleConfig::cohere` | `command-a-plus-05-2026` |
 | ByteDance Doubao (Volcano Engine Ark) | `OpenAICompatibleConfig::bytedance` | none; deployment-specific |
-| Gemini (OpenAI-compatible endpoint) | `OpenAICompatibleConfig::gemini` | `gemini-3.7-flash` |
+| Gemini (OpenAI-compatible endpoint) | `OpenAICompatibleConfig::gemini` | `gemini-3.8-flash` |
 
 ```rust
 use adk_core::{Content, Llm, LlmRequest};
@@ -556,10 +556,10 @@ use futures::StreamExt;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("XAI_API_KEY")?;
-    let model = OpenAICompatible::new(OpenAICompatibleConfig::xai(api_key, "grok-4.6"))?;
+    let model = OpenAICompatible::new(OpenAICompatibleConfig::xai(api_key, "grok-4.7"))?;
 
     let request = LlmRequest::new(
-        "grok-4.6",
+        "grok-4.7",
         vec![Content::new("user").with_text("Name one planet in a short sentence.")],
     );
     let mut responses = model.generate_content(request, false).await?;

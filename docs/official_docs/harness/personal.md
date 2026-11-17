@@ -102,7 +102,7 @@ use adk_rust::harness::personal::PersonalAgent;
 use adk_rust::model::GeminiModel;
 
 fn build() -> anyhow::Result<Arc<HarnessAgent>> {
-    let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.8-flash")?);
     let agent = PersonalAgent::builder()
         .name("assistant")
         .model(model)

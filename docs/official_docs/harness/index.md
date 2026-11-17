@@ -35,7 +35,7 @@ use adk_rust::UserId;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.8-flash")?);
     let harness = HarnessAgent::builder("harness")
         .model(model)
         .workspace(Workspace::new(".").allow_bash(true))

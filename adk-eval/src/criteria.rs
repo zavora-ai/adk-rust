@@ -240,7 +240,7 @@ impl Default for SemanticMatchConfig {
 }
 
 fn default_judge_model() -> String {
-    "gemini-3.7-flash".to_string()
+    "gemini-3.8-flash".to_string()
 }
 
 /// Configuration for rubric-based evaluation

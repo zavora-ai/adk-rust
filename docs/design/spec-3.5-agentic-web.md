@@ -29,7 +29,7 @@ design label.
 | Phase | Item | Status | On `main`, or what is missing |
 |---|---|---|---|
 | 0 | X1–X5 AWP 1.x hygiene | Done | #1094: `build_manifest` carries `access_level` and both schemas; the `PaymentIntent` docs name `adk-gateway` and `evaluate` loses its redundant branch; `FileConsentService` writes atomically on a blocking thread; `AwpConfigError::Serialize`; `sign_payload` and `verify_signature` deprecated |
-| 0 | X6–X8 | Done | #1077: the `awp_agent` example (since moved to adk-playground) on `gemini-3.7-flash`; `ROADMAP.md` matches `STABILITY.md` for the AWP crates; spec 3.4 §1's timeline |
+| 0 | X6–X8 | Done | #1077: the `awp_agent` example (since moved to adk-playground) on `gemini-3.8-flash`; `ROADMAP.md` matches `STABILITY.md` for the AWP crates; spec 3.4 §1's timeline |
 | 0 | X9 | Done | Spec 3.2's implementation status already records `adk-kernel` |
 | 0 | X13 | Done | The protocol repository (`zavora-ai/agenticwebprotocol`, branch `awp-2.0`, private) marks the v1.0 draft and the v0.4 document superseded; no workspace file names `awp.dev` except this spec and the overview, which describe the problem |
 | 1 | AWP 2.0 wire types ([§7.2](#72-the-site-contract)–[§7.8.3](#783-constantly-updated-sites), [§7.10](#710-partitions-and-signals)) | Done | #1083: `awp_types::v2`, re-exported at the crate root; JSON Schemas in `awp-types/schemas/2.0/` (`json-schema`) |
@@ -107,7 +107,7 @@ same pass. No scenario has a `known` gap left: every check passes.
 S10 reports one note, not a failed check: the scenario runs its agents directly, so the
 charter's quiet hours and the jobs' run budgets bind them only by construction (the runs are
 at 10:00 UTC); a served site's kernel defers each proactive run inside the quiet hours and
-bounds it by its run budget. The live set on `gemini-3.7-flash` (`--provider gemini`) did not
+bounds it by its run budget. The live set on `gemini-3.8-flash` (`--provider gemini`) did not
 complete on 2026-10-28: the model answered 503 under load and then the key's free-tier quota
 (20 requests a day) refused every call. The WordPress compose fixture runs in the nightly
 `website-wordpress` job.
@@ -215,7 +215,7 @@ leaves open.
 | [§7.5](#75-events-status-consent-and-commerce), [§7.16](#716-adk-website) `booking` | A calendar driver | `edge::caldav::CalDavCalendar`: every event of a slots collection is a slot, a recurring one per occurrence the server expands (RFC 4791 §9.6.5); a booking is an event in the bookings collection — the slots' own by default — named after its slot and written with `If-None-Match: *`, carrying `X-ADK-SLOT` and `X-ADK-BOOKING-KEY` and no personal data; a separate bookings collection's busy events block the slots they overlap; a slot's `X-ADK-PRICE`, else the calendar's price, is its amount, as last listed | The spec names no calendar model; CalDAV covers most providers, and a conditional write books a slot once across processes and sites | #1181 |
 | [§8.2](#82-server-kernel-surfaces-and-templates) | The views on the web home | The desk keeps the paired device, onboarding answers, the charter under review and the editor's drafts in a `DeskStore` (`data/desk.json`); `adk-website start` mounts no views, `adk-rust website new` does (#1159) | `adk-website` cannot depend on `adk-surface` | #1156, #1173 |
 | [§7.11](#711-charter-store-kpi-tracker-and-earned-autonomy) | A promotion creates a standing rule | The rules live in `data/kernel.db`, which the served back office reads; a promotion to "act with approval" grants rules that change no decision by themselves, since that level holds every non-read call | §7.11's table does not name the rules of that level; they are the ones "act within budget" uses | #1159, #1165, #1173 |
-| [§11](#11-testing-and-live-verification) | Live runs on the Anthropic model and `gemini-3.7-flash` | `claude-sonnet-5-5` only; S8 builds the product's outbox over an in-memory email driver and S18 hands its WhatsApp messages, the three photos downloaded as the adapter does, to the served site's chat route | One provider was run; no email driver or WhatsApp webhook is configured in the fixtures | #1158, #1173, #1235 |
+| [§11](#11-testing-and-live-verification) | Live runs on the Anthropic model and `gemini-3.8-flash` | `claude-sonnet-5-5` only; S8 builds the product's outbox over an in-memory email driver and S18 hands its WhatsApp messages, the three photos downloaded as the adapter does, to the served site's chat route | One provider was run; no email driver or WhatsApp webhook is configured in the fixtures | #1158, #1173, #1235 |
 | [§5](#5-headline-capabilities-and-demonstration-scenarios) S3, A-I4 | Every inventoried URL is served or 301-redirected | Legacy runtime paths the new site does not serve — `/wp-includes/…`, theme and plugin files, `*.php`, WordPress's `/wp-login.php` and `/xmlrpc.php` — answer 410 Gone; after a crawl, a link to a page the crawl could not read becomes its text | A static site has no runtime to redirect them to; a robots-disallowed page was never migrated | #1168 |
 | [§7.8.2](#782-publishing) | The agent product feed | `products/feed.xml` per language: RSS 2.0 with the `g:` product attributes merchant and agent catalogues read; live fields are left out | The spec names no format | #1168 |
 | [§4.4](#44-the-standards-awp-20-binds) | `Content-Usage` from the charter's public terms | Every kind's charter drafts `usage`: `search=y`, and `train-ai=n, search=y` for news and media; the owner reviews it with the charter | A launched site states its preferences from release 1 | #1168 |
@@ -255,7 +255,7 @@ leaves open.
 
 | Item | Spec | State |
 |---|---|---|
-| Live runs | [§11](#11-testing-and-live-verification) | No live run on `gemini-3.7-flash` has completed: on 2026-10-28 the model answered 503 under load and the repository's key is on the free tier (20 requests a day) |
+| Live runs | [§11](#11-testing-and-live-verification) | No live run on `gemini-3.8-flash` has completed: on 2026-10-28 the model answered 503 under load and the repository's key is on the free tier (20 requests a day) |
 | Protocol home | [§13](#13-open-questions) Q1 | The AWP 2.0 text, the well-known URI and `application/awp+json` await a published home and IANA registration |
 
 ## 1. Summary
@@ -1137,7 +1137,7 @@ Spans `website.onboarding.{stage}`, `site.release`, `site.probe`, `awp.request` 
 | X3 | `FileConsentService` writes atomically off the async executor | Whole-file blocking writes ([`consent.rs:163-190`](../../adk-awp/src/consent.rs)) |
 | X4 | `business_context_to_toml` gets its own error variant | It reports serialisation failures as `WatcherError` ([`config.rs:31-33`](../../adk-awp/src/config.rs)) |
 | X5 | The legacy `sign_payload`/`verify_signature` pair is deprecated for Standard Webhooks | Two schemes ([`events.rs:304-327`](../../adk-awp/src/events.rs)) |
-| X6 | The `awp_agent` example moves to `gemini-3.7-flash` | It uses `gemini-2.5-flash` |
+| X6 | The `awp_agent` example moves to `gemini-3.8-flash` | It uses `gemini-2.5-flash` |
 | X7 | `ROADMAP.md` matches `STABILITY.md` for the AWP crates | Stable versus Beta |
 | X8 | Spec 3.4 §1: the OpenAI incident ran 8–19 July 2026, was attributed on 20 July and disclosed on 21 July | Public timeline |
 | X9 | Spec 3.2's implementation-status table reflects that `adk-kernel` exists | It says the crate does not exist |
@@ -1155,7 +1155,7 @@ Spans `website.onboarding.{stage}`, `site.release`, `site.probe`, `awp.request` 
 - **Interoperability.** Web Bot Auth against the draft's test vectors and an external signer; A2A card signatures against A2A v1.0 vectors; the MCP server card against the merged schema; `awp verify` against a site built by a different generator.
 - **Property tests.** Release manifests round-trip; a checkpoint never verifies against a log it does not extend; the sanitiser never emits an element outside its allowlist; manifest filtering never shows a capability above the caller's tier; the autonomy ladder never raises a level without an owner decision.
 - **Soak.** S19 runs nightly for 24 simulated hours against `DirectoryHost` and an S3-compatible emulator behind a caching proxy, recording approval-to-live latency, held batches, false drift alarms, model calls per thousand updates and storage growth of the site log.
-- **Live.** Each scenario has a live run with a real model (the Anthropic live model for the harness, `gemini-3.7-flash` for examples), real Web Bot Auth signing, real email delivery to a maintainers' mailbox, a real static host the maintainers control, and payment rails in sandbox mode only. Documentation claims about routes and defaults are verified by a running program and reviewed by an agent that did not write them.
+- **Live.** Each scenario has a live run with a real model (the Anthropic live model for the harness, `gemini-3.8-flash` for examples), real Web Bot Auth signing, real email delivery to a maintainers' mailbox, a real static host the maintainers control, and payment rails in sandbox mode only. Documentation claims about routes and defaults are verified by a running program and reviewed by an agent that did not write them.
 
 ## 12. Phased delivery
 

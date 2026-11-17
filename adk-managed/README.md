@@ -169,7 +169,7 @@ Declarative agent definition with a builder API:
 use adk_managed::types::{ManagedAgentDef, ModelRef, ToolConfig};
 
 fn main() {
-    let def = ManagedAgentDef::new("my-agent", ModelRef::Shorthand("gemini-3.7-flash".into()))
+    let def = ManagedAgentDef::new("my-agent", ModelRef::Shorthand("gemini-3.8-flash".into()))
         .with_system("You are a helpful assistant.")
         .with_description("Research agent with web search")
         .with_tools(vec![ToolConfig::WebSearch {}]);
@@ -211,7 +211,7 @@ use adk_managed::types::{ModelConfig, ModelRef, Provider};
 
 fn main() {
     // Shorthand: the provider is inferred from the name prefix
-    let _gemini = ModelRef::Shorthand("gemini-3.7-flash".into()); // → Gemini
+    let _gemini = ModelRef::Shorthand("gemini-3.8-flash".into()); // → Gemini
     let _openai = ModelRef::Shorthand("gpt-5.6-terra".into()); // → OpenAI
     let _anthropic = ModelRef::Shorthand("claude-sonnet-4-6".into()); // → Anthropic
 

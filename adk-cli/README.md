@@ -93,7 +93,7 @@ Every provider `adk_model::ModelProvider` names, and mistral.rs:
 
 | Provider | Flag | Feature | Default Model | Env Var |
 |----------|------|---------|---------------|---------|
-| Gemini | `--provider gemini` | `gemini` | `gemini-3.7-flash` | `GOOGLE_API_KEY` / `GEMINI_API_KEY` |
+| Gemini | `--provider gemini` | `gemini` | `gemini-3.8-flash` | `GOOGLE_API_KEY` / `GEMINI_API_KEY` |
 | OpenAI | `--provider openai` | `openai` | `gpt-5.6-terra` | `OPENAI_API_KEY` |
 | Anthropic | `--provider anthropic` | `anthropic` | `claude-sonnet-5` | `ANTHROPIC_API_KEY` |
 | DeepSeek | `--provider deepseek` | `deepseek` | `deepseek-flash` | `DEEPSEEK_API_KEY` |

@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create an agent (any model — Gemini, OpenAI, Anthropic, etc.)
     let agent = client.create_agent(CreateAgentParams {
         name: "Hello Agent".into(),
-        model: "gemini-3.7-flash".into(),
+        model: "gemini-3.8-flash".into(),
         system: Some("You are brief and friendly.".into()),
         ..Default::default()
     }).await?;
@@ -185,7 +185,7 @@ async fn run(client: &EnterpriseClient) -> Result<(), Box<dyn std::error::Error>
     // Shorthand (provider inferred from name)
     client
         .create_agent(CreateAgentParams {
-            model: "gemini-3.7-flash".into(),
+            model: "gemini-3.8-flash".into(),
             ..Default::default()
         })
         .await?;

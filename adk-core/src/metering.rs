@@ -56,7 +56,7 @@
 //! let tracker = Arc::new(BudgetTracker::new(RunBudget::new().max_model_calls(10)));
 //! let scope = ModelCallScope::for_run(&config, "my-app", "assistant").with_budget(tracker);
 //! assert!(!scope.is_unmetered());
-//! assert_eq!(scope.spend_key("gemini-3.7-flash").unwrap().vendor.as_deref(), Some("gemini"));
+//! assert_eq!(scope.spend_key("gemini-3.8-flash").unwrap().vendor.as_deref(), Some("gemini"));
 //! ```
 
 use std::fmt;
@@ -92,7 +92,7 @@ pub const UNBOUNDED_HOLD_MICRO_USD: u64 = i64::MAX as u64;
 /// use adk_core::{LlmRequest, LlmSpendEstimate};
 ///
 /// let estimate = LlmSpendEstimate::per_call(20_000).with_output_price(10_000_000);
-/// let mut request = LlmRequest::new("gemini-3.7-flash", vec![]);
+/// let mut request = LlmRequest::new("gemini-3.8-flash", vec![]);
 /// assert_eq!(estimate.estimate(&request), 20_000);
 ///
 /// request.config = Some(adk_core::GenerateContentConfig {
@@ -155,7 +155,7 @@ impl Default for LlmSpendEstimate {
 /// ```
 /// use adk_core::vendor_for_model;
 ///
-/// assert_eq!(vendor_for_model("models/gemini-3.7-flash"), "gemini");
+/// assert_eq!(vendor_for_model("models/gemini-3.8-flash"), "gemini");
 /// assert_eq!(vendor_for_model("grok-4.6"), "xai");
 /// assert_eq!(vendor_for_model("muse-spark-1.3"), "muse");
 /// assert_eq!(vendor_for_model("my-fine-tune"), "unknown");

@@ -9,7 +9,7 @@
 //! ```rust,ignore
 //! use adk_model::bedrock::{BedrockClient, BedrockConfig};
 //!
-//! let config = BedrockConfig::new("us-east-1", "us.anthropic.claude-sonnet-4-6");
+//! let config = BedrockConfig::new("us-east-1", "us.anthropic.claude-sonnet-5-5");
 //! let client = BedrockClient::new(config).await?;
 //! ```
 //!

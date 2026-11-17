@@ -49,7 +49,7 @@ cargo adk new my_agent --template tools --addon docker --addon telemetry
 | `tools` | Agent with `#[tool]` macro custom tools + schemars schema generation |
 | `rag` | RAG pipeline — Gemini embeddings, in-memory vector store, document ingestion |
 | `api` | Axum REST server, health check, and streaming endpoints |
-| `openai` | OpenAI `gpt-5.6-terra` agent with console |
+| `openai` | OpenAI `gpt-6.1-sol` agent with console |
 | `a2a` | A2A protocol agent with `A2aServer` builder and agent card (alias for `a2a-server`) |
 
 Run `cargo adk templates` for every template, including the workflow agent types and the
@@ -153,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
     let api_key = std::env::var("OPENAI_API_KEY")?;
 
     let model = adk_rust::model::openai::OpenAIClient::new(
-        adk_rust::model::openai::OpenAIConfig::new(&api_key, "gpt-5.6-terra"),
+        adk_rust::model::openai::OpenAIConfig::new(&api_key, "gpt-6.1-sol"),
     )?;
 
     let agent: Arc<dyn Agent> = Arc::new(
@@ -279,14 +279,14 @@ Or scaffold with a provider: `cargo adk new my-agent --provider openai`
 
 ```rust
 let api_key = std::env::var("OPENAI_API_KEY")?;
-let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-5.6-terra"))?;
+let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-6.1-sol"))?;
 ```
 
 ### Anthropic
 
 ```rust
 let api_key = std::env::var("ANTHROPIC_API_KEY")?;
-let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-5"))?;
+let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-5-5"))?;
 ```
 
 ### DeepSeek
@@ -315,9 +315,9 @@ let model = OllamaModel::new(OllamaConfig::new("llama3.2"))?;
 
 | Provider | Model Examples | Feature Flag |
 |----------|---------------|--------------|
-| Gemini | `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview` | (default) |
-| OpenAI | `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.6-luna` | `openai` |
-| Anthropic | `claude-sonnet-5`, `claude-opus-5`, `claude-fable-5` | `anthropic` |
+| Gemini | `gemini-3.8-flash`, `gemini-4-hydrogen`, `gemini-4-carbon`, `gemini-3.5-flash-lite` | (default) |
+| OpenAI | `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-luna`, `gpt-5.6-terra` | `openai` |
+| Anthropic | `claude-sonnet-5-5`, `claude-fable-5-2`, `claude-opus-5-5`, `claude-haiku-5-5` | `anthropic` |
 | DeepSeek | `deepseek-flash`, `deepseek-v4-pro` | `deepseek` |
 | Groq | `openai/gpt-oss-120b`, `openai/gpt-oss-20b` | `groq` |
 | Ollama | Any pulled model, such as `qwen3.5` or `llama3.2` | `ollama` |

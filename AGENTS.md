@@ -355,16 +355,22 @@ Use current-generation models. Gemini 2.0 models were shut down on June 1, 2026.
 
 | Use case | Model ID | Notes |
 |----------|----------|-------|
-| Default / general | `gemini-3.7-flash` | Default in `adk-gemini` and `adk-model` |
+| Default / general | `gemini-3.8-flash` | Default in `adk-gemini` and `adk-model` |
 | Cost-efficient / high-volume | `gemini-3.5-flash-lite` | Fast routing and high-volume work |
-| Advanced reasoning | `gemini-3.1-pro-preview` | Preview reasoning model |
-| Image generation | `gemini-3.1-flash-image` | Native image output |
+| Advanced reasoning | `gemini-4-carbon` | Strongest reasoning model; `gemini-4-argon` is the efficient one |
+| Image generation | `gemini-nano-banana-2.1` | Native image output |
 | Live voice | `gemini-3.1-flash-live-preview` | Realtime audio and video; default in `adk-realtime` and `adk-model` |
 | Live voice, newer model | `gemini-3.8-live` | Built-in reasoning, no thinking level; tools declared `BLOCKING` |
 | Live voice with configurable reasoning | `gemini-3.8-live-extended-thinking` | `RealtimeConfig::with_thinking_level` (low, medium, high; ADK sends medium unless set); tools run non-blocking |
 
 **Avoid retired models:** `gemini-2.0-flash`, `gemini-2.0-flash-lite`,
-`gemini-3.1-flash-lite-preview`, and `gemini-3-pro-preview`.
+`gemini-3.1-flash-lite-preview`, `gemini-3-pro-preview`, and
+`gemini-2.5-computer-use-preview-10-2025`.
+
+**Avoid deprecated models:** `gemini-3.7-flash` (routed to `gemini-3.8-flash`),
+`gemini-3.5-flash`, `gemini-3.1-flash-image`, and `gemini-2.5-pro` / `gemini-2.5-flash`
+(shut down on December 1, 2026). `adk-model/src/catalog.rs` lists every provider's
+deprecated and retired IDs.
 
 ### adk-realtime
 

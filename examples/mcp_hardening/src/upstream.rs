@@ -50,7 +50,7 @@ impl ScriptedGemini {
 
     /// The real Gemini client, pointed at this endpoint.
     pub fn model(&self) -> anyhow::Result<GeminiModel> {
-        Ok(GeminiModel::new_with_base_url("scripted", "gemini-3.7-flash", &self.base_url)?)
+        Ok(GeminiModel::new_with_base_url("scripted", "gemini-3.8-flash", &self.base_url)?)
     }
 
     pub fn requests(&self) -> usize {
@@ -110,7 +110,7 @@ async fn gemini(State(state): State<Arc<GeminiState>>, uri: Uri, body: Bytes) ->
             "index": 0
         }],
         "usageMetadata": { "promptTokenCount": 8, "candidatesTokenCount": 4, "totalTokenCount": 12 },
-        "modelVersion": "gemini-3.7-flash"
+        "modelVersion": "gemini-3.8-flash"
     });
     if uri.path().ends_with(":streamGenerateContent") {
         ([(header::CONTENT_TYPE, "text/event-stream")], format!("data: {reply}\r\n\r\n"))

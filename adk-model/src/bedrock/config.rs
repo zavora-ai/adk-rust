@@ -13,14 +13,14 @@ use serde::{Deserialize, Serialize};
 /// use adk_model::bedrock::BedrockCacheTtl;
 ///
 /// let ttl = BedrockCacheTtl::FiveMinutes; // default
-/// let ttl = BedrockCacheTtl::OneHour;     // Claude Opus 4.5, Haiku 4.5, Sonnet 4.5
+/// let ttl = BedrockCacheTtl::OneHour;     // Claude 4.5 and later
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BedrockCacheTtl {
     /// 5-minute TTL (default, supported by all cacheable models).
     #[default]
     FiveMinutes,
-    /// 1-hour TTL (supported by Claude Opus 4.5, Haiku 4.5, Sonnet 4.5).
+    /// 1-hour TTL (supported by Claude Opus 4.5, Haiku 4.5, Sonnet 4.5 and later Claude models).
     OneHour,
 }
 
@@ -57,22 +57,23 @@ pub struct BedrockCacheConfig {
 ///
 /// # Inference Profiles
 ///
-/// Newer Bedrock models require cross-region inference profile IDs
-/// (prefixed with `us.` or `global.`) instead of raw model IDs.
+/// Newer Bedrock models require cross-region inference profile IDs (prefixed with a
+/// geography such as `us.`, `eu.`, `jp.` or `apac.`, or with `global.`) instead of raw model
+/// IDs; a request with the base model ID fails with HTTP 400.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use adk_model::bedrock::BedrockConfig;
 ///
-/// // Default: us-east-1, Claude Sonnet 4.6, prompt caching enabled
+/// // Default: us-east-1, Claude Sonnet 5.5, prompt caching enabled
 /// let config = BedrockConfig::default();
 ///
 /// // Custom region and model
-/// let config = BedrockConfig::new("eu-west-1", "us.anthropic.claude-haiku-4-5-20251001-v1:0");
+/// let config = BedrockConfig::new("eu-west-1", "eu.anthropic.claude-haiku-5-5");
 ///
 /// // With a custom endpoint (e.g., VPC endpoint)
-/// let config = BedrockConfig::new("us-west-2", "us.anthropic.claude-sonnet-4-6")
+/// let config = BedrockConfig::new("us-west-2", "us.anthropic.claude-sonnet-5-5")
 ///     .with_endpoint_url("https://vpce-xxx.bedrock-runtime.us-west-2.vpce.amazonaws.com");
 ///
 /// // Disable prompt caching
@@ -82,7 +83,7 @@ pub struct BedrockCacheConfig {
 pub struct BedrockConfig {
     /// AWS region for the Bedrock endpoint (e.g., `"us-east-1"`).
     pub region: String,
-    /// Bedrock model identifier (e.g., `"us.anthropic.claude-sonnet-4-6"`).
+    /// Bedrock model identifier (e.g., `"us.anthropic.claude-sonnet-5-5"`).
     pub model_id: String,
     /// Optional custom endpoint URL (e.g., a VPC endpoint).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -101,7 +102,7 @@ impl Default for BedrockConfig {
     fn default() -> Self {
         Self {
             region: "us-east-1".to_string(),
-            model_id: "us.anthropic.claude-sonnet-4-6".to_string(),
+            model_id: "us.anthropic.claude-sonnet-5-5".to_string(),
             endpoint_url: None,
             prompt_caching: Some(BedrockCacheConfig::default()),
         }

@@ -33,7 +33,7 @@ scaffold to running on its own.
 
 | Provider | Feature | Catalog default model |
 |----------|---------|-----------------------|
-| Gemini | `gemini` (in every tier) | `gemini-3.7-flash` |
+| Gemini | `gemini` (in every tier) | `gemini-3.8-flash` |
 | OpenAI | `openai` | `gpt-5.6-terra` |
 | Anthropic | `anthropic` | `claude-sonnet-5` |
 | DeepSeek | `deepseek` | `deepseek-flash` |
@@ -80,7 +80,7 @@ use adk_rust::prelude::*;
 async fn main() -> AnyhowResult<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
+    let model = GeminiModel::new(&api_key, "gemini-3.8-flash")?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .instruction("You are a helpful assistant.")

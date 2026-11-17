@@ -58,7 +58,7 @@ impl ProviderOrigin {
     /// ```rust
     /// use adk_core::history::ProviderOrigin;
     ///
-    /// let origin = ProviderOrigin::new("gemini", "gemini-3.7-flash");
+    /// let origin = ProviderOrigin::new("gemini", "gemini-3.8-flash");
     /// assert_eq!(origin.provider, "gemini");
     /// ```
     pub fn new(provider: impl Into<String>, model: impl Into<String>) -> Self {
@@ -221,7 +221,7 @@ pub fn strip_native(content: &mut Content) {
 /// assert_eq!(for_owner[0].parts.len(), 1);
 ///
 /// let mut for_other = vec![turn];
-/// retain_replayable(&mut for_other, &ProviderOrigin::new("gemini", "gemini-3.7-flash"));
+/// retain_replayable(&mut for_other, &ProviderOrigin::new("gemini", "gemini-3.8-flash"));
 /// assert!(for_other.is_empty());
 /// ```
 pub fn mark_origin(content: &mut Content, origin: Option<&ProviderOrigin>) {

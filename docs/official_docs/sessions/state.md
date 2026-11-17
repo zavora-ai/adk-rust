@@ -310,7 +310,7 @@ State values can be injected into agent instructions using `{key}` syntax:
 use adk_rust::prelude::*;
 use std::sync::Arc;
 
-let model = GeminiModel::new(&std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?;
+let model = GeminiModel::new(&std::env::var("GOOGLE_API_KEY")?, "gemini-3.8-flash")?;
 let agent = LlmAgentBuilder::new("personalized_assistant")
     .instruction("You are helping {user:name} with {topic}. Their preferred language is {user:language?}.")
     .model(Arc::new(model))

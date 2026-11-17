@@ -28,7 +28,7 @@
 //! use adk_managed::types::{ManagedAgentDef, ModelRef};
 //!
 //! let def: ManagedAgentDef =
-//!     HarnessDef::new("reviewer", ModelRef::Shorthand("gemini-3.7-flash".into()))
+//!     HarnessDef::new("reviewer", ModelRef::Shorthand("gemini-3.8-flash".into()))
 //!         .with_mode(HarnessMode::Plan)
 //!         .with_shell(ShellPolicy::none())
 //!         .into();
@@ -116,7 +116,7 @@ pub const INVALID_HARNESS_DEF_CODE: &str = "harness.managed.invalid_def";
 /// use adk_harness::packs::managed::{HarnessDef, MemberDef};
 /// use adk_managed::types::{ManagedAgentDef, ModelRef};
 ///
-/// let def = HarnessDef::new("builder", ModelRef::Shorthand("gpt-5.6-terra".into()))
+/// let def = HarnessDef::new("builder", ModelRef::Shorthand("gpt-6.1-sol".into()))
 ///     .with_mode(HarnessMode::Ask)
 ///     .with_member(MemberDef::new("tester", "Runs the test suite.", "Run the tests and report."));
 /// let wire: ManagedAgentDef = def.into();

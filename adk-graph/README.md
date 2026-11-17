@@ -106,7 +106,7 @@ fn text_into(channel: &'static str) -> impl Fn(&[Event]) -> HashMap<String, Valu
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?);
 
     // Create LLM agents
     let translator = LlmAgentBuilder::new("translator")
