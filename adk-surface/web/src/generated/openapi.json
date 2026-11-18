@@ -3191,7 +3191,7 @@
         "type": "object"
       },
       "DrawnDepth": {
-        "description": "Components a home view holds, presented with CSS 3D (see the [module](self)).",
+        "description": "Components a home view holds, presented with CSS 3D, as `HomeNode::Depth`.",
         "properties": {
           "effect": {
             "$ref": "#/components/schemas/DepthEffect",
@@ -3495,7 +3495,7 @@
         "type": "object"
       },
       "DrawnScene": {
-        "description": "A 3D scene a home view draws (see the [module](self)).",
+        "description": "A 3D scene a home view draws, as `HomeNode::Scene`.",
         "properties": {
           "axes": {
             "anyOf": [

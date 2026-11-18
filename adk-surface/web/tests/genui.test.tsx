@@ -281,6 +281,35 @@ describe("the ported A2UI parts", () => {
     expect(getPath(setPath({ rows: [{ a: 1 }] }, "/rows/0/a", 2), "/rows/0/a")).toBe(2);
   });
 
+  it("reads A2UI 1.0 into the same surfaces, one createSurface carrying the drawing", () => {
+    const store = new SurfaceStore();
+    applyMessages(
+      store,
+      parseJsonl(
+        [
+          JSON.stringify({
+            version: "1.0",
+            createSurface: {
+              surfaceId: "s",
+              catalogId: "https://adk-rust.com/a2ui/catalogs/forms/1.0/catalog.json",
+              components: [
+                { id: "root", component: "Text", text: { "@path": "/to" }, "@accessibility": { label: "To" }, extra: { "@@type": "x" } },
+              ],
+              dataModel: { to: "ana" },
+            },
+          }),
+          JSON.stringify({ version: "1.0", updateDataModel: { surfaceId: "s", path: "/to", value: null } }),
+        ].join("\n"),
+      ),
+    );
+    const surface = store.get("s");
+    expect(surface?.components.get("root")).toEqual({ id: "root", component: "Text", text: { path: "/to" }, accessibility: { label: "To" }, extra: { "@type": "x" } });
+    expect(surface?.dataModel).toEqual({});
+    expect(() => parseJsonl('{"version":"1.0","updateDataModel":{"surfaceId":"s","path":"/a"}}')).toThrow(/requires value/);
+    expect(() => parseJsonl('{"version":"1.0","updateComponents":{"surfaceId":"s","components":[{"id":"r","component":"Text","text":{"@x":1}}]}}')).toThrow(/reserved key/);
+    expect(() => parseJsonl('{"version":"2.0","deleteSurface":{"surfaceId":"s"}}')).toThrow(/line 1/);
+  });
+
   it("never follows a link to this computer or a script", () => {
     expect(sanitizeUrl("https://example.com/a", "anchor")).toBe("https://example.com/a");
     expect(sanitizeUrl("http://127.0.0.1:8080/", "anchor")).toBeNull();

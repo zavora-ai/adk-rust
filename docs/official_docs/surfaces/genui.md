@@ -23,7 +23,9 @@ adk-surface = { version = "3.0.0", features = ["web", "genui"] }
 |---|---|---|
 | `DrawToolset` | `genui` | The render tools: `render_form`, `render_card`, `render_table`, `render_screen`, `patch_surface`, `delete_surface` |
 | `Validator`, `Catalog::forms` | `genui` | Rule 5, and the `forms` 1.0 catalog the tools draw in |
-| The A2UI v0.9.1 model (`A2uiMessage`, `encode_jsonl`, `decode_jsonl`) | `genui` | The wire format a drawing is stored in |
+| The A2UI v0.9.1 model (`A2uiMessage`, `encode_jsonl`, `decode_jsonl`) | `genui` | The internal form a drawing is stored and checked in |
+| `A2uiVersion`, `to_wire`, `from_wire`, `components_in` | `genui` | A2UI 1.0 (the default) and v0.9.1 on the wire. See [A2UI versions](#a2ui-versions) |
+| `ValidationResult`, `Severity` | `genui` | A refusal, or a warning, in A2UI 1.0's `ValidationResult` shape |
 | The thread items `drawn`, `drawnRefused` and `drawnSent`, and the `submitDrawn` command | every `web` build | The page and the OpenAPI document are the same on every server; one built without `genui` never projects a drawing and answers `submitDrawn` with `surface.unsupported` |
 | `GET /api/surface/genui/capabilities`, `GET /api/surface/genui/sessions/{session}/forms` | `web` and `genui` | What the home claims of A2UI, AG-UI and MCP Apps, and each sent form's state |
 | The terminal's box and fill-in pane | `tui` and `genui` | See [In the terminal](#in-the-terminal) |
@@ -92,7 +94,7 @@ run side by side, so they need no approval in any mode.
 | `render_form` | A title, fields (`text`, `longText`, `number`, `email`, `date`, `checkbox`, `choice`) and actions |
 | `render_card` | A title and label and value rows |
 | `render_table` | A title, column headings and rows of text or numbers |
-| `render_screen` | A2UI v0.9.1 components of the `forms` catalog, one with id `root`, a data model and actions |
+| `render_screen` | A2UI components of the `forms` catalog, in 1.0's syntax or v0.9.1's, one with id `root`, a data model and actions |
 | `patch_surface` | The next version of a surface: data model changes, components added or replaced by id, components removed |
 | `delete_surface` | Removes a surface from the thread |
 
@@ -122,6 +124,28 @@ Drawing a surface again under its id makes its next version. The thread collapse
 version to "Earlier version · 10:02" and says "Finance changed this form at 10:05" over the
 new one.
 
+### A2UI versions
+
+A drawing is stored and checked in one internal form, and written in the version a renderer
+speaks: A2UI 1.0 by default, v0.9.1 for a renderer that offers nothing newer.
+
+| | A2UI 1.0 | v0.9.1 |
+|---|---|---|
+| A binding | `{"@path": "/to"}` | `{"path": "/to"}` |
+| A function call | `{"@call": "formatNumber", "args": {…}}` | `{"call": "formatNumber", "args": {…}}` |
+| Accessibility and checks | `@accessibility`, `@checks` | `accessibility`, `checks` |
+| A new surface | one `createSurface` carrying `components` and `dataModel` | `createSurface`, `updateComponents`, `updateDataModel` |
+| An extension component | `@catalogId` names its catalog; the surface's default is `forms` | the drawing's one catalog |
+| Removing a data path | `updateDataModel` with `value: null` | no `value` |
+
+`render_screen` and `patch_surface` read components in either syntax. `GenuiAgUi` writes
+drawings in 1.0 (`with_a2ui_version(A2uiVersion::V0_9_1)` for an older client) and reads
+activities a client sends back in either. Reading 1.0 refuses what would change meaning in the
+internal form: an unknown `@` key, a literal object whose only key is `path` or that has a
+`call` key, `@metadata`, `@index` and `theme`. A refusal comes with A2UI 1.0's
+`ValidationResult` (`{"valid": false, "severity": "error", "code": …, "message": …}`) after its
+plain-words message.
+
 ### What a drawing may not contain
 
 Every drawing is checked on the server before it is shown, on the strings a person reads: its
@@ -134,6 +158,7 @@ checked as a whole surface again.
 | A decision's single words — Edit, Deny, Done, Approve, Approved, Decided — as a whole label or heading; "Edit address" is shown (wave 4 decision 20) | `genui.refused.looks_like_decision` | The same |
 | A password or other secret field | `genui.refused.asks_for_secret` | "Finance asked for a password in a form. Use Take over for passwords." |
 | A component outside the catalog, a link, an undeclared action, an action naming a render tool or a kernel tool, more than the limits (`MAX_COMPONENTS`, `MAX_DEPTH`, `MAX_TEXT_CHARS`, `MAX_DRAWING_BYTES`, `MAX_ACTIONS`) | `genui.refused.cannot_show` | "Finance tried to show something this home can't show." |
+| A button that speaks as the person (A2UI 1.0 `userMessage`), a field or button hidden from screen readers (`accessibility.hidden`), an echoed surface that asks for the whole data model on every message (`sendDataModel`) | `genui.refused.cannot_show` | The same |
 
 A refused drawing is a tool error: the agent reads why and what to draw instead. The thread
 shows the plain notice above, and the technical reason — "catalog forms 1.0 · component c7
@@ -267,8 +292,8 @@ drawings with their technical reasons.
 
 | Protocol | Claim | Status |
 |---|---|---|
-| A2UI (`a2ui`) | Version 0.9.1 | Supported |
-| A2UI | Version 1.0 | Candidate |
+| A2UI (`a2ui`) | Version 1.0 | Supported |
+| A2UI | Version 0.9.1 | Legacy (written for renderers that offer nothing newer) |
 | A2UI | Trusted component catalog; no approval controls in drawn UI | Supported (security) |
 | AG-UI (`ag_ui`) | a2ui-surface activity; interrupts for a drawn submit | Supported (transport) where `GenuiAgUi` is set; planned, "Not set on this server", where not |
 | MCP Apps (`mcp_apps`) | Version 2026-01-26; app tool calls governed | Supported with `genui-apps` where an apps host is mounted; planned without |

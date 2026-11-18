@@ -3,7 +3,8 @@
 //!
 //! | Part | What | Feature |
 //! |---|---|---|
-//! | `A2uiMessage` and the rest of the A2UI v0.9.1 model | The wire format an agent draws in | `genui` |
+//! | `A2uiMessage` and the rest of the A2UI v0.9.1 model | The internal form a drawing is stored and checked in | `genui` |
+//! | `A2uiVersion`, `to_wire`, `from_wire` | A2UI 1.0 (the default) and v0.9.1 on the wire | `genui` |
 //! | `Catalog::forms` | The `forms` 1.0 catalog: the A2UI basic catalog without images, icons, media and modals, embedded | `genui` |
 //! | `Validator` | Rule 5: the catalog, no secrets, no links, declared actions only, and no decision's words in any string a person reads, resolved on the server | `genui` |
 //! | `DrawToolset` | `render_form`, `render_card`, `render_table`, `render_screen`, `patch_surface`, `delete_surface` | `genui` |
@@ -48,6 +49,8 @@ mod submit;
 mod validate;
 #[cfg(feature = "genui")]
 mod view;
+#[cfg(feature = "genui")]
+mod wire;
 
 #[cfg(feature = "genui")]
 pub use a2ui::{
@@ -100,11 +103,15 @@ pub use validate::{
     MAX_SCENE_BYTES, MAX_SCENE_GRID_SIDE, MAX_SCENE_GROUP_DEPTH, MAX_SCENE_INSTANCES,
     MAX_SCENE_LIGHTS, MAX_SCENE_LINE_POINTS, MAX_SCENE_MOTIONS, MAX_SCENE_OBJECTS,
     MAX_SCENE_PANELS, MAX_SCENE_TEXT_CHARS, MAX_SCENE_TEXTS, MAX_SCENES, MAX_SHOWN, MAX_TEXT_CHARS,
-    RESERVED_LABELS, RESERVED_PHRASES, ResolvedText, SurfaceDraft, ValidatedSurface, Validator,
-    reserved,
+    RESERVED_LABELS, RESERVED_PHRASES, ResolvedText, Severity, SurfaceDraft, ValidatedSurface,
+    ValidationResult, Validator, reserved,
 };
 #[cfg(feature = "genui")]
 pub use view::SHOWN_ROWS;
+#[cfg(feature = "genui")]
+pub use wire::{
+    A2uiVersion, WireError, component_to_v1_0, components_in, from_wire, is_v1_0_syntax, to_wire,
+};
 
 #[cfg(feature = "genui")]
 pub(crate) use app_view::app_name;

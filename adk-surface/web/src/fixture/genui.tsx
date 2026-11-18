@@ -388,8 +388,8 @@ export function capabilities(): GenuiCapabilities {
         id: "a2ui",
         name: "A2UI",
         claims: [
-          claim("version_0_9_1", "Version 0.9.1", "supported", "runtime"),
-          claim("version_1_0", "Version 1.0", "candidate", "runtime"),
+          claim("version_1_0", "Version 1.0", "supported", "runtime"),
+          claim("version_0_9_1", "Version 0.9.1", "legacy", "runtime"),
           claim("trusted_catalog", "Trusted component catalog", "supported", "security"),
           claim("no_approval_controls", "No approval controls in drawn UI", "supported", "security"),
         ],

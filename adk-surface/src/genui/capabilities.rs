@@ -1,4 +1,4 @@
-//! This home's claims (spec 3.3 §6.1 `genui`): A2UI v0.9.1 on the `forms` 1.0 catalog, with
+//! This home's claims (spec 3.3 §6.1 `genui`): A2UI 1.0 (and v0.9.1) on the `forms` 1.0 catalog, with
 //! no approval controls in anything drawn; drawings over AG-UI; and, with `genui-apps`, a
 //! governed MCP Apps host.
 
@@ -115,15 +115,15 @@ pub fn capabilities_wired(wiring: GenuiWiring) -> GenuiCapabilities {
 /// ```
 pub fn capabilities_with(wiring: GenuiWiring, catalogs: &Catalogs) -> GenuiCapabilities {
     use ClaimScope::{Runtime, Security, Transport};
-    use ClaimStatus::{Candidate, Supported};
+    use ClaimStatus::{Legacy, Supported};
     GenuiCapabilities {
         protocols: vec![
             ProtocolClaims {
                 id: "a2ui".into(),
                 name: "A2UI".into(),
                 claims: vec![
-                    claim("version_0_9_1", "Version 0.9.1", Supported, Runtime),
-                    claim("version_1_0", "Version 1.0", Candidate, Runtime),
+                    claim("version_1_0", "Version 1.0", Supported, Runtime),
+                    claim("version_0_9_1", "Version 0.9.1", Legacy, Runtime),
                     claim("trusted_catalog", "Trusted component catalog", Supported, Security),
                     claim(
                         "no_approval_controls",

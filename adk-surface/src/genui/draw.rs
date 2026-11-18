@@ -461,7 +461,8 @@ struct ScreenParams {
     /// The title above it.
     #[serde(default)]
     title: Option<String>,
-    /// A2UI v0.9.1 components of the forms catalog, one with id `root`.
+    /// A2UI components of the forms catalog, one with id `root`, in 1.0's syntax
+    /// (`{"@path": "/x"}`) or v0.9.1's (`{"path": "/x"}`).
     components: Vec<Value>,
     /// The data model the components bind to.
     #[serde(default)]
@@ -508,7 +509,7 @@ struct DeleteParams {
 }
 
 /// The forms catalog's `render_screen` description, unchanged for a `forms` toolset.
-const FORMS_SCREEN_DESCRIPTION: &str = "Show the person a screen of A2UI v0.9.1 components from \
+const FORMS_SCREEN_DESCRIPTION: &str = "Show the person a screen of A2UI 1.0 (or v0.9.1) components from \
      the forms catalog (Text, Row, Column, List, Card, Tabs, Divider, Button, TextField, \
      CheckBox, ChoicePicker, Slider, DateTimeInput), one with id root. Buttons dispatch only \
      declared actions, which ask the person before a tool runs.";
@@ -520,10 +521,10 @@ fn screen_description(catalog: &Catalog) -> String {
     }
     let added: Vec<&str> = catalog.extensions().collect();
     let mut out = format!(
-        "Show the person a screen of A2UI v0.9.1 components from the {} catalog, one with id \
+        "Show the person a screen of A2UI 1.0 (or v0.9.1) components from the {} catalog, one with id \
          root: the forms components (Text, Row, Column, List, Card, Tabs, Divider, Button, \
          TextField, CheckBox, ChoicePicker, Slider, DateTimeInput) and {}. Bind data with \
-         {{\"path\": \"/...\"}} into dataModel.",
+         {{\"@path\": \"/...\"}} (or v0.9.1's {{\"path\": \"/...\"}}) into dataModel.",
         catalog.label(),
         added.join(", ")
     );
@@ -544,7 +545,7 @@ fn screen_schema(catalog: &Catalog) -> Value {
         && let Some(components) = schema.pointer_mut("/properties/components")
     {
         components["description"] = json!(format!(
-            "A2UI v0.9.1 components of the {} catalog, one with id `root`.",
+            "A2UI components of the {} catalog, one with id `root`, in 1.0's syntax or v0.9.1's.",
             catalog.label()
         ));
     }
@@ -569,8 +570,16 @@ fn invalid(tool: &str, error: impl std::fmt::Display) -> AdkError {
     )
 }
 
+/// A refusal as the tool's error: its message, then the same in A2UI 1.0's `ValidationResult`
+/// shape so an agent can act on its code.
 fn refused(refusal: &DrawRefusal) -> AdkError {
-    AdkError::new(ErrorComponent::Tool, ErrorCategory::Forbidden, refusal.code(), refusal.message())
+    let result = serde_json::to_string(&refusal.validation_result()).unwrap_or_default();
+    AdkError::new(
+        ErrorComponent::Tool,
+        ErrorCategory::Forbidden,
+        refusal.code(),
+        format!("{}\nvalidationResult: {result}", refusal.message()),
+    )
 }
 
 fn params<T: DeserializeOwned>(tool: &str, args: Value) -> Result<T> {
@@ -977,7 +986,10 @@ impl DrawTool {
             let id = component.get("id").and_then(Value::as_str).unwrap_or_default();
             !params.remove.iter().any(|removed| removed == id)
         });
-        for component in params.components {
+        let components =
+            super::wire::components_in(params.components, self.shared.validator.catalog())
+                .map_err(|error| invalid(tool, format!("components{error}")))?;
+        for component in components {
             let id = component.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
             match draft
                 .components
@@ -1056,13 +1068,17 @@ impl Tool for DrawTool {
             Op::Table => self.draw(ctx, table(params(tool, args)?)),
             Op::Screen => {
                 let screen: ScreenParams = params(tool, args)?;
+                // Components in A2UI 1.0's syntax are read into the internal form first.
+                let components =
+                    super::wire::components_in(screen.components, self.shared.validator.catalog())
+                        .map_err(|error| invalid(tool, format!("components{error}")))?;
                 self.draw(
                     ctx,
                     SurfaceDraft {
                         surface_id: screen.surface_id,
                         kind: DrawnKind::Screen,
                         title: screen.title,
-                        components: screen.components,
+                        components,
                         data_model: screen.data_model.unwrap_or_else(|| json!({})),
                         actions: screen.actions,
                     },

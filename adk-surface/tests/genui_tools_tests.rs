@@ -364,3 +364,41 @@ async fn a_form_bound_to_a_tool_the_agent_lacks_is_refused() {
         "{error}"
     );
 }
+
+/// A screen written in A2UI 1.0's syntax is drawn and stored in the internal form; a
+/// refusal carries A2UI 1.0's `ValidationResult` (spec 3.3 §6.1 `genui`).
+#[tokio::test]
+async fn a_screen_in_a2ui_1_0_syntax_is_drawn_and_a_refusal_says_so_as_a_validation_result() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let screen = |label: &str| {
+        json!({
+            "surfaceId": "status",
+            "components": [
+                { "id": "root", "component": "Column", "children": ["t"] },
+                { "id": "t", "component": "Text", "text": { "@path": "/status" },
+                  "@accessibility": { "label": label } }
+            ],
+            "dataModel": { "status": "Paid" }
+        })
+    };
+    let script = vec![
+        ScriptedResponse::function_call("render_screen", screen("Invoice status")),
+        ScriptedResponse::function_call("render_screen", screen("Approve")),
+        ScriptedResponse::text("done"),
+    ];
+    let harness = harness(script, sessions, &dir).await;
+
+    let events = send(&harness, "Show the invoice status").await;
+
+    let drawn = drawings(&events);
+    assert_eq!(drawn.len(), 2, "{drawn:?}");
+    let envelope = DrawnEnvelope::from_response(&drawn[0].1).expect("drawn");
+    let draft = envelope.draft().unwrap();
+    assert_eq!(draft.components[1]["text"], json!({ "path": "/status" }));
+    assert_eq!(draft.components[1]["accessibility"], json!({ "label": "Invoice status" }));
+    // A decision's word in an accessibility label is refused like any shown text.
+    let error = drawn[1].1["error"].as_str().unwrap_or_default();
+    assert!(error.contains("Not shown: it looks like a decision"), "{error}");
+    assert!(error.contains("validationResult: {\"valid\":false,\"severity\":\"error\""), "{error}");
+}

@@ -1,9 +1,9 @@
-//! The A2UI v0.9.1 wire model (spec 3.3 §6.1 `genui`): the messages an agent sends a
-//! renderer and a renderer sends back, dynamic strings, the data model, JSON lines, stable
-//! component ids and capability sets.
+//! The A2UI v0.9.1 model (spec 3.3 §6.1 `genui`): the messages an agent sends a renderer and
+//! a renderer sends back, dynamic strings, the data model, JSON lines, stable component ids
+//! and capability sets. It is the internal form a drawing is stored and checked in;
+//! [`super::wire`] writes it in A2UI 1.0 (the default) or v0.9.1 and reads either.
 //!
-//! Ported from `adk-ui` (commit `5a82754`) onto adk-core 3. Only the production v0.9.1
-//! protocol is modelled; the v1.0 release candidate's messages are not.
+//! Ported from `adk-ui` (commit `5a82754`) onto adk-core 3.
 
 use std::collections::BTreeMap;
 
@@ -478,46 +478,68 @@ pub fn stable_id(seed: &str) -> String {
     format!("id_{hash:016x}")
 }
 
-/// The catalogs a renderer or an agent supports, by A2UI version family (A2UI v0.9.1
-/// `client_capabilities.json`, keyed `v0.9` upstream).
+/// The catalogs a renderer or an agent supports, by A2UI version family: A2UI 1.0
+/// `renderer_capabilities.json` keys them `1.0`, and v0.9.1 `client_capabilities.json` keys
+/// them `v0.9`.
 ///
 /// # Example
 ///
 /// ```rust
-/// use adk_surface::genui::{A2uiCapabilities, FORMS_CATALOG_ID};
+/// use adk_surface::genui::{A2uiCapabilities, A2uiVersion, FORMS_CATALOG_ID};
 ///
 /// let wire = serde_json::to_value(A2uiCapabilities::forms()).unwrap();
+/// assert_eq!(wire["1.0"]["supportedCatalogIds"][0], FORMS_CATALOG_ID);
 /// assert_eq!(wire["v0.9"]["supportedCatalogIds"][0], FORMS_CATALOG_ID);
+///
+/// // A renderer that offers only v0.9 is written to in v0.9.1.
+/// let renderer: A2uiCapabilities = serde_json::from_value(serde_json::json!({
+///     "v0.9": { "supportedCatalogIds": [FORMS_CATALOG_ID] }
+/// })).unwrap();
+/// assert_eq!(renderer.preferred(), Some(A2uiVersion::V0_9_1));
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct A2uiCapabilities {
+    /// What 1.0 supports.
+    #[serde(rename = "1.0", default, skip_serializing_if = "Option::is_none")]
+    pub v1_0: Option<CapabilitySet>,
     /// What v0.9 and v0.9.1 support.
     #[serde(rename = "v0.9", default, skip_serializing_if = "Option::is_none")]
     pub v0_9: Option<CapabilitySet>,
 }
 
 impl A2uiCapabilities {
-    /// The `forms` 1.0 catalog only, with no inline catalogs: what this home renders.
+    /// The `forms` 1.0 catalog only, with no inline catalogs, in 1.0 and v0.9.1: what this
+    /// home renders.
     pub fn forms() -> Self {
-        Self {
-            v0_9: Some(CapabilitySet {
-                supported_catalog_ids: vec![FORMS_CATALOG_ID.to_string()],
-                accepts_inline_catalogs: false,
-            }),
-        }
+        let set = CapabilitySet {
+            supported_catalog_ids: vec![FORMS_CATALOG_ID.to_string()],
+            accepts_inline_catalogs: false,
+        };
+        Self { v1_0: Some(set.clone()), v0_9: Some(set) }
     }
 
-    /// Every catalog in `catalogs`, `forms` first, with no inline catalogs: what a home that
-    /// registers extension catalogs renders.
+    /// Every catalog in `catalogs`, `forms` first, with no inline catalogs, in 1.0 and v0.9.1:
+    /// what a home that registers extension catalogs renders.
     pub fn of(catalogs: &Catalogs) -> Self {
-        Self {
-            v0_9: Some(CapabilitySet {
-                supported_catalog_ids: catalogs
-                    .iter()
-                    .map(|catalog| catalog.id().to_string())
-                    .collect(),
-                accepts_inline_catalogs: false,
-            }),
+        let set = CapabilitySet {
+            supported_catalog_ids: catalogs
+                .iter()
+                .map(|catalog| catalog.id().to_string())
+                .collect(),
+            accepts_inline_catalogs: false,
+        };
+        Self { v1_0: Some(set.clone()), v0_9: Some(set) }
+    }
+
+    /// The newest version these capabilities offer, if any.
+    pub fn preferred(&self) -> Option<super::wire::A2uiVersion> {
+        use super::wire::A2uiVersion;
+        if self.v1_0.is_some() {
+            Some(A2uiVersion::V1_0)
+        } else if self.v0_9.is_some() {
+            Some(A2uiVersion::V0_9_1)
+        } else {
+            None
         }
     }
 }
@@ -526,7 +548,7 @@ impl A2uiCapabilities {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CapabilitySet {
-    /// Catalog ids, by preference.
+    /// Catalog ids, by preference. In 1.0 they mix on one surface.
     pub supported_catalog_ids: Vec<String>,
     /// Whether catalogs sent inline are accepted. Drawn surfaces never use one.
     #[serde(default)]

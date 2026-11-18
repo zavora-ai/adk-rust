@@ -1076,7 +1076,7 @@ export interface DrawnCheck {
   message: string;
 }
 
-/** Components a home view holds, presented with CSS 3D (see the [module](self)). */
+/** Components a home view holds, presented with CSS 3D, as `HomeNode::Depth`. */
 export interface DrawnDepth {
   /** How the children are presented. */
   effect: DepthEffect;
@@ -1198,7 +1198,7 @@ export interface DrawnOption {
   value: string;
 }
 
-/** A 3D scene a home view draws (see the [module](self)). */
+/** A 3D scene a home view draws, as `HomeNode::Scene`. */
 export interface DrawnScene {
   /** Named axes, ticks and a floor grid. */
   axes?: SceneAxes | null;
