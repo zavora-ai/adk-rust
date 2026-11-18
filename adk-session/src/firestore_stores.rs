@@ -81,14 +81,47 @@ pub(crate) fn transaction_options() -> FirestoreTransactionOptions {
     FirestoreTransactionOptions::new().with_max_elapsed_time(TRANSACTION_DEADLINE)
 }
 
+/// Whether Firestore reports `error` as retryable, such as a write aborted by contention.
+pub(crate) fn is_retryable(error: &FirestoreError) -> bool {
+    matches!(error, FirestoreError::DatabaseError(db) if db.retry_possible)
+}
+
+/// Runs `attempt` again, with exponential backoff, while it fails with an error
+/// `retryable` accepts and [`TRANSACTION_DEADLINE`] has not passed.
+///
+/// Firestore aborts a write that contends with another for a document and reports the
+/// abort as retryable; its client libraries run such a write again, and so does this.
+pub(crate) async fn retry_while<T, E, F, Fut>(
+    retryable: impl Fn(&E) -> bool,
+    mut attempt: F,
+) -> std::result::Result<T, E>
+where
+    E: std::fmt::Display,
+    F: FnMut() -> Fut,
+    Fut: Future<Output = std::result::Result<T, E>>,
+{
+    let deadline = std::time::Instant::now()
+        + TRANSACTION_DEADLINE.to_std().expect("the transaction deadline is positive");
+    let mut delay = Duration::from_millis(50);
+    loop {
+        match attempt().await {
+            Err(error) if retryable(&error) && std::time::Instant::now() < deadline => {
+                tracing::debug!(error = %error, delay.ms = delay.as_millis(), "retrying firestore write");
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(Duration::from_secs(2));
+            }
+            result => return result,
+        }
+    }
+}
+
 /// Retries a transaction on a read Firestore reports as retryable, such as a contention
 /// abort, and gives up on any other failure.
 pub(crate) fn retry_or_fail(
     error: FirestoreError,
     fail: impl FnOnce(FirestoreError) -> AdkError,
 ) -> BackoffError<AdkError> {
-    let retryable = matches!(&error, FirestoreError::DatabaseError(db) if db.retry_possible);
-    if retryable {
+    if is_retryable(&error) {
         BackoffError::transient(fail(error))
     } else {
         BackoffError::permanent(fail(error))
@@ -1498,6 +1531,39 @@ impl ApprovalStore for FirestoreApprovalStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use firestore::errors::{FirestoreDatabaseError, FirestoreErrorPublicGenericDetails};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// The error the Firestore emulator returns when a contended lock times out.
+    fn aborted(retry_possible: bool) -> FirestoreError {
+        FirestoreError::DatabaseError(FirestoreDatabaseError {
+            public: FirestoreErrorPublicGenericDetails { code: "Aborted".to_string() },
+            details: "Transaction lock timeout.".to_string(),
+            retry_possible,
+        })
+    }
+
+    #[tokio::test]
+    async fn a_write_firestore_aborted_runs_again_until_it_succeeds() {
+        let attempts = AtomicUsize::new(0);
+        let result = retry_while(is_retryable, || async {
+            if attempts.fetch_add(1, Ordering::SeqCst) < 3 { Err(aborted(true)) } else { Ok(7) }
+        })
+        .await;
+        assert_eq!((result.ok(), attempts.into_inner()), (Some(7), 4));
+    }
+
+    #[tokio::test]
+    async fn a_failure_firestore_does_not_retry_is_returned_at_once() {
+        let attempts = AtomicUsize::new(0);
+        let result: std::result::Result<(), _> = retry_while(is_retryable, || async {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            Err(aborted(false))
+        })
+        .await;
+        assert!(matches!(result, Err(FirestoreError::DatabaseError(_))), "{result:?}");
+        assert_eq!(attempts.into_inner(), 1);
+    }
 
     fn snapshot(org: &str) -> OrgSnapshot {
         let total = |agent: Option<&str>, vendor: Option<&str>, micro_usd| AttributedTotal {

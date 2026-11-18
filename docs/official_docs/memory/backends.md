@@ -169,6 +169,11 @@ The SQLite, PostgreSQL, MongoDB, Neo4j, and graph services run **versioned, idem
 migrations** to create and upgrade their schema, so deploying a new version doesn't require
 manual DDL. Construction does not migrate: call the service's `migrate()` on startup.
 
+Replicas that start together can migrate one database at once. PostgreSQL serializes them
+with an advisory lock. On MongoDB and Neo4j every index and constraint is created
+idempotently, a statement that loses a race to create the same rule succeeds, and each
+version is recorded once — with an upsert on MongoDB and `MERGE` on Neo4j.
+
 ## Choosing
 
 - **Building / testing** → InMemory.

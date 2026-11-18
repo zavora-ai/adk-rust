@@ -817,6 +817,8 @@ A session ID is unique within an app, and the owning `user_id` is a field of the
 
 A new session never inherits events left under its path. App names, user IDs, and session IDs are document IDs, so they must not contain `/`.
 
+Firestore aborts a transaction that contends with another for a document. Such a write applied nothing, so the service runs it again from its reads, with backoff, for up to two minutes; a failure Firestore reports as retryable carries `session.firestore.retryable` (`Unavailable`). The subject registry's `ensure` retries its create the same way.
+
 > **Note**: Requires the `firestore` feature flag:
 > ```toml
 > adk-session = { version = "3.0.0", features = ["firestore"] }
@@ -1042,6 +1044,7 @@ On PostgreSQL only tables in the connection's current schema (`current_schema()`
 - **Idempotent**: Running `migrate()` multiple times is safe
 - **Transactional**: Each SQL step runs in its own transaction and is recorded with its version, description, and time
 - **Serialized**: PostgreSQL `migrate()` holds an advisory lock (`PostgresSessionService::ADVISORY_LOCK_KEY`) on one connection for the whole run, so instances starting together do not race
+- **Concurrent**: MongoDB and Neo4j `migrate()` can run from several instances at once. Every index and constraint is created idempotently, a statement that loses a race to create the same rule succeeds, and each version is recorded once — with an upsert on MongoDB and `MERGE` on Neo4j
 
 ## Session Lifecycle
 
