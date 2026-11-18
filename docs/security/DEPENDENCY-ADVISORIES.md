@@ -8,7 +8,7 @@ The purpose of this file is to provide transparency to consumers about the secur
 
 These accepted advisories are also configured in [`.cargo/audit.toml`](../../.cargo/audit.toml) so that `cargo audit` passes in CI while still surfacing new, unreviewed advisories.
 
-**Last reviewed:** 2026-11-15 (3.0.0 release candidate)
+**Last reviewed:** 2026-11-18 (3.0.0 release candidate)
 
 ---
 
@@ -66,7 +66,7 @@ These accepted advisories are also configured in [`.cargo/audit.toml`](../../.ca
 | RUSTSEC-2026-0414, RUSTSEC-2026-0433 | `pulldown-cmark` | Lockfile updated from 0.13.4 to 0.13.6; `adk-site` and `adk-surface` now require 0.13.6. |
 | RUSTSEC-2026-0391, RUSTSEC-2026-0398, RUSTSEC-2026-0403, RUSTSEC-2026-0410 | `zstd`, `zstd-safe`, `zstd-sys` | Lockfile updated to zstd 0.13.5, zstd-safe 7.4.1, and zstd-sys 2.1.3. |
 | RUSTSEC-2026-0538 | `quinn-udp` | Lockfile updated from 0.5.15 to 0.5.16. |
-| RUSTSEC-2026-0429 (zip 0.6.6) | `zip` | `webrtc-sys-build` 0.3.21 no longer requires zip 0.6, so the `adk-realtime/livekit` build-time path is gone. |
+| RUSTSEC-2026-0367, RUSTSEC-2026-0368, RUSTSEC-2026-0369, RUSTSEC-2026-0429, RUSTSEC-2026-0545, RUSTSEC-2026-0547, RUSTSEC-2026-0548 (zip 6.0.0) | `zip` | `adk-audio` requires `ndarray-npy` 0.11, which is on zip 9; zip 6.0.0 left the lockfile. |
 | RUSTSEC-2026-0386 | `tokio` (unsound) | Lockfile updated to 1.54.1; the workspace now requires tokio 1.53.3. |
 | RUSTSEC-2026-0486, RUSTSEC-2026-0442 | `rustix`, `arrow-data` (unsound) | Lockfile updated to patched releases. |
 
@@ -92,28 +92,32 @@ These accepted advisories are also configured in [`.cargo/audit.toml`](../../.ca
 
 ---
 
-### RUSTSEC-2026-0367, RUSTSEC-2026-0368, RUSTSEC-2026-0369, RUSTSEC-2026-0429 — zip < 9: archive extraction
+### RUSTSEC-2026-0367, RUSTSEC-2026-0368, RUSTSEC-2026-0369, RUSTSEC-2026-0429, RUSTSEC-2026-0545, RUSTSEC-2026-0546, RUSTSEC-2026-0547, RUSTSEC-2026-0548 — zip < 9
 
-- **Crate:** `zip` (6.0.0, 7.4.0)
-- **Severity:** High (7.3) for RUSTSEC-2026-0367, Critical (9.1) for RUSTSEC-2026-0369, High (7.5, availability) for RUSTSEC-2026-0429; RUSTSEC-2026-0368 is unscored
+- **Crate:** `zip` (0.6.6, 7.4.0)
+- **Severity:** High (7.3) for RUSTSEC-2026-0367, Critical (9.1) for RUSTSEC-2026-0369, High (7.5, availability) for RUSTSEC-2026-0429 and RUSTSEC-2026-0547, High (7.4) for RUSTSEC-2026-0546, Medium (6.5, integrity) for RUSTSEC-2026-0545; RUSTSEC-2026-0368 and RUSTSEC-2026-0548 are unscored
 - **Advisories:**
   - [RUSTSEC-2026-0367](https://rustsec.org/advisories/RUSTSEC-2026-0367) — SUID, SGID, and sticky bits preserved from archive attributes during extraction
   - [RUSTSEC-2026-0368](https://rustsec.org/advisories/RUSTSEC-2026-0368) — symbolic links created with attacker-chosen targets outside the destination
   - [RUSTSEC-2026-0369](https://rustsec.org/advisories/RUSTSEC-2026-0369) — Unix permissions applied through extracted symlinks outside the destination
   - [RUSTSEC-2026-0429](https://rustsec.org/advisories/RUSTSEC-2026-0429) — process abort on a symlink entry with a huge declared size
+  - [RUSTSEC-2026-0545](https://rustsec.org/advisories/RUSTSEC-2026-0545) — WinZip AES entries returned without checking their authentication code when the data ends early or is empty
+  - [RUSTSEC-2026-0546](https://rustsec.org/advisories/RUSTSEC-2026-0546) — `ZipArchive::extract` writes outside the destination through absolute or chained symlink targets (zip 7.2 to 8)
+  - [RUSTSEC-2026-0547](https://rustsec.org/advisories/RUSTSEC-2026-0547) — legacy Shrink, Reduce and Implode decoders preallocate the declared uncompressed size (zip 5.1 to 8)
+  - [RUSTSEC-2026-0548](https://rustsec.org/advisories/RUSTSEC-2026-0548) — `ZipStreamReader` extracts entries under local-header names that can differ from the central directory
 - **ADK Impact:**
 
   | zip | Dependency path | Feature | Vulnerable code reached |
   |---|---|---|---|
-  | 6.0.0 | `adk-audio` → `ndarray-npy` 0.10.0 (`npz`) | `adk-audio/kokoro` | No — `NpzReader` reads entries by name |
-  | 7.4.0 | `adk-audio` → `candle-core` 0.9.2, also via `qwen_tts` 0.1.1 | `adk-audio/qwen3-tts` | No — reads `.npz`/`.pth` entries by name, writes `.npz` |
+  | 7.4.0 | `adk-audio` → `candle-core` 0.9.2, also via `qwen_tts` 0.1.1 | `adk-audio/qwen3-tts` | No — reads `.npz`/`.pth` entries by name with `ZipArchive`, writes `.npz` |
   | 7.4.0 | `adk-mistralrs` → `mistralrs` 0.8.1 → `candle-core` 0.10.2 | default | No — same `candle-core` code |
+  | 0.6.6 | `adk-realtime` → `webrtc-sys-build` 0.3.18 | `adk-realtime/livekit` | Build time only — `ZipArchive::extract` on LiveKit's libwebrtc release archive |
 
-- **Status:** Patched upstream in zip ≥ 9.0.0. No release of either wrapper path depends on zip 9: `ndarray-npy` 0.10.0 is the latest release and requires zip 6, `qwen_tts` 0.1.1 requires `candle-core` 0.9, and `mistralrs` 0.8.1 requires `candle-core` 0.10.2 (`candle-core` 0.11.1 is on zip 9, but nothing that ADK depends on uses it).
+- **Status:** Patched upstream in zip ≥ 9.0.0 (≥ 9.0.5 for RUSTSEC-2026-0548). No release of either wrapper path depends on zip 9: `qwen_tts` 0.1.1 requires `candle-core` 0.9, and `mistralrs` 0.8.1 requires `candle-core` 0.10.2 (`candle-core` 0.11.1 is on zip 9, but nothing that ADK depends on uses it). `webrtc-sys-build` 0.3.20 and later are on zip 9 but download a libwebrtc whose headers `webrtc-sys` 0.3.40 does not compile against, so it stays pinned at 0.3.18 with the livekit 0.8.1 stack.
 - **Disposition:** Accepted risk — no runtime path
-- **Conditions:** All four advisories are in `ZipArchive::extract` and `ZipStreamReader::extract`, and require the attacker to control the archive being extracted.
-- **ADK-Specific Context:** `ndarray-npy` and `candle-core` never call either extraction API; they open archives with `ZipArchive::new` and read single entries with `by_name`. No ADK-Rust code path extracts a zip archive with these versions.
-- **Mitigation:** The crates this workspace declares directly are on the patched line — the workspace `zip` dependency requires zip 9, and `adk-skill` validates registry archives in memory without either extraction API. `deny.toml` bans `zip < 9` with `ndarray-npy` and `candle-core` as the sole permitted wrappers, so a direct regression cannot hide behind this exception. Remove the exception when `ndarray-npy`, `qwen_tts`, and `mistralrs` move to zip 9.
+- **Conditions:** RUSTSEC-2026-0367, -0368, -0369, -0429 and -0546 are in `ZipArchive::extract` and `ZipStreamReader::extract`; RUSTSEC-2026-0548 is in `ZipStreamReader` only. RUSTSEC-2026-0545 needs the `aes-crypto` feature and a password read, and RUSTSEC-2026-0547 the `legacy-zip` feature. Each requires the attacker to control the archive being read.
+- **ADK-Specific Context:** The resolved graph enables no zip feature on 7.4.0 and only `deflate` on 0.6.6, so neither the AES nor the legacy decoders are compiled. `candle-core` opens archives with `ZipArchive::new` and reads single entries with `by_name`; it never extracts or streams. `webrtc-sys-build` extracts one archive at build time — LiveKit's own libwebrtc release, fetched over HTTPS from the URL the pinned release names — and a party able to substitute it already controls the native code linked into the binary. No ADK-Rust code path extracts or streams a zip archive with these versions at run time.
+- **Mitigation:** The crates this workspace declares directly require zip 9.0.5, and `adk-skill` validates registry archives in memory without either extraction API. `deny.toml` bans `zip < 9` with `candle-core` and `webrtc-sys-build` as the sole permitted wrappers, so a direct regression cannot hide behind this exception. Remove the exception when `qwen_tts` and `mistralrs` move to zip 9 and `webrtc-sys-build`'s pin goes with the livekit 0.8.4 stack.
 
 ---
 
@@ -156,6 +160,20 @@ These accepted advisories are also configured in [`.cargo/audit.toml`](../../.ca
 - **Conditions:** The archive being unpacked must carry an attacker-chosen image name.
 - **ADK-Specific Context:** The `intel-mkl-src` build script downloads a fixed image (`ghcr.io/rust-math/rust-mkl/...:2020.1-3038006115`) that supplies the MKL library linked into the binary, so a party able to substitute it already controls linked code. No ADK-Rust runtime path uses `ocipkg`.
 - **Mitigation:** Remove the exception when `intel-mkl-src` releases on ocipkg ≥ 0.4.1.
+
+---
+
+### RUSTSEC-2026-0543, RUSTSEC-2026-0555 — chrono and chrono-tz: unmaintained
+
+- **Crate:** `chrono` (0.4.45), `chrono-tz` (0.8.6, 0.10.4); `chrono-tz-build` (RUSTSEC-2026-0559) and `humantime` (RUSTSEC-2026-0542) are flagged by the same announcement as transitive dependencies
+- **Severity:** Informational (unmaintained notice; no vulnerability)
+- **Advisories:** [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543), [RUSTSEC-2026-0555](https://rustsec.org/advisories/RUSTSEC-2026-0555) ([chronotope/chrono#1768](https://github.com/chronotope/chrono/issues/1768))
+- **ADK Impact:** `chrono` is a direct dependency of most workspace crates, and `DateTime<Utc>` appears in their public types (sessions, events, ledgers, schedules). `chrono-tz` is declared by `adk-core` (optional), `adk-kernel` and `adk-website` for time-zone-aware schedules.
+- **Status:** No release addresses the notice; the advisory recommends `jiff` or `time`.
+- **Disposition:** Accepted risk — no security impact
+- **Conditions:** N/A — the notice names no vulnerability.
+- **ADK-Specific Context:** Replacing `chrono` changes the public API of most crates, so it is a breaking change in its own right rather than a dependency update.
+- **Mitigation:** Listed in `deny.toml` only; cargo-audit reports unmaintained notices as warnings. Remove the exceptions when the workspace moves off `chrono`.
 
 ---
 

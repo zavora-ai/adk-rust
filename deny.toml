@@ -41,22 +41,30 @@ ignore = [
 
     # zip < 9 — SUID/SGID bits kept, symlink targets and permissions applied
     # outside the destination, and an abort on a symlink entry with a huge
-    # declared size, all in `ZipArchive::extract` / `ZipStreamReader::extract`.
-    # Reached only through third-party wrappers with no release on zip >= 9:
-    #   * zip 6.0.0 — adk-audio -> ndarray-npy (`npz`), feature `adk-audio/kokoro`.
-    #     Reads entries by name; never extracts.
+    # declared size, all in `ZipArchive::extract` / `ZipStreamReader::extract`
+    # (0367, 0368, 0369, 0429, 0546); WinZip AES entries returned unauthenticated
+    # (0545, `aes-crypto` feature, password reads only); legacy Shrink, Reduce and
+    # Implode decoders preallocating a declared size (0547, `legacy-zip` feature);
+    # `ZipStreamReader` naming entries by local header (0548).
+    # Reached only through third-party wrappers with no release on zip >= 9, both
+    # built without `aes-crypto` and `legacy-zip`:
     #   * zip 7.4.0 — adk-audio -> candle-core 0.9 (`adk-audio/qwen3-tts`) and
-    #     adk-mistralrs -> mistralrs -> candle-core 0.10. Reads entries by name;
-    #     never extracts.
+    #     adk-mistralrs -> mistralrs -> candle-core 0.10. Reads entries by name with
+    #     `ZipArchive`; never extracts or streams.
     #   * zip 0.6.6 — adk-realtime -> webrtc-sys-build 0.3.18 (`adk-realtime/livekit`),
     #     pinned because 0.3.21's libwebrtc breaks webrtc-sys 0.3.40. Its build
-    #     script extracts LiveKit's own libwebrtc release archive, fetched over HTTPS.
-    # The crates this workspace declares require zip 9, and the `[[bans.deny]]`
-    # entry below keeps that floor enforced.
+    #     script extracts LiveKit's own libwebrtc release archive, fetched over HTTPS,
+    #     with `ZipArchive`.
+    # The crates this workspace declares require zip 9.0.5, and the `[[bans.deny]]`
+    # entry below keeps zip 9 enforced.
     "RUSTSEC-2026-0367",
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",
     "RUSTSEC-2026-0429",
+    "RUSTSEC-2026-0545",
+    "RUSTSEC-2026-0546",
+    "RUSTSEC-2026-0547",
+    "RUSTSEC-2026-0548",
 
     # libsqlite3-sys 0.37 — bundled SQLite 3.53 returns uninitialised page-cache
     # memory for a database opened with a crafted `-wal` file; only files a less
@@ -76,6 +84,15 @@ ignore = [
     # `adk-mistralrs/mkl` feature, at build time. Remove when intel-mkl-src
     # releases on ocipkg >= 0.4.1.
     "RUSTSEC-2026-0450",
+
+    # --- Unmaintained crates this workspace declares ---
+
+    # chrono and chrono-tz — marked unmaintained upstream (chronotope/chrono#1768);
+    # no release fixes it and the advisories name no vulnerability. `DateTime<Utc>`
+    # is in the public API of most crates here, so moving to `jiff` or `time` is a
+    # breaking change of its own. Remove when the workspace moves off chrono.
+    "RUSTSEC-2026-0543",
+    "RUSTSEC-2026-0555",
 
     # --- Unsoundness and notices: reviewed, no ADK-reachable path ---
     # http-types: ASCII invariant in Authorization value. Reached only through
@@ -160,7 +177,7 @@ wrappers = ["inferno"]
 # Keep declared zip usage on the patched line. The wrappers are the third-party
 # crates named in the zip advisory ignore above.
 crate = "zip:<9"
-wrappers = ["ndarray-npy", "candle-core", "webrtc-sys-build"]
+wrappers = ["candle-core", "webrtc-sys-build"]
 
 [sources]
 unknown-registry = "deny"
