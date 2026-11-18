@@ -94,6 +94,7 @@ mod request;
 pub mod schema_adapter;
 mod streaming;
 mod token_count;
+mod toolsets;
 
 pub use client::AnthropicClient;
 pub use config::{AnthropicConfig, Effort, ThinkingMode};

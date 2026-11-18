@@ -1046,6 +1046,9 @@ impl Anthropic {
         if params.speed.is_some() {
             Self::append_beta_header(&mut headers, "fast-mode-2026-02-01")?;
         }
+        for beta in params.tool_beta_headers() {
+            Self::append_beta_header(&mut headers, beta)?;
+        }
         for beta in extra_betas {
             Self::append_beta_header(&mut headers, beta)?;
         }

@@ -5,6 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// Each variant maps to a specific wire name string used by the Anthropic API.
 /// The `Unknown(String)` variant captures any unrecognised tool name.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ServerTool {
     /// Bash tool version 20241022.
     BashTool20241022,
@@ -28,6 +29,12 @@ pub enum ServerTool {
     ComputerUse20241022,
     /// Computer use version 20250124.
     ComputerUse20250124,
+    /// Computer use version 20251124.
+    ComputerUse20251124,
+    /// The computer use toolset, version 20260801.
+    ComputerToolset20260801,
+    /// The browser use toolset, version 20260801.
+    BrowserToolset20260801,
     /// Memory tool.
     Memory,
     /// Unknown tool type (forward compatibility).
@@ -49,6 +56,9 @@ impl ServerTool {
             Self::CodeExecution20250522 => "code_execution_20250522",
             Self::ComputerUse20241022 => "computer_20241022",
             Self::ComputerUse20250124 => "computer_20250124",
+            Self::ComputerUse20251124 => "computer_20251124",
+            Self::ComputerToolset20260801 => "computer_toolset_20260801",
+            Self::BrowserToolset20260801 => "browser_toolset_20260801",
             Self::Memory => "memory",
             Self::Unknown(s) => s.as_str(),
         }
@@ -69,6 +79,9 @@ impl From<&str> for ServerTool {
             "code_execution_20250522" => Self::CodeExecution20250522,
             "computer_20241022" => Self::ComputerUse20241022,
             "computer_20250124" => Self::ComputerUse20250124,
+            "computer_20251124" => Self::ComputerUse20251124,
+            "computer_toolset_20260801" => Self::ComputerToolset20260801,
+            "browser_toolset_20260801" => Self::BrowserToolset20260801,
             "memory" => Self::Memory,
             other => Self::Unknown(other.to_string()),
         }
@@ -137,6 +150,9 @@ mod tests {
             ServerTool::CodeExecution20250522,
             ServerTool::ComputerUse20241022,
             ServerTool::ComputerUse20250124,
+            ServerTool::ComputerUse20251124,
+            ServerTool::ComputerToolset20260801,
+            ServerTool::BrowserToolset20260801,
             ServerTool::Memory,
         ];
         for variant in variants {

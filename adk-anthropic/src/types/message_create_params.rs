@@ -561,6 +561,20 @@ impl MessageCreateParams {
         self
     }
 
+    /// The beta headers the declared tools require, without duplicates, in declaration
+    /// order: `computer-use-2025-11-24` for `computer_20251124` and
+    /// `computer-use-2025-01-24` for `computer_20250124`. The client adds them to the
+    /// request.
+    pub fn tool_beta_headers(&self) -> Vec<&'static str> {
+        let mut betas = Vec::new();
+        for beta in self.tools.iter().flatten().filter_map(ToolUnionParam::beta_header) {
+            if !betas.contains(&beta) {
+                betas.push(beta);
+            }
+        }
+        betas
+    }
+
     /// Check if this request requires the structured outputs beta header.
     ///
     /// Returns `true` if either:
@@ -695,6 +709,11 @@ impl ContentSize {
         match content {
             Content::Text(text) => self.text += text.text.len(),
             Content::Image(image) => self.add_image(image)?,
+            Content::BrowserState(state) => {
+                for tab in &state.tabs {
+                    self.text += tab.tab_id.len() + tab.title.len() + tab.url.len();
+                }
+            }
         }
         Ok(())
     }

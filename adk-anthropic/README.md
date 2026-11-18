@@ -20,6 +20,7 @@ This project is an **unofficial** community-maintained library. It is not affili
 - **Effort parameter** — `OutputConfig::with_effort()` with `low`, `medium`, `high`, `xhigh`, `max` levels
 - **Structured outputs** — JSON schema via `OutputConfig` / `OutputFormat`
 - **Tool calling** — custom function tools, server tools (web search, web fetch, bash, text editor, code execution, memory); `WebSearchTool20260209` and `WebFetchTool20260209` declare the dynamic-filtering tool versions
+- **Computer use and browser use** — `computer_toolset_20260801` and `browser_toolset_20260801` (`ComputerToolset20260801`, `BrowserToolset20260801`), the earlier `computer_20251124` and `computer_20250124` with their beta headers, `toolset_name` on member calls and results, the `browser_state` result block, and `ComputerToolVersion::for_model` to pick the version a model accepts
 - **Prompt caching** — automatic (top-level `cache_control`) and explicit (block-level)
 - **Context management** — `ContextManagement` with tool result clearing and thinking block clearing (beta)
 - **Citations** — document-level citations with char, page, and content block locations

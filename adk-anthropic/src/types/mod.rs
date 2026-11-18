@@ -2,6 +2,7 @@ mod auto_cache_control;
 mod base64_image_source;
 mod base64_pdf_source;
 mod batch;
+mod browser_state;
 mod cache_control_ephemeral;
 mod citation_char_location;
 mod citation_content_block_location;
@@ -9,6 +10,7 @@ mod citation_page_location;
 mod citation_web_search_result_location;
 mod citations_config;
 mod citations_delta;
+mod client_toolset;
 mod code_execution_result_block;
 mod code_execution_tool_result_block;
 mod content;
@@ -96,6 +98,7 @@ pub use base64_pdf_source::Base64PdfSource;
 pub use batch::{
     BatchError, BatchRequest, BatchRequestCounts, BatchResult, BatchResultItem, MessageBatch,
 };
+pub use browser_state::{BrowserStateBlock, BrowserStateChange, BrowserTab};
 pub use cache_control_ephemeral::{CacheControlEphemeral, CacheTtl};
 pub use citation_char_location::CitationCharLocation;
 pub use citation_content_block_location::CitationContentBlockLocation;
@@ -103,6 +106,12 @@ pub use citation_page_location::CitationPageLocation;
 pub use citation_web_search_result_location::CitationWebSearchResultLocation;
 pub use citations_config::CitationsConfig;
 pub use citations_delta::{Citation, CitationsDelta};
+pub use client_toolset::{
+    BROWSER_BATCH_HALT_TEXT, BROWSER_TOOLSET, BrowserMember, BrowserToolset20260801,
+    COMPUTER_BATCH_HALT_TEXT, COMPUTER_TOOLSET, COMPUTER_USE_20250124_BETA,
+    COMPUTER_USE_20251124_BETA, ComputerMember, ComputerToolVersion, ComputerToolset20260801,
+    ToolComputer20250124, ToolComputer20251124, ToolsetMemberConfig, supports_browser_toolset,
+};
 pub use code_execution_result_block::CodeExecutionResultBlock;
 pub use code_execution_tool_result_block::CodeExecutionToolResultBlock;
 pub use content::Content;

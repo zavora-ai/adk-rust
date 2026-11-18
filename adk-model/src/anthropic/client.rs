@@ -378,44 +378,6 @@ impl AnthropicClient {
             reject_unsupported("anthropic", request.config.as_ref(), supports)?;
         }
 
-        let mut system_parts: Vec<String> = Vec::new();
-        let mut messages = Vec::new();
-
-        for content in &request.contents {
-            if content.role == "system" {
-                // Requirement 1.1: Extract system-role content text parts
-                let text: String = content
-                    .parts
-                    .iter()
-                    .filter_map(|p| match p {
-                        Part::Text { text } => Some(text.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if !text.is_empty() {
-                    system_parts.push(text);
-                }
-            } else {
-                let message =
-                    convert::content_to_message(content, anthropic_config.prompt_caching)?;
-                // A turn with no blocks (only whitespace, or reasoning the API cannot verify)
-                // would fail this request and every later one; the turns around it merge.
-                let empty = match &message.content {
-                    adk_anthropic::MessageParamContent::String(text) => text.trim().is_empty(),
-                    adk_anthropic::MessageParamContent::Array(blocks) => blocks.is_empty(),
-                };
-                if !empty {
-                    messages.push(message);
-                }
-            }
-        }
-
-        // Requirement 1.3: Concatenate multiple system entries with newline separators
-        // Requirement 1.4: Omit system parameter when no system content found
-        let system_prompt =
-            if system_parts.is_empty() { None } else { Some(system_parts.join("\n")) };
-
         let mut tools = if request.tools.is_empty() {
             Vec::new()
         } else {
@@ -438,7 +400,7 @@ impl AnthropicClient {
                 static ADAPTER: AnthropicSchemaAdapter = AnthropicSchemaAdapter;
                 static SCHEMA_CACHE: LazyLock<SchemaCache> =
                     LazyLock::new(|| SchemaCache::for_adapter(Arc::new(AnthropicSchemaAdapter)));
-                convert::convert_tools(&filtered_tools, &ADAPTER, &SCHEMA_CACHE)?
+                convert::convert_tools(model, &filtered_tools, &ADAPTER, &SCHEMA_CACHE)?
             }
         };
 
@@ -467,6 +429,48 @@ impl AnthropicClient {
                 tools.push(tool);
             }
         }
+        // Computer and browser use take the form this model accepts, and the history's
+        // member calls and results follow that form.
+        super::toolsets::resolve_for_model(model, &mut tools)?;
+        let forms = super::toolsets::ToolsetForms::of(&tools);
+
+        let mut system_parts: Vec<String> = Vec::new();
+        let mut messages = Vec::new();
+
+        for content in &request.contents {
+            if content.role == "system" {
+                // Requirement 1.1: Extract system-role content text parts
+                let text: String = content
+                    .parts
+                    .iter()
+                    .filter_map(|p| match p {
+                        Part::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !text.is_empty() {
+                    system_parts.push(text);
+                }
+            } else {
+                let message =
+                    convert::content_to_message(content, anthropic_config.prompt_caching, forms)?;
+                // A turn with no blocks (only whitespace, or reasoning the API cannot verify)
+                // would fail this request and every later one; the turns around it merge.
+                let empty = match &message.content {
+                    adk_anthropic::MessageParamContent::String(text) => text.trim().is_empty(),
+                    adk_anthropic::MessageParamContent::Array(blocks) => blocks.is_empty(),
+                };
+                if !empty {
+                    messages.push(message);
+                }
+            }
+        }
+
+        // Requirement 1.3: Concatenate multiple system entries with newline separators
+        // Requirement 1.4: Omit system parameter when no system content found
+        let system_prompt =
+            if system_parts.is_empty() { None } else { Some(system_parts.join("\n")) };
 
         let (thinking, effort) = Self::request_posture(model, request, anthropic_config);
 
@@ -830,25 +834,27 @@ impl Llm for AnthropicClient {
                     async move {
                         let mut params = Self::build_message_params(model_ref, max_tokens, &request, cfg)?;
                         params.stream = true;
+                        let forms = super::toolsets::ToolsetForms::of(params.tools.as_deref().unwrap_or_default());
                         if let Some(adapter) = adapter {
                             let (params, headers) = super::request::prepare(client_ref, params, adapter)?;
                             client_ref
                                 .stream_with_headers(&params, headers)
                                 .await
-                                .map(|events| events.boxed())
+                                .map(|events| (events.boxed(), forms))
                                 .map_err(convert_anthropic_error)
                         } else {
                             client_ref
                                 .stream(&params)
                                 .await
-                                .map(|events| events.boxed())
+                                .map(|events| (events.boxed(), forms))
                                 .map_err(convert_anthropic_error)
                         }
                     }
                 })
                 .await?;
+                let (event_stream, forms) = event_stream;
 
-                let mut responses = super::streaming::responses(event_stream);
+                let mut responses = super::streaming::responses(event_stream, forms);
                 while let Some(response) = responses.next().await {
                     yield response?;
                 }
@@ -862,21 +868,25 @@ impl Llm for AnthropicClient {
                     let adapter = request_adapter.as_ref();
                     async move {
                         let params = Self::build_message_params(model_ref, max_tokens, &request, cfg)?;
+                        let forms = super::toolsets::ToolsetForms::of(params.tools.as_deref().unwrap_or_default());
                         if let Some(adapter) = adapter {
                             let (params, headers) = super::request::prepare(client_ref, params, adapter)?;
                             client_ref
                                 .send_with_headers(params, headers)
                                 .await
+                                .map(|message| (message, forms))
                                 .map_err(convert_anthropic_error)
                         } else {
                             client_ref
                                 .send(params)
                                 .await
+                                .map(|message| (message, forms))
                                 .map_err(convert_anthropic_error)
                         }
                     }
                 })
                 .await?;
+                let (message, forms) = message;
 
                 // Requirement 4.3: On success, propagate request-id to tracing span.
                 // The adk-anthropic crate does not expose the raw `request-id` response
@@ -886,7 +896,7 @@ impl Llm for AnthropicClient {
                 // the actual `request-id` header value.
                 Span::current().record("anthropic.request_id", message.id.as_str());
 
-                yield convert::from_anthropic_message(&message).0;
+                yield convert::from_anthropic_message(&message, forms).0;
             }
         };
 
