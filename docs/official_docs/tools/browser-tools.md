@@ -148,6 +148,15 @@ an interaction tool, such as a link click or a form submission, and the subresou
 loads are not checked. Isolate the browser's network when it must not reach internal
 services at all.
 
+## Claude's Browser Use Toolset
+
+`BrowserUseToolset` offers the members of Claude's `browser_toolset_20260801`
+(`browser.navigate`, `browser.read_page`, `browser.left_click`, ...) over the same
+`BrowserSession`, with the navigation policy above. The model adapter declares them as one
+toolset entry, and each action runs on the governed tool path; `WebDriverComputer` makes the
+viewport a display for the computer use toolset. See
+[Governed Computer Use and Browser Use](../computer-use/toolsets.md).
+
 ## Multi-Tenant Usage with Pool-Backed Toolsets
 
 For production multi-tenant deployments, use `BrowserToolset::with_pool()` together with `LlmAgentBuilder::toolset()`. Each user gets an isolated browser session resolved from the pool at runtime:

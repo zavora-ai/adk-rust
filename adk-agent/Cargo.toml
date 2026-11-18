@@ -90,3 +90,8 @@ tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread", "test
 tracing-subscriber = { workspace = true }
 # Mock provider endpoints for the built-in tool governance tests.
 wiremock = "0.6"
+# The GenAI span tests export through an OpenTelemetry layer into an in-memory exporter.
+adk-telemetry = { path = "../adk-telemetry", features = ["otlp"] }
+opentelemetry = "0.32"
+opentelemetry_sdk = { version = "0.32", features = ["testing"] }
+tracing-opentelemetry = "0.33"

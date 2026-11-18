@@ -257,11 +257,22 @@ fn build(model: BoxedModel) -> adk_realtime::Result<RealtimeRunner> {
 | Arguments are not a JSON object | `{"error": "Tool '<name>' was not run: its arguments are not valid JSON (...)"}` — the tool does not run with `{}` |
 | The policy denies the call | `{"error": "Tool '<name>' denied by policy: <reason>"}` |
 | The call needs confirmation and no decision exists | `{"error": "Tool '<name>' requires confirmation"}`; `RealtimeAgent` also emits an event carrying the `ToolConfirmationRequest`, and the request is recorded in the approval store |
-| The tool runs past its timeout (default five minutes) | `{"error": "Tool '<name>' timed out after ..."}` |
+| The tool runs past its timeout (default five minutes) | `{"error": "Tool '<name>' timed out after ..."}`; a `NonIdempotent` ADK tool under `RealtimeAgent` is answered `{"status": "outcome_unknown", "detail": "Tool '<name>' timed out after .... The call may have taken effect; ..."}`, as `LlmAgent` answers it |
+| The run's action ledger already holds the call (`RealtimeAgent`) | `{"status": "already_succeeded", ...}`, `{"status": "already_failed", ...}`, or `outcome_unknown` — the tool does not run again |
+| The run's tool-call budget is spent (`RealtimeAgent`) | `{"error": "not run: <budget error>"}`; the session ends with the `budget.*` error |
 | An ADK tool fails | `{"error": "tool '<name>' failed: <component>.<category> (<code>)"}` — the message stays out unless `expose_tool_error_messages(true)` is set |
 | A native handler fails | `{"error": "tool '<name>' failed"}` — the message stays out unless `expose_tool_error_messages(true)` is set |
 | The result screen withholds the result | `{"status": "result_withheld", "error": "tool '<name>' ran, but its result was withheld: <reason>; ..."}` |
 | The kill switch is frozen | Nothing — the session ends with a `governance.frozen` error |
+
+`RealtimeAgent` brackets a `ToolEffect::NonIdempotent` call with the run's action ledger
+(`RunConfig::action_ledger`), as `LlmAgent` does: the call is begun under its
+`ToolContext::idempotency_key()` after authorization, the kill switch is checked again after the
+ledger write, and the outcome is recorded when the tool returns. A call the provider issues twice
+under the same call ID runs once, and a call that timed out keeps its begun record, so a replay
+is answered `outcome_unknown` instead of running again. Each call also counts against the run's
+`RunBudget::max_tool_calls`. `RealtimeRunner` and `IntegratedRealtimeRunner` do not ledger calls
+or count them against a budget.
 
 `RealtimeAgent` and `IntegratedRealtimeRunner` record each answer in the session with the
 [tool result status](../tools/function-tools.md#tool-result-status) `LlmAgent` gives it: `not_run`, `refused`, `held`,

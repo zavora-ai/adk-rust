@@ -24,6 +24,8 @@ Agent evaluation framework for Rust Agent Development Kit (ADK-Rust).
 - **Cost & Latency Tracking**: Token usage extraction, dollar cost estimation, latency recording
 - **Trace Analysis**: Detect redundant tool calls, execution loops, compute efficiency scores
 - **Regression Baselines**: Save/load metric snapshots, detect quality degradation
+- **Repeated Runs**: `Evaluator::evaluate_test_file_runs` runs an eval set `num_runs` times and reports each case's pass rate, score mean and sample variance, and flakiness (`MultiRunReport`); baselines from it carry a `pass_rate` metric
+- **Metered Judging**: `Evaluator::set_run_config` puts every eval run and LLM-judge call under one budget, spend ledger and kill switch; a refusal stops the evaluation (`EvalError::Refused`) instead of failing cases
 - **Ledger Statistics**: Median/MAD baselines per dimension and day class, warm-up, windowed deviation test, and drift runs with cooldowns over a content-free activity ledger (`ledger`), also run as `cargo adk eval --ledger`
 - **JUnit XML Output**: CI-friendly report generation (feature: `ci-helpers`)
 - **Human Annotation**: JSONL export/import workflow for human review
@@ -311,6 +313,31 @@ async fn run_cases(evaluator: &Evaluator, agent: Arc<dyn Agent>, cases: &[EvalCa
 ```
 
 A case passes only when at least one criterion was evaluated and none failed: an empty test file, a case without turns, an evaluator without criteria, or a directory without `*.test.json` files returns `EvalError::ConfigError`, and a case no criterion applies to fails as `not_evaluated`. `EvaluationReport::all_passed()` is `false` for a report without results.
+
+### Repeated Runs
+
+Run an eval set several times to separate reliable cases from lucky ones. Each case gets a fresh session every run; a case passes when it passes in at least `min_pass_rate` of the runs (every run by default):
+
+```rust
+use std::sync::Arc;
+
+use adk_core::{Agent, RunBudget, RunConfig};
+use adk_eval::{Evaluator, MultiRunConfig, TestFile};
+
+async fn three_runs(mut evaluator: Evaluator, agent: Arc<dyn Agent>) -> adk_eval::Result<()> {
+    // The agent's and the judges' model calls share one budget for the whole evaluation.
+    evaluator.set_run_config(RunConfig::builder().budget(RunBudget::new().max_model_calls(100)).build());
+    let file = TestFile::load("tests/weather.test.json")?;
+    let report = evaluator.evaluate_test_file_runs(agent, &file, &MultiRunConfig::new(3)?).await?;
+    for case in &report.cases {
+        println!("{}: {}/{} runs, flaky={}", case.eval_id, case.passed_runs, case.runs, case.flaky);
+    }
+    assert!(report.all_passed(), "{}", report.format_summary());
+    Ok(())
+}
+```
+
+When the budget, the spend ledger or a frozen kill switch refuses a run or a judge call, the runs stop: the report keeps the completed runs and says why in `stopped`. `cargo adk eval --num-runs 3 --min-pass-rate 0.67 --judge-max-calls 50` does the same for an agent binary.
 
 ## Integration with cargo test
 

@@ -26,6 +26,8 @@
 //! |---------|----------|
 //! | `openai` | OpenAI Realtime API over WebSocket |
 //! | `openai-webrtc` | OpenAI Realtime API over WebRTC with Opus |
+//! | `telephony` | Provider-neutral phone-call control and governed call tools ([`telephony`]) |
+//! | `openai-sip` | OpenAI Realtime SIP: incoming-call webhooks, accept, reject, transfer, hang up |
 //! | `gemini` | Gemini Live API |
 //! | `vertex-live` | Vertex AI Live API with Application Default Credentials |
 //! | `livekit` | LiveKit WebRTC bridge |
@@ -111,6 +113,9 @@ pub mod livekit;
 
 #[cfg(feature = "video-avatar")]
 pub mod avatar;
+
+#[cfg(feature = "telephony")]
+pub mod telephony;
 
 #[cfg(feature = "integration")]
 pub mod integration;

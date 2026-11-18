@@ -264,7 +264,8 @@ impl Llm for OpenRouterClient {
             &adk_core::history::ProviderOrigin::new("openrouter", &model_name),
         );
         let api_mode = request_options.api_mode.unwrap_or(self.config().default_api_mode);
-        let usage_span = adk_telemetry::llm_generate_span("openrouter", &model_name, stream);
+        let usage_span =
+            crate::telemetry::inference_span("openrouter", &model_name, stream, &request);
 
         let response_stream = match api_mode {
             OpenRouterApiMode::ChatCompletions => {

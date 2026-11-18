@@ -73,6 +73,10 @@ impl Tool for PrefixedTool {
         self.inner.egress(args)
     }
 
+    fn batch_group(&self) -> Option<adk_core::BatchGroup> {
+        self.inner.batch_group()
+    }
+
     fn annotations(&self) -> Option<&Value> {
         self.inner.annotations()
     }

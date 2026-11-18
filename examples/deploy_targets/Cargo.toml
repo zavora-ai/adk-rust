@@ -1,0 +1,27 @@
+[package]
+name = "deploy-targets"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "An agent that runs unchanged on every adk-deploy target, configured by the deploy contract"
+
+[workspace]
+
+[[bin]]
+name = "support-desk"
+path = "src/main.rs"
+
+[dependencies]
+adk-agent = { path = "../../adk-agent" }
+adk-core = { path = "../../adk-core" }
+adk-deploy = { path = "../../adk-deploy" }
+adk-model = { path = "../../adk-model", default-features = false, features = ["anthropic"] }
+adk-server = { path = "../../adk-server" }
+adk-session = { path = "../../adk-session", features = ["sqlite"] }
+anyhow = "1.0"
+async-trait = "0.1"
+axum = "0.8"
+dotenvy = "0.15"
+tokio = { version = "1.40", features = ["macros", "rt-multi-thread", "net"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
