@@ -120,7 +120,9 @@ while read -r package; do
         run "doctests $package --features $combined" \
             cargo test -p "$package" --features "$combined" --doc
     fi
-done < <(awk '!seen[$1]++ { print $1 }' <<<"$selected")
+# `selected` ends in a newline and `<<<` adds another, so `NF` skips the blank line that
+# would otherwise name an empty package.
+done < <(awk 'NF && !seen[$1]++ { print $1 }' <<<"$selected")
 
 printf '\nfeature coverage: %d pair(s) linted, %d step(s) failed\n' "$linted" "${#failed[@]}"
 ((${#failed[@]} == 0)) && exit 0
