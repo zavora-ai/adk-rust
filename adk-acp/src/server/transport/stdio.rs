@@ -1552,6 +1552,7 @@ mod tests {
                             args: serde_json::json!({"path": "/tmp/report.csv"}),
                             acting: None,
                             origin: None,
+                            evidence: Vec::new(),
                         });
                         yield Ok(event);
                     }

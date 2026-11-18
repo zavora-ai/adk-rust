@@ -80,6 +80,7 @@ fn call(agent: &str, tool: &str, args: Value) -> ToolConfirmationRequest {
         args,
         origin: None,
         acting: Some(Box::new(acting(agent))),
+        evidence: Vec::new(),
     }
 }
 

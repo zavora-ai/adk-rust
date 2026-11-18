@@ -186,6 +186,7 @@ impl Fixture {
             args: json!({ "amount": amount, "to": "acct:1/main" }),
             acting: None,
             origin: None,
+            evidence: Vec::new(),
         };
         (scope, call)
     }

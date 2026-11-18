@@ -364,6 +364,7 @@ mod tests {
             args: serde_json::json!({ "command": "ls" }),
             origin: None,
             acting: None,
+            evidence: Vec::new(),
         };
         ApprovalRequest::new(
             format!("apr-{session}"),

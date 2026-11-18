@@ -120,6 +120,7 @@ async fn a_terminal_decides_through_the_control_plane() {
             args: json!({ "path": "other.txt" }),
             origin: None,
             acting: None,
+            evidence: Vec::new(),
         },
         adk_core::ApprovalPolicy::new([adk_core::ApproverSelector::group("operator")])
             .allow_self_approval(),
@@ -610,6 +611,7 @@ async fn always_allow_is_asked_again_after_the_kernel_could_not_answer() {
         args: json!({ "path": "offer.txt" }),
         origin: None,
         acting: None,
+        evidence: Vec::new(),
     };
     let request = adk_core::ApprovalRequest::new(
         "apr-offer",

@@ -241,6 +241,7 @@ async fn a_process_sleeping_on_an_approval_wakes_when_the_decision_lands() {
         args: json!({ "amount": 10 }),
         acting: None,
         origin: None,
+        evidence: Vec::new(),
     };
     approvals.record_pending(&scope, &call).await.unwrap();
     let wake = WakeSet::any_of([Wake::Approval { fingerprint: call.fingerprint() }]);
@@ -411,6 +412,7 @@ async fn a_harness_decision_wakes_a_sleeper_only_once_it_is_recorded() {
         args: json!({ "amount": 10 }),
         acting: None,
         origin: None,
+        evidence: Vec::new(),
     };
     approvals.record_pending(&scope, &call).await.unwrap();
     let harness_service = f.harness.agent().runtime().approval_service().unwrap().clone();

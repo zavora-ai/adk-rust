@@ -497,6 +497,7 @@ mod tests {
             args: json!({ "to": "acct-99", "amount": 10 }),
             acting: None,
             origin: None,
+            evidence: Vec::new(),
         };
         let held = activity_for_event(&KernelEvent::Held {
             pid: "run-1".into(),

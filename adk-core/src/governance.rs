@@ -1021,6 +1021,7 @@ pub struct PendingApproval {
 ///     args: json!({ "amount": 40 }),
 ///     acting: None,
 ///     origin: None,
+///     evidence: Vec::new(),
 /// };
 ///
 /// store.record_pending(&scope, &request).await?;
@@ -1398,6 +1399,11 @@ pub struct GovernedCall {
     /// run's egress policy before anything else may run it. [`for_tool`](Self::for_tool) sets
     /// it from the call's arguments as the agent built them.
     pub egress: crate::egress::ToolEgress,
+    /// What an approver sees with the call if it is held ([`Tool::approval_evidence`]).
+    /// [`for_tool`](Self::for_tool) sets it from the call's arguments as the agent built
+    /// them; a held request carries it, and its digests are part of the request's
+    /// [fingerprint](ToolConfirmationRequest::fingerprint).
+    pub evidence: Vec<crate::Evidence>,
 }
 
 impl GovernedCall {
@@ -1417,6 +1423,7 @@ impl GovernedCall {
             resumes: None,
             requested: false,
             egress: crate::egress::ToolEgress::Undeclared,
+            evidence: Vec::new(),
         }
     }
 
@@ -1424,9 +1431,11 @@ impl GovernedCall {
     /// [`ToolOrigin`] from the tool.
     pub fn for_tool(tool: &dyn Tool, function_call_id: impl Into<String>, args: Value) -> Self {
         let egress = tool.egress(&args);
+        let evidence = tool.approval_evidence(&args);
         let mut call = Self::new(tool.name(), function_call_id, args).with_effect(tool.effect());
         call.origin = Some(ToolOrigin::of(tool));
         call.egress = egress;
+        call.evidence = evidence;
         call
     }
 
@@ -1538,6 +1547,14 @@ impl GovernedCall {
     #[must_use]
     pub fn with_egress(mut self, egress: crate::egress::ToolEgress) -> Self {
         self.egress = egress;
+        self
+    }
+
+    /// Sets what an approver sees with the call if it is held; see
+    /// [`GovernedCall::evidence`].
+    #[must_use]
+    pub fn with_evidence(mut self, evidence: impl IntoIterator<Item = crate::Evidence>) -> Self {
+        self.evidence = evidence.into_iter().collect();
         self
     }
 
@@ -2244,6 +2261,7 @@ pub async fn authorize_tool_call(
         resumes,
         requested,
         egress,
+        evidence,
     } = call;
     let audited = AuditedCall {
         gate,
@@ -2251,6 +2269,7 @@ pub async fn authorize_tool_call(
         function_call_id: &function_call_id,
         effect,
         origin: origin.as_ref(),
+        evidence: &evidence,
     };
     if let Err(frozen) = config.check_governance() {
         audited.decision(&args, AuditDecision::Denied, Some(POLICY_REF_GOVERNANCE), None).await?;
@@ -2386,6 +2405,7 @@ pub async fn authorize_tool_call(
             args: args.clone(),
             acting: Some(Box::new(gate.acting.clone())),
             origin: origin.clone(),
+            evidence: evidence.clone(),
         };
         // A decision recorded before the person asked would otherwise answer the call when
         // it resumes.
@@ -2432,6 +2452,7 @@ pub async fn authorize_tool_call(
         args: args.clone(),
         acting: Some(Box::new(gate.acting.clone())),
         origin: origin.clone(),
+        evidence: evidence.clone(),
     };
     // A reviewer decides only what the policy holds: never a call the agent's confirmation
     // policy asks a person about, one a person asked for, or a held call being resumed.
@@ -2933,6 +2954,7 @@ struct AuditedCall<'g, 'a> {
     function_call_id: &'g str,
     effect: ToolEffect,
     origin: Option<&'g ToolOrigin>,
+    evidence: &'g [crate::Evidence],
 }
 
 impl AuditedCall<'_, '_> {
@@ -2947,6 +2969,11 @@ impl AuditedCall<'_, '_> {
             draft = draft
                 .ext("toolSource", Value::String(origin.source.clone()))
                 .ext("declarationDigest", Value::String(origin.declaration_digest.clone()));
+        }
+        // The images the decision binds to, by digest; never their pixels.
+        if !self.evidence.is_empty() {
+            let digests = self.evidence.iter().map(|item| Value::from(item.digest())).collect();
+            draft = draft.ext("evidenceDigests", Value::Array(digests));
         }
         Some(draft)
     }
@@ -3284,6 +3311,7 @@ async fn review_held_call(
         function_call_id: request.function_call_id.as_deref().unwrap_or_default(),
         effect: input.effect,
         origin: request.origin.as_ref(),
+        evidence: &request.evidence,
     };
     if let (Some(trail), Some(draft)) =
         (&config.audit, audited.draft(AuditRecordKind::Approval, &request.args))
@@ -3440,6 +3468,7 @@ pub struct HeldToolCall {
 ///     args: json!({ "amount": 5 }),
 ///     acting: None,
 ///     origin: None,
+///     evidence: Vec::new(),
 /// });
 ///
 /// let calls = held_tool_calls(&[held], "agent", "");
@@ -3609,6 +3638,7 @@ fn scan_all_held_calls(events: &[Event]) -> Vec<ScannedHold> {
 ///     args: json!({ "amount": 5 }),
 ///     acting: None,
 ///     origin: None,
+///     evidence: Vec::new(),
 /// });
 ///
 /// let events = vec![ask, call, hold];
@@ -3653,6 +3683,7 @@ pub fn held_call_compaction_limit(events: &[Event], end: usize) -> usize {
 ///     args: json!({ "amount": 5 }),
 ///     acting: None,
 ///     origin: None,
+///     evidence: Vec::new(),
 /// });
 /// hold.actions.workflow_positions.insert("pipeline".into(), WorkflowPosition::new(0, "ops"));
 ///
@@ -5559,6 +5590,7 @@ mod tests {
             args,
             acting: None,
             origin: None,
+            evidence: Vec::new(),
         });
         event
     }
@@ -5591,6 +5623,7 @@ mod tests {
                     args: json!({ "amount": 500 }),
                     acting: None,
                     origin: None,
+                    evidence: Vec::new(),
                 },
                 id: Some("c1".into()),
                 name: "pay".into(),
@@ -5627,6 +5660,7 @@ mod tests {
                     args: json!({ "path": "a.txt" }),
                     acting: None,
                     origin: None,
+                    evidence: Vec::new(),
                 },
                 id: Some("c1".into()),
                 name: "helper".into(),
@@ -5939,6 +5973,7 @@ mod tests {
             args: json!({ "amount": 5 }),
             acting: None,
             origin: None,
+            evidence: Vec::new(),
         };
         let none = RunConfig::default();
         assert!(!confirmation_decision_available(&gate(&none), &request).await.unwrap());

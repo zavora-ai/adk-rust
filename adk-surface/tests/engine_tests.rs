@@ -88,6 +88,7 @@ fn call(tool: &str, args: Value) -> ToolConfirmationRequest {
         args,
         origin: None,
         acting: None,
+        evidence: Vec::new(),
     }
 }
 

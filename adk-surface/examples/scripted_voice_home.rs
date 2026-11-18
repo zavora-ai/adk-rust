@@ -347,6 +347,7 @@ async fn finance_waits(
         args: json!({ "to": "[CLIENT]", "subject": "October invoice" }),
         origin: None,
         acting: None,
+        evidence: Vec::new(),
     };
     let mut request = ApprovalRequest::new(
         "apr-finance",

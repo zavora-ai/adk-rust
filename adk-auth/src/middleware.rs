@@ -59,6 +59,11 @@ macro_rules! impl_protected_tool {
                 ($inner).egress(args)
             }
 
+            fn approval_evidence(&self, args: &Value) -> Vec<adk_core::Evidence> {
+                let $self_ident = self;
+                ($inner).approval_evidence(args)
+            }
+
             fn batch_group(&self) -> Option<adk_core::BatchGroup> {
                 let $self_ident = self;
                 ($inner).batch_group()
@@ -164,6 +169,11 @@ macro_rules! impl_protected_tool {
             fn egress(&self, args: &Value) -> adk_core::egress::ToolEgress {
                 let $self_ident = self;
                 ($inner).egress(args)
+            }
+
+            fn approval_evidence(&self, args: &Value) -> Vec<adk_core::Evidence> {
+                let $self_ident = self;
+                ($inner).approval_evidence(args)
             }
 
             fn batch_group(&self) -> Option<adk_core::BatchGroup> {

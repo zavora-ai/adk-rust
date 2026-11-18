@@ -306,6 +306,7 @@ fn call(tool: &str) -> ToolConfirmationRequest {
         args: json!({ "to": "[client email]" }),
         origin: None,
         acting: None,
+        evidence: Vec::new(),
     }
 }
 

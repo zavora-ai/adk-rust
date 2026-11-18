@@ -1219,6 +1219,7 @@ fn held_then_resumed(id: Option<&str>) -> MutableSession {
         args: serde_json::json!({"amount": 5}),
         acting: None,
         origin: None,
+        evidence: Vec::new(),
     });
     mutable.append_event(hold);
     mutable.append_event(event_with(

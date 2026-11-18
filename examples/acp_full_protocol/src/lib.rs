@@ -356,6 +356,7 @@ impl Agent for ScriptedAgent {
                     args: json!({ "path": DELETE_TARGET }),
                     acting: None,
                     origin: None,
+                    evidence: Vec::new(),
                 });
                 yield Ok(event);
                 return;

@@ -908,6 +908,7 @@ mod tests {
             args: json!({}),
             acting: None,
             origin: None,
+            evidence: Vec::new(),
         });
         let history = SessionHistory::new(vec![event("ask", &[]), hold], HashMap::new(), None);
         let error = history

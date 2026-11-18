@@ -17,6 +17,7 @@
 //! | [`requests_list_by_session`] | `list_requests` filtered by session (application, user and session ID) returns that session's requests alone, in order and by page, however many requests of other sessions list first (spec 3.3 §10 C1) |
 //! | [`delegations_round_trip`] | Delegations are stored, replaced by ID, listed per delegate by ID, and deleted once |
 //! | [`approval_requests_survive_a_restart`] | Requests and delegations read back unchanged after a restart |
+//! | [`evidence_round_trips`] | A held call's evidence and a request's evidence read back unchanged after a restart; a decision binds to the evidence digest |
 //!
 //! Every request carries an [`ActingContext`] and a [`ToolOrigin`], and the cases compare
 //! whole requests, so each backend proves the acting agent and the tool's origin are
@@ -39,8 +40,9 @@ use crate::principal::SubjectRef;
 use crate::{
     ActingContext, AgentId, AgentPrincipal, ApprovalCursor, ApprovalDecision, ApprovalDelegation,
     ApprovalPolicy, ApprovalRequest, ApprovalRequestQuery, ApprovalScope, ApprovalState,
-    ApprovalStore, ApproverSelector, DelegationScope, DelegationWindow, PendingApproval,
-    ToolApproval, ToolConfirmationDecision, ToolConfirmationRequest, ToolOrigin,
+    ApprovalStore, ApproverSelector, ArtifactLocator, DelegationScope, DelegationWindow, Evidence,
+    ImageEvidence, PendingApproval, ToolApproval, ToolConfirmationDecision,
+    ToolConfirmationRequest, ToolOrigin,
 };
 
 /// Opens an [`ApprovalStore`] backend for the conformance suite.
@@ -97,6 +99,7 @@ fn request(amount: u64, call_id: &str) -> ToolConfirmationRequest {
             )
             .on_behalf_of(SubjectRef::human("alice")),
         )),
+        evidence: Vec::new(),
     }
 }
 
@@ -724,4 +727,75 @@ pub async fn approval_requests_survive_a_restart<H: ApprovalStoreHarness + ?Size
         "and lists"
     );
     assert_eq!(store.delegations_to(&delegate).await.expect("list"), [delegation]);
+}
+
+/// An image held as evidence, with regions and a caption, so a backend proves it keeps every
+/// field.
+fn image_evidence(scope: &ApprovalScope, digest: &str) -> Evidence {
+    ImageEvidence::new(
+        digest,
+        ArtifactLocator::new(
+            &scope.app_name,
+            &scope.user_id,
+            &scope.session_id,
+            unique_unicode("egress/crop"),
+            3,
+        ),
+        "image/png",
+        640,
+        180,
+    )
+    .with_regions(json!({
+        "image": digest,
+        "width": 640,
+        "height": 180,
+        "regions": [{ "label": "total", "shape": { "box": { "x0": 12.5, "y0": 8.5, "x1": 300.25, "y1": 60.75 } } }]
+    }))
+    .with_caption("Invoice total — ü-日本, after redaction")
+    .into()
+}
+
+/// A held call's evidence and an approval request's evidence read back unchanged, also after
+/// a restart, and a decision recorded for one image's call never authorizes the same call
+/// with another image.
+pub async fn evidence_round_trips<H: ApprovalStoreHarness + ?Sized>(harness: &H) {
+    let scope = scope();
+    let digest = "sha256:9f2c0a7e5b1d4c8a6f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a";
+    let swapped_digest = "sha256:0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8";
+    let held = request(10, "call-1").with_evidence([image_evidence(&scope, digest)]);
+    let swapped = request(10, "call-2").with_evidence([image_evidence(&scope, swapped_digest)]);
+    assert_ne!(held.fingerprint(), swapped.fingerprint(), "the digest is part of the fingerprint");
+
+    let mut approval = ApprovalRequest::new(
+        unique_unicode("request"),
+        scope.clone(),
+        &held,
+        ApprovalPolicy::new([ApproverSelector::human("ana")]),
+    )
+    .with_evidence([image_evidence(&scope, swapped_digest)]);
+    approval.created_at = base_time();
+    {
+        let store = harness.open().await;
+        store.record_pending(&scope, &held).await.expect("record");
+        let listed = pending(&*store, &scope).await;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].request, held, "the held call keeps its evidence");
+        assert_eq!(listed[0].fingerprint, held.fingerprint());
+        assert_eq!(store.create_request(&approval).await.expect("create"), approval);
+        store.decide(&scope, &held.fingerprint(), ToolApproval::approve()).await.expect("decide");
+    }
+
+    let store = harness.open().await;
+    assert_eq!(stored(&*store, &approval.id).await, Some(approval.clone()), "evidence survives");
+    assert_eq!(approval.evidence.len(), 2);
+    assert_eq!(
+        take(&*store, &scope, &swapped.fingerprint()).await,
+        None,
+        "the decision does not authorize the call with another image"
+    );
+    assert_eq!(
+        take(&*store, &scope, &held.fingerprint()).await,
+        Some(ToolConfirmationDecision::Approve),
+        "the call with the approved image takes its decision"
+    );
 }

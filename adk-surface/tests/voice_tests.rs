@@ -47,6 +47,7 @@ mod engine {
             args: json!({ "to": "[CLIENT]", "body": "x".repeat(if tool == "write_file" { 3_000 } else { 10 }) }),
             origin: None,
             acting: None,
+            evidence: Vec::new(),
         };
         let request = ApprovalRequest::new(
             format!("apr-{tool}"),
@@ -324,6 +325,7 @@ mod conversation {
             args: json!({ "to": "[CLIENT]" }),
             origin: None,
             acting: None,
+            evidence: Vec::new(),
         };
         voice
             .service
@@ -571,6 +573,7 @@ mod conversation {
             args: json!({ "to": "[CLIENT]" }),
             origin: None,
             acting: None,
+            evidence: Vec::new(),
         };
         let request = voice
             .service

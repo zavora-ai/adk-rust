@@ -339,6 +339,7 @@ mod tests {
             args: serde_json::json!({"path": "/tmp/x"}),
             origin: None,
             acting: None,
+            evidence: Vec::new(),
         }
     }
 

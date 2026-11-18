@@ -89,6 +89,7 @@ async fn submit_in(fx: &Fixture, user: &str, session: &str, quorum: u32) -> Appr
         args: json!({ "amount": 900, "iban": "DE00 secret" }),
         acting: None,
         origin: None,
+        evidence: Vec::new(),
     };
     let scope = ApprovalScope::new("bank", user, session);
     fx.store.record_pending(&scope, &call).await.unwrap();

@@ -142,7 +142,9 @@ Every record names the acting agent and the subject it acts for in `actor`: the 
 Records never carry arguments: `argsDigest` is `sha256:<hex>` of the call's final arguments
 (the cart for a payment). `ext` holds the call ID, the tool's declared effect, the session
 ID, the tool's `toolSource` and `declarationDigest` (its `ToolOrigin`, on governed records and
-short-circuit records whose tool is known), the policy's reason for a denial or hold, an
+short-circuit records whose tool is known), the `evidenceDigests` of a call held with
+[evidence](tool-authorization.md#approving-with-evidence) and of the approval decisions made on
+it, the policy's reason for a denial or hold, an
 approval's `source` (`call_id`, `fingerprint`, `approval_store`, `handler`,
 `handler_timeout`), a short-circuited call's `toolName`, `agentName`, and `answeredBy`
 (`before_tool_callback`, `invocation_hook`, `enhanced_plugin`), an unknown outcome's `cause`

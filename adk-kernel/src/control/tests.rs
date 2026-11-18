@@ -921,6 +921,7 @@ async fn attach_returns_the_transcript_cursor_pending_holds_and_process() {
         args: json!({ "command": "cargo test" }),
         acting: None,
         origin: None,
+        evidence: Vec::new(),
     });
     fake.sessions.append_event("s-1", held.clone()).await.unwrap();
     let pid = fake.spawn(&user, "s-1", RunState::Waiting).await;
@@ -1105,6 +1106,7 @@ async fn a_held_call_is_decided_over_the_local_transport() {
         args: json!({ "command": "cargo test" }),
         acting: None,
         origin: None,
+        evidence: Vec::new(),
     };
     let policy = ApprovalPolicy::new([ApproverSelector::group("operator")]).allow_self_approval();
     let scope = ApprovalScope::new(APP, os_user(), "s-1");

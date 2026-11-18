@@ -780,6 +780,7 @@ mod tests {
             args: json!({ "invoice": "INV-10", "to": "client@example.com" }),
             origin: None,
             acting: None,
+            evidence: Vec::new(),
         }
     }
 

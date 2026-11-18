@@ -210,6 +210,7 @@ impl Plane {
             args: json!({ "path": "invoice.txt" }),
             acting: None,
             origin: None,
+            evidence: Vec::new(),
         };
         let policy =
             ApprovalPolicy::new([ApproverSelector::group("operator")]).allow_self_approval();
