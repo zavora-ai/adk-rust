@@ -388,6 +388,22 @@ export type AppPrompt = {
   text: string;
   /** The link, an `https` or `http` URL. */
   url: string;
+} | {
+  /** Its contents in base64, when the app sent bytes. */
+  blob?: string | null;
+  /** "Cancel". */
+  dismissLabel: string;
+  kind: "download";
+  /** Its media type; never one a browser opens as a page. */
+  mimeType: string;
+  /** The file's name, sanitized. */
+  name: string;
+  /** "Save". */
+  saveLabel: string;
+  /** "The Weather app wants to save forecast.csv (2 KB)" */
+  text: string;
+  /** Its contents as text, when the app sent text. */
+  textContent?: string | null;
 };
 
 /**

@@ -212,6 +212,18 @@ pub(crate) struct Declared {
 }
 
 impl Declared {
+    /// What the frame's policy grants, as MCP Apps `hostCapabilities.sandbox.csp` reports it:
+    /// each kind of site that passed the checks.
+    pub(crate) fn granted(&self) -> serde_json::Value {
+        let sources = |sites: &[Site]| sites.iter().map(Site::source).collect::<Vec<_>>();
+        serde_json::json!({
+            "connectDomains": sources(&self.connect),
+            "resourceDomains": sources(&self.resource),
+            "frameDomains": sources(&self.frame),
+            "baseUriDomains": sources(&self.base),
+        })
+    }
+
     /// Whether some declared site covers `url`.
     pub(crate) fn covers(&self, url: &Parsed) -> bool {
         self.connect.iter().chain(&self.resource).chain(&self.frame).any(|site| site.covers(url))

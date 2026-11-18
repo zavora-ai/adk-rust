@@ -176,6 +176,7 @@ const WORDS: &[(&str, &str)] = listed![
     SEND_IT,
     MARKED_AS_SUGGESTED_BY_THE_APP,
     OPEN,
+    SAVE,
     APP_CALL_WAITS_FOR_YOU,
     APP_CALL_SENT,
     APP_SERVER_DIDNT_ANSWER,

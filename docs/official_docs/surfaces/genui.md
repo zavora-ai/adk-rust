@@ -422,7 +422,16 @@ and the origin of the page that opened the app, from the request's `Host` with t
 origin's scheme, so a remote home behind `--apps-origin` and a home listening on every
 interface both frame it. A page whose policy cannot be sent is not served. The home's page
 adds `frame-src` for that origin only. The frame is `sandbox="allow-scripts"`: no same-origin
-access, forms, popups or navigation of the page. The surface API answers every request whose
+access, forms, popups or navigation of the page.
+
+**An origin per server.** With a `localhost` apps origin, each server's apps are framed on an
+origin of their own under it, `http://<sha256(server)[..16]>.localhost:<port>` (browsers
+resolve every `*.localhost` name to this computer), so two servers' apps never share one; a
+frame is served only on its own server's origin, and the home's page names
+`http://*.localhost:<port>` in its `frame-src`. A remote apps origin needs wildcard DNS and
+certificates first: `McpAppsHostBuilder::origin_per_server(true)`, with the page's `frame-src`
+naming `https://*.<apps host>`. An IP address has no subdomains, so every app shares it. The
+surface API refuses requests from every server's origin as it does from the apps origin. The surface API answers every request whose
 `Origin` is the apps origin, or the opaque `null` a sandboxed frame sends, `403
 surface.not_here`, whatever `SecurityConfig` admits (`refuse_apps_origin`);
 `refuse_apps_origin_recorded` also records `surface.app.origin_refused`, at most once a minute
@@ -432,7 +441,7 @@ with the number refused since, so a page that keeps trying cannot fill the trail
 
 | Request | Answer |
 |---|---|
-| `ui/initialize`, `ping` | Answered; display mode inline |
+| `ui/initialize`, `ping` | Answered; display mode inline. `hostCapabilities.sandbox` reports what the frame was granted: the sites that passed (`connectDomains`, `resourceDomains`, `frameDomains`, `baseUriDomains`) and no permission at all |
 | `tools/call` for a tool its own server publishes for both the model and the app, a tool that declares no `_meta.ui` included | Asked of the agent whose call showed the app as a requested call, by the name the agent knows that server's tool by (`surface.app.call_asked`), and answered once the agent holds it — the ordinary card follows the app, its first step "The app from Weather asked · 10:06", its detail "From the Weather app in this thread", never **Always allow**; `surface.app.call_held` — or refuses it (`surface.app.call_refused`, by the agent). The same call again is the decision already waiting; an app with three calls waiting is told "The app already asked for 3 things. Answer those first." |
 | `tools/call` for a model-only tool, another server's tool, or one the agent is not given | Refused: "The app tried to use transfer_funds. Apps can't use it."; `surface.app.call_refused` |
 | `tools/call` whose name is not a tool's name | A malformed request: nothing it sent is shown or recorded |
@@ -440,6 +449,7 @@ with the number refused since, so a page that keeps trying cannot fill the trail
 | `tools/call` for an app-only tool | Refused: "This app needs a tool this home can't run yet" |
 | `ui/message` | "The app wants to send: “…”" with **Send it** and **Not now**; **Send it** sends it as the person's message inside an untrusted-content block labelled "Suggested by the Weather app", which the model reads and every surface shows as the message with "Suggested by the Weather app" under it; `surface.app.message_sent` |
 | `ui/open-link` | "Open example.com?" with **Open** and **Cancel**; only **Open** opens it. A link to this computer or its network (loopback, `0.0.0.0`, private and link-local addresses, IPv4 inside IPv6, `.local` and single-label names) is refused, on the server and again on the page |
+| `ui/download-file` | "The Weather app wants to save forecast.csv (2 KB)" with **Save** and **Cancel**; only **Save** saves it. Only an embedded resource (the home fetches no link), up to 5 MB, its name cut to its last part; a file that runs or that a browser opens as a page (`.exe`, `.sh`, `.html`, `.svg`, …) is refused |
 | `ui/update-model-context` | Logged, never forwarded to the model |
 | Anything else | "not supported here" |
 

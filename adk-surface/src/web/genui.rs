@@ -323,6 +323,18 @@ mod apps {
         since: u64,
     }
 
+    /// Whether `origin` is a server's own origin under `apps_origin`
+    /// (`McpAppsHostBuilder::origin_per_server`): the same scheme and port, a subdomain of its
+    /// host.
+    fn under(origin: &str, apps_origin: &str) -> bool {
+        let (Some((scheme, rest)), Some((apps_scheme, apps_rest))) =
+            (origin.split_once("://"), apps_origin.split_once("://"))
+        else {
+            return false;
+        };
+        scheme == apps_scheme && rest.ends_with(&format!(".{apps_rest}"))
+    }
+
     fn refuse(router: Router, apps_origin: &str, trail: Option<AuditTrail>) -> Router {
         let apps_origin = apps_origin.trim_end_matches('/').to_ascii_lowercase();
         let refusals = Arc::new(Mutex::new(Refusals::default()));
@@ -337,7 +349,9 @@ mod apps {
                     .iter()
                     .filter_map(|origin| origin.to_str().ok())
                     .map(|origin| origin.trim_end_matches('/').to_ascii_lowercase())
-                    .any(|origin| origin == apps_origin || origin == "null");
+                    .any(|origin| {
+                        origin == apps_origin || origin == "null" || under(&origin, &apps_origin)
+                    });
                 if from_apps {
                     tracing::warn!(
                         http.path = %request.uri().path(),

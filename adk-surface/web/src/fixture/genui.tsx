@@ -731,6 +731,19 @@ export function appAnswer(request: AppRequest): AppAnswer {
         result: {},
         prompt: { kind: "link", text: "Open example.com?", url: String(params.url), openLabel: "Open", dismissLabel: "Cancel" },
       };
+    case "ui/download-file":
+      return {
+        result: {},
+        prompt: {
+          kind: "download",
+          text: "The Weather app wants to save forecast.csv (14 bytes)",
+          name: "forecast.csv",
+          mimeType: "text/csv",
+          textContent: "day,rain\nmon,4",
+          saveLabel: "Save",
+          dismissLabel: "Cancel",
+        },
+      };
     default:
       return { error: { code: -32601, message: `${request.method} is not supported here` } };
   }

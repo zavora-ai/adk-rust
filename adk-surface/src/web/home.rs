@@ -36,9 +36,20 @@ fn content_security_policy(headers: &HeaderMap, frames: Option<&str>) -> String 
         None => CONTENT_SECURITY_POLICY.to_string(),
     };
     if let Some(frames) = frames {
-        policy.push_str(&format!("; frame-src {frames}"));
+        policy.push_str(&format!("; frame-src {}", frame_sources(frames)));
     }
     policy
+}
+
+/// The page's `frame-src` for the apps origin `frames`: the origin itself and, for a
+/// `localhost` one, its per-server subdomains (`McpAppsHostBuilder::origin_per_server`).
+fn frame_sources(frames: &str) -> String {
+    match frames.split_once("://") {
+        Some((scheme, rest)) if rest.starts_with("localhost") && !frames.contains(' ') => {
+            format!("{frames} {scheme}://*.{rest}")
+        }
+        _ => frames.to_string(),
+    }
 }
 
 #[derive(RustEmbed)]

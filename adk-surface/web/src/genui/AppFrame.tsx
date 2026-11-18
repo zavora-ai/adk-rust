@@ -244,5 +244,37 @@ function Prompt({
         </div>
       );
     }
+    case "download": {
+      // Saved only on the person's press, as a file the browser keeps: never opened here.
+      const save = () => {
+        const bytes =
+          prompt.textContent !== undefined && prompt.textContent !== null
+            ? new TextEncoder().encode(prompt.textContent)
+            : Uint8Array.from(atob(prompt.blob ?? ""), (c) => c.charCodeAt(0));
+        const url = URL.createObjectURL(new Blob([bytes], { type: prompt.mimeType }));
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = prompt.name;
+        anchor.rel = "noopener";
+        anchor.click();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+        onDone();
+      };
+      return (
+        <div className="app-ask" role="group" aria-label={visible(prompt.text)}>
+          <p className="app-ask-text">
+            <strong>{visible(prompt.text)}</strong>
+          </p>
+          <div className="app-ask-actions">
+            <button type="button" className="button button-primary" onClick={save}>
+              {visible(prompt.saveLabel)}
+            </button>
+            <button type="button" className="button button-secondary" onClick={onDone}>
+              {visible(prompt.dismissLabel)}
+            </button>
+          </div>
+        </div>
+      );
+    }
   }
 }

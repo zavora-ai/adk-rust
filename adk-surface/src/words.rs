@@ -1159,6 +1159,8 @@ pub const SEND_IT: &str = "Send it";
 pub const MARKED_AS_SUGGESTED_BY_THE_APP: &str = "It will be marked as suggested by the app";
 /// Opens a link an app asked to open.
 pub const OPEN: &str = "Open";
+/// Saves a file an app offered.
+pub const SAVE: &str = "Save";
 /// What an app's tool call answers the app once it is held: it ran nothing.
 pub const APP_CALL_WAITS_FOR_YOU: &str = "Sent to the person. It runs only once they decide.";
 /// What an app's tool call answers the app when the agent has not yet held or refused it.
@@ -1190,6 +1192,18 @@ pub fn app_wants_to_send(message: &str) -> String {
 /// An app asks to open a link: "Open example.com?"
 pub fn open_site(host: &str) -> String {
     format!("Open {host}?")
+}
+
+/// An app offers a file: "The Weather app wants to save forecast.csv (2 KB)".
+pub fn app_wants_to_save(app: &str, name: &str, bytes: usize) -> String {
+    let size = if bytes < 1024 {
+        format!("{bytes} bytes")
+    } else if bytes < 1024 * 1024 {
+        format!("{} KB", bytes.div_ceil(1024))
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    };
+    format!("The {app} app wants to save {name} ({size})")
 }
 
 /// An app that already has `count` calls waiting asks for another: "The app already asked for 3

@@ -9,6 +9,8 @@
 //! | `tools/call` | Only a tool the same server publishes for both the model and the app, a tool without `_meta.ui` included, by the name the agent knows that tool by, asked for as a requested call held by the agent whose call showed the app and answered once the agent has held or refused it; an app-only tool is "This app needs a tool this home can't run yet"; the same call again is the same decision, and an app with three calls waiting asks for no more |
 //! | `ui/message` | "The app wants to send: …" with **Send it** and **Not now**; sent as the person's message inside an untrusted-content block labelled "Suggested by the Weather app", which every surface shows as the message and that label |
 //! | `ui/open-link` | "Open example.com?", opened only by the person's press; a link to this computer or its network is refused |
+//! | `ui/download-file` | "The Weather app wants to save forecast.csv (2 KB)", saved only by the person's press: an embedded resource up to 5 MB, its name sanitized, never a file that runs or opens as a page |
+//! | Origins | With a `localhost` apps origin, each server's apps on an origin of their own under it ([`McpAppsHostBuilder::origin_per_server`]); `ui/initialize` reports what the frame was granted (`hostCapabilities.sandbox`) |
 //! | `ui/update-model-context` | Logged, never forwarded to the model |
 //! | Anything else | "not supported here" |
 //!
@@ -67,6 +69,8 @@ const MAX_HEIGHT: u32 = 640;
 const FRAME_LIFETIME: Duration = Duration::from_secs(15 * 60);
 /// The longest message an app may suggest, in characters.
 const MAX_MESSAGE_CHARS: usize = 4_000;
+/// How many apps' grants are kept before the oldest are forgotten.
+const MAX_GRANTS_KEPT: usize = 1_024;
 /// JSON-RPC: the method is not offered here.
 const METHOD_NOT_FOUND: i64 = -32_601;
 /// JSON-RPC: the parameters are not what the method takes.
@@ -199,6 +203,8 @@ where
 struct Frame {
     html: String,
     policy: String,
+    /// The origin it is served on: the apps origin, or its server's own under it.
+    origin: String,
     until: Instant,
 }
 
@@ -230,8 +236,12 @@ pub struct McpAppsHost {
 struct Inner {
     servers: Vec<Arc<dyn AppServers>>,
     apps_origin: Option<String>,
+    /// Whether each server's apps are framed on an origin of their own under the apps origin.
+    per_server: bool,
     home_origins: Vec<String>,
     frames: Mutex<HashMap<String, Frame>>,
+    /// What each open app's frame was granted (`hostCapabilities.sandbox`), by session and call.
+    granted: Mutex<HashMap<String, Value>>,
 }
 
 impl std::fmt::Debug for McpAppsHost {
@@ -249,6 +259,7 @@ impl std::fmt::Debug for McpAppsHost {
 pub struct McpAppsHostBuilder {
     servers: Vec<Arc<dyn AppServers>>,
     apps_origin: Option<String>,
+    per_server: Option<bool>,
     home_origins: Vec<String>,
 }
 
@@ -269,6 +280,19 @@ impl McpAppsHostBuilder {
         self
     }
 
+    /// Frames each server's apps on an origin of its own under the apps origin,
+    /// `<sha256(server)[..16]>.<apps host>`, so two servers' apps never share one (spec 3.3
+    /// §6.1 `genui-apps`). On by default when the apps origin's host is `localhost`, whose
+    /// subdomains every browser resolves to this computer; a remote apps origin needs wildcard
+    /// DNS and certificates first, and the home's page must name `*.<apps host>` in its
+    /// `frame-src` ([`web::home_with_apps_origin`](crate::web::home_with_apps_origin) does for
+    /// `localhost`).
+    #[must_use]
+    pub fn origin_per_server(mut self, per_server: bool) -> Self {
+        self.per_server = Some(per_server);
+        self
+    }
+
     /// An origin the home is served on: the only one that may frame apps, and one no app may
     /// declare.
     #[must_use]
@@ -279,12 +303,20 @@ impl McpAppsHostBuilder {
 
     /// The host.
     pub fn build(self) -> McpAppsHost {
+        let per_server = self.per_server.unwrap_or_else(|| {
+            self.apps_origin
+                .as_deref()
+                .and_then(origin_host)
+                .is_some_and(|host| host == "localhost")
+        });
         McpAppsHost {
             inner: Arc::new(Inner {
                 servers: self.servers,
                 apps_origin: self.apps_origin,
+                per_server,
                 home_origins: self.home_origins,
                 frames: Mutex::new(HashMap::new()),
+                granted: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -306,6 +338,34 @@ impl McpAppsHost {
     /// The origin apps are framed on, when there is one.
     pub fn apps_origin(&self) -> Option<&str> {
         self.inner.apps_origin.as_deref()
+    }
+
+    /// The origin `server`'s apps are framed on: its own under the apps origin when origins
+    /// are per server ([`McpAppsHostBuilder::origin_per_server`]), else the apps origin.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_surface::genui::McpAppsHost;
+    ///
+    /// let host = McpAppsHost::builder().apps_origin("http://localhost:41234").build();
+    /// let weather = host.server_origin("weather").unwrap();
+    /// assert!(weather.starts_with("http://") && weather.ends_with(".localhost:41234"));
+    /// assert_ne!(weather, host.server_origin("calendar").unwrap());
+    /// // An IP address has no subdomains: every app shares it.
+    /// let loopback = McpAppsHost::builder().apps_origin("http://127.0.0.1:41234").build();
+    /// assert_eq!(loopback.server_origin("weather").as_deref(), Some("http://127.0.0.1:41234"));
+    /// ```
+    pub fn server_origin(&self, server: &str) -> Option<String> {
+        let origin = self.inner.apps_origin.clone()?;
+        if !self.inner.per_server {
+            return Some(origin);
+        }
+        let (scheme, rest) = origin.split_once("://")?;
+        use sha2::Digest;
+        let digest = sha2::Sha256::digest(server.as_bytes());
+        let label: String = digest.iter().take(8).map(|byte| format!("{byte:02x}")).collect();
+        Some(format!("{scheme}://{label}.{rest}"))
     }
 
     /// The routes of the apps origin (spec 3.3 §6.1 `genui-apps`): `GET /app/{token}` serves a
@@ -569,11 +629,27 @@ impl McpAppsHost {
             }
         };
         let token = uuid::Uuid::new_v4().simple().to_string();
+        // Each server's apps on an origin of their own, when origins are per server.
+        let origin = self.server_origin(&record.server).unwrap_or(origin);
         let frame = Frame {
             html: resource.html.clone(),
             policy: declared.policy(&home_origins),
+            origin: origin.clone(),
             until: Instant::now() + FRAME_LIFETIME,
         };
+        // What the frame is granted, reported to the app at ui/initialize: the sites that
+        // passed, and no permission (camera, microphone, geolocation, clipboard) at all.
+        {
+            let mut granted =
+                self.inner.granted.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if granted.len() > MAX_GRANTS_KEPT {
+                granted.clear();
+            }
+            granted.insert(
+                format!("{session}/{call_id}"),
+                json!({ "permissions": {}, "csp": declared.granted() }),
+            );
+        }
         {
             let mut frames =
                 self.inner.frames.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -617,7 +693,21 @@ impl McpAppsHost {
             "ui/initialize" => Ok(ok(json!({
                 "protocolVersion": MCP_APPS_VERSION,
                 "hostInfo": { "name": "adk-rust", "version": env!("CARGO_PKG_VERSION") },
-                "hostCapabilities": { "openLinks": {}, "serverTools": {}, "logging": {} },
+                "hostCapabilities": {
+                    "openLinks": {},
+                    "downloadFile": {},
+                    "serverTools": {},
+                    "logging": {},
+                    // What the frame was actually granted; never same-origin storage.
+                    "sandbox": self
+                        .inner
+                        .granted
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .get(&format!("{session}/{call_id}"))
+                        .cloned()
+                        .unwrap_or_else(|| json!({ "permissions": {}, "csp": {} })),
+                },
                 "hostContext": {
                     "displayMode": "inline",
                     "availableDisplayModes": ["inline"],
@@ -805,6 +895,12 @@ impl McpAppsHost {
                     )),
                 }
             }
+            "ui/download-file" => Ok(match download(&request.params, &label) {
+                Ok(prompt) => {
+                    AppAnswer { result: Some(json!({})), error: None, prompt: Some(prompt) }
+                }
+                Err(why) => error(INVALID_PARAMS, why, None),
+            }),
             "ui/update-model-context" => {
                 // Logged, never forwarded: an app does not steer the model (decision 15).
                 tracing::info!(
@@ -860,12 +956,26 @@ impl McpAppsHost {
 }
 
 /// `GET /app/{token}` on the apps origin.
-async fn frame(State(host): State<McpAppsHost>, Path(token): Path<String>) -> Response {
+async fn frame(
+    State(host): State<McpAppsHost>,
+    Path(token): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let asked_host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_ascii_lowercase());
     let page = {
         let frames = host.inner.frames.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         frames
             .get(&token)
             .filter(|frame| frame.until > Instant::now())
+            // Served only on its own server's origin, never another server's.
+            .filter(|frame| {
+                asked_host.is_none()
+                    || frame.origin.split_once("://").map(|(_, rest)| rest.to_ascii_lowercase())
+                        == asked_host
+            })
             .map(|frame| (frame.html.clone(), frame.policy.clone()))
     };
     let Some((html, policy)) = page else {
@@ -891,6 +1001,83 @@ async fn frame(State(host): State<McpAppsHost>, Path(token): Path<String>) -> Re
     );
     headers.insert("cross-origin-resource-policy", HeaderValue::from_static("cross-origin"));
     response
+}
+
+/// The host of `origin`, `scheme://host[:port]`, lowercased.
+fn origin_host(origin: &str) -> Option<String> {
+    let (_, rest) = origin.split_once("://")?;
+    let host = rest.split('/').next()?;
+    let host = host.rsplit_once(':').map_or(host, |(host, port)| {
+        if port.bytes().all(|byte| byte.is_ascii_digit()) { host } else { rest }
+    });
+    Some(host.to_ascii_lowercase())
+}
+
+/// The largest file an app may offer to save (`ui/download-file`).
+const MAX_DOWNLOAD_BYTES: usize = 5 * 1024 * 1024;
+
+/// Extensions a saved file may not have: ones that run, or that a browser opens as a page.
+const UNSAFE_EXTENSIONS: &[&str] = &[
+    "exe", "msi", "bat", "cmd", "com", "scr", "ps1", "vbs", "js", "mjs", "jar", "sh", "app", "dmg",
+    "pkg", "deb", "rpm", "html", "htm", "xhtml", "svg", "mht", "url", "lnk", "desktop",
+];
+
+/// `ui/download-file`'s first embedded resource as a host prompt the person answers (spec
+/// 3.3 §6.1 `genui-apps`): its name sanitized, its size capped, a link to fetch or a file
+/// that runs refused.
+fn download(params: &Value, app: &str) -> std::result::Result<AppPrompt, String> {
+    let item = params
+        .get("contents")
+        .and_then(Value::as_array)
+        .and_then(|contents| contents.first())
+        .ok_or("ui/download-file needs contents: one embedded resource")?;
+    if item.get("type").and_then(Value::as_str) != Some("resource") {
+        return Err("ui/download-file saves an embedded resource; this home fetches no link".into());
+    }
+    let resource = item.get("resource").ok_or("an embedded resource needs its resource")?;
+    let uri = resource.get("uri").and_then(Value::as_str).unwrap_or_default();
+    let raw = uri.rsplit(['/', '\\', ':']).next().unwrap_or_default();
+    let name: String = raw
+        .chars()
+        .filter(|c| !c.is_control() && !"<>:\"/\\|?*".contains(*c))
+        .take(100)
+        .collect::<String>()
+        .trim_matches(['.', ' '])
+        .to_string();
+    let name = if name.is_empty() { "download".to_string() } else { name };
+    let extension = name.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase());
+    if extension.as_deref().is_some_and(|ext| UNSAFE_EXTENSIONS.contains(&ext)) {
+        return Err(format!("this home does not save .{} files", extension.unwrap_or_default()));
+    }
+    let mime_type = resource
+        .get("mimeType")
+        .and_then(Value::as_str)
+        .filter(|mime| {
+            !mime.contains("html") && !mime.contains("svg") && !mime.contains("javascript")
+        })
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let (text, blob) = (
+        resource.get("text").and_then(Value::as_str),
+        resource.get("blob").and_then(Value::as_str),
+    );
+    let size = match (text, blob) {
+        (Some(text), _) => text.len(),
+        (None, Some(blob)) => blob.len() / 4 * 3,
+        (None, None) => return Err("an embedded resource needs text or blob".into()),
+    };
+    if size > MAX_DOWNLOAD_BYTES {
+        return Err(format!("this home saves files up to {} MB", MAX_DOWNLOAD_BYTES / 1024 / 1024));
+    }
+    Ok(AppPrompt::Download {
+        text: words::app_wants_to_save(app, &name, size),
+        name,
+        mime_type,
+        text_content: text.map(str::to_string),
+        blob: if text.is_none() { blob.map(str::to_string) } else { None },
+        save_label: words::SAVE.to_string(),
+        dismiss_label: words::CANCEL.to_string(),
+    })
 }
 
 /// Whether `name` can be an MCP tool's name: 1 to 128 letters, digits, `_`, `-`, `.` and `/`.
@@ -1017,6 +1204,7 @@ mod tests {
             Frame {
                 html: "<p>Nairobi</p>".into(),
                 policy: "default-src 'none'; connect-src https://[a.b\u{1}]".into(),
+                origin: "http://127.0.0.1:41234".into(),
                 until: Instant::now() + FRAME_LIFETIME,
             },
         );
@@ -1028,6 +1216,81 @@ mod tests {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert!(!String::from_utf8_lossy(&body).contains("Nairobi"));
+    }
+
+    #[tokio::test]
+    async fn each_server_has_its_own_origin_and_a_frame_is_served_only_on_its_own() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt as _;
+
+        let host = McpAppsHost::builder().apps_origin("http://localhost:41234").build();
+        let weather = host.server_origin("weather").unwrap();
+        let calendar = host.server_origin("calendar").unwrap();
+        assert_ne!(weather, calendar);
+        assert_eq!(weather, host.server_origin("weather").unwrap(), "stable");
+        host.inner.frames.lock().unwrap().insert(
+            "token".into(),
+            Frame {
+                html: "<p>Nairobi</p>".into(),
+                policy: "default-src 'none'".into(),
+                origin: weather.clone(),
+                until: Instant::now() + FRAME_LIFETIME,
+            },
+        );
+        let at = |origin: &str| {
+            let host_header = origin.split_once("://").unwrap().1.to_string();
+            Request::builder()
+                .uri("/app/token")
+                .header("host", host_header)
+                .body(Body::empty())
+                .unwrap()
+        };
+        let served = host.sandbox_router().oneshot(at(&weather)).await.unwrap();
+        assert_eq!(served.status(), StatusCode::OK);
+        let elsewhere = host.sandbox_router().oneshot(at(&calendar)).await.unwrap();
+        assert_eq!(elsewhere.status(), StatusCode::NOT_FOUND, "never on another server's origin");
+        // Per server only where subdomains resolve, unless asked for.
+        let remote = McpAppsHost::builder().apps_origin("https://apps.example.net").build();
+        assert_eq!(remote.server_origin("weather").as_deref(), Some("https://apps.example.net"));
+        let opted = McpAppsHost::builder()
+            .apps_origin("https://apps.example.net")
+            .origin_per_server(true)
+            .build();
+        assert!(opted.server_origin("weather").unwrap().ends_with(".apps.example.net"));
+    }
+
+    #[test]
+    fn a_file_an_app_offers_is_a_prompt_with_a_safe_name_and_size() {
+        let offered = |name: &str, mime: &str, text: &str| {
+            download(
+                &json!({ "contents": [{ "type": "resource",
+                    "resource": { "uri": format!("file:///tmp/{name}"), "mimeType": mime, "text": text } }] }),
+                "Weather",
+            )
+        };
+        match offered("forecast.csv", "text/csv", "day,rain\nmon,4").unwrap() {
+            AppPrompt::Download { text, name, mime_type, text_content, .. } => {
+                assert_eq!(name, "forecast.csv");
+                assert_eq!(mime_type, "text/csv");
+                assert_eq!(text, "The Weather app wants to save forecast.csv (14 bytes)");
+                assert_eq!(text_content.as_deref(), Some("day,rain\nmon,4"));
+            }
+            other => panic!("{other:?}"),
+        }
+        // A page or a program is never saved; a link is never fetched; a huge file is refused.
+        assert!(offered("report.html", "text/html", "<p>").is_err());
+        assert!(offered("setup.exe", "application/octet-stream", "MZ").is_err());
+        assert!(download(&json!({ "contents": [{ "type": "resource_link", "uri": "https://x.test/a.csv" }] }), "W").is_err());
+        let huge = "x".repeat(MAX_DOWNLOAD_BYTES + 1);
+        assert!(offered("big.txt", "text/plain", &huge).is_err());
+        // A name made of path tricks keeps only its last part.
+        match offered("..%2F..%2Fpasswd", "text/plain", "x").unwrap() {
+            AppPrompt::Download { name, .. } => {
+                assert!(!name.contains('/') && !name.starts_with('.'))
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

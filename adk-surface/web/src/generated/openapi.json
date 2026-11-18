@@ -1119,6 +1119,58 @@
               "dismissLabel"
             ],
             "type": "object"
+          },
+          {
+            "description": "\"The Weather app wants to save forecast.csv (2 KB)\", with **Save** and **Cancel**: a\nfile an app offers (MCP Apps `ui/download-file`), saved only by the person's press.",
+            "properties": {
+              "blob": {
+                "description": "Its contents in base64, when the app sent bytes.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "dismissLabel": {
+                "description": "\"Cancel\".",
+                "type": "string"
+              },
+              "kind": {
+                "const": "download",
+                "type": "string"
+              },
+              "mimeType": {
+                "description": "Its media type; never one a browser opens as a page.",
+                "type": "string"
+              },
+              "name": {
+                "description": "The file's name, sanitized.",
+                "type": "string"
+              },
+              "saveLabel": {
+                "description": "\"Save\".",
+                "type": "string"
+              },
+              "text": {
+                "description": "\"The Weather app wants to save forecast.csv (2 KB)\"",
+                "type": "string"
+              },
+              "textContent": {
+                "description": "Its contents as text, when the app sent text.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "text",
+              "name",
+              "mimeType",
+              "saveLabel",
+              "dismissLabel"
+            ],
+            "type": "object"
           }
         ]
       },

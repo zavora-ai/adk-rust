@@ -508,6 +508,22 @@ describe("an app from an MCP server", () => {
     opened.mockRestore();
   });
 
+  it("saves a file an app offers only when the person presses Save", async () => {
+    const created = vi.fn(() => "blob:forecast");
+    const revoked = vi.fn();
+    Object.assign(URL, { createObjectURL: created, revokeObjectURL: revoked });
+    const clicked = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const { container } = render(<AppFrame app={weatherApp()} seam={new AppsFixture()} session="s-chief" />);
+    const frame = await framed(container);
+    fromFrame(frame, { jsonrpc: "2.0", id: 3, method: "ui/download-file", params: { contents: [] } });
+    const ask = await screen.findByRole("group", { name: "The Weather app wants to save forecast.csv (14 bytes)" });
+    expect(created).not.toHaveBeenCalled();
+    await userEvent.click(within(ask).getByRole("button", { name: "Save" }));
+    expect(created).toHaveBeenCalledTimes(1);
+    expect(clicked).toHaveBeenCalledTimes(1);
+    clicked.mockRestore();
+  });
+
   it("stands in the thread for its tool call, with the decision of a call it asked for under it", () => {
     const at = new Date().toISOString();
     const entries: FeedEntry[] = [
