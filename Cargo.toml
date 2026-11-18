@@ -199,6 +199,11 @@ livekit-common = "=0.1.1"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio"] }
 pgvector = "0.4.2"
 
+# ONNX Runtime for every crate that runs ONNX models. One exact pin: every 2.0.0 pre-release is
+# one Cargo compatibility range, so two exact pins cannot resolve together. It is the version
+# `oar-ocr` 0.10 pins (spec 3.7 Q7). Default features are off so each crate states how it links.
+ort = { version = "=2.0.0-rc.13", default-features = false }
+
 # ADK internal crates (use { workspace = true } in member crates)
 adk-core = { path = "adk-core", version = "3.0.0" }
 adk-rust-macros = { path = "adk-rust-macros", version = "3.0.0" }

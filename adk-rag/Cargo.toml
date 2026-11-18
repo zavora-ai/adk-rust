@@ -44,9 +44,9 @@ uuid = { workspace = true, features = ["v5"], optional = true }
 lancedb = { version = "0.31", optional = true }
 futures = { version = "0.3", optional = true }
 sqlx = { workspace = true, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "json"], optional = true }
-# `OnnxEmbeddingProvider` (feature `onnx`). The ort pin is adk-audio's: rc.12 renamed
-# `ort::execution_providers`, so a floating pre-release breaks every ONNX feature.
-ort = { version = "=2.0.0-rc.11", optional = true }
+# `OnnxEmbeddingProvider` (feature `onnx`): the workspace `ort` pin with `ort`'s default features
+# listed, so `download-binaries` fetches the onnxruntime binary at build time. It runs on the CPU.
+ort = { workspace = true, optional = true, features = ["std", "ndarray", "tracing", "download-binaries", "tls-native", "copy-dylibs", "api-27"] }
 # `esaxx_fast` links a C++ object built against the static CRT, which rust-lld refuses next
 # to ort's dynamic-CRT objects on MSVC; `onig` alone is the feature set candle-core uses.
 tokenizers = { version = "0.22", default-features = false, features = ["onig"], optional = true }

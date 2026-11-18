@@ -315,7 +315,18 @@ impl OnnxSttProvider {
             message: format!("failed to create {session_name} session builder: {e}"),
         })?;
 
-        let builder = Self::apply_execution_provider(builder, ep, session_name);
+        let mut builder = match ep.dispatch() {
+            Some(provider) => builder.with_execution_providers([provider]).unwrap_or_else(|e| {
+                tracing::warn!(
+                    onnx.execution_provider = %ep,
+                    onnx.session = session_name,
+                    error = %e,
+                    "execution provider failed, falling back to cpu"
+                );
+                e.recover()
+            }),
+            None => builder,
+        };
 
         builder.commit_from_file(onnx_path).map_err(|e| AudioError::Stt {
             provider: "ONNX".into(),
@@ -324,49 +335,6 @@ impl OnnxSttProvider {
                 onnx_path.display()
             ),
         })
-    }
-
-    /// Apply the requested execution provider to a session builder.
-    ///
-    /// On failure, logs a warning and returns the builder unchanged (CPU fallback).
-    fn apply_execution_provider(
-        builder: ort::session::builder::SessionBuilder,
-        ep: &OnnxExecutionProvider,
-        session_name: &str,
-    ) -> ort::session::builder::SessionBuilder {
-        match ep {
-            OnnxExecutionProvider::Cuda => {
-                match builder.with_execution_providers([
-                    ort::execution_providers::CUDAExecutionProvider::default().build(),
-                ]) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        tracing::warn!(
-                            "CUDA not available for {session_name}, falling back to CPU: {e}"
-                        );
-                        Session::builder().unwrap_or_else(|_| unreachable!())
-                    }
-                }
-            }
-            OnnxExecutionProvider::CoreMl => {
-                match builder.with_execution_providers([
-                    ort::execution_providers::CoreMLExecutionProvider::default().build(),
-                ]) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        tracing::warn!(
-                            "CoreML not available for {session_name}, falling back to CPU: {e}"
-                        );
-                        Session::builder().unwrap_or_else(|_| unreachable!())
-                    }
-                }
-            }
-            OnnxExecutionProvider::DirectMl => {
-                tracing::warn!("DirectML not available for {session_name}, falling back to CPU");
-                builder
-            }
-            OnnxExecutionProvider::Cpu => builder,
-        }
     }
 
     /// Load the HuggingFace tokenizer from `tokenizer.json` in the model directory.

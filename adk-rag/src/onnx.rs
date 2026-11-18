@@ -2,10 +2,10 @@
 //! §10 R1).
 //!
 //! [`OnnxEmbeddingProvider`] runs a sentence-transformer ONNX model — `BAAI/bge-small-en-v1.5`
-//! by default, 384 dimensions — on the `ort` runtime `adk-audio` already pins. The model
-//! and its tokenizer are fetched once into the Hugging Face hub cache (`HF_HOME`, else
-//! `~/.cache/huggingface`) and read from there afterwards, so embedding needs no network
-//! and no provider key. It is the recall embedder of the fully local harness.
+//! by default, 384 dimensions — on ONNX Runtime through `ort`, at the one version every ADK-Rust
+//! crate pins. The model and its tokenizer are fetched once into the Hugging Face hub cache
+//! (`HF_HOME`, else `~/.cache/huggingface`) and read from there afterwards, so embedding needs
+//! no network and no provider key. It is the recall embedder of the fully local harness.
 //!
 //! | Step | Default |
 //! |---|---|
@@ -213,7 +213,9 @@ impl OnnxEmbeddingProvider {
         tokenizer.with_padding(Some(PaddingParams::default()));
 
         let mut builder = Session::builder()
-            .and_then(|builder| builder.with_optimization_level(GraphOptimizationLevel::Level3))
+            .and_then(|builder| {
+                builder.with_optimization_level(GraphOptimizationLevel::Level3).map_err(Into::into)
+            })
             .map_err(|e| error(format!("failed to create the session builder: {e}")))?;
         if let Some(threads) = config.threads {
             builder = builder

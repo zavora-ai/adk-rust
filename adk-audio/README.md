@@ -39,7 +39,9 @@ adk-rust = { version = "3.0.0", features = ["audio"] }
 | `muse` | `MuseStt`: Meta Muse file and realtime transcription | `adk-model` (`muse-realtime`) |
 | `fx` | DSP processors: normalizer, resampler, noise suppressor, compressor, trimmer, pitch shifter | none |
 | `mlx` | Local TTS and STT model loading with tokenizers and Hugging Face Hub | `tokenizers`, `hf-hub` |
-| `onnx` | ONNX Runtime local inference | `ort`, `tokenizers`, `hf-hub` |
+| `onnx` | ONNX Runtime local inference; `ort` downloads the onnxruntime binary at build time | `ort`, `tokenizers`, `hf-hub` |
+| `onnx-cuda` | `OnnxExecutionProvider::Cuda` (implies `onnx`); downloads the CUDA build of onnxruntime | `ort` (`cuda`) |
+| `onnx-coreml` | `OnnxExecutionProvider::CoreMl` (implies `onnx`); links only on Apple targets | `ort` (`coreml`) |
 | `kokoro` | Kokoro-82M ONNX TTS with the espeak-ng phonemizer (implies `onnx`) | `espeak-rs`, `ndarray`; needs a system espeak-ng |
 | `chatterbox` | Chatterbox ONNX TTS (implies `onnx`) | |
 | `whisper-onnx`, `distil-whisper`, `moonshine` | ONNX STT backends (imply `onnx`) | |
@@ -48,7 +50,7 @@ adk-rust = { version = "3.0.0", features = ["audio"] }
 | `livekit` | `RealtimeBridge` between `adk-realtime` audio and pipelines | `base64` |
 | `desktop-audio` | Microphone capture, speaker playback, and VAD turn-taking | `cpal` |
 | `music` | Adds `reqwest` for `MusicProvider` implementations | `reqwest` |
-| `all` | Every feature except `desktop-audio` | |
+| `all` | Every feature except `desktop-audio`, `onnx-cuda`, and `onnx-coreml` | |
 
 ## Core types
 
@@ -196,7 +198,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `OnnxTtsProvider::new(OnnxModelConfig, &registry)` loads another model. The provider is generic
 over a `Preprocessor`: `TokenizerPreprocessor` uses a Hugging Face `tokenizer.json`, and
 `KokoroPreprocessor` (`kokoro` feature) runs the espeak-ng phonemizer. Execution providers are
-`OnnxExecutionProvider::Cpu`, `Cuda`, `CoreMl`, and `DirectMl`.
+`OnnxExecutionProvider::Cpu`, `Cuda`, `CoreMl`, and `DirectMl`; `auto_detect()` picks `CoreMl` on
+macOS and `Cpu` elsewhere. `Cuda` needs the `onnx-cuda` feature and `CoreMl` needs `onnx-coreml`.
+A provider whose feature is off, and `DirectMl`, logs a warning and the session runs on the CPU.
 
 ### ONNX STT
 
