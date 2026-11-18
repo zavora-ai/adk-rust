@@ -258,7 +258,7 @@ async fn settled(runs: &Arc<dyn DurableRunStore>, completed: &[(&str, usize)]) {
 }
 
 /// Phase one: a kernel puts four series to sleep at 08:50, fires each one's 09:0x
-/// occurrence live at 09:06, and stops with each series asleep again.
+/// occurrence live as the clock reaches it, and stops at 09:06 with each series asleep again.
 async fn first_kernel(path: &Path, clock: &ManualClock, model: &Arc<ScriptedLlm>) {
     let stores = open(path, Arc::new(clock.clone())).await;
     let first = kernel("replica-1", &stores, clock, model);
@@ -281,6 +281,20 @@ async fn first_kernel(path: &Path, clock: &ManualClock, model: &Arc<ScriptedLlm>
             async move { watermarks.read(&source).await.unwrap() }
         })
         .await;
+    }
+    // The kernel watches each occurrence come due, so each is routed on time: a `skip` wake
+    // routed minutes late would pass it over.
+    let mut done = Vec::new();
+    for (name, due) in
+        [("once", at(9, 0, 0)), ("two", at(9, 1, 0)), ("skip", at(9, 2, 0)), ("late", at(9, 5, 0))]
+    {
+        clock.set(due + chrono::Duration::seconds(30));
+        done.push(name);
+        let completed: Vec<(&str, usize)> = ["once", "two", "skip", "late"]
+            .into_iter()
+            .map(|series| (series, usize::from(done.contains(&series))))
+            .collect();
+        settled(&stores.runs, &completed).await;
     }
     clock.set(at(9, 6, 0));
     settled(&stores.runs, &[("once", 1), ("two", 1), ("skip", 1), ("late", 1)]).await;

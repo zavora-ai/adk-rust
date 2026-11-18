@@ -81,6 +81,9 @@ pub fn activity_for_event(event: &KernelEvent) -> Option<Activity> {
                 Some(WakeOutcome::Spawned { .. }) => "spawned",
                 Some(WakeOutcome::Deduplicated { .. }) => "deduplicated",
                 Some(WakeOutcome::Expired { .. }) => "expired",
+                Some(WakeOutcome::Skipped { .. }) => "skipped",
+                Some(WakeOutcome::Coalesced { .. }) => "coalesced",
+                Some(WakeOutcome::Missed { .. }) => "missed",
                 None => "unmatched",
             };
             kernel(LedgerKind::Wake).with_effect(effect).with_subject(source.clone())

@@ -118,7 +118,8 @@ A standing trigger on a cron expression (`KernelBuilder::trigger` with `Wake::Cr
 through a watermarked `CronWakeSource` the kernel registers itself: one per expression, named
 `trigger-cron:<expression>`, planned with the widest `missed` policy of the expression's
 triggers, its cursor in the same `CronWatermarkStore`. Every trigger on the expression matches
-each tick once. A registered source that ticks on the expression — a
+each tick once, and starts a run as its own `missed` policy and
+[overlap](scheduling.md#overlapping-firings) allow. A registered source that ticks on the expression — a
 `CronWakeSource::watermarked` one reports it through `WakeSource::cron_expression` — takes the
 kernel's place (spec 3.5 §7.11).
 

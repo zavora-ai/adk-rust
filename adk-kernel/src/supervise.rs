@@ -1762,6 +1762,7 @@ impl Supervision {
                 &Wake::Cron { expr: expr.to_string(), missed: *missed },
                 &event,
                 run,
+                pass.now,
             )
         });
         // An occurrence no sleeper picks is passed over.

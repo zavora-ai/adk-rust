@@ -102,6 +102,7 @@ mod subagents;
 mod supervisor_property_tests;
 mod supervisor_tests;
 mod surface_routes;
+mod trigger_overlap;
 mod wake_router;
 mod wake_scenarios;
 mod wake_sources;

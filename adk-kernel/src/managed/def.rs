@@ -698,17 +698,9 @@ fn validate_wake(set: &str, wake: &Wake, partitions: &BTreeSet<PartitionId>) -> 
     }
 }
 
-/// What a wake set's firing does while its previous process is unfinished (spec 3.2 §7.9).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub enum WakeOverlap {
-    /// The firing starts nothing.
-    #[default]
-    Skip,
-    /// The firing's process queues behind the unfinished one.
-    Queue,
-}
+/// What a wake set's firing does while its previous process is unfinished (spec 3.2 §7.9):
+/// the kernel's [`WakeOverlap`](crate::WakeOverlap), which a standing trigger takes too.
+pub use crate::wake::WakeOverlap;
 
 fn invalid(reason: impl Into<String>) -> KernelError {
     KernelError::Config { reason: reason.into() }
