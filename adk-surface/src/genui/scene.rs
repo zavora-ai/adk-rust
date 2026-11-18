@@ -25,7 +25,7 @@ fn origin() -> Xyz {
     [Number::from(0), Number::from(0), Number::from(0)]
 }
 
-/// A 3D scene a home view draws (see the [module](self)).
+/// A 3D scene a home view draws, as `HomeNode::Scene`.
 ///
 /// # Example
 ///
@@ -638,7 +638,7 @@ pub struct ScenePanel {
     pub key: String,
 }
 
-/// Components a home view holds, presented with CSS 3D (see the [module](self)).
+/// Components a home view holds, presented with CSS 3D, as `HomeNode::Depth`.
 ///
 /// # Example
 ///
