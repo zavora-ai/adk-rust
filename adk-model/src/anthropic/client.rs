@@ -1145,7 +1145,7 @@ mod tests {
             message.stop_reason = Some(adk_anthropic::StopReason::Compaction);
             message
         };
-        convert::from_anthropic_message(&message).0.content.unwrap()
+        convert::from_anthropic_message(&message, Default::default()).0.content.unwrap()
     }
 
     #[test]

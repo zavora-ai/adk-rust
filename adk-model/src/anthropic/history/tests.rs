@@ -300,7 +300,7 @@ fn compaction_message() -> Message {
 
 #[test]
 fn a_compaction_reads_as_its_summary_and_keeps_the_signed_block_for_replay() {
-    let response = convert::from_anthropic_message(&compaction_message()).0;
+    let response = convert::from_anthropic_message(&compaction_message(), Default::default()).0;
 
     let content = response.content.unwrap();
     assert!(adk_core::intra_compaction::is_native_compaction(&content));
@@ -319,7 +319,7 @@ fn a_compaction_reads_as_its_summary_and_keeps_the_signed_block_for_replay() {
     assert_eq!((usage.prompt_token_count, usage.candidates_token_count), (144, 276));
 
     assert_eq!(
-        restore(&content),
+        restore(&content, Default::default()),
         Some(vec![ContentBlock::Compaction(adk_anthropic::CompactionBlock::new(
             "The user is designing a recipe app.",
             "EuYBCkQY",
@@ -329,7 +329,10 @@ fn a_compaction_reads_as_its_summary_and_keeps_the_signed_block_for_replay() {
 
 #[test]
 fn a_compaction_whose_summary_text_was_rewritten_is_sent_as_the_new_text() {
-    let mut content = convert::from_anthropic_message(&compaction_message()).0.content.unwrap();
+    let mut content = convert::from_anthropic_message(&compaction_message(), Default::default())
+        .0
+        .content
+        .unwrap();
     content.parts[0] = Part::Text { text: "redacted by a guardrail".to_string() };
-    assert_eq!(restore(&content), None);
+    assert_eq!(restore(&content, Default::default()), None);
 }
