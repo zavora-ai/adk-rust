@@ -23,6 +23,8 @@
 //! - **Streaming**: Multiple stream modes (values, updates, messages, custom, debug)
 //! - **ADK Integration**: [`AgentNode`] runs any ADK agent as a node, and an agent's failure is
 //!   [`GraphError::AgentFailed`] with the agent's own `AdkError`
+//! - **YAML and JSON workflows** (`yaml` feature): the `definition` module reads a workflow
+//!   file, validates it with each issue's line and column, and builds it into a graph
 //! - **Functional API** (`functional` feature): Write workflows as async functions
 //!   with `#[entrypoint]`/`#[task]` macros, automatic checkpointing, typed state
 //!   reducers (ReducedValue, UntrackedValue, MessagesValue), state schema
@@ -126,6 +128,9 @@ pub mod time_travel;
 pub mod action;
 #[cfg(feature = "action")]
 pub mod workflow;
+
+#[cfg(feature = "yaml")]
+pub mod definition;
 
 #[cfg(feature = "functional")]
 pub mod functional;

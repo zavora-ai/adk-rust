@@ -220,6 +220,10 @@ file roots and the HTTP policy keep their defaults; build the graph yourself to 
 `trigger_configs()` and `build_trigger_runtime(...)` (`action-trigger`) expose the workflow's
 triggers.
 
+A hand-written workflow file uses the [YAML workflow format](../agents/graph-workflows-yaml.md)
+instead: its `action:` nodes take the same configurations, with the standard properties
+defaulted from the node, beside agent, LLM, interrupt and `set` nodes.
+
 ## Defining Custom Node Types
 
 The node types are a closed enum. For custom logic, implement `adk_graph::Node` (or use

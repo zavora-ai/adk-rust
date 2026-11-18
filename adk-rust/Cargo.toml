@@ -71,6 +71,7 @@ full = [
     "graph-node-cache",
     "graph-delta",
     "graph-time-travel",
+    "graph-yaml",
     "harness",
     "harness-kernel",
     # The kernel's daily baselines and observations (spec 3.2 §7.10, §13 Q4).
@@ -356,6 +357,8 @@ graph-functional = ["graph", "adk-graph/functional"]
 graph-node-cache = ["graph", "adk-graph/node-cache"]
 graph-delta = ["graph", "adk-graph/delta-checkpoint"]
 graph-time-travel = ["graph", "adk-graph/time-travel"]
+# Graph workflows from YAML or JSON files: `adk_rust::graph::definition`
+graph-yaml = ["graph", "adk-graph/yaml"]
 # These two need external infrastructure, so they stay out of `full` alongside
 # the other production backends.
 graph-sqlite = ["graph", "adk-graph/sqlite"]

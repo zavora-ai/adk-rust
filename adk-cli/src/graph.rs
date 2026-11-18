@@ -41,9 +41,18 @@ fn terminal_safe(text: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(escaped)
 }
 
-/// Execute a graph time-travel CLI command.
+/// Execute a graph CLI command.
 pub async fn run(command: GraphCommands) -> Result<()> {
     match command {
+        GraphCommands::Run { file, input, state, thread, resume, node, db } => {
+            workflow::run(&file, input, state, &thread, resume, node, db.as_deref()).await
+        }
+        GraphCommands::Validate { file } => workflow::validate(&file),
+        GraphCommands::Schema => {
+            let schema = adk_graph::definition::workflow_json_schema();
+            println!("{}", serde_json::to_string_pretty(&schema)?);
+            Ok(())
+        }
         GraphCommands::Steps { thread_id, db } => run_steps(&thread_id, db.as_deref()).await,
         GraphCommands::Replay { thread_id, from, to, db } => {
             run_replay(&thread_id, from, to, db.as_deref()).await
@@ -458,6 +467,224 @@ async fn run_resume(thread_id: &str, from: usize, db: Option<&str>) -> Result<()
     println!();
     println!("See: https://docs.rs/adk-graph/latest/adk_graph/time_travel/");
     Ok(())
+}
+
+/// `graph run` and `graph validate`: YAML and JSON workflow files (adk-graph `definition`).
+mod workflow {
+    use std::collections::BTreeSet;
+    use std::io::{BufRead, IsTerminal, Write as _};
+    use std::path::Path;
+    use std::sync::Arc;
+
+    use adk_graph::checkpoint::Checkpointer;
+    use adk_graph::definition::{CheckpointStore, WorkflowDefinition, WorkflowRegistry};
+    use adk_graph::{ExecutionConfig, GraphError, Interrupt, State};
+    use anyhow::{Context, Result, anyhow, bail};
+    use serde_json::Value;
+
+    use super::terminal_safe;
+    use crate::cli::Provider;
+
+    /// Prints every issue of a workflow file, or that it is valid.
+    pub(super) fn validate(file: &Path) -> Result<()> {
+        let workflow = WorkflowDefinition::from_file(file).map_err(|error| anyhow!("{error}"))?;
+        println!(
+            "{}: valid workflow '{}' ({} nodes, {} edges)",
+            file.display(),
+            terminal_safe(&workflow.name),
+            workflow.nodes.len(),
+            workflow.edges.len()
+        );
+        Ok(())
+    }
+
+    /// Runs a workflow file until it ends or pauses.
+    pub(super) async fn run(
+        file: &Path,
+        input: Option<String>,
+        state: Option<String>,
+        thread: &str,
+        resume: Option<String>,
+        node: Option<String>,
+        db: Option<&str>,
+    ) -> Result<()> {
+        let workflow = WorkflowDefinition::from_file(file).map_err(|error| anyhow!("{error}"))?;
+        let (checkpointer, persistent) = checkpointer(&workflow, file, db).await?;
+        let mut registry = WorkflowRegistry::new().checkpointer(Arc::clone(&checkpointer));
+        for reference in model_references(&workflow) {
+            registry = registry.model(reference.clone(), model(&reference).await?);
+        }
+        let graph = workflow.build(&registry).await.map_err(|error| anyhow!("{error}"))?;
+
+        let mut initial = match state {
+            Some(json) => {
+                serde_json::from_str::<State>(&json).context("--state is not a JSON object")?
+            }
+            None => State::new(),
+        };
+        if let Some(input) = input {
+            initial.insert("input".into(), Value::String(input));
+        }
+        let mut config = ExecutionConfig::new(thread);
+        if let Some(answer) = resume {
+            let node = match node {
+                Some(node) => node,
+                None => pending_node(checkpointer.as_ref(), thread).await?,
+            };
+            config = config.with_resume_value(node, answer_value(&answer));
+        }
+
+        let mut next = Some((initial, config));
+        while let Some((state, config)) = next.take() {
+            match graph.invoke(state, config).await {
+                Ok(state) => {
+                    print_state(&state)?;
+                    return Ok(());
+                }
+                Err(GraphError::Interrupted(paused)) => {
+                    let (key, question) = describe(&paused.interrupt);
+                    println!(
+                        "paused on thread '{}': {}",
+                        terminal_safe(thread),
+                        terminal_safe(&question)
+                    );
+                    if let Interrupt::Dynamic { response_schema: Some(schema), .. } =
+                        &paused.interrupt
+                    {
+                        println!("answer schema: {}", terminal_safe(&schema.to_string()));
+                    }
+                    if persistent {
+                        let db = db.map(|db| format!(" --db {db}")).unwrap_or_default();
+                        println!(
+                            "resume with: adk-rust graph run {} --thread {thread}{db} --resume '<json>'",
+                            file.display()
+                        );
+                        return Ok(());
+                    }
+                    let answer = read_answer(key.is_some())?;
+                    let mut config = ExecutionConfig::new(thread);
+                    if let (Some(key), Some(answer)) = (key, answer) {
+                        config = config.with_resume_value(key, answer);
+                    }
+                    next = Some((State::new(), config));
+                }
+                Err(error) => return Err(anyhow!("workflow '{}' failed: {error}", workflow.name)),
+            }
+        }
+        Ok(())
+    }
+
+    /// The checkpointer for a run: `--db`, else the workflow's store. Returns whether a
+    /// pause outlives this process.
+    async fn checkpointer(
+        workflow: &WorkflowDefinition,
+        file: &Path,
+        db: Option<&str>,
+    ) -> Result<(Arc<dyn Checkpointer>, bool)> {
+        if let Some(db) = db {
+            // A run creates its database; `steps` and `fork` only open an existing one.
+            let url = if db.starts_with("sqlite:") {
+                db.to_string()
+            } else {
+                format!("sqlite://{db}?mode=rwc")
+            };
+            return Ok((super::load_checkpointer(Some(&url)).await?, true));
+        }
+        match workflow.checkpoint.store {
+            CheckpointStore::Sqlite => {
+                let path = workflow.checkpoint.path.as_deref().unwrap_or_default();
+                let path = match file.parent() {
+                    Some(dir) if Path::new(path).is_relative() => dir.join(path),
+                    _ => Path::new(path).to_path_buf(),
+                };
+                let url = format!("sqlite://{}?mode=rwc", path.display());
+                Ok((super::load_checkpointer(Some(&url)).await?, true))
+            }
+            _ => Ok((super::load_checkpointer(None).await?, false)),
+        }
+    }
+
+    /// Every model an `llm` node names, with aliases resolved.
+    fn model_references(workflow: &WorkflowDefinition) -> BTreeSet<String> {
+        workflow
+            .nodes
+            .values()
+            .filter_map(|node| node.llm.as_ref())
+            .map(|llm| workflow.models.get(&llm.model).unwrap_or(&llm.model).clone())
+            .collect()
+    }
+
+    /// Builds the model a `provider/model` reference names, with the key the other commands
+    /// use (flag-less: environment, keychain or saved config).
+    async fn model(reference: &str) -> Result<Arc<dyn adk_core::Llm>> {
+        let (provider, model) = reference.split_once('/').ok_or_else(|| {
+            anyhow!("model '{reference}' is not a provider/model reference, such as anthropic/claude-haiku-5-5")
+        })?;
+        let provider: Provider = provider.parse().map_err(|error: String| anyhow!(error))?;
+        let resolved = crate::setup::resolve(
+            Some(provider),
+            Some(model.to_string()),
+            None,
+            Some(String::new()),
+        )?;
+        let built = crate::create_model(provider, model, resolved.api_key.as_deref(), None).await?;
+        Ok(built.llm)
+    }
+
+    /// The node of a paused thread an answer is for.
+    async fn pending_node(checkpointer: &dyn Checkpointer, thread: &str) -> Result<String> {
+        let checkpoint = checkpointer
+            .load(thread)
+            .await
+            .map_err(|error| anyhow!("cannot read thread '{thread}': {error}"))?
+            .ok_or_else(|| {
+                anyhow!("thread '{thread}' has no checkpoint; pass --db to the run that paused")
+            })?;
+        match checkpoint.pending_nodes.as_slice() {
+            [node] => Ok(node.clone()),
+            [] => bail!("thread '{thread}' is not paused"),
+            nodes => bail!(
+                "thread '{thread}' has several pending nodes ({}); pass --node",
+                nodes.join(", ")
+            ),
+        }
+    }
+
+    /// The resume key and the question of a pause.
+    fn describe(interrupt: &Interrupt) -> (Option<String>, String) {
+        match interrupt {
+            Interrupt::Dynamic { message, id, .. } => (id.clone(), message.clone()),
+            Interrupt::Before(node) => (None, format!("before node '{node}'")),
+            Interrupt::After(node) => (None, format!("after node '{node}'")),
+        }
+    }
+
+    /// Reads one answer line from stdin; a static pause needs only Enter.
+    fn read_answer(wants_value: bool) -> Result<Option<Value>> {
+        if std::io::stdin().is_terminal() {
+            print!(
+                "{}",
+                if wants_value { "answer (JSON or text)> " } else { "press Enter to continue> " }
+            );
+            std::io::stdout().flush()?;
+        }
+        let mut line = String::new();
+        if std::io::stdin().lock().read_line(&mut line)? == 0 {
+            bail!("stdin closed before the pause was answered");
+        }
+        Ok(wants_value.then(|| answer_value(line.trim())))
+    }
+
+    /// An answer as JSON, or as a string when it is not JSON.
+    fn answer_value(answer: &str) -> Value {
+        serde_json::from_str(answer).unwrap_or_else(|_| Value::String(answer.to_string()))
+    }
+
+    fn print_state(state: &State) -> Result<()> {
+        let ordered: std::collections::BTreeMap<_, _> = state.iter().collect();
+        println!("{}", terminal_safe(&serde_json::to_string_pretty(&ordered)?));
+        Ok(())
+    }
 }
 
 /// Opens the SQLite checkpoint database at `db`, or an in-memory checkpointer without one.

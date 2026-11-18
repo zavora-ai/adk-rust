@@ -1,0 +1,537 @@
+{
+  "$defs": {
+    "ChannelDefinition": {
+      "additionalProperties": false,
+      "description": "A state channel.",
+      "properties": {
+        "default": {
+          "description": "The channel's value before any node writes it."
+        },
+        "reducer": {
+          "$ref": "#/$defs/ReducerKind",
+          "default": "overwrite",
+          "description": "How an update combines with the current value. Defaults to `overwrite`."
+        }
+      },
+      "type": "object"
+    },
+    "CheckpointDefinition": {
+      "additionalProperties": false,
+      "description": "Where a workflow keeps its checkpoints.",
+      "properties": {
+        "path": {
+          "description": "For `sqlite`: the database file, relative to the workflow file.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "store": {
+          "$ref": "#/$defs/CheckpointStore",
+          "default": "memory",
+          "description": "The store. Defaults to `memory`."
+        }
+      },
+      "type": "object"
+    },
+    "CheckpointStore": {
+      "description": "A checkpoint store.",
+      "oneOf": [
+        {
+          "const": "memory",
+          "description": "In process memory: a thread resumes only in the process that paused it.",
+          "type": "string"
+        },
+        {
+          "const": "sqlite",
+          "description": "A SQLite file (the `sqlite` feature).",
+          "type": "string"
+        },
+        {
+          "const": "none",
+          "description": "No checkpoints: a workflow with interrupts cannot use this.",
+          "type": "string"
+        }
+      ]
+    },
+    "Condition": {
+      "additionalProperties": false,
+      "description": "A condition over state: a comparison (`field`, `op`, `value`), or `all`, `any` or `not` of\nconditions. There is no free-form expression: a condition is data, never code.",
+      "properties": {
+        "all": {
+          "description": "Holds when every condition holds.",
+          "items": {
+            "$ref": "#/$defs/Condition"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "any": {
+          "description": "Holds when any condition holds.",
+          "items": {
+            "$ref": "#/$defs/Condition"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "field": {
+          "description": "A dotted state path, such as `review.approved`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "not": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Condition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Holds when the condition does not."
+        },
+        "op": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConditionOp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The comparison."
+        },
+        "value": {
+          "description": "The value to compare with: a string, number or boolean, or a list for `in`."
+        }
+      },
+      "type": "object"
+    },
+    "ConditionOp": {
+      "description": "A comparison operator.",
+      "oneOf": [
+        {
+          "const": "eq",
+          "description": "Equal; numbers compare numerically, booleans as `true`/`false`.",
+          "type": "string"
+        },
+        {
+          "const": "neq",
+          "description": "Not equal.",
+          "type": "string"
+        },
+        {
+          "const": "gt",
+          "description": "Greater than, numerically.",
+          "type": "string"
+        },
+        {
+          "const": "lt",
+          "description": "Less than, numerically.",
+          "type": "string"
+        },
+        {
+          "const": "gte",
+          "description": "Greater than or equal, numerically.",
+          "type": "string"
+        },
+        {
+          "const": "lte",
+          "description": "Less than or equal, numerically.",
+          "type": "string"
+        },
+        {
+          "const": "contains",
+          "description": "A string contains the value, or a list holds it.",
+          "type": "string"
+        },
+        {
+          "const": "starts_with",
+          "description": "A string starts with the value.",
+          "type": "string"
+        },
+        {
+          "const": "ends_with",
+          "description": "A string ends with the value.",
+          "type": "string"
+        },
+        {
+          "const": "matches",
+          "description": "A regular expression matches; `(?i)` makes it case-insensitive.",
+          "type": "string"
+        },
+        {
+          "const": "in",
+          "description": "The value is one of a list.",
+          "type": "string"
+        },
+        {
+          "const": "empty",
+          "description": "The value is absent, null, or empty.",
+          "type": "string"
+        },
+        {
+          "const": "exists",
+          "description": "The value is present.",
+          "type": "string"
+        }
+      ]
+    },
+    "EdgeDefinition": {
+      "anyOf": [
+        {
+          "description": "Consecutive node ids, each connected to the next.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "$ref": "#/$defs/EdgeSpec",
+          "description": "One edge from a node."
+        }
+      ],
+      "description": "An edge item: a chain of node ids, or an edge object.\n\nA chain `[START, a, b, END]` adds an edge between each consecutive pair."
+    },
+    "EdgeSpec": {
+      "additionalProperties": false,
+      "description": "One edge from a node. Exactly one of `to`, `routes` and `switch` is set.",
+      "properties": {
+        "cases": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "For `switch`: the node for each value, compared as text after trimming.",
+          "type": "object"
+        },
+        "default": {
+          "description": "For `routes` and `switch`: the node when nothing matches. Defaults to `END`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "from": {
+          "description": "The source node, or `START`.",
+          "type": "string"
+        },
+        "routes": {
+          "description": "Conditional routes, tried in order; the first whose `when` holds is taken.",
+          "items": {
+            "$ref": "#/$defs/RouteDefinition"
+          },
+          "type": "array"
+        },
+        "switch": {
+          "description": "A state path whose value selects the next node from `cases`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Targets"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Always continue to these nodes; more than one runs them in parallel."
+        }
+      },
+      "required": [
+        "from"
+      ],
+      "type": "object"
+    },
+    "InterruptDefinition": {
+      "additionalProperties": false,
+      "description": "A pause for an answer.",
+      "properties": {
+        "message": {
+          "description": "What the run asks; a template over state.",
+          "type": "string"
+        },
+        "response_schema": {
+          "description": "A JSON Schema the answer must satisfy; checked when the run resumes."
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "type": "object"
+    },
+    "LlmDefinition": {
+      "additionalProperties": false,
+      "description": "An LLM agent declared in the workflow.",
+      "properties": {
+        "description": {
+          "description": "What the agent does, for its description.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instruction": {
+          "description": "The agent's instruction. `{key}` placeholders read session state, as in any `LlmAgent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "A model alias from `models`, a registered model name, or a `provider/model` reference\nsuch as `anthropic/claude-haiku-5-5`.",
+          "type": "string"
+        },
+        "tools": {
+          "description": "Registered tools the agent may call, by name.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "type": "object"
+    },
+    "NodeDefinition": {
+      "additionalProperties": false,
+      "description": "One node. Exactly one of `agent`, `llm`, `function`, `set`, `action` and `interrupt` is set.",
+      "properties": {
+        "action": {
+          "additionalProperties": true,
+          "description": "Runs an `adk-action` action node (`type: http`, `transform`, `switch`, ...). Its\n`id`, `name`, error handling, tracing and output mapping default from the node.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "agent": {
+          "description": "Runs a registered agent, by name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "What the node does.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "function": {
+          "description": "Runs a registered function node, by name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "input": {
+          "description": "For `agent` and `llm` nodes: a template for the message the agent receives. Defaults to\nthe last message in `messages`, else `input`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "interrupt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InterruptDefinition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Pauses the run for an answer, which a resume supplies."
+        },
+        "llm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LlmDefinition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Runs an LLM agent declared here."
+        },
+        "max_attempts": {
+          "description": "Attempts for a node that fails, including the first. Defaults to 1.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "output_key": {
+          "description": "The state key the node writes: an agent's final text, an interrupt's answer, or an\naction's result. Agent nodes also append their text to `messages`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "set": {
+          "additionalProperties": true,
+          "description": "Writes state keys. A string value is a template: `{{key}}` and `{{key.field}}` read state.",
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ReducerKind": {
+      "description": "How a channel combines an update with its current value.",
+      "oneOf": [
+        {
+          "const": "overwrite",
+          "description": "The update replaces the value.",
+          "type": "string"
+        },
+        {
+          "const": "append",
+          "description": "The update is appended; a list update appends each item.",
+          "type": "string"
+        },
+        {
+          "const": "sum",
+          "description": "The update is added to a number.",
+          "type": "string"
+        }
+      ]
+    },
+    "RouteDefinition": {
+      "additionalProperties": false,
+      "description": "A conditional route.",
+      "properties": {
+        "to": {
+          "description": "The node the route goes to, or `END`.",
+          "type": "string"
+        },
+        "when": {
+          "$ref": "#/$defs/Condition",
+          "description": "When to take the route."
+        }
+      },
+      "required": [
+        "when",
+        "to"
+      ],
+      "type": "object"
+    },
+    "Targets": {
+      "anyOf": [
+        {
+          "description": "One node.",
+          "type": "string"
+        },
+        {
+          "description": "Several nodes, run in parallel.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "One node id, or a list of them."
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A graph workflow that adk-graph compiles into a graph: nodes, edges with conditional routes, state channels, interrupts and checkpointing.",
+  "properties": {
+    "checkpoint": {
+      "$ref": "#/$defs/CheckpointDefinition",
+      "description": "Where checkpoints are kept. Defaults to memory."
+    },
+    "description": {
+      "description": "What the workflow does.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "edges": {
+      "description": "The edges, in order. `START` and `END` name the graph's entry and exit.",
+      "items": {
+        "$ref": "#/$defs/EdgeDefinition"
+      },
+      "type": "array"
+    },
+    "interrupt_after": {
+      "description": "Nodes the run pauses after; resuming the thread continues past them.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "interrupt_before": {
+      "description": "Nodes the run pauses before; resuming the thread runs the node.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "models": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Model aliases: a name an `llm` node can use in place of a `provider/model` reference.",
+      "type": "object"
+    },
+    "name": {
+      "description": "Workflow name; a graph agent built from it takes this name.",
+      "type": "string"
+    },
+    "nodes": {
+      "additionalProperties": {
+        "$ref": "#/$defs/NodeDefinition"
+      },
+      "description": "The nodes, by id.",
+      "type": "object"
+    },
+    "recursion_limit": {
+      "description": "The most supersteps one run may take. Defaults to the graph's limit, 100.",
+      "format": "uint",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "state": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ChannelDefinition"
+      },
+      "description": "State channels that need a reducer or a default. A key no channel names is overwritten\nby each update. `messages`, which agent nodes append to, appends unless declared here.",
+      "type": "object"
+    },
+    "version": {
+      "description": "Format version. Must be `1`.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "version",
+    "name",
+    "nodes",
+    "edges"
+  ],
+  "title": "ADK-Rust graph workflow",
+  "type": "object"
+}

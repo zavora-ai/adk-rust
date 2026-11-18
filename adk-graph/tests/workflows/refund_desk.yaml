@@ -1,0 +1,74 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/zavora-ai/adk-rust/main/adk-graph/schemas/workflow.schema.json
+version: 1
+name: refund_desk
+description: Classify a customer message, hold refunds for a person's approval, and reply.
+
+models:
+  fast: anthropic/claude-haiku-5-5
+
+nodes:
+  classify:
+    llm:
+      model: fast
+      instruction: >-
+        Classify the customer's message. Reply with exactly one lowercase word:
+        refund if they ask for money back, otherwise question.
+    input: "{{input}}"
+    output_key: category
+
+  approve:
+    interrupt:
+      message: "Refund requested: {{input}} -- approve it?"
+      response_schema:
+        type: object
+        properties:
+          approved: { type: boolean }
+        required: [approved]
+    output_key: approval
+
+  refund_reply:
+    llm:
+      model: fast
+      instruction: >-
+        Write one short sentence telling the customer their refund is approved
+        and will arrive within five working days.
+    input: "{{input}}"
+    output_key: reply
+
+  decline_reply:
+    llm:
+      model: fast
+      instruction: Write one short sentence telling the customer their refund was declined.
+    input: "{{input}}"
+    output_key: reply
+
+  answer:
+    llm:
+      model: fast
+      instruction: Answer the customer's question in one short sentence.
+    input: "{{input}}"
+    output_key: reply
+
+  close:
+    set:
+      status: "closed: {{category}}"
+
+edges:
+  - [START, classify]
+  - from: classify
+    routes:
+      - when: { field: category, op: matches, value: "(?i)refund" }
+        to: approve
+    default: answer
+  - from: approve
+    routes:
+      - when: { field: approval.approved, op: eq, value: true }
+        to: refund_reply
+    default: decline_reply
+  - from: refund_reply
+    to: close
+  - from: decline_reply
+    to: close
+  - from: answer
+    to: close
+  - [close, END]

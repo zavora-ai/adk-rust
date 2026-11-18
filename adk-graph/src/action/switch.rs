@@ -109,7 +109,7 @@ pub fn evaluate_switch_conditions(
 }
 
 /// Evaluate a single condition expression against state.
-fn evaluate_condition(
+pub(crate) fn evaluate_condition(
     expr: &ExpressionMode,
     state: &std::collections::HashMap<String, Value>,
 ) -> bool {

@@ -42,7 +42,7 @@ adk-tool.workspace = true
 adk-telemetry.workspace = true
 adk-skill.workspace = true
 adk-deploy.workspace = true
-adk-graph = { workspace = true, features = ["time-travel"] }
+adk-graph = { workspace = true, features = ["time-travel", "yaml"] }
 # The harness REPL, `code`, `goal`, `ultracode` and `serve` (spec 3.1 §8.1)
 adk-harness = { workspace = true, optional = true }
 # `adk-rust up`, `attach`, `ps`, `top`, `kill`, `suspend`, `resume`, `freeze`, `unfreeze` and
