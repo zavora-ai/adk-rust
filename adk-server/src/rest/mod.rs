@@ -544,6 +544,8 @@ pub struct ServerBuilder {
     cron_state: Option<crate::background::CronState>,
     #[cfg(feature = "webhook-ingress")]
     webhook_ingress: Option<crate::webhooks::WebhookIngress>,
+    #[cfg(feature = "google-triggers")]
+    google_push: Option<crate::google_triggers::GooglePushIngress>,
     #[cfg(feature = "approvals")]
     approval_service: Option<Arc<dyn adk_core::ApprovalService>>,
     #[cfg(feature = "awp")]
@@ -573,6 +575,8 @@ impl ServerBuilder {
             cron_state: None,
             #[cfg(feature = "webhook-ingress")]
             webhook_ingress: None,
+            #[cfg(feature = "google-triggers")]
+            google_push: None,
             #[cfg(feature = "approvals")]
             approval_service: None,
             #[cfg(feature = "awp")]
@@ -788,6 +792,30 @@ impl ServerBuilder {
     #[cfg(feature = "webhook-ingress")]
     pub fn with_webhook_ingress(mut self, ingress: crate::webhooks::WebhookIngress) -> Self {
         self.webhook_ingress = Some(ingress);
+        self
+    }
+
+    /// Mount Google push triggers: `POST /triggers/pubsub/{name}` and
+    /// `POST /triggers/eventarc/{name}` at the root, outside `/api`, so Pub/Sub and Eventarc
+    /// reach them with their own OIDC tokens rather than the server's auth middleware
+    /// ([`google_triggers`](crate::google_triggers)).
+    ///
+    /// An ingress built without a kill switch takes
+    /// [`ServerConfig::governance`](crate::ServerConfig::governance), so a frozen server
+    /// answers `503` and the source redelivers. The routes are host-checked like every other:
+    /// add the service's hostname to `SecurityConfig::allowed_hosts`.
+    ///
+    /// ```rust,ignore
+    /// use adk_server::google_triggers::{GoogleOidcVerifier, GooglePushIngress, PushTrigger};
+    ///
+    /// let verifier = GoogleOidcVerifier::new(audience, ["push@my-project.iam.gserviceaccount.com"])?;
+    /// let ingress = GooglePushIngress::new(run_store.clone())
+    ///     .with_trigger(PushTrigger::pubsub("orders", verifier, "shop", "order_agent"));
+    /// let app = ServerBuilder::new(config).with_google_push(ingress).build();
+    /// ```
+    #[cfg(feature = "google-triggers")]
+    pub fn with_google_push(mut self, ingress: crate::google_triggers::GooglePushIngress) -> Self {
+        self.google_push = Some(ingress);
         self
     }
 
@@ -1211,6 +1239,16 @@ impl ServerBuilder {
                 ingress.with_governance(config.governance.clone())
             };
             app = app.merge(crate::webhooks::webhook_ingress_router(ingress));
+        }
+
+        #[cfg(feature = "google-triggers")]
+        if let Some(ingress) = self.google_push {
+            let ingress = if ingress.has_governance() {
+                ingress
+            } else {
+                ingress.with_governance(config.governance.clone())
+            };
+            app = app.merge(crate::google_triggers::google_push_router(ingress));
         }
 
         // Merge custom root routes
