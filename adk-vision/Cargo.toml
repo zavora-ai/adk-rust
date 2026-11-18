@@ -62,6 +62,13 @@ ureq = { version = "3", optional = true, default-features = false }
 [dev-dependencies]
 # Path-only self dependency, so the crate's own tests run the conformance suite.
 adk-vision = { path = ".", features = ["conformance"] }
+# The governed-toolset scenarios (S1–S4, S7) run through `Runner` and `LlmAgent` with a
+# scripted model.
+adk-agent = { path = "../adk-agent" }
+adk-model = { path = "../adk-model", default-features = false }
+adk-runner = { path = "../adk-runner" }
+adk-session = { path = "../adk-session" }
+futures = { workspace = true }
 jsonschema = { workspace = true }
 proptest = "1.5"
 tempfile = "3"
@@ -70,6 +77,18 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync
 [[test]]
 name = "fetch_tests"
 required-features = ["fetch"]
+
+[[test]]
+name = "privacy_guardrail_tests"
+required-features = ["guardrail"]
+
+[[test]]
+name = "governed_toolset_tests"
+required-features = ["guardrail"]
+
+[[test]]
+name = "egress_property_tests"
+required-features = ["guardrail"]
 
 [[test]]
 name = "fetch_live_tests"

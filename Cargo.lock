@@ -1541,13 +1541,18 @@ dependencies = [
 name = "adk-vision"
 version = "3.0.0"
 dependencies = [
+ "adk-agent",
  "adk-artifact",
  "adk-core",
  "adk-guardrail",
+ "adk-model",
+ "adk-runner",
+ "adk-session",
  "adk-vision",
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "futures",
  "hex",
  "hf-hub 0.5.0",
  "image",
