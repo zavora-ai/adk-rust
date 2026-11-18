@@ -2,7 +2,7 @@
 
 use super::{
     Backend, CallOptions, CallRecord, Escalation, Inputs, Prepared, Route, Trigger, VisionOutput,
-    VisionRuntime, mismatch,
+    VisionRuntime, mismatch, planned_size,
 };
 use crate::backend::{BackendDescriptor, BackendId};
 use crate::cx::VisionCx;
@@ -117,8 +117,9 @@ impl VisionRuntime {
         options: &CallOptions,
     ) -> Result<VisionOutput<Vec<Region>>> {
         let mut calls = Vec::new();
-        let regions =
-            self.regions_once(cx, task, &route.primary, image, None, options, &mut calls).await?;
+        let regions = self
+            .regions_once(cx, task, &route.primary, image, options.region, options, &mut calls)
+            .await?;
         let regions = match &route.escalation {
             Some(escalation) => {
                 self.escalate_regions(
@@ -152,6 +153,8 @@ impl VisionRuntime {
         let (descriptor, raw, prepared, mut record) = match task {
             RegionTask::Detect(query) => {
                 let (descriptor, backend) = self.detectors.get(id)?;
+                let sent = planned_size(image.size(), crop, &descriptor.limits);
+                let hold = self.preflight(cx, task.task(), descriptor, &[sent], 0, None).await?;
                 let prepared =
                     self.prepare(cx, descriptor, backend.is_remote(), image, crop, options).await?;
                 let work = match (backend, &prepared) {
@@ -160,11 +163,14 @@ impl VisionRuntime {
                     _ => return Err(mismatch(descriptor)),
                 };
                 let inputs = Inputs::of(std::slice::from_ref(&prepared));
-                let (raw, record) = self.metered(cx, task.task(), descriptor, inputs, work).await?;
+                let (raw, record) =
+                    self.metered(cx, task.task(), descriptor, inputs, hold, work).await?;
                 (descriptor, raw, prepared, record)
             }
             RegionTask::Segment(prompts) => {
                 let (descriptor, backend) = self.segmenters.get(id)?;
+                let sent = planned_size(image.size(), crop, &descriptor.limits);
+                let hold = self.preflight(cx, task.task(), descriptor, &[sent], 0, None).await?;
                 let prepared =
                     self.prepare(cx, descriptor, backend.is_remote(), image, crop, options).await?;
                 let prompts = prompts_for(descriptor, prepared.image(), prompts)?;
@@ -174,7 +180,8 @@ impl VisionRuntime {
                     _ => return Err(mismatch(descriptor)),
                 };
                 let inputs = Inputs::of(std::slice::from_ref(&prepared));
-                let (raw, record) = self.metered(cx, task.task(), descriptor, inputs, work).await?;
+                let (raw, record) =
+                    self.metered(cx, task.task(), descriptor, inputs, hold, work).await?;
                 (descriptor, raw, prepared, record)
             }
         };
@@ -223,8 +230,9 @@ impl VisionRuntime {
                     }
                 }
                 Trigger::Disagreement { with, min_iou } => {
-                    let other =
-                        self.regions_once(cx, task, with, image, None, options, calls).await?;
+                    let other = self
+                        .regions_once(cx, task, with, image, options.region, options, calls)
+                        .await?;
                     let agrees = |a: &Region, b: &Region| match (a.shape.bbox(), b.shape.bbox()) {
                         (Some(x), Some(y)) => x.iou(&y) >= *min_iou,
                         _ => false,
@@ -319,8 +327,9 @@ impl VisionRuntime {
     ) -> Result<VisionOutput<DocumentPage>> {
         let route = self.route_for(VisionTask::Read, options, self.readers.default_id())?;
         let mut calls = Vec::new();
-        let mut result =
-            self.read_once(cx, &route.primary, page, None, read, options, &mut calls).await?;
+        let mut result = self
+            .read_once(cx, &route.primary, page, options.region, read, options, &mut calls)
+            .await?;
         let Some(escalation) = &route.escalation else {
             return Ok(VisionOutput { value: result, calls });
         };
@@ -334,7 +343,7 @@ impl VisionRuntime {
                             cx,
                             &escalation.backend,
                             page,
-                            None,
+                            options.region,
                             read,
                             &esc_options,
                             &mut calls,
@@ -427,6 +436,8 @@ impl VisionRuntime {
         calls: &mut Vec<CallRecord>,
     ) -> Result<DocumentPage> {
         let (descriptor, backend) = self.readers.get(id)?;
+        let sent = planned_size(page.size(), crop, &descriptor.limits);
+        let hold = self.preflight(cx, VisionTask::Read, descriptor, &[sent], 0, None).await?;
         let prepared =
             self.prepare(cx, descriptor, backend.is_remote(), page, crop, options).await?;
         let work = match (backend, &prepared) {
@@ -436,7 +447,7 @@ impl VisionRuntime {
         };
         let inputs = Inputs::of(std::slice::from_ref(&prepared));
         let (raw, mut record) =
-            self.metered(cx, VisionTask::Read, descriptor, inputs, work).await?;
+            self.metered(cx, VisionTask::Read, descriptor, inputs, hold, work).await?;
         let page = normalize_page(&Self::normalizer(descriptor, &prepared), raw)?;
         record.regions = page.blocks.len();
         calls.push(record);
@@ -529,21 +540,34 @@ impl VisionRuntime {
         calls: &mut Vec<CallRecord>,
     ) -> Result<Description> {
         let (descriptor, backend) = self.describers.get(id)?;
+        let sizes: Vec<(u32, u32)> = images
+            .iter()
+            .map(|i| planned_size(i.size(), options.region, &descriptor.limits))
+            .collect();
+        let hold = self
+            .preflight(
+                cx,
+                VisionTask::Describe,
+                descriptor,
+                &sizes,
+                spec.prompt.len(),
+                spec.max_output_tokens,
+            )
+            .await?;
         let prepared =
             self.prepare_all(cx, descriptor, backend.is_remote(), images, options).await?;
         let normalizers: Vec<RegionNormalizer> =
             prepared.iter().map(|p| Self::normalizer(descriptor, p)).collect();
         let inputs = Inputs::of(&prepared);
+        let task = VisionTask::Describe;
         let (raw, mut record) = match backend {
             Backend::Local(b) => {
                 let request = DescribeRequest::new(local_images(descriptor, prepared)?, spec);
-                self.metered(cx, VisionTask::Describe, descriptor, inputs, b.describe(cx, &request))
-                    .await?
+                self.metered(cx, task, descriptor, inputs, hold, b.describe(cx, &request)).await?
             }
             Backend::Remote(b) => {
                 let request = DescribeRequest::new(released_images(descriptor, prepared)?, spec);
-                self.metered(cx, VisionTask::Describe, descriptor, inputs, b.describe(cx, &request))
-                    .await?
+                self.metered(cx, task, descriptor, inputs, hold, b.describe(cx, &request)).await?
             }
         };
         let mut regions = Vec::with_capacity(raw.regions.len());
@@ -581,7 +605,8 @@ impl VisionRuntime {
     ) -> Result<Vec<Prepared>> {
         let mut prepared = Vec::with_capacity(images.len());
         for image in images {
-            prepared.push(self.prepare(cx, descriptor, remote, image, None, options).await?);
+            prepared
+                .push(self.prepare(cx, descriptor, remote, image, options.region, options).await?);
         }
         Ok(prepared)
     }
@@ -600,21 +625,27 @@ impl VisionRuntime {
     ) -> Result<VisionOutput<Vec<Vec<f32>>>> {
         let route = self.route_for(VisionTask::Embed, options, self.embedders.default_id())?;
         let (descriptor, backend) = self.embedders.get(&route.primary)?;
+        let sizes: Vec<(u32, u32)> = images
+            .iter()
+            .map(|i| planned_size(i.size(), options.region, &descriptor.limits))
+            .collect();
+        let hold = self.preflight(cx, VisionTask::Embed, descriptor, &sizes, 0, Some(0)).await?;
         let prepared =
             self.prepare_all(cx, descriptor, backend.is_remote(), images, options).await?;
         let inputs = Inputs::of(&prepared);
+        let task = VisionTask::Embed;
         let (vectors, dims, record) = match backend {
             Backend::Local(b) => {
                 let images = local_images(descriptor, prepared)?;
                 let (v, r) = self
-                    .metered(cx, VisionTask::Embed, descriptor, inputs, b.embed_images(cx, &images))
+                    .metered(cx, task, descriptor, inputs, hold, b.embed_images(cx, &images))
                     .await?;
                 (v, b.space().dimensions, r)
             }
             Backend::Remote(b) => {
                 let images = released_images(descriptor, prepared)?;
                 let (v, r) = self
-                    .metered(cx, VisionTask::Embed, descriptor, inputs, b.embed_images(cx, &images))
+                    .metered(cx, task, descriptor, inputs, hold, b.embed_images(cx, &images))
                     .await?;
                 (v, b.space().dimensions, r)
             }
@@ -636,17 +667,20 @@ impl VisionRuntime {
     ) -> Result<VisionOutput<Vec<Vec<f32>>>> {
         let route = self.route_for(VisionTask::Embed, options, self.embedders.default_id())?;
         let (descriptor, backend) = self.embedders.get(&route.primary)?;
+        let chars = texts.iter().map(|t| t.len()).sum();
+        let hold = self.preflight(cx, VisionTask::Embed, descriptor, &[], chars, Some(0)).await?;
         let inputs = Inputs::default();
+        let task = VisionTask::Embed;
         let (vectors, dims, record) = match backend {
             Backend::Local(b) => {
                 let (v, r) = self
-                    .metered(cx, VisionTask::Embed, descriptor, inputs, b.embed_texts(cx, texts))
+                    .metered(cx, task, descriptor, inputs, hold, b.embed_texts(cx, texts))
                     .await?;
                 (v, b.space().dimensions, r)
             }
             Backend::Remote(b) => {
                 let (v, r) = self
-                    .metered(cx, VisionTask::Embed, descriptor, inputs, b.embed_texts(cx, texts))
+                    .metered(cx, task, descriptor, inputs, hold, b.embed_texts(cx, texts))
                     .await?;
                 (v, b.space().dimensions, r)
             }
@@ -677,6 +711,8 @@ impl VisionRuntime {
         })?;
         let route = self.route_for(VisionTask::Edit, options, self.editors.default_id())?;
         let (descriptor, backend) = self.editors.get(&route.primary)?;
+        let sent = planned_size(image.size(), None, &descriptor.limits);
+        let hold = self.preflight(cx, VisionTask::Edit, descriptor, &[sent], 0, None).await?;
         let prepared =
             self.prepare(cx, descriptor, backend.is_remote(), image, None, options).await?;
         let work = match (backend, &prepared) {
@@ -685,7 +721,8 @@ impl VisionRuntime {
             _ => return Err(mismatch(descriptor)),
         };
         let inputs = Inputs::of(std::slice::from_ref(&prepared));
-        let (pixels, record) = self.metered(cx, VisionTask::Edit, descriptor, inputs, work).await?;
+        let (pixels, record) =
+            self.metered(cx, VisionTask::Edit, descriptor, inputs, hold, work).await?;
         let operation_digest = Digest::of_json(&serde_json::json!({
             "op": operation,
             "chain": prepared.image().chain(),

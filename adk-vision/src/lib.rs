@@ -22,6 +22,13 @@
 //! | (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor` |
 //! | `fetch` | `ModelFetcher`: Hugging Face downloads by revision, SHA-256 checked before load, `HF_HUB_OFFLINE` honoured |
 //! | `conformance` | `conformance`: the suite every backend runs, and its test macros |
+//! | `guardrail` | `ImagePrivacyGuardrail` on model calls, tool results and user input, and `PersonalTextRedactor` (OCR words matched by `adk-guardrail`'s PII patterns) |
+//!
+//! [`VisionToolset`] — `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`,
+//! `vision_crop`, `vision_redact`, `vision_annotate` — is always built: each tool runs on
+//! the governed path, a remote call is held with the exact egress image as approval
+//! evidence, and every call, release and edit writes its `vision.*` audit record
+//! ([`audit`]).
 //!
 //! Backends — `ort`, OCR, mistral.rs, the cloud providers, Meta `sam-3.1`, NVIDIA NIM — are
 //! features added by the workstreams that bring them.
@@ -73,7 +80,9 @@
 
 #![warn(missing_docs)]
 
+pub mod audit;
 mod backend;
+mod budget;
 #[cfg(feature = "conformance")]
 pub mod conformance;
 mod cx;
@@ -84,21 +93,27 @@ mod error;
 #[cfg(feature = "fetch")]
 mod fetch;
 mod geometry;
+#[cfg(feature = "guardrail")]
+mod guardrail;
 mod manifest;
 mod media;
+mod redact;
 mod runtime;
 mod sent;
+mod toolset;
 mod tracker;
 mod traits;
 
 pub use backend::{BackendDescriptor, BackendId, InputLimits, Locality, Oversize, PriceRef};
+pub use budget::{ImageTokens, TokenEstimate};
 pub use cx::VisionCx;
 pub use digest::Digest;
 pub use edit::{DeterministicEditor, EditOp, Overlay, Rgba, apply_edit};
 pub use egress::{
     DataClass, EgressAction, EgressConfig, EgressDecision, EgressEvidence, EgressGate,
     EgressPreview, EgressReceipt, EgressRecord, EgressRecorder, EgressRefusal, EgressRuleConfig,
-    InMemoryEgressRecorder, RedactionClass, Redactor, ReleaseRequest, ReleasedImage, VisionConfig,
+    InMemoryEgressRecorder, RedactionClass, Redactor, ReleaseRequest, ReleasedImage, StagedEgress,
+    VisionConfig,
 };
 pub use error::{Result, VisionError};
 #[cfg(feature = "fetch")]
@@ -107,6 +122,10 @@ pub use geometry::{
     AxisOrder, BBox, CoordFrame, EscalatedFrom, EscalationReason, Keypoint, Keypoints, Letterbox,
     LetterboxGeometry, Mask, Point2, Polygon, RawRegion, Region, RegionNormalizer, RegionOrigin,
     RegionSet, ScreenSpace, Shape, Track, TrackId, Transform, TransformChain,
+};
+#[cfg(feature = "guardrail")]
+pub use guardrail::{
+    GateOutcome, ImagePrivacyGuardrail, MODEL_CONTEXT_CLASS, PersonalTextRedactor,
 };
 pub use manifest::{
     AcceptanceStore, FileAcceptanceStore, InMemoryAcceptanceStore, InputSpec, IoSpec,
@@ -117,11 +136,16 @@ pub use media::{
     ArtifactLocator, DecodeLimits, DecodedImage, Frame, FrameMeta, FramePixels, FrameSourceId,
     ImageRef, MediaScope, MediaStore, Provenance, SourceImage, VideoRef, artifact_uri,
 };
+pub use redact::{PersonRedactor, REDACTION_MARGIN};
 pub use runtime::{
     CallOptions, CallRecord, Edited, Escalation, Route, Trigger, VisionOutput, VisionRuntime,
     VisionRuntimeBuilder,
 };
 pub use sent::{SentImage, VisionInput};
+pub use toolset::{
+    EgressApproval, VISION_EGRESS_POLICY_REF, VISION_TOOL_NAMES, VisionTool, VisionToolKind,
+    VisionToolset, VisionToolsetBuilder,
+};
 pub use tracker::GreedyIouTracker;
 pub use traits::{
     Block, BlockKind, DescribeRequest, DescribeSpec, Describer, Description, DetectQuery, Detector,

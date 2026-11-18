@@ -1543,8 +1543,10 @@ version = "3.0.0"
 dependencies = [
  "adk-artifact",
  "adk-core",
+ "adk-guardrail",
  "adk-vision",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "hex",
  "hf-hub 0.5.0",

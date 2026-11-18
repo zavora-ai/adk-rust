@@ -26,6 +26,9 @@ default = []
 fetch = ["dep:hf-hub", "dep:ureq"]
 # The conformance suite every backend runs, and its test macros (§7.18).
 conformance = ["tokio/rt-multi-thread"]
+# `ImagePrivacyGuardrail` as an adk-guardrail `Guardrail` and `ToolGuardrail` and a
+# `BeforeModelCallback`, and `PersonalTextRedactor` over `PiiRedactor`'s byte ranges (§7.8).
+guardrail = ["dep:adk-guardrail", "dep:base64"]
 
 [dependencies]
 adk-core.workspace = true
@@ -46,6 +49,10 @@ tokio-util = { version = "0.7", default-features = false }
 toml.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+
+adk-guardrail = { workspace = true, optional = true }
+# Base64 images inside tool results (feature `guardrail`).
+base64 = { version = "0.22", optional = true }
 
 # Same client configuration as adk-rag: the blocking ureq client, no default TLS stack.
 hf-hub = { version = "0.5", optional = true, default-features = false, features = ["ureq"] }

@@ -15,8 +15,10 @@ use crate::cx::VisionCx;
 use crate::digest::Digest;
 use crate::edit::{Rgba, ops};
 use crate::error::{Result, VisionError};
-use crate::geometry::{BBox, Transform, TransformChain};
-use crate::media::{DecodedImage, SourceImage};
+use crate::geometry::{
+    BBox, CoordFrame, Region, RegionOrigin, RegionSet, Shape, Transform, TransformChain,
+};
+use crate::media::{DecodedImage, ImageRef, MediaStore, Provenance, SourceImage};
 use crate::sent::SentImage;
 
 /// One request to release an image to a remote backend.
@@ -90,6 +92,7 @@ pub struct EgressPreview {
     bytes: Arc<[u8]>,
     egress: Digest,
     redactions: BTreeMap<RedactionClass, u32>,
+    filled: Vec<(RedactionClass, BBox)>,
 }
 
 impl EgressPreview {
@@ -118,6 +121,37 @@ impl EgressPreview {
         &self.redactions
     }
 
+    /// The boxes filled, in the egress image's pixels, by redaction class.
+    pub fn filled(&self) -> &[(RedactionClass, BBox)] {
+        &self.filled
+    }
+
+    /// The filled boxes as a [`RegionSet`] over the egress image, each labelled with its
+    /// redaction class, for an approval card to outline (board choice A3).
+    pub fn overlay(&self) -> RegionSet {
+        let (width, height) = self.image.size();
+        let origin = RegionOrigin {
+            backend: crate::backend::BackendId::new(EGRESS_GATE_BACKEND),
+            manifest: None,
+            frame: CoordFrame::SentPixels,
+            chain: TransformChain::new(width, height),
+            escalated_from: None,
+        };
+        let regions = self
+            .filled
+            .iter()
+            .map(|(class, bbox)| Region {
+                image: self.egress,
+                shape: Shape::Box(bbox.clamped(width, height)),
+                label: Some(class.to_string()),
+                score: None,
+                track: None,
+                origin: origin.clone(),
+            })
+            .collect();
+        RegionSet::new(self.egress, width, height, regions)
+    }
+
     /// The approval evidence for this image.
     pub fn evidence(&self, caption: impl Into<String>) -> EgressEvidence {
         let (width, height) = self.image.size();
@@ -126,9 +160,103 @@ impl EgressPreview {
             mime_type: "image/png".into(),
             width,
             height,
-            overlay: None,
+            overlay: (!self.filled.is_empty()).then(|| self.overlay()),
             caption: caption.into(),
         }
+    }
+}
+
+/// The backend id regions the gate itself produced carry: the redaction overlay.
+pub(crate) const EGRESS_GATE_BACKEND: &str = "egress-gate";
+
+/// What would leave for one call, staged before anyone decides: the redacted copy, stored
+/// as an artifact when the gate has a media store, and the rule that applies to it.
+///
+/// [`EgressGate::stage`] makes one; an approval card shows
+/// [`image_evidence`](Self::image_evidence), and a person's approval names
+/// [`digest`](Self::digest), the only image [`EgressGate::release`] then lets leave.
+#[derive(Clone, Debug)]
+pub struct StagedEgress {
+    preview: EgressPreview,
+    stored: Option<ImageRef>,
+    action: EgressAction,
+    rule: Option<usize>,
+    hosts: Vec<String>,
+    data_class: DataClass,
+}
+
+impl StagedEgress {
+    /// The digest of the exact bytes that would leave.
+    pub fn digest(&self) -> Digest {
+        self.preview.egress
+    }
+
+    /// The minimised, redacted image.
+    pub fn preview(&self) -> &EgressPreview {
+        &self.preview
+    }
+
+    /// The stored egress copy, when the gate has a media store and the call a media scope.
+    pub fn stored(&self) -> Option<&ImageRef> {
+        self.stored.as_ref()
+    }
+
+    /// What the rule for the destination and data class says: `allow`, `ask` or `deny`.
+    pub fn action(&self) -> EgressAction {
+        self.action
+    }
+
+    /// The index of the rule that decided, or `None` for the default.
+    pub fn rule(&self) -> Option<usize> {
+        self.rule
+    }
+
+    /// The destination hosts.
+    pub fn hosts(&self) -> &[String] {
+        &self.hosts
+    }
+
+    /// A one-line caption: destination, data class and what was covered, in the board's
+    /// wording ("1 face · the whole person is covered").
+    pub fn caption(&self) -> String {
+        let mut covered = Vec::new();
+        for (class, count) in &self.preview.redactions {
+            if *count == 0 {
+                continue;
+            }
+            let plural = if *count == 1 { "" } else { "s" };
+            covered.push(match class.as_str() {
+                "faces" => format!("{count} face{plural} · the whole person is covered"),
+                "personal_text" => format!("{count} personal detail{plural} covered"),
+                "schema_personal_fields" => format!("{count} personal field{plural} covered"),
+                "marked" => format!("{count} marked region{plural} covered"),
+                other => format!("{count} {other} covered"),
+            });
+        }
+        let covered =
+            if covered.is_empty() { "nothing covered".to_string() } else { covered.join(", ") };
+        format!("to {} as {} · {covered}", self.hosts.join(", "), self.data_class)
+    }
+
+    /// The approval evidence for the stored egress copy: its digest, artifact, size, the
+    /// redactions as a region overlay, and the caption. `None` when the copy is not stored,
+    /// since a card loads evidence from its artifact.
+    pub fn image_evidence(&self) -> Option<adk_core::ImageEvidence> {
+        let stored = self.stored.as_ref()?;
+        let mut evidence = adk_core::ImageEvidence::new(
+            stored.digest.to_string(),
+            stored.artifact.clone(),
+            stored.mime_type.clone(),
+            stored.width,
+            stored.height,
+        )
+        .with_caption(self.caption());
+        if !self.preview.filled.is_empty() {
+            evidence = evidence.with_regions(
+                serde_json::to_value(self.preview.overlay()).unwrap_or(serde_json::Value::Null),
+            );
+        }
+        Some(evidence)
     }
 }
 
@@ -156,6 +284,8 @@ pub struct EgressGate {
     config: EgressConfig,
     redactors: Vec<Arc<dyn Redactor>>,
     recorder: Arc<dyn EgressRecorder>,
+    store: Option<MediaStore>,
+    released: std::sync::Mutex<std::collections::HashSet<Digest>>,
 }
 
 impl std::fmt::Debug for EgressGate {
@@ -175,7 +305,45 @@ impl EgressGate {
         config: EgressConfig,
         recorder: Arc<dyn EgressRecorder>,
     ) -> Self {
-        Self { policy, config, redactors: Vec::new(), recorder }
+        Self {
+            policy,
+            config,
+            redactors: Vec::new(),
+            recorder,
+            store: None,
+            released: std::sync::Mutex::new(std::collections::HashSet::new()),
+        }
+    }
+
+    /// Stores every egress copy as an artifact, under the call's media scope, before it is
+    /// released (spec 3.7 §7.8 step 5); the receipt and the audit record name it.
+    pub fn with_media_store(mut self, store: MediaStore) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    /// Whether this gate released an image with egress digest `digest`: a part carrying a
+    /// release annotation is trusted only when its bytes hash to a digest the gate released.
+    pub fn has_released(&self, digest: &Digest) -> bool {
+        self.released.lock().unwrap_or_else(|e| e.into_inner()).contains(digest)
+    }
+
+    /// The redaction classes the installed redactors find.
+    pub fn redaction_classes(&self) -> Vec<RedactionClass> {
+        let mut classes: Vec<RedactionClass> = self.redactors.iter().map(|r| r.class()).collect();
+        classes.sort();
+        classes.dedup();
+        classes
+    }
+
+    /// The action and rule for an image of `class` bound for `hosts`: the strictest over
+    /// the hosts, `deny` over `ask` over `allow`.
+    pub fn decide(&self, hosts: &[String], class: &DataClass) -> (EgressAction, Option<usize>) {
+        hosts
+            .iter()
+            .map(|host| self.config.decide(host, class))
+            .max_by_key(|(action, _)| *action)
+            .unwrap_or((self.config.default, None))
     }
 
     /// Installs a redactor.
@@ -204,6 +372,56 @@ impl EgressGate {
         self.prepare(cx, request, &hosts).await
     }
 
+    /// Runs the destination, minimise and redact steps, stores the egress copy, and returns
+    /// what would leave with the rule that applies, for an approval card (spec 3.7 S4).
+    ///
+    /// Releases nothing. A rule that denies is refused here, and recorded, so nobody is
+    /// asked about an image that can never leave.
+    ///
+    /// # Errors
+    ///
+    /// The refusals of [`release`](Self::release)'s first three steps,
+    /// [`VisionError::EgressRefused`] for a rule that denies, and the media store's error.
+    pub async fn stage(&self, cx: &VisionCx, request: &ReleaseRequest<'_>) -> Result<StagedEgress> {
+        let hosts = remote_hosts(request.backend)?;
+        let preview = self.prepare(cx, request, &hosts).await?;
+        let (action, rule) = self.decide(&hosts, &request.data_class);
+        if action == EgressAction::Deny {
+            let reason = deny_reason(rule, &request.data_class);
+            self.refuse(cx, request, &hosts, Some(preview.egress), "decide", &reason).await?;
+            return Err(VisionError::EgressRefused { host: hosts.join(", "), reason });
+        }
+        let stored = self.store_copy(cx, request, &preview).await?;
+        Ok(StagedEgress {
+            preview,
+            stored,
+            action,
+            rule,
+            hosts,
+            data_class: request.data_class.clone(),
+        })
+    }
+
+    async fn store_copy(
+        &self,
+        cx: &VisionCx,
+        request: &ReleaseRequest<'_>,
+        preview: &EgressPreview,
+    ) -> Result<Option<ImageRef>> {
+        let (Some(store), Some(scope)) = (&self.store, cx.media_scope()) else {
+            return Ok(None);
+        };
+        let provenance = Provenance::Derived {
+            from: request.source.digest(),
+            operation: Digest::of_json(&serde_json::json!({
+                "op": "egress",
+                "chain": preview.image.chain(),
+            })),
+        };
+        let (image, _) = store.put_image(scope, preview.bytes.to_vec(), provenance).await?;
+        Ok(Some(image))
+    }
+
     /// Releases an image to a remote backend, or refuses.
     ///
     /// # Errors
@@ -220,11 +438,7 @@ impl EgressGate {
     ) -> Result<ReleasedImage> {
         let hosts = remote_hosts(request.backend)?;
         let preview = self.prepare(cx, &request, &hosts).await?;
-        let (action, rule) = hosts
-            .iter()
-            .map(|host| self.config.decide(host, &request.data_class))
-            .max_by_key(|(action, _)| *action)
-            .unwrap_or((self.config.default, None));
+        let (action, rule) = self.decide(&hosts, &request.data_class);
         let decision = match action {
             EgressAction::Allow => EgressDecision::Allowed { rule },
             EgressAction::Ask if request.approved.contains(&preview.egress) => {
@@ -232,7 +446,7 @@ impl EgressGate {
             }
             EgressAction::Ask => {
                 let reason = format!("held for a person's approval of {}", preview.egress);
-                self.refuse(&request, &hosts, Some(preview.egress), "decide", &reason).await?;
+                self.refuse(cx, &request, &hosts, Some(preview.egress), "decide", &reason).await?;
                 return Err(VisionError::EgressHeld {
                     host: hosts.join(", "),
                     data_class: request.data_class.to_string(),
@@ -240,19 +454,24 @@ impl EgressGate {
                 });
             }
             EgressAction::Deny => {
-                let reason = match rule {
-                    Some(index) => format!("egress rule {index} denies `{}`", request.data_class),
-                    None => format!("the default egress action denies `{}`", request.data_class),
-                };
-                self.refuse(&request, &hosts, Some(preview.egress), "decide", &reason).await?;
+                let reason = deny_reason(rule, &request.data_class);
+                self.refuse(cx, &request, &hosts, Some(preview.egress), "decide", &reason).await?;
                 return Err(VisionError::EgressRefused { host: hosts.join(", "), reason });
             }
         };
         if let Err(err) = cx.check() {
-            self.refuse(&request, &hosts, Some(preview.egress), "release", &err.to_string())
+            self.refuse(cx, &request, &hosts, Some(preview.egress), "release", &err.to_string())
                 .await?;
             return Err(err);
         }
+        let artifact = match self.store_copy(cx, &request, &preview).await {
+            Ok(stored) => stored.map(|image| image.artifact),
+            Err(err) => {
+                let reason = format!("the egress copy could not be stored: {err}");
+                self.refuse(cx, &request, &hosts, Some(preview.egress), "record", &reason).await?;
+                return Err(err);
+            }
+        };
         let receipt = EgressReceipt {
             id: uuid::Uuid::new_v4().to_string(),
             source: request.source.digest(),
@@ -268,9 +487,13 @@ impl EgressGate {
                 .price
                 .as_ref()
                 .and_then(|p| p.request_cost(1)),
+            artifact,
             released_at: Utc::now(),
         };
-        self.recorder.record(EgressRecord::Released(receipt.clone())).await?;
+        let record = EgressRecord::Released(receipt.clone());
+        self.recorder.record(record.clone()).await?;
+        cx.audit(crate::audit::egress_draft(&record)).await?;
+        self.released.lock().unwrap_or_else(|e| e.into_inner()).insert(receipt.egress);
         tracing::info!(
             egress.backend = %receipt.backend,
             egress.source = %receipt.source,
@@ -288,14 +511,14 @@ impl EgressGate {
         hosts: &[String],
     ) -> Result<EgressPreview> {
         if let Err(err) = cx.check() {
-            self.refuse(request, hosts, None, "destination", &err.to_string()).await?;
+            self.refuse(cx, request, hosts, None, "destination", &err.to_string()).await?;
             return Err(err);
         }
         for host in hosts {
             let (name, port) = split_host_port(host);
             if let Err(denial) = self.policy.decide(&EgressTarget::Name { host: name, port }) {
                 let reason = denial.to_string();
-                self.refuse(request, hosts, None, "destination", &reason).await?;
+                self.refuse(cx, request, hosts, None, "destination", &reason).await?;
                 return Err(VisionError::EgressRefused { host: host.clone(), reason });
             }
         }
@@ -308,7 +531,7 @@ impl EgressGate {
             let (x, y, cw, ch) = crop.pixel_bounds(w, h);
             if cw == 0 || ch == 0 {
                 let reason = format!("crop {crop:?} leaves no pixels of the {w}x{h} image");
-                self.refuse(request, hosts, None, "minimise", &reason).await?;
+                self.refuse(cx, request, hosts, None, "minimise", &reason).await?;
                 return Err(VisionError::InvalidInput(reason));
             }
             chain.push(Transform::Crop { x, y, width: cw, height: ch })?;
@@ -323,7 +546,7 @@ impl EgressGate {
                     limit: limits.describe(),
                     actual: format!("{pw}x{ph}"),
                 };
-                self.refuse(request, hosts, None, "minimise", &err.to_string()).await?;
+                self.refuse(cx, request, hosts, None, "minimise", &err.to_string()).await?;
                 return Err(err);
             }
             chain.push(Transform::Resize { width: fw, height: fh })?;
@@ -343,7 +566,7 @@ impl EgressGate {
                 self.redactors.iter().filter(|r| &r.class() == class).collect();
             if redactors.is_empty() {
                 let err = VisionError::RedactionUnavailable { class: class.to_string() };
-                self.refuse(request, hosts, None, "redact", &err.to_string()).await?;
+                self.refuse(cx, request, hosts, None, "redact", &err.to_string()).await?;
                 return Err(err);
             }
             let mut found = Vec::new();
@@ -352,7 +575,7 @@ impl EgressGate {
                     Ok(regions) => found.extend(regions),
                     Err(err) => {
                         let reason = format!("the `{class}` redactor failed: {err}");
-                        self.refuse(request, hosts, None, "redact", &reason).await?;
+                        self.refuse(cx, request, hosts, None, "redact", &reason).await?;
                         return Err(err);
                     }
                 }
@@ -366,11 +589,13 @@ impl EgressGate {
 
         let mut redacted = (*pixels).clone();
         let mut redactions = BTreeMap::new();
+        let mut filled = Vec::new();
         for (class, regions) in boxes {
             let mut count = 0u32;
             for region in &regions {
                 if ops::fill(&mut redacted, region, Rgba::BLACK) {
                     count += 1;
+                    filled.push((class.clone(), *region));
                 }
             }
             redactions.insert(class, count);
@@ -385,11 +610,13 @@ impl EgressGate {
             bytes,
             egress,
             redactions,
+            filled,
         })
     }
 
     async fn refuse(
         &self,
+        cx: &VisionCx,
         request: &ReleaseRequest<'_>,
         hosts: &[String],
         egress: Option<Digest>,
@@ -402,18 +629,25 @@ impl EgressGate {
             egress.reason = reason,
             "image not released"
         );
-        self.recorder
-            .record(EgressRecord::Refused(EgressRefusal {
-                source: request.source.digest(),
-                egress,
-                backend: request.backend.id.clone(),
-                hosts: hosts.to_vec(),
-                data_class: request.data_class.clone(),
-                step: step.to_string(),
-                reason: reason.to_string(),
-                refused_at: Utc::now(),
-            }))
-            .await
+        let record = EgressRecord::Refused(EgressRefusal {
+            source: request.source.digest(),
+            egress,
+            backend: request.backend.id.clone(),
+            hosts: hosts.to_vec(),
+            data_class: request.data_class.clone(),
+            step: step.to_string(),
+            reason: reason.to_string(),
+            refused_at: Utc::now(),
+        });
+        self.recorder.record(record.clone()).await?;
+        cx.audit(crate::audit::egress_draft(&record)).await
+    }
+}
+
+fn deny_reason(rule: Option<usize>, class: &DataClass) -> String {
+    match rule {
+        Some(index) => format!("egress rule {index} denies `{class}`"),
+        None => format!("the default egress action denies `{class}`"),
     }
 }
 
