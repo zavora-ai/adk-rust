@@ -15,6 +15,7 @@
 //! | [`Characters`](UsageUnit::Characters) | Characters of text synthesized or translated | Per thousand characters |
 //! | [`Pages`](UsageUnit::Pages) | Document pages processed | Per page |
 //! | [`Requests`](UsageUnit::Requests) | Requests billed as a whole | Per request |
+//! | [`Frames`](UsageUnit::Frames) | Video frames analysed | Per thousand frames, with a minimum per request |
 //!
 //! # Example
 //!
@@ -66,11 +67,13 @@ pub enum UsageUnit {
     Pages,
     /// Requests billed as a whole.
     Requests,
+    /// Video frames analysed, such as frames a segmentation model tracked objects through.
+    Frames,
 }
 
 impl UsageUnit {
     /// Every unit, in declaration order.
-    pub const ALL: [UsageUnit; 8] = [
+    pub const ALL: [UsageUnit; 9] = [
         Self::InputTokens,
         Self::OutputTokens,
         Self::Images,
@@ -79,6 +82,7 @@ impl UsageUnit {
         Self::Characters,
         Self::Pages,
         Self::Requests,
+        Self::Frames,
     ];
 
     /// The unit's wire name.
@@ -92,6 +96,7 @@ impl UsageUnit {
             Self::Characters => "characters",
             Self::Pages => "pages",
             Self::Requests => "requests",
+            Self::Frames => "frames",
         }
     }
 }
@@ -151,6 +156,19 @@ impl UsageVector {
         }
     }
 
+    /// Takes every amount in `other` away, saturating at zero; a unit that reaches zero is
+    /// removed.
+    pub(crate) fn subtract(&mut self, other: &UsageVector) {
+        for (unit, amount) in other.iter() {
+            if let Some(total) = self.0.get_mut(&unit) {
+                *total = total.saturating_sub(amount);
+                if *total == 0 {
+                    self.0.remove(&unit);
+                }
+            }
+        }
+    }
+
     /// The amount counted for `unit`, zero when none was.
     pub fn get(&self, unit: UsageUnit) -> u64 {
         self.0.get(&unit).copied().unwrap_or(0)
@@ -186,7 +204,9 @@ impl FromIterator<(UsageUnit, u64)> for UsageVector {
 ///
 /// `granularity` is the billing step: usage is billed in whole multiples of it, rounded
 /// down, as a vendor billing "whole seconds, rounded down" bills audio milliseconds in
-/// steps of 1,000. The cost of the billed amount rounds up to a whole micro-USD.
+/// steps of 1,000. `minimum_per_request` is the least a request that uses the unit at all
+/// is billed for, as a vendor billing "at least 50 frames per video request" does. The cost
+/// of the billed amount rounds up to a whole micro-USD.
 ///
 /// # Example
 ///
@@ -197,9 +217,15 @@ impl FromIterator<(UsageUnit, u64)> for UsageVector {
 /// let rate = UnitRate::new(UsageUnit::Images, 2_500_000, 1_000);
 /// assert_eq!(rate.cost_micro_usd(3), 7_500);
 /// assert_eq!(rate.cost_micro_usd(0), 0);
+///
+/// // $0.20 per 1,000 frames, at least 50 frames per request.
+/// let frames = UnitRate::new(UsageUnit::Frames, 200_000, 1_000).with_minimum_per_request(50);
+/// assert_eq!(frames.cost_micro_usd(12), 10_000);
+/// assert_eq!(frames.cost_micro_usd(900), 180_000);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct UnitRate {
     /// The unit priced.
     pub unit: UsageUnit,
@@ -209,12 +235,25 @@ pub struct UnitRate {
     pub per: u64,
     /// Usage is billed in whole multiples of this many units, rounded down. Never zero.
     pub granularity: u64,
+    /// The fewest units a request that uses the unit is billed for; zero for no minimum.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub minimum_per_request: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl UnitRate {
     /// `micro_usd` per `per` units of `unit`, every unit billed. A zero `per` is read as 1.
     pub const fn new(unit: UsageUnit, micro_usd: u64, per: u64) -> Self {
-        Self { unit, micro_usd, per: if per == 0 { 1 } else { per }, granularity: 1 }
+        Self {
+            unit,
+            micro_usd,
+            per: if per == 0 { 1 } else { per },
+            granularity: 1,
+            minimum_per_request: 0,
+        }
     }
 
     /// Bills usage in whole multiples of `granularity` units, rounded down. Zero is read as 1.
@@ -223,10 +262,23 @@ impl UnitRate {
         self
     }
 
-    /// The cost of `amount` units in micro-USD, saturating at `u64::MAX`.
+    /// Bills every request that uses the unit for at least `minimum` units.
+    pub const fn with_minimum_per_request(mut self, minimum: u64) -> Self {
+        self.minimum_per_request = minimum;
+        self
+    }
+
+    /// The cost in micro-USD of one request that used `amount` units, saturating at
+    /// `u64::MAX`.
+    ///
+    /// The amount is rounded down to the billing granularity, then raised to the
+    /// per-request minimum; a request that used none of the unit costs nothing.
     pub fn cost_micro_usd(&self, amount: u64) -> u64 {
+        if amount == 0 {
+            return 0;
+        }
         let granularity = self.granularity.max(1);
-        let billed = u128::from(amount / granularity * granularity);
+        let billed = u128::from((amount / granularity * granularity).max(self.minimum_per_request));
         let cost = (billed * u128::from(self.micro_usd)).div_ceil(u128::from(self.per.max(1)));
         u64::try_from(cost).unwrap_or(u64::MAX)
     }
@@ -277,6 +329,44 @@ mod tests {
         assert_eq!(rate.cost_micro_usd(1_000), 50);
         assert_eq!(rate.cost_micro_usd(30_400), 1_500);
         assert_eq!(rate.cost_micro_usd(3_600_000), 180_000);
+    }
+
+    #[test]
+    fn a_per_request_minimum_bills_small_requests_at_the_minimum() {
+        let rate = UnitRate::new(UsageUnit::Frames, 200_000, 1_000).with_minimum_per_request(50);
+        assert_eq!(rate.cost_micro_usd(0), 0);
+        assert_eq!(rate.cost_micro_usd(1), 10_000);
+        assert_eq!(rate.cost_micro_usd(50), 10_000);
+        assert_eq!(rate.cost_micro_usd(51), 10_200);
+        assert_eq!(rate.cost_micro_usd(1_800), 360_000);
+        // The minimum lifts what granularity rounds down to nothing.
+        let seconds = UnitRate::new(UsageUnit::AudioMillis, 180_000, 3_600_000)
+            .rounded_down_to(1_000)
+            .with_minimum_per_request(15_000);
+        assert_eq!(seconds.cost_micro_usd(400), 750);
+    }
+
+    #[test]
+    fn a_rate_without_a_minimum_keeps_its_wire_form() {
+        let rate = UnitRate::new(UsageUnit::Images, 2_500_000, 1_000);
+        let json = serde_json::json!({
+            "unit": "images", "microUsd": 2_500_000, "per": 1_000, "granularity": 1
+        });
+        assert_eq!(serde_json::to_value(rate).unwrap(), json);
+        assert_eq!(serde_json::from_value::<UnitRate>(json).unwrap(), rate);
+        let floored = rate.with_minimum_per_request(50);
+        let json = serde_json::to_value(floored).unwrap();
+        assert_eq!(json["minimumPerRequest"], 50);
+        assert_eq!(serde_json::from_value::<UnitRate>(json).unwrap(), floored);
+    }
+
+    #[test]
+    fn subtracting_removes_units_that_reach_zero() {
+        let mut vector = UsageVector::new().with(UsageUnit::Images, 3).with(UsageUnit::Frames, 2);
+        vector.subtract(&UsageVector::new().with(UsageUnit::Images, 1).with(UsageUnit::Frames, 5));
+        assert_eq!(vector, UsageVector::new().with(UsageUnit::Images, 2));
+        vector.subtract(&UsageVector::new().with(UsageUnit::Pages, 4));
+        assert_eq!(vector, UsageVector::new().with(UsageUnit::Images, 2));
     }
 
     #[test]
