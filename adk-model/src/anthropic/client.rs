@@ -49,6 +49,8 @@ pub struct AnthropicClient {
     latest_rate_limit: Arc<RwLock<RateLimitInfo>>,
     /// The tools each conversation started with, for inline tool changes.
     tool_ledgers: Arc<super::tool_changes::ToolLedgers>,
+    /// The message thread each conversation can continue.
+    threads: Arc<super::threads::Threads>,
 }
 
 /// The identifier from `claude-` on, so a platform ID such as `anthropic.claude-sonnet-5-5`
@@ -130,6 +132,12 @@ impl AnthropicClient {
         });
         (self.config.inline_tool_changes && first_party && Self::supports_inline_tools(&self.model))
             .then(|| self.tool_ledgers.clone())
+    }
+
+    /// The thread store message threads use for this client's requests, if enabled. An
+    /// endpoint that refuses threads gets each conversation sent without one.
+    fn thread_store(&self) -> Option<Arc<super::threads::Threads>> {
+        self.config.message_threads.then(|| self.threads.clone())
     }
 
     fn supports_fast_mode(model: &str) -> bool {
@@ -238,6 +246,7 @@ impl AnthropicClient {
             request_adapter: None,
             latest_rate_limit: Arc::new(RwLock::new(RateLimitInfo::default())),
             tool_ledgers: Arc::default(),
+            threads: Arc::default(),
         })
     }
 
@@ -652,6 +661,74 @@ fn keep_compaction_block_first(messages: &mut [adk_anthropic::MessageParam]) {
     }
 }
 
+/// Sends `params` and waits for the whole message, through `adapter` when one is set.
+async fn send_unary(
+    client: &Anthropic,
+    params: adk_anthropic::MessageCreateParams,
+    adapter: Option<&RequestAdapter>,
+) -> Result<adk_anthropic::Message, AdkError> {
+    match adapter {
+        Some(adapter) => {
+            let (params, headers) = super::request::prepare(client, params, adapter)?;
+            client.send_with_headers(params, headers).await.map_err(convert_anthropic_error)
+        }
+        None => client.send(params).await.map_err(convert_anthropic_error),
+    }
+}
+
+/// The SSE events of `params`, through `adapter` when one is set.
+async fn open_stream(
+    client: &Anthropic,
+    params: &adk_anthropic::MessageCreateParams,
+    adapter: Option<&RequestAdapter>,
+) -> Result<
+    futures::stream::BoxStream<
+        'static,
+        Result<adk_anthropic::MessageStreamEvent, adk_anthropic::Error>,
+    >,
+    AdkError,
+> {
+    match adapter {
+        Some(adapter) => {
+            let (params, headers) = super::request::prepare(client, params.clone(), adapter)?;
+            client
+                .stream_with_headers(&params, headers)
+                .await
+                .map(|events| events.boxed())
+                .map_err(convert_anthropic_error)
+        }
+        None => client
+            .stream(params)
+            .await
+            .map(|events| events.boxed())
+            .map_err(convert_anthropic_error),
+    }
+}
+
+/// Whether `error` is the API refusing a thread request before the model ran: the thread
+/// expired, was continued elsewhere, or cannot hold the request.
+fn thread_refused(error: &AdkError) -> bool {
+    matches!(error.category, ErrorCategory::NotFound | ErrorCategory::InvalidInput)
+}
+
+/// Records that `plan`'s thread continues from response `id`, whose turn this client will
+/// render from the agent's history as it does `response`. A declined turn is not continued.
+fn record_thread(
+    threads: &super::threads::Threads,
+    plan: &super::threads::ThreadPlan,
+    id: &str,
+    response: &adk_core::LlmResponse,
+    prompt_caching: bool,
+) {
+    if response.error_code.is_some() {
+        return;
+    }
+    let Some(content) = &response.content else { return };
+    if let Ok(reply) = convert::content_to_message(content, prompt_caching) {
+        threads.record(plan, id, reply);
+    }
+}
+
 /// Merge consecutive `MessageParam`s that share the same role into a single message.
 ///
 /// This is required for Anthropic parallel tool use. Per the
@@ -935,17 +1012,19 @@ impl Llm for AnthropicClient {
         let anthropic_config = self.config.clone();
         let request_adapter = self.request_adapter.clone();
         let tool_ledgers = self.inline_tool_ledgers();
+        let threads = self.thread_store();
 
         let response_stream = try_stream! {
             if stream {
                 // Streaming mode
                 let client_ref = &client;
                 let model_ref = model.as_str();
-                let event_stream = execute_with_retry(&retry_config, is_retryable_model_error, || {
+                let (event_stream, plan, forms) = execute_with_retry(&retry_config, is_retryable_model_error, || {
                     let request = request_for_retry.clone();
                     let cfg = &anthropic_config;
                     let adapter = request_adapter.as_ref();
                     let ledgers = tool_ledgers.as_deref();
+                    let threads = threads.as_deref();
                     async move {
                         let mut params = Self::build_message_params(model_ref, max_tokens, &request, cfg)?;
                         params.stream = true;
@@ -953,38 +1032,60 @@ impl Llm for AnthropicClient {
                         if let Some(ledgers) = ledgers {
                             ledgers.apply(&mut params);
                         }
-                        if let Some(adapter) = adapter {
-                            let (params, headers) = super::request::prepare(client_ref, params, adapter)?;
-                            client_ref
-                                .stream_with_headers(&params, headers)
-                                .await
-                                .map(|events| (events.boxed(), forms))
-                                .map_err(convert_anthropic_error)
-                        } else {
-                            client_ref
-                                .stream(&params)
-                                .await
-                                .map(|events| (events.boxed(), forms))
-                                .map_err(convert_anthropic_error)
+                        let plan = threads.and_then(|threads| threads.prepare(&mut params));
+                        match open_stream(client_ref, &params, adapter).await {
+                            Ok(events) => Ok((events, plan, forms)),
+                            Err(error) => match (plan, threads) {
+                                (Some(plan), Some(threads)) if thread_refused(&error) => {
+                                    if !plan.continues {
+                                        threads.unthread(&plan);
+                                    }
+                                    let events = open_stream(client_ref, &plan.unthreaded(), adapter).await?;
+                                    Ok((events, None, forms))
+                                }
+                                _ => Err(error),
+                            },
                         }
                     }
                 })
                 .await?;
-                let (event_stream, forms) = event_stream;
 
+                // The thread continues from this response's id, once it completes.
+                let message_id = Arc::new(std::sync::Mutex::new(None::<String>));
+                let seen = message_id.clone();
+                let event_stream = event_stream.inspect(move |event| {
+                    if let Ok(adk_anthropic::MessageStreamEvent::MessageStart(start)) = event {
+                        *seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            Some(start.message.id.clone());
+                    }
+                });
                 let mut responses = super::streaming::responses(event_stream, forms);
                 while let Some(response) = responses.next().await {
-                    yield response?;
+                    let response = response?;
+                    // Recorded before the complete turn is yielded: a caller stops reading once
+                    // it has the final turn.
+                    if !response.partial
+                        && response.content.is_some()
+                        && let (Some(threads), Some(plan)) = (&threads, &plan)
+                        && let Some(id) = message_id
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .clone()
+                    {
+                        record_thread(threads, plan, &id, &response, anthropic_config.prompt_caching);
+                    }
+                    yield response;
                 }
             } else {
                 // Non-streaming mode
                 let client_ref = &client;
                 let model_ref = model.as_str();
-                let message = execute_with_retry(&retry_config, is_retryable_model_error, || {
+                let (message, plan, forms) = execute_with_retry(&retry_config, is_retryable_model_error, || {
                     let request = request_for_retry.clone();
                     let cfg = &anthropic_config;
                     let adapter = request_adapter.as_ref();
                     let ledgers = tool_ledgers.as_deref();
+                    let threads = threads.as_deref();
                     async move {
                         let mut params = Self::build_message_params(model_ref, max_tokens, &request, cfg)?;
                         let forms = super::toolsets::ToolsetForms::of(params.tools.as_deref().unwrap_or_default());
@@ -1002,25 +1103,30 @@ impl Llm for AnthropicClient {
                             }
                             None => None,
                         };
-                        let message = if let Some(adapter) = adapter {
-                            let (params, headers) = super::request::prepare(client_ref, params, adapter)?;
-                            client_ref
-                                .send_with_headers(params, headers)
-                                .await
-                                .map_err(convert_anthropic_error)
-                        } else {
-                            client_ref.send(params).await.map_err(convert_anthropic_error)
-                        }?;
+                        let plan = threads.and_then(|threads| threads.prepare(&mut params));
+                        let (message, plan) = match send_unary(client_ref, params, adapter).await {
+                            Ok(message) => (message, plan),
+                            Err(error) => match (plan, threads) {
+                                // A thread error comes before the model runs and uses no tokens;
+                                // the conversation is sent again without a thread.
+                                (Some(plan), Some(threads)) if thread_refused(&error) => {
+                                    if !plan.continues {
+                                        threads.unthread(&plan);
+                                    }
+                                    (send_unary(client_ref, plan.unthreaded(), adapter).await?, None)
+                                }
+                                _ => return Err(error),
+                            },
+                        };
                         if let (Some(ledgers), Some((tools, sent))) = (ledgers, compaction_tools)
                             && let Some(ContentBlock::Compaction(block)) = message.content.first()
                         {
                             ledgers.continue_after(&sent.model, &sent, block, tools);
                         }
-                        Ok((message, forms))
+                        Ok((message, plan, forms))
                     }
                 })
                 .await?;
-                let (message, forms) = message;
 
                 // Requirement 4.3: On success, propagate request-id to tracing span.
                 // The adk-anthropic crate does not expose the raw `request-id` response
@@ -1030,7 +1136,11 @@ impl Llm for AnthropicClient {
                 // the actual `request-id` header value.
                 Span::current().record("anthropic.request_id", message.id.as_str());
 
-                yield convert::from_anthropic_message(&message, forms).0;
+                let response = convert::from_anthropic_message(&message, forms).0;
+                if let (Some(threads), Some(plan)) = (&threads, plan) {
+                    record_thread(threads, &plan, &message.id, &response, anthropic_config.prompt_caching);
+                }
+                yield response;
             }
         };
 

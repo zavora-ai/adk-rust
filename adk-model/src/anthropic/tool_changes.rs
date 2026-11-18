@@ -283,7 +283,7 @@ fn prefix(messages: &[MessageParam]) -> u64 {
 }
 
 /// What tells a conversation apart: its model, system prompt and first block.
-fn conversation_key(model: &Model, params: &MessageCreateParams) -> Option<u64> {
+pub(super) fn conversation_key(model: &Model, params: &MessageCreateParams) -> Option<u64> {
     let first = match &params.messages.first()?.content {
         MessageParamContent::Array(blocks) => blocks.first()?.clone(),
         MessageParamContent::String(text) => {

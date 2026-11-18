@@ -486,3 +486,99 @@ struct PageArgs {
     /// The cursor the previous page gave; "start" for page 1.
     cursor: String,
 }
+
+#[tokio::test]
+#[ignore = "calls the Anthropic API; needs ANTHROPIC_API_KEY"]
+async fn a_live_tool_loop_continues_a_message_thread() {
+    dotenvy::dotenv().ok();
+    let key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY");
+    let sent: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let capture = sent.clone();
+    let model = adk_model::anthropic::AnthropicClient::new(
+        adk_model::anthropic::AnthropicConfig::new(key, "claude-haiku-5-5")
+            .with_max_tokens(4_096)
+            .with_message_threads(true),
+    )
+    .unwrap()
+    .with_request_adapter(Arc::new(move |body, _headers| {
+        capture.lock().unwrap().push(body.clone());
+        Ok(())
+    }));
+    let read_page = FunctionTool::new(
+        "read_page",
+        "Reads one page of the ledger. Page 1 takes the cursor \"start\"; each page gives the \
+         cursor of the next.",
+        |_ctx: Arc<dyn ToolContext>, args: Value| async move {
+            Ok(page(args["page"].as_u64().unwrap_or(1), args["cursor"].as_str().unwrap_or("")))
+        },
+    )
+    .with_parameters_schema::<PageArgs>();
+    let agent = LlmAgentBuilder::new("auditor")
+        .instruction(
+            "You audit a ledger. Read the pages the user asks for, in order, with read_page: \
+             page 1 takes the cursor \"start\" and each page gives the cursor of the next. \
+             Reply with only the number asked for.",
+        )
+        .model(Arc::new(model) as Arc<dyn Llm>)
+        .tool(Arc::new(read_page))
+        .max_iterations(20)
+        .build()
+        .unwrap();
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "live".to_string(),
+            user_id: "u".to_string(),
+            session_id: Some("s".to_string()),
+            state: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let runner = Runner::builder()
+        .app_name("live")
+        .agent(Arc::new(agent))
+        .session_service(sessions as Arc<dyn SessionService>)
+        .build()
+        .unwrap();
+
+    let first = audit(
+        &runner,
+        "Read pages 1 through 5, then reply with the sum of their page_total values.",
+        RunConfig::default(),
+    )
+    .await;
+    let second = audit(
+        &runner,
+        "Read pages 6 and 7, then reply with the sum of page_total over pages 1 through 7.",
+        RunConfig::default(),
+    )
+    .await;
+
+    let bodies = sent.lock().unwrap().clone();
+    println!("request | thread | messages sent | body bytes");
+    for (index, body) in bodies.iter().enumerate() {
+        let thread = match body["thread"]["type"].as_str() {
+            Some("continue") => "continue",
+            Some("create") => "create",
+            _ => "none",
+        };
+        println!(
+            "{:>7} | {thread} | {} | {}",
+            index + 1,
+            body["messages"].as_array().map_or(0, Vec::len),
+            body.to_string().len()
+        );
+    }
+    println!("answers: {:?} / {:?}", first.answer, second.answer);
+    let continued = bodies.iter().filter(|body| body["thread"]["type"] == "continue").count();
+    assert_eq!(bodies[0]["thread"]["type"], "create");
+    assert!(continued >= bodies.len() / 2, "most requests continue the thread");
+    assert!(
+        bodies.iter().filter(|body| body["thread"]["type"] == "continue").all(|body| {
+            body.get("system").is_none() && body["messages"].as_array().unwrap().len() <= 2
+        }),
+        "a continue request carries only the new messages"
+    );
+    assert!(first.answer.contains(&(820 * 15).to_string()), "{:?}", first.answer);
+    assert!(second.answer.contains(&(820 * 28).to_string()), "{:?}", second.answer);
+}
