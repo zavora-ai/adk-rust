@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "AuthorizationFailed",
+    "message": "The client 'ci@acme.example' does not have authorization to perform action 'Microsoft.App/containerApps/write' over scope '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/agents'."
+  }
+}

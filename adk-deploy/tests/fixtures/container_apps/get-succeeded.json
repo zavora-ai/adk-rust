@@ -1,0 +1,23 @@
+{
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/agents/providers/Microsoft.App/containerApps/support-desk",
+  "name": "support-desk",
+  "type": "Microsoft.App/containerApps",
+  "location": "East US",
+  "properties": {
+    "provisioningState": "Succeeded",
+    "runningStatus": "Running",
+    "latestRevisionName": "support-desk--0000001",
+    "latestReadyRevisionName": "support-desk--0000001",
+    "latestRevisionFqdn": "support-desk--0000001.happyhill-70162bb9.eastus.azurecontainerapps.io",
+    "configuration": {
+      "activeRevisionsMode": "Single",
+      "ingress": {
+        "fqdn": "support-desk.happyhill-70162bb9.eastus.azurecontainerapps.io",
+        "external": true,
+        "targetPort": 8080,
+        "transport": "Auto",
+        "allowInsecure": false
+      }
+    }
+  }
+}

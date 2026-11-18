@@ -38,12 +38,17 @@ google-cloud-auth = { version = "1.8", optional = true, default-features = false
 aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
 aws-credential-types = { version = "1", optional = true }
 aws-sigv4 = { version = "1", optional = true }
+# Optional: Azure Container Apps deploy target (ARM REST with DefaultAzureCredential)
+azure_core = { version = "0.22", optional = true }
+azure_identity = { version = "0.22", optional = true }
 
 [features]
 # Agent Engine (ReasoningEngine) BYOC deployment: create/poll/get/delete
 gcp = ["dep:adk-core", "dep:adk-gcp", "dep:google-cloud-auth"]
 # Amazon ECS Express Mode deploy target: create/describe/update/delete Express services
 aws = ["dep:aws-config", "dep:aws-credential-types", "dep:aws-sigv4"]
+# Azure Container Apps deploy target: create or update, read, and delete container apps
+azure = ["dep:azure_core", "dep:azure_identity"]
 
 [dev-dependencies]
 tempfile = "3"

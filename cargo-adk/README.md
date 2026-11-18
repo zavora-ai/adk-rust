@@ -27,7 +27,7 @@ cargo install cargo-adk --features bench
 | `cargo adk addons` | List capability addons |
 | `cargo adk build` | Compile the project (`cargo build --release`, or `--debug`) |
 | `cargo adk validate` | Check a YAML agent definition (`--yaml`) or a Rust source file (`--rust`) |
-| `cargo adk deploy` | Build, bundle, and push to a deployment control plane, or deploy to a target: `--target container`, `agent-engine`, or `ecs-express` |
+| `cargo adk deploy` | Build, bundle, and push to a deployment control plane, or deploy to a target: `--target container`, `agent-engine`, `ecs-express`, or `azure-container-apps` |
 | `cargo adk eval` | Run eval sets against an agent binary, or gate on drift in an exported activity ledger |
 | `cargo adk bench` | Run performance benchmarks against real LLM APIs (feature `bench`) |
 
@@ -172,11 +172,14 @@ cargo adk deploy --target agent-engine --image us-central1-docker.pkg.dev/p/agen
 
 # Amazon ECS Express Mode (cargo install cargo-adk --features aws)
 cargo adk deploy --target ecs-express --image 123456789012.dkr.ecr.us-east-1.amazonaws.com/a:1.0.0
+
+# Azure Container Apps (cargo install cargo-adk --features azure)
+cargo adk deploy --target azure-container-apps --image acme.azurecr.io/a:1.0.0
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--target` | `platform` (default), `container`, `agent-engine`, or `ecs-express` |
+| `--target` | `platform` (default), `container`, `agent-engine`, `ecs-express`, or `azure-container-apps` |
 | `--image` | Image to deploy; default `[targets.<name>] image` |
 | `--manifest` | Manifest path (default `adk-deploy.toml`) |
 | `--plan` | Write and print what would be created; deploy nothing |
@@ -187,6 +190,7 @@ cargo adk deploy --target ecs-express --image 123456789012.dkr.ecr.us-east-1.ama
 |---------|---------|
 | `gcp` | `--target agent-engine` |
 | `aws` | `--target ecs-express` |
+| `azure` | `--target azure-container-apps` |
 
 See [Deploy Targets](../docs/official_docs/deployment/deploy-targets.md).
 

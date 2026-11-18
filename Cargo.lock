@@ -491,6 +491,8 @@ dependencies = [
  "aws-credential-types",
  "aws-sigv4",
  "axum",
+ "azure_core",
+ "azure_identity",
  "chrono",
  "dirs 7.0.0",
  "flate2",

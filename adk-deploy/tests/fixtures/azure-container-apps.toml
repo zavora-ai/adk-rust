@@ -1,0 +1,56 @@
+# The support-desk manifest with Azure Container Apps settings.
+[agent]
+name = "support-desk"
+binary = "support-desk"
+version = "1.4.0"
+
+[scaling]
+minInstances = 1
+maxInstances = 5
+targetConcurrentRequests = 40
+
+[health]
+path = "/api/health"
+intervalSecs = 10
+timeoutSecs = 3
+failureThreshold = 3
+
+[[services]]
+name = "sessions"
+kind = "postgres"
+mode = "external"
+secretRef = "DATABASE_URL"
+
+[[secrets]]
+key = "DATABASE_URL"
+
+[[secrets]]
+key = "ANTHROPIC_API_KEY"
+
+[[secrets]]
+key = "ADK_API_TOKEN"
+
+[env]
+RUST_LOG = "info"
+ANTHROPIC_API_KEY = { secretRef = "ANTHROPIC_API_KEY" }
+ADK_API_TOKEN = { secretRef = "ADK_API_TOKEN" }
+
+[auth]
+mode = "bearer"
+requiredScopes = ["agent:invoke"]
+
+[targets.azure-container-apps]
+image = "acme.azurecr.io/support-desk:1.4.0"
+subscriptionId = "00000000-0000-0000-0000-000000000000"
+resourceGroup = "agents"
+location = "eastus"
+environmentId = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/agents/providers/Microsoft.App/managedEnvironments/agents"
+identity = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/agents/providers/Microsoft.ManagedIdentity/userAssignedIdentities/support-desk"
+keyVaultUrl = "https://acme-agents.vault.azure.net"
+registryServer = "acme.azurecr.io"
+cpu = 0.5
+memory = "1Gi"
+allowedHosts = ["support.example.com"]
+
+[targets.azure-container-apps.secrets]
+DATABASE_URL = "support-desk-database-url"
