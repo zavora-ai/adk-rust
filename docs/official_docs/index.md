@@ -128,6 +128,7 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 - [Architecture](realtime/architecture.md) - The four layers, event loop, audio pipeline, and turn lifecycle
 - [Providers](realtime/providers.md) - OpenAI Realtime & Gemini Live models, voices, and how to choose
 - [Tools](realtime/tools.md) - Server-side actions: native handlers, bridged `adk_core::Tool`s, parallel calls
+- [Telephony](realtime/telephony.md) - Phone calls: OpenAI Realtime SIP, governed transfer, hang-up, DTMF and dialling tools, freeze ends the call
 - [Multimodal](realtime/multimodal.md) - Video input via `send_video_frame` and browser camera capture
 - [Affective Dialogue](realtime/affective-dialogue.md) - Emotion-aware responses on Gemini native-audio
 - [Memory](realtime/memory.md) - Context injection, turn storage, and knowledge-graph self-curation

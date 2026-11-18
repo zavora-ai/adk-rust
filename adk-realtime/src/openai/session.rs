@@ -55,6 +55,9 @@ pub struct OpenAIRealtimeSession {
     close: Mutex<Option<oneshot::Sender<()>>>,
     writer: Mutex<Option<JoinHandle<()>>>,
     receiver: Arc<Mutex<WsSource>>,
+    /// Attached to a SIP call: the call's media format is the provider's, so session
+    /// updates leave `audio.*.format` out.
+    attached_to_call: bool,
 }
 
 /// A short, stable-within-a-run digest of a frame.
@@ -178,6 +181,29 @@ async fn shutdown_writer(
 impl OpenAIRealtimeSession {
     /// Connect to OpenAI Realtime API.
     pub async fn connect(url: &str, api_key: &str, config: RealtimeConfig) -> Result<Self> {
+        Self::open(url, api_key, config, false).await
+    }
+
+    /// Attaches to a session OpenAI already runs for a SIP call, at a
+    /// `wss://api.openai.com/v1/realtime?call_id=...` URL.
+    ///
+    /// The call's audio flows between the SIP trunk and OpenAI; this socket carries the
+    /// session's events and tool calls. Session updates leave the audio format out, since
+    /// the call fixes it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RealtimeError::ConnectionError`] when the socket cannot be opened.
+    pub async fn connect_to_call(url: &str, api_key: &str, config: RealtimeConfig) -> Result<Self> {
+        Self::open(url, api_key, config, true).await
+    }
+
+    async fn open(
+        url: &str,
+        api_key: &str,
+        config: RealtimeConfig,
+        attached_to_call: bool,
+    ) -> Result<Self> {
         adk_core::ensure_crypto_provider();
         // Parse URL and build request with auth header
         let uri: Uri =
@@ -218,6 +244,7 @@ impl OpenAIRealtimeSession {
             close: Mutex::new(Some(close)),
             writer: Mutex::new(Some(writer)),
             receiver: Arc::new(Mutex::new(source)),
+            attached_to_call,
         };
 
         // Send initial session configuration via the trait default implementation
@@ -319,6 +346,15 @@ impl OpenAITransportLink for OpenAIRealtimeSession {
     async fn close(&self) -> Result<()> {
         self.connected.store(false, Ordering::SeqCst);
         shutdown_writer(&self.close, &self.writer, CLOSE_GRACE).await
+    }
+
+    async fn configure_session(&self, config: RealtimeConfig) -> Result<()> {
+        let session = if self.attached_to_call {
+            crate::openai::protocol::call_session_config(&config)
+        } else {
+            crate::openai::protocol::convert_config_to_openai(&config)
+        };
+        self.send_raw(&serde_json::json!({ "type": "session.update", "session": session })).await
     }
 }
 

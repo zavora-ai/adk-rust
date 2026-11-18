@@ -328,6 +328,10 @@
 1 adk-realtime openai
 # The Gemini Live session: setup, usage reports, the audio stream end on commit.
 1 adk-realtime gemini
+# Phone calls: the call-control tools alone, and OpenAI Realtime SIP's signed webhooks, call
+# control (wiremock) and call-attached session, with a simulated call through the governed path.
+1 adk-realtime telephony
+1 adk-realtime openai-sip,scripted doc
 1 adk-session vertex-session
 1 adk-session postgres
 # Durable stores on every backend: compiles them and runs the SQLite conformance suites;
