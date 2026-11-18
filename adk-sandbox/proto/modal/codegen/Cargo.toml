@@ -1,0 +1,14 @@
+# Regenerates the committed Modal protocol code of adk-sandbox; see src/main.rs.
+[package]
+name = "adk-sandbox-modal-codegen"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone: not a member of the ADK-Rust workspace, so its build dependencies never enter it.
+[workspace]
+
+[dependencies]
+# The versions the workspace's tonic 0.14.9 and prost 0.14.6 were generated with.
+tonic-prost-build = "=0.14.9"
+prost-build = "=0.14.6"

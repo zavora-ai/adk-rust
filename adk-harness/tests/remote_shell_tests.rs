@@ -3,8 +3,8 @@
 //! Most tests run over a fake `SandboxClient` that reports itself off-host and runs each
 //! environment in its own directory, apart from the workspace, as a remote microVM is. One
 //! test runs the real `LocalUnixClient`, which reports itself on-host, so the harness governs
-//! it as the host shell. The E2B and Daytona clients are covered by adk-sandbox's contract
-//! tests.
+//! it as the host shell. The E2B, Daytona and Modal clients are covered by adk-sandbox's
+//! contract tests; the live tests at the end run each of them.
 
 #![cfg(all(feature = "remote-shell", feature = "runner", unix))]
 
@@ -588,6 +588,15 @@ fn live_daytona_client() -> adk_sandbox::workspace::remote::DaytonaClient {
     adk_sandbox::workspace::remote::DaytonaClient::new(config).unwrap()
 }
 
+fn live_modal_client() -> adk_sandbox::workspace::remote::ModalClient {
+    let env = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.env");
+    let _ = dotenvy::from_path_override(&env);
+    let config = adk_sandbox::workspace::remote::ModalConfig::from_env()
+        .expect("MODAL_TOKEN_ID and MODAL_TOKEN_SECRET")
+        .with_timeout(Duration::from_secs(600));
+    adk_sandbox::workspace::remote::ModalClient::new(config).unwrap()
+}
+
 const SALES: &[u8] = b"region,amount\nnorth,1200.50\nsouth,830.25\neast,410.00\nwest,1559.25\n";
 
 /// The harness shell through `ShellIsolation::Remote` over the process-backed client: the
@@ -617,6 +626,14 @@ async fn live_remote_shell_runs_the_models_commands_in_an_e2b_microvm() {
 async fn live_remote_shell_runs_the_models_commands_in_a_daytona_sandbox() {
     let client = Arc::new(live_daytona_client());
     live_remote_shell_sums_the_seeded_file(client, "daytona").await;
+}
+
+/// The same run in a Modal Sandbox.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: needs ANTHROPIC_API_KEY, MODAL_TOKEN_ID and MODAL_TOKEN_SECRET in the workspace .env"]
+async fn live_remote_shell_runs_the_models_commands_in_a_modal_sandbox() {
+    let client = Arc::new(live_modal_client());
+    live_remote_shell_sums_the_seeded_file(client, "modal").await;
 }
 
 async fn live_remote_shell_sums_the_seeded_file(client: Arc<dyn SandboxClient>, provider: &str) {
@@ -719,6 +736,13 @@ async fn live_sandbox_tool_runs_code_in_an_e2b_microvm() {
 #[ignore = "live: needs ANTHROPIC_API_KEY and DAYTONA_API_KEY in the workspace .env"]
 async fn live_sandbox_tool_runs_code_in_a_daytona_sandbox() {
     live_sandbox_tool_sums_squares(Arc::new(live_daytona_client())).await;
+}
+
+/// The same run in a Modal Sandbox.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: needs ANTHROPIC_API_KEY, MODAL_TOKEN_ID and MODAL_TOKEN_SECRET in the workspace .env"]
+async fn live_sandbox_tool_runs_code_in_a_modal_sandbox() {
+    live_sandbox_tool_sums_squares(Arc::new(live_modal_client())).await;
 }
 
 async fn live_sandbox_tool_sums_squares(client: Arc<dyn SandboxClient>) {

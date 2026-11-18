@@ -41,6 +41,7 @@ adk-rust = { version = "3.0.0", features = ["sandbox"] }
 | `workspace-docker` | `DockerClient` (implies `workspace`) | off | `bollard`, `futures` |
 | `remote-e2b` | `E2bClient`: workspaces in E2B Firecracker microVMs over the E2B REST API and the in-VM `envd` daemon ([Remote Sandbox Providers](../docs/official_docs/sandbox/remote-providers.md)) | off | `reqwest`, `futures`, `base64` |
 | `remote-daytona` | `DaytonaClient`: workspaces in Daytona sandboxes over the Daytona REST and toolbox APIs | off | `reqwest`, `futures` |
+| `remote-modal` | `ModalClient`: workspaces in Modal Sandboxes over Modal's gRPC API, from a vendored subset of Modal's protobuf definitions with the generated code committed | off | `tonic`, `tonic-prost`, `prost`, `base64` |
 
 ## Backend Comparison
 
@@ -109,7 +110,7 @@ fn sandbox_agent(model: Arc<dyn Llm>) -> adk_core::Result<LlmAgent> {
 
 The tool accepts `language`, `code`, optional `stdin`, and optional `timeout_secs` parameters. It requires the `code:execute` scope. `timeout_secs` is clamped to the schema's 1–300 second range; a missing or non-numeric value uses 30 seconds. Inside a run, a frozen governance control refuses the call, a freeze while code runs ends it, and the timeout is cut to the wall time left in the run's budget.
 
-With the `workspace` feature, `SessionBackend::new(client)` is a backend over any `SandboxClient`, so the tool runs code in a Docker container or in an E2B or Daytona microVM.
+With the `workspace` feature, `SessionBackend::new(client)` is a backend over any `SandboxClient`, so the tool runs code in a Docker container, an E2B or Daytona microVM, or a Modal Sandbox.
 
 ## Error Handling
 
@@ -365,7 +366,7 @@ its permissions, instead of truncating it, so a link outside the workspace keeps
 
 ### Remote providers
 
-`E2bClient` (`remote-e2b`) and `DaytonaClient` (`remote-daytona`) run the same lifecycle in a provider's microVMs, created with a provider-side lifetime and destroyed by `stop` or when the client drops. `SandboxSession::exec(CommandRequest)` takes a per-command timeout, environment and working directory; `upload`, `download` and `SandboxClient::pause` round out the interface. Modal is not supported: its only API is gRPC. See [Remote Sandbox Providers](../docs/official_docs/sandbox/remote-providers.md) for the configuration, the API each operation calls, and the contract and live tests.
+`E2bClient` (`remote-e2b`), `DaytonaClient` (`remote-daytona`) and `ModalClient` (`remote-modal`) run the same lifecycle in a provider's microVMs or containers, created with a provider-side lifetime and destroyed by `stop` or when the client drops. `SandboxSession::exec(CommandRequest)` takes a per-command timeout, environment and working directory; `upload`, `download` and `SandboxClient::pause` round out the interface. `ModalClient` speaks Modal's gRPC API through `tonic`; its protobuf subset lives in `proto/modal/` (Apache-2.0, from `modal-labs/modal-client`), and the generated code is committed, so building needs no `protoc`. See [Remote Sandbox Providers](../docs/official_docs/sandbox/remote-providers.md) for the configuration, the API each operation calls, and the contract and live tests.
 
 `LocalUnixClient` is not an isolation boundary for commands. Use `DockerClient` when workspace commands are untrusted. `DockerClient` passes paths, URLs, and branch names as command arguments rather than shell text, reads files as raw bytes, and needs a network mode other than `none` for `GitRepo` manifest entries. A provisioning that fails after its container was created removes that container before the error is returned.
 

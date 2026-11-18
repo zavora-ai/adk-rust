@@ -40,6 +40,10 @@ futures = { workspace = true, optional = true }
 # Optional dependencies for the remote providers
 reqwest = { workspace = true, optional = true }
 base64 = { version = "0.22", optional = true }
+# Modal's gRPC API: the tonic and prost versions the workspace already resolves.
+tonic = { version = "0.14", optional = true, default-features = false, features = ["channel", "codegen", "tls-aws-lc", "tls-webpki-roots"] }
+tonic-prost = { version = "0.14", optional = true }
+prost = { version = "0.14", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -77,6 +81,8 @@ workspace-docker = ["workspace", "dep:bollard", "dep:futures"]
 remote-e2b = ["workspace", "dep:reqwest", "dep:futures", "dep:base64"]
 # Daytona: sandboxes over the REST control plane and the toolbox API.
 remote-daytona = ["workspace", "dep:reqwest", "dep:futures"]
+# Modal: Sandboxes over Modal's gRPC API (vendored protobuf subset, generated code committed).
+remote-modal = ["workspace", "dep:tonic", "dep:tonic-prost", "dep:prost", "dep:base64"]
 
 # OS-level sandbox enforcers
 sandbox-macos = []       # Seatbelt via sandbox-exec (no extra deps)
@@ -94,6 +100,10 @@ sandbox-native = ["sandbox-macos", "sandbox-linux", "sandbox-windows"]
 [dev-dependencies]
 proptest = "1.4"
 wiremock = "0.6"
+# The Modal contract tests' mock gRPC server.
+tonic = { version = "0.14", default-features = false, features = ["server", "router", "codegen"] }
+tonic-prost = "0.14"
+prost = "0.14"
 tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
 
 # Document every feature-gated API on docs.rs.

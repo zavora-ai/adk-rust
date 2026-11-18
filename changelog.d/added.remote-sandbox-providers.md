@@ -9,5 +9,4 @@
   `SandboxTool` and `adk-code` requests in any client's environment. `ShellIsolation::Remote`
   (`adk-harness` feature `remote-shell`) runs `bash` there through the container shell's
   governed path: approvals, audit records, the kill switch, and the run's remaining wall
-  time. The live runs against E2B and Daytona are `#[ignore]`d tests pending credentials;
-  Modal is not supported, since its only API is gRPC.
+  time. The live runs against E2B and Daytona are `#[ignore]`d tests pending credentials.

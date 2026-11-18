@@ -1,15 +1,14 @@
 //! Remote sandbox providers behind [`SandboxClient`](super::SandboxClient).
 //!
-//! Each provider runs workspaces in its own cloud and talks to it over its documented HTTP
-//! API, so the harness shell, [`SessionBackend`](super::SessionBackend) and everything else
-//! written against `SandboxClient` run commands there unchanged.
+//! Each provider runs workspaces in its own cloud and talks to it over its documented API, so
+//! the harness shell, [`SessionBackend`](super::SessionBackend) and everything else written
+//! against `SandboxClient` run commands there unchanged.
 //!
 //! | Provider | Feature | Isolation | API |
 //! |----------|---------|-----------|-----|
 //! | `E2bClient` | `remote-e2b` | Firecracker microVM | REST control plane plus the in-VM `envd` daemon (Connect protocol over HTTP) |
 //! | `DaytonaClient` | `remote-daytona` | Container or Linux VM, per sandbox class | REST control plane plus the toolbox API |
-//!
-//! Modal is not here: its only API is gRPC, spoken by its Python, JavaScript and Go SDKs.
+//! | `ModalClient` | `remote-modal` | gVisor container | gRPC control plane plus each sandbox's task command router, over `tonic` |
 //!
 //! # Bounds
 //!
@@ -17,7 +16,7 @@
 //! |-------|-----|
 //! | Lifetime | Every environment is created with a provider-side lifetime (`E2bConfig::with_timeout`, `DaytonaConfig::with_ttl`), so the provider destroys it even when this process dies |
 //! | Release | `stop` destroys the environment; dropping the client destroys every environment it created and did not stop |
-//! | Requests | Each HTTP call has a deadline: the command's timeout plus a grace period for a command, [`REQUEST_TIMEOUT`] otherwise |
+//! | Requests | Each HTTP or gRPC call has a deadline: the command's timeout plus a grace period for a command, [`REQUEST_TIMEOUT`] otherwise |
 //! | Output | stdout and stderr are capped at 1 MiB each, with a truncation notice; a file read is capped at [`MAX_FILE_BYTES`] |
 //! | Credentials | API keys are sent only to the configured API origin and never appear in `Debug` output or errors |
 
@@ -25,6 +24,7 @@ use std::fmt;
 use std::future::Future;
 use std::time::Duration;
 
+#[cfg(any(feature = "remote-e2b", feature = "remote-daytona"))]
 use futures::StreamExt;
 
 use super::manifest::{Manifest, ManifestEntry};
@@ -37,11 +37,15 @@ use crate::error::SandboxError;
 mod daytona;
 #[cfg(feature = "remote-e2b")]
 mod e2b;
+#[cfg(feature = "remote-modal")]
+mod modal;
 
 #[cfg(feature = "remote-daytona")]
 pub use daytona::{DaytonaClient, DaytonaConfig, DaytonaSession};
 #[cfg(feature = "remote-e2b")]
 pub use e2b::{E2bClient, E2bConfig, E2bSession};
+#[cfg(feature = "remote-modal")]
+pub use modal::{ModalClient, ModalConfig, ModalSession};
 
 /// Deadline of a provider request that runs no command: create, delete, file transfer.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
@@ -57,7 +61,7 @@ pub const MAX_FILE_BYTES: usize = 100 * 1024 * 1024;
 pub(crate) const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
 /// Bytes of a provider's error body kept in a [`SandboxError::Remote`] message.
-const ERROR_EXCERPT_BYTES: usize = 512;
+pub(crate) const ERROR_EXCERPT_BYTES: usize = 512;
 
 /// An API key or token, kept out of `Debug` output.
 #[derive(Clone, PartialEq, Eq)]
@@ -79,6 +83,7 @@ impl fmt::Debug for Secret {
     }
 }
 
+#[cfg(any(feature = "remote-e2b", feature = "remote-daytona"))]
 /// The HTTP client every provider uses: rustls, a connect timeout, no redirects to other
 /// origins (a redirect could carry the API key elsewhere), and per-request deadlines set by
 /// each call.
@@ -96,6 +101,7 @@ pub(crate) fn http_client(provider: &str) -> Result<reqwest::Client, SandboxErro
         })
 }
 
+#[cfg(any(feature = "remote-e2b", feature = "remote-daytona"))]
 /// Reads a required configuration value from the environment.
 pub(crate) fn env_var(key: &str, provider: &str) -> Result<String, SandboxError> {
     std::env::var(key)
@@ -110,6 +116,7 @@ pub(crate) fn env_var(key: &str, provider: &str) -> Result<String, SandboxError>
         })
 }
 
+#[cfg(any(feature = "remote-e2b", feature = "remote-daytona"))]
 /// Sends `request` and returns the response when its status is a success.
 ///
 /// # Errors
@@ -147,6 +154,7 @@ pub(crate) async fn send(
     })
 }
 
+#[cfg(any(feature = "remote-e2b", feature = "remote-daytona"))]
 /// Reads at most `max` bytes of `response`. With `truncate`, a longer body is cut;
 /// otherwise it is an error.
 pub(crate) async fn read_bounded(
@@ -182,6 +190,7 @@ pub(crate) async fn read_bounded(
     Ok(body)
 }
 
+#[cfg(any(feature = "remote-e2b", feature = "remote-daytona"))]
 /// A response body decoded as JSON.
 pub(crate) async fn json<T: serde::de::DeserializeOwned>(
     response: reqwest::Response,

@@ -1,0 +1,272 @@
+// Subset of Modal's public gRPC API used by adk-sandbox's `ModalClient`.
+//
+// Source: modal_proto/api.proto in https://github.com/modal-labs/modal-client at commit
+// 103e9a97b12242923f99f45957ece99254b8b99e (2026-11-17).
+// Copyright Modal Labs, Inc. Licensed under the Apache License, Version 2.0
+// (https://www.apache.org/licenses/LICENSE-2.0); see the LICENSE file at the root of the
+// modal-client repository.
+//
+// Modified by the ADK-Rust project: only the messages, fields and RPCs `ModalClient` uses are
+// kept. Every kept message, field, enum value and RPC keeps its upstream name and number, so
+// the wire format is unchanged; fields the client neither sends nor reads are left out, which
+// protobuf decoders skip.
+//
+// Upstream notes that direct use of the gRPC API carries no compatibility guarantee. The
+// generated Rust code is committed (adk-sandbox/src/workspace/remote/modal/proto/); see
+// adk-sandbox/proto/modal/codegen/src/main.rs to regenerate it.
+syntax = "proto3";
+
+package modal.client;
+
+enum ObjectCreationType {
+  OBJECT_CREATION_TYPE_UNSPECIFIED = 0;  // just lookup
+  OBJECT_CREATION_TYPE_CREATE_IF_MISSING = 1;
+  OBJECT_CREATION_TYPE_CREATE_FAIL_IF_EXISTS = 2;
+  OBJECT_CREATION_TYPE_CREATE_OVERWRITE_IF_EXISTS = 3;
+  OBJECT_CREATION_TYPE_ANONYMOUS_OWNED_BY_APP = 4;  // deprecate at some point
+  OBJECT_CREATION_TYPE_EPHEMERAL = 5;
+}
+
+message AppGetOrCreateRequest {
+  string app_name = 1;
+  string environment_name = 2;
+  ObjectCreationType object_creation_type = 3;
+}
+
+message AppGetOrCreateResponse {
+  string app_id = 1;
+}
+
+message AuthTokenGetRequest {
+}
+
+message AuthTokenGetResponse {
+  string token = 1;
+}
+
+message CommandRouterAccess {
+  string jwt = 1;
+  string url = 2;
+}
+
+message EnvironmentGetOrCreateRequest {
+  string deployment_name = 1;
+  ObjectCreationType object_creation_type = 2;
+}
+
+message EnvironmentGetOrCreateResponse {
+  string environment_id = 1;
+  EnvironmentMetadata metadata = 2;
+}
+
+message EnvironmentMetadata {
+  string name = 1;
+  EnvironmentSettings settings = 2;
+}
+
+message EnvironmentSettings {
+  string image_builder_version = 1;
+}
+
+message GenericResult {  // Used for both tasks and function outputs
+  enum GenericStatus {
+    GENERIC_STATUS_UNSPECIFIED = 0;
+    GENERIC_STATUS_SUCCESS = 1;
+    GENERIC_STATUS_FAILURE = 2;
+    // Used when a task was killed using an external signal.
+    GENERIC_STATUS_TERMINATED = 3;
+    GENERIC_STATUS_TIMEOUT = 4;
+    // Used when the user's function fails to initialize (ex. S3 mount failed due to invalid credentials).
+    // Terminates the function and all remaining inputs.
+    GENERIC_STATUS_INIT_FAILURE = 5;
+    GENERIC_STATUS_INTERNAL_FAILURE = 6;
+    // Used when sandboxes are terminated due to idle_timeout
+    GENERIC_STATUS_IDLE_TIMEOUT = 7;
+    // Used when a task was killed because it was evicted by the memory manager when the worker was
+    // under memory pressure.
+    GENERIC_STATUS_MEMORY_MANAGER_EVICTION = 8;
+    // Used when a task was killed by the memory manager after thrashing at its own memory limit.
+    GENERIC_STATUS_MEMORY_THRASHING_EVICTION = 9;
+    // Used when the kernel OOM-killed a process in the task's container after it hit its own memory limit.
+    GENERIC_STATUS_KERNEL_OOM_KILL = 10;
+  }
+
+  GenericStatus status = 1; // Status of the task or function output.
+  string exception = 2;  // Exception message for failures, if available.
+  int32 exitcode = 3;  // Status code of the container entrypoint or builder process if it terminates unexpectedly.
+}
+
+message Image {
+  repeated string dockerfile_commands = 6;
+}
+
+message ImageGetOrCreateRequest {
+  Image image = 2;
+  string app_id = 4;
+  bool force_build = 7;
+  string builder_version = 9;
+}
+
+message ImageGetOrCreateResponse {
+  // image_id is set regardless if the image is built (use ImageJoinStreaming to wait for build)
+  string image_id = 1;
+  // result of build - only set if the image has finished building (regardless if success or not)
+  GenericResult result = 2;
+}
+
+message ImageJoinStreamingRequest {
+  string image_id = 1;
+  float timeout = 2;
+  string last_entry_id = 3;
+}
+
+message ImageJoinStreamingResponse {
+  GenericResult result = 1;
+  string entry_id = 3;
+  bool eof = 4;
+}
+
+message NetworkAccess {
+  enum NetworkAccessType {
+    UNSPECIFIED = 0;
+    OPEN = 1;
+    BLOCKED = 2;
+    ALLOWLIST = 3;
+  }
+  NetworkAccessType network_access_type = 1;
+  repeated string allowed_cidrs = 2;
+}
+
+message Resources {
+  uint32 memory_mb = 2; // MiB
+  uint32 milli_cpu = 3; // milli CPU cores
+}
+
+message Sandbox {
+  repeated string entrypoint_args = 1;
+  string image_id = 3;
+
+  Resources resources = 5;
+
+  uint32 timeout_secs = 7; // The max lifetime of a sandbox in seconds.
+
+  optional string workdir = 8;
+
+  // Network access configuration beyond simple allow/block.
+  NetworkAccess network_access = 22;
+
+  // If set, the sandbox will be created with a name.
+  optional string name = 30;
+
+  // Optional idle timeout in seconds. If set, the sandbox will be terminated after being idle for this duration.
+  optional uint32 idle_timeout_secs = 33;
+}
+
+message SandboxCreateV2Request {
+  string app_id = 1;
+  Sandbox definition = 2;
+  repeated SandboxTag tags = 4;
+  // Applied in order. Cannot be combined with ephemeral_secrets. If definition.secret_ids is set, it must match the secret_id entries here.
+  repeated SecretSource secret_sources = 6;
+}
+
+message SandboxCreateV2Response {
+  string sandbox_id = 1;
+  string task_id = 3;
+  CommandRouterAccess command_router_access = 5;
+}
+
+message SandboxGetCommandRouterAccessRequest {
+  oneof target {
+    string sandbox_id = 1;
+    string task_id = 2;
+  }
+}
+
+message SandboxGetCommandRouterAccessResponse {
+  string jwt = 1;
+  string url = 2;
+}
+
+message SandboxGetTaskIdRequest {
+  string sandbox_id = 1;
+  optional float timeout = 2; // Legacy clients do not provide a timeout. New clients must always provide a timeout.
+  bool wait_until_ready = 3; // If true, waits until the container's postStart hook has been run before returning. Useful for detecting init failures.
+}
+
+message SandboxGetTaskIdResponse {
+  optional string task_id = 1; // This is None if the sandbox was terminated before a task could be scheduled.
+  optional GenericResult task_result = 2; // If the task has already exited, this is the result.
+}
+
+message SandboxInfo {
+  string id = 1;
+  double created_at = 3;
+  string app_id = 5;
+  repeated SandboxTag tags = 6;
+  string name = 7;
+}
+
+message SandboxListRequest {
+  string app_id = 1;
+  double before_timestamp = 2;
+  string environment_name = 3;
+  bool include_finished = 4;
+  repeated SandboxTag tags = 5;
+}
+
+message SandboxListResponse {
+  repeated SandboxInfo sandboxes = 1;
+}
+
+message SandboxTag {
+  string tag_name = 1;
+  string tag_value = 2;
+}
+
+message SandboxTerminateRequest {
+  string sandbox_id = 1;
+}
+
+message SandboxTerminateResponse {
+  GenericResult existing_result = 1;
+}
+
+message SecretSource {
+  oneof source {
+    // Server-side Secret, resolved on the worker.
+    string secret_id = 1;
+    // Plaintext values sent directly to the worker. Must not be persisted.
+    StringMap env = 2;
+  }
+}
+
+message StringMap {
+  map<string, string> contents = 1;
+}
+
+message TaskGetCommandRouterAccessRequest {
+  string task_id = 1;
+}
+
+message TaskGetCommandRouterAccessResponse {
+  string jwt = 1;
+  string url = 2;
+}
+
+service ModalClient {
+  rpc AppGetOrCreate(AppGetOrCreateRequest) returns (AppGetOrCreateResponse);
+  rpc AuthTokenGet(AuthTokenGetRequest) returns (AuthTokenGetResponse);
+  rpc EnvironmentGetOrCreate(EnvironmentGetOrCreateRequest) returns (EnvironmentGetOrCreateResponse);
+  rpc ImageGetOrCreate(ImageGetOrCreateRequest) returns (ImageGetOrCreateResponse);
+  rpc ImageJoinStreaming(ImageJoinStreamingRequest) returns (stream ImageJoinStreamingResponse);
+  rpc SandboxCreateV2(SandboxCreateV2Request) returns (SandboxCreateV2Response);
+  rpc SandboxGetCommandRouterAccess(SandboxGetCommandRouterAccessRequest) returns (SandboxGetCommandRouterAccessResponse);
+  rpc SandboxGetTaskId(SandboxGetTaskIdRequest) returns (SandboxGetTaskIdResponse); // needed for modal container exec
+  rpc SandboxGetTaskIdV2(SandboxGetTaskIdRequest) returns (SandboxGetTaskIdResponse);
+  rpc SandboxList(SandboxListRequest) returns (SandboxListResponse);
+  rpc SandboxListV2(SandboxListRequest) returns (SandboxListResponse);
+  rpc SandboxTerminate(SandboxTerminateRequest) returns (SandboxTerminateResponse);
+  rpc SandboxTerminateV2(SandboxTerminateRequest) returns (SandboxTerminateResponse);
+  rpc TaskGetCommandRouterAccess(TaskGetCommandRouterAccessRequest) returns (TaskGetCommandRouterAccessResponse);
+}

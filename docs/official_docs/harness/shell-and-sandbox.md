@@ -15,7 +15,7 @@ command is retried outside them, and what the harness records.
 | `OsSandbox(..)` with no working enforcer | the host, as `Host` | `Degraded { requested, reason }` |
 | `Container(ContainerConfig)` (feature `docker`) | `sh -c` in a container per session, the workspace mounted at `/workspace` | `Container { image }` |
 | `Container(..)` with no reachable Docker daemon | the host, as `Host` | `Degraded { requested: "container", reason }` |
-| `Remote(RemoteShellConfig)` (feature `remote-shell`) | `sh -c` in an environment per session from a `SandboxClient`, such as an E2B or Daytona microVM; the host workspace is not mounted | `Remote { provider, off_host }` |
+| `Remote(RemoteShellConfig)` (feature `remote-shell`) | `sh -c` in an environment per session from a `SandboxClient`, such as an E2B or Daytona microVM or a Modal Sandbox; the host workspace is not mounted | `Remote { provider, off_host }` |
 
 The enforcer — for a container, the Docker daemon — is probed when the harness is built,
 and the sandbox again on every call:
