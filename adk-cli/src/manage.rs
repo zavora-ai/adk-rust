@@ -123,6 +123,42 @@ pub async fn sessions(command: SessionsCommands) -> Result<()> {
                 .await?;
             println!("deleted session {}", safe(&id));
         }
+        SessionsCommands::Fork { id, turns, at, new_id } => {
+            let identity = adk_core::AdkIdentity::new(
+                adk_core::AppName::try_from(APP_NAME)?,
+                adk_core::UserId::try_from(user.as_str())?,
+                adk_core::SessionId::try_from(id.as_str())?,
+            );
+            let at = match (at, turns) {
+                (Some(event_id), _) => Some(event_id),
+                (None, Some(turns)) => {
+                    let history = store.history(&identity).await?;
+                    turn_end(&history.events, turns)
+                }
+                (None, None) => None,
+            };
+            let mut request = adk_session::ForkRequest::new(identity);
+            if let Some(event_id) = at {
+                request = request.at_event(event_id);
+            }
+            if let Some(new_id) = new_id {
+                request = request.with_session_id(new_id);
+            }
+            let actor = adk_core::audit_log::AuditActor::subject(
+                adk_core::principal::SubjectRef::human(user.clone()),
+            );
+            let fork = adk_runner::HistoryControl::new(db.sessions.clone())
+                .with_run_store(db.runs.clone())
+                .fork(&actor, request)
+                .await?;
+            println!(
+                "forked session {} into {} with {} events; continue it with `adk-rust --session {}`",
+                safe(&id),
+                safe(fork.session.id()),
+                fork.session.events().len(),
+                safe(fork.session.id())
+            );
+        }
         SessionsCommands::Rewind { id, turn, redo, yes } => {
             let session = get(store, &user, &id).await?;
             let harness = session_harness(&db, session.as_ref())?.with_context(|| {
@@ -140,6 +176,24 @@ pub async fn sessions(command: SessionsCommands) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The last event of the session's first `turns` turns, or `None` when it has no more turns
+/// than that. A turn starts at an invocation's first event when the user wrote it.
+fn turn_end(events: &[adk_session::Event], turns: u32) -> Option<String> {
+    let mut started = 0_u32;
+    let mut previous: Option<&str> = None;
+    for (index, event) in events.iter().enumerate() {
+        let new_invocation = previous != Some(event.invocation_id.as_str());
+        previous = Some(&event.invocation_id);
+        if new_invocation && event.author == "user" {
+            started += 1;
+            if started > turns {
+                return index.checked_sub(1).map(|last| events[last].id.clone());
+            }
+        }
+    }
+    None
 }
 
 /// A harness over the workspace `session` recorded, with its snapshots, plan checkpoints and
@@ -934,6 +988,26 @@ fn shell_quote(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turn_end_names_the_last_event_of_the_kept_turns() {
+        let event = |invocation: &str, author: &str, id: &str| {
+            let mut event = adk_session::Event::new(invocation);
+            event.author = author.into();
+            event.id = id.into();
+            event
+        };
+        let events = vec![
+            event("i1", "user", "u1"),
+            event("i1", "agent", "a1"),
+            event("i2", "user", "u2"),
+            event("i2", "agent", "a2"),
+            event("i3", "user", "u3"),
+        ];
+        assert_eq!(turn_end(&events, 1).as_deref(), Some("a1"));
+        assert_eq!(turn_end(&events, 2).as_deref(), Some("a2"));
+        assert_eq!(turn_end(&events, 3), None, "every turn is kept");
+    }
 
     fn add(tool: &str) -> NewRule {
         NewRule {

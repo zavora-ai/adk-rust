@@ -406,6 +406,12 @@ I wrote RISKS.md with 4 lines, which is under the ten-line limit. …
 Goal check `test $(wc -l < RISKS.md) -ge 4` passed on iteration 1. The goal is done.
 ```
 
+Undo a turn that went wrong, or try another answer from an earlier point, without losing the
+original: `adk-rust sessions fork ID --turns N` copies a session up to a turn, and the server's
+`POST …/sessions/{id}/rewind` with `{"beforeInvocationId": …}` removes a turn and everything
+after it. Both refuse while a turn runs on the session or a call waits for a decision, and both
+are recorded in the audit log ([Fork, Rewind, and Edit History](../sessions/history.md)).
+
 Verify the signed audit log:
 
 ```bash

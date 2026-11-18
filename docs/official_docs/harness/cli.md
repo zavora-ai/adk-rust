@@ -322,6 +322,7 @@ adk-rust sessions list
 adk-rust sessions show 6754153c-…
 adk-rust sessions rewind 6754153c-…                  # its turns and the files each changed
 adk-rust sessions rewind 6754153c-… 2                # back to before turn 2, asked once
+adk-rust sessions fork 6754153c-… --turns 2 --as try-b  # a copy with its first 2 turns
 adk-rust rules add bash --prefix "cargo test"        # allow `cargo test …` everywhere
 adk-rust rules add bash --prefix "git push" --deny "push from the release branch only"
 adk-rust rules list

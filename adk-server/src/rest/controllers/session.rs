@@ -18,7 +18,7 @@ impl SessionController {
     }
 
     /// Helper function to convert a session to SessionResponse with actual events and state
-    fn session_to_response(session: &dyn adk_session::Session) -> SessionResponse {
+    pub(crate) fn session_to_response(session: &dyn adk_session::Session) -> SessionResponse {
         // Convert events to JSON values, capping at a reasonable limit to prevent
         // uncontrolled allocation from very large session histories.
         const MAX_EVENTS: usize = 10_000;
@@ -82,7 +82,7 @@ pub struct CreateSessionRequest {
     pub session_id: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionResponse {
     pub id: String,

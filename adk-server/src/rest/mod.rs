@@ -949,6 +949,7 @@ impl ServerBuilder {
     fn build_inner(self) -> (Router, Option<ShutdownHandle>) {
         let config = &self.config;
         let session_controller = SessionController::new(config.session_service.clone());
+        let history_controller = controllers::session_history::HistoryController::new(config);
         let runtime_controller = RuntimeController::new(config.clone());
         #[cfg(feature = "approvals")]
         let runtime_controller = match &self.approval_service {
@@ -1044,6 +1045,27 @@ impl ServerBuilder {
             .with_state(session_controller)
             .layer(auth_layer.clone());
 
+        // Fork, rewind, and edit carry the session routes' authentication.
+        let history_router = Router::new()
+            .route(
+                "/apps/{app_name}/users/{user_id}/sessions/{session_id}/history",
+                get(controllers::session_history::get_history),
+            )
+            .route(
+                "/apps/{app_name}/users/{user_id}/sessions/{session_id}/history/edit",
+                post(controllers::session_history::edit_history),
+            )
+            .route(
+                "/apps/{app_name}/users/{user_id}/sessions/{session_id}/fork",
+                post(controllers::session_history::fork_session),
+            )
+            .route(
+                "/apps/{app_name}/users/{user_id}/sessions/{session_id}/rewind",
+                post(controllers::session_history::rewind_session),
+            )
+            .with_state(history_controller)
+            .layer(auth_layer.clone());
+
         let runtime_router = Router::new()
             .route("/run", post(controllers::runtime::run_collect_for_request))
             .route(
@@ -1094,6 +1116,7 @@ impl ServerBuilder {
             .merge(health_router)
             .merge(ui_api_router)
             .merge(session_router)
+            .merge(history_router)
             .merge(runtime_router)
             .merge(artifacts_router)
             .merge(debug_router);
