@@ -395,7 +395,9 @@ fn node(agent: Arc<dyn Agent>) -> AgentNode {
 ```
 
 Without mappers, the input is the last `messages` entry or the `input` channel, and the output is
-the agent's text.
+one `messages` entry per response the agent completes, with its whole text whether the model
+streamed it or not. A custom output mapper receives every event the agent yielded, streamed
+partial chunks included; the non-partial events carry each response's complete content.
 
 ### FunctionNode
 
