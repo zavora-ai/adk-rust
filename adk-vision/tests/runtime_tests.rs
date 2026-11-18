@@ -558,3 +558,49 @@ async fn oversized_input_is_refused_with_the_limit_when_the_backend_says_so() {
     assert!(matches!(err, VisionError::InputTooLarge { .. }), "{err}");
     assert!(err.to_string().contains("320 px on the long edge"), "{err}");
 }
+
+/// A describer that records whether the run's metering scope is current while it runs, as
+/// a token-billed model call made inside it would need.
+struct ScopeProbe {
+    descriptor: adk_vision::BackendDescriptor,
+    ambient: ModelCallScope,
+    saw_run_scope: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl adk_vision::Describer for ScopeProbe {
+    fn descriptor(&self) -> &adk_vision::BackendDescriptor {
+        &self.descriptor
+    }
+
+    async fn describe(
+        &self,
+        _cx: &VisionCx,
+        _request: &adk_vision::DescribeRequest,
+    ) -> adk_vision::Result<adk_vision::Description<adk_vision::ImageRegion>> {
+        let current = ModelCallScope::current().is_some_and(|scope| scope.same_as(&self.ambient));
+        self.saw_run_scope.store(current, std::sync::atomic::Ordering::SeqCst);
+        Ok(adk_vision::Description { text: Some("ok".into()), ..Default::default() })
+    }
+}
+
+#[tokio::test]
+async fn an_unmetered_context_leaves_the_run_scope_current_for_backend_model_calls() {
+    let ambient = ModelCallScope::new().with_budget(Arc::new(BudgetTracker::new(RunBudget::new())));
+    let probe = arc(ScopeProbe {
+        descriptor: adk_vision::BackendDescriptor::new(
+            "local-vlm",
+            Locality::InProcess,
+            adk_vision::CoordFrame::SentPixels,
+        ),
+        ambient: ambient.clone(),
+        saw_run_scope: std::sync::atomic::AtomicBool::new(false),
+    });
+    let runtime = VisionRuntime::builder().describer(probe.clone()).build().unwrap();
+    let image = page();
+    ambient
+        .within(runtime.describe(&VisionCx::new(), &[&image], &DescribeSpec::new("what is this?")))
+        .await
+        .unwrap();
+    assert!(probe.saw_run_scope.load(std::sync::atomic::Ordering::SeqCst));
+}

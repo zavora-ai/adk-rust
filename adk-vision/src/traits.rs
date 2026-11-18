@@ -373,7 +373,7 @@ pub struct ImageRegion {
 
 /// A describer's answer: free text, a value matching the request's schema, and regions
 /// when asked for.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Description<R = Region> {
     /// Free text.
@@ -392,6 +392,18 @@ pub struct Description<R = Region> {
     /// runtime.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub escalated_from: Option<EscalatedFrom>,
+}
+
+impl<R> Default for Description<R> {
+    fn default() -> Self {
+        Self {
+            text: None,
+            value: None,
+            regions: Vec::new(),
+            confidence: None,
+            escalated_from: None,
+        }
+    }
 }
 
 /// Describes images in text, structured values and regions.

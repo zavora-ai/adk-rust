@@ -519,7 +519,13 @@ impl VisionRuntime {
         };
         let scope = cx.scope().clone();
         let metering = scope.meter(call, inner);
-        let result = scope.clone().within(metering).await;
+        // An unmetered context leaves the enclosing run's scope current for the model calls a
+        // token-billed backend makes.
+        let result = if scope.is_unmetered() {
+            metering.await
+        } else {
+            scope.clone().within(metering).await
+        };
         let value = match result {
             Ok(value) => value,
             Err(adk) => {
