@@ -50,6 +50,7 @@ use std::path::PathBuf;
 
 use super::{
     AccessMode, AllowedPath, NetworkSupport, SandboxEnforcer, SandboxPolicy, WrappedCommand,
+    canonicalize_paths,
 };
 use crate::error::SandboxError;
 
@@ -413,28 +414,6 @@ impl SandboxEnforcer for WindowsEnforcer {
                 .to_string(),
         })
     }
-}
-
-/// Canonicalizes all paths in the policy, failing when one cannot be resolved.
-fn canonicalize_paths(paths: &[AllowedPath]) -> Result<Vec<AllowedPath>, SandboxError> {
-    let mut result = Vec::with_capacity(paths.len());
-    for entry in paths {
-        let canonical = std::fs::canonicalize(&entry.path).map_err(|e| {
-            SandboxError::PolicyViolation(format!(
-                "failed to canonicalize allowed path '{}': {e}",
-                entry.path.display()
-            ))
-        })?;
-        if canonical != entry.path {
-            tracing::warn!(
-                original = %entry.path.display(),
-                resolved = %canonical.display(),
-                "allowed path resolved to a different location (possible symlink)"
-            );
-        }
-        result.push(AllowedPath { path: canonical, mode: entry.mode });
-    }
-    Ok(result)
 }
 
 /// Strips the extended-length prefix `\\?\` that `std::fs::canonicalize` adds, which the

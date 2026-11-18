@@ -525,7 +525,9 @@ pub trait SandboxEnforcer: Send + Sync {
     ///
     /// This method:
     /// 1. Returns `SandboxError::Unenforceable` if the policy's network mode is not enforced
-    /// 2. Canonicalizes all paths in the policy (logs `tracing::warn` if changed)
+    /// 2. Resolves every path in the policy to the location it grants: a symbolic link
+    ///    resolved is logged at `debug`, and at `warn` only when the link sits between a
+    ///    read-write entry and a read-only entry inside it, where a command can replace it
     /// 3. Returns `SandboxError::PolicyViolation` if any path cannot be resolved
     /// 4. Generates the platform-specific wrapper (Seatbelt profile, bwrap args, etc.)
     /// 5. Returns the wrapped program and args
@@ -550,6 +552,71 @@ pub trait SandboxEnforcer: Send + Sync {
     ) -> Result<(), SandboxError> {
         Ok(())
     }
+}
+
+/// Resolves each allowed path to the location the enforcers grant, since Seatbelt matches
+/// and bubblewrap mounts resolved paths: `/tmp` is granted as `/private/tmp` on macOS.
+///
+/// A path that resolves elsewhere — `/tmp`, a Homebrew `opt` link, the Cryptexes on `PATH`
+/// on macOS — is logged at `debug`: the grant covers the location it resolves to. The one
+/// resolution logged at `warn` is a read-only entry reached through a symbolic link inside
+/// a read-write entry, because a sandboxed command can replace that link: the grant still
+/// protects the target, but no longer what the entry's path names.
+///
+/// # Errors
+///
+/// Returns `SandboxError::PolicyViolation` when a path cannot be resolved.
+#[cfg(any(
+    test,
+    feature = "sandbox-windows",
+    all(feature = "sandbox-macos", target_os = "macos"),
+    all(feature = "sandbox-linux", target_os = "linux")
+))]
+pub(crate) fn canonicalize_paths(paths: &[AllowedPath]) -> Result<Vec<AllowedPath>, SandboxError> {
+    let resolved = paths
+        .iter()
+        .map(|entry| {
+            let path = std::fs::canonicalize(&entry.path).map_err(|e| {
+                SandboxError::PolicyViolation(format!(
+                    "failed to canonicalize allowed path '{}': {e}",
+                    entry.path.display()
+                ))
+            })?;
+            Ok(AllowedPath { path, mode: entry.mode })
+        })
+        .collect::<Result<Vec<_>, SandboxError>>()?;
+
+    for (entry, canonical) in paths.iter().zip(&resolved) {
+        if canonical.path == entry.path {
+            continue;
+        }
+        let replaceable = entry.mode == AccessMode::ReadOnly
+            && paths.iter().zip(&resolved).any(|(outer, outer_canonical)| {
+                outer.mode == AccessMode::ReadWrite
+                    && outer.path != entry.path
+                    && entry
+                        .path
+                        .strip_prefix(&outer.path)
+                        .is_ok_and(|rest| outer_canonical.path.join(rest) != canonical.path)
+            });
+        if replaceable {
+            tracing::warn!(
+                original = %entry.path.display(),
+                resolved = %canonical.path.display(),
+                "a read-only path inside a writable one is reached through a symbolic link a \
+                 sandboxed command can replace, so only the link's target stays read-only; \
+                 replace the link with what it points to"
+            );
+        } else {
+            tracing::debug!(
+                original = %entry.path.display(),
+                resolved = %canonical.path.display(),
+                "allowed path granted at its resolved location"
+            );
+        }
+    }
+
+    Ok(resolved)
 }
 
 /// Returns the platform-appropriate sandbox enforcer.
@@ -599,4 +666,140 @@ pub fn get_enforcer() -> Result<Box<dyn SandboxEnforcer>, SandboxError> {
         enforcer: "none".to_string(),
         message: "no sandbox feature flag is enabled for this platform".to_string(),
     })
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::unix::fs::symlink;
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+
+    use tracing::field::{Field, Visit};
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Level, Metadata, Subscriber};
+
+    use super::*;
+
+    /// The level and `original` field of every event logged.
+    #[derive(Clone, Default)]
+    struct Logged(Arc<Mutex<Vec<(Level, String)>>>);
+
+    struct Original<'a>(&'a mut String);
+
+    impl Visit for Original<'_> {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "original" {
+                *self.0 = format!("{value:?}");
+            }
+        }
+    }
+
+    impl Subscriber for Logged {
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            let mut original = String::new();
+            event.record(&mut Original(&mut original));
+            self.0.lock().expect("the log").push((*event.metadata().level(), original));
+        }
+
+        fn enter(&self, _: &Id) {}
+
+        fn exit(&self, _: &Id) {}
+    }
+
+    /// Resolves `paths`, returning the resolved paths and what was logged.
+    fn resolve(paths: &[(&Path, AccessMode)]) -> (Vec<PathBuf>, Vec<(Level, String)>) {
+        let entries: Vec<AllowedPath> = paths
+            .iter()
+            .map(|(path, mode)| AllowedPath { path: path.to_path_buf(), mode: *mode })
+            .collect();
+        let logged = Logged::default();
+        let resolved =
+            tracing::subscriber::with_default(logged.clone(), || canonicalize_paths(&entries))
+                .expect("every path resolves");
+        let events = std::mem::take(&mut *logged.0.lock().expect("the log"));
+        (resolved.into_iter().map(|entry| entry.path).collect(), events)
+    }
+
+    #[test]
+    fn a_linked_toolchain_directory_is_granted_at_its_target_and_logged_at_debug() {
+        // Homebrew's `opt/<formula>` link into `Cellar`, as a `PATH` entry reaches it.
+        let root = tempfile::tempdir().expect("tempdir");
+        let root = std::fs::canonicalize(root.path()).expect("canonical");
+        let cellar = root.join("Cellar/python/3.12/libexec/bin");
+        std::fs::create_dir_all(&cellar).expect("cellar");
+        std::fs::create_dir(root.join("opt")).expect("opt");
+        symlink("../Cellar/python/3.12", root.join("opt/python")).expect("link");
+        let linked = root.join("opt/python/libexec/bin");
+
+        let (resolved, logged) = resolve(&[(&linked, AccessMode::ReadOnly)]);
+
+        assert_eq!(resolved, vec![cellar]);
+        assert_eq!(logged, vec![(Level::DEBUG, linked.display().to_string())]);
+    }
+
+    #[test]
+    fn a_link_above_the_workspace_is_routine() {
+        // `/tmp` on macOS: the link sits above both entries, so it is not the workspace's.
+        let root = tempfile::tempdir().expect("tempdir");
+        let root = std::fs::canonicalize(root.path()).expect("canonical");
+        std::fs::create_dir_all(root.join("real/ws/.git")).expect("workspace");
+        symlink("real", root.join("tmp")).expect("link");
+        let workspace = root.join("tmp/ws");
+        let git = workspace.join(".git");
+
+        let (resolved, logged) =
+            resolve(&[(&workspace, AccessMode::ReadWrite), (&git, AccessMode::ReadOnly)]);
+
+        assert_eq!(resolved, vec![root.join("real/ws"), root.join("real/ws/.git")]);
+        assert!(logged.iter().all(|(level, _)| *level == Level::DEBUG), "{logged:?}");
+    }
+
+    #[test]
+    fn a_read_only_entry_behind_a_replaceable_link_warns() {
+        // `.git` inside the writable workspace is a link: a command can swap the link for a
+        // writable directory, so only the link's target stays read-only.
+        let root = tempfile::tempdir().expect("tempdir");
+        let root = std::fs::canonicalize(root.path()).expect("canonical");
+        let workspace = root.join("ws");
+        std::fs::create_dir_all(root.join("elsewhere/git")).expect("target");
+        std::fs::create_dir(&workspace).expect("workspace");
+        symlink(root.join("elsewhere/git"), workspace.join(".git")).expect("link");
+        let git = workspace.join(".git");
+
+        let (resolved, logged) =
+            resolve(&[(&workspace, AccessMode::ReadWrite), (&git, AccessMode::ReadOnly)]);
+
+        assert_eq!(resolved, vec![workspace, root.join("elsewhere/git")]);
+        assert_eq!(logged, vec![(Level::WARN, git.display().to_string())]);
+    }
+
+    #[test]
+    fn a_writable_entry_behind_a_link_is_routine() {
+        // A writable entry reached through a link inside a read-only one cannot be replaced:
+        // the link sits in read-only space.
+        let root = tempfile::tempdir().expect("tempdir");
+        let root = std::fs::canonicalize(root.path()).expect("canonical");
+        let workspace = root.join("ws");
+        std::fs::create_dir_all(root.join("elsewhere/out")).expect("target");
+        std::fs::create_dir(&workspace).expect("workspace");
+        symlink(root.join("elsewhere/out"), workspace.join("out")).expect("link");
+        let out = workspace.join("out");
+
+        let (_, logged) =
+            resolve(&[(&workspace, AccessMode::ReadOnly), (&out, AccessMode::ReadWrite)]);
+
+        assert_eq!(logged, vec![(Level::DEBUG, out.display().to_string())]);
+    }
 }

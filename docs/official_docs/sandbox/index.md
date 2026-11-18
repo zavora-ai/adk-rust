@@ -208,6 +208,12 @@ enforcers (under bubblewrap in CI through the `Sandbox Linux` workflow). The rea
 must exist when the command is built, as every allowed path must, so a path that does not
 exist yet cannot be protected from creation this way.
 
+The enforcers grant each path at its resolved location, so a symbolic link in an allowed
+path — `/tmp` and Homebrew's `opt` links on macOS — is routine and logged at `debug`. A
+read-only entry reached through a link inside the read-write entry is the exception: the grant
+keeps the link's target read-only, but a command can replace the link itself, so the enforcer
+logs a `warn` naming the path. Replace such a link with what it points to.
+
 > **Note:** bubblewrap mounts each allowed path at its resolved location. On a merged-`/usr`
 > distribution `/bin` and `/lib` are symbolic links into `/usr`, so a policy that lists them
 > does not mount the dynamic loader's `/lib` path, and dynamically linked programs fail to
