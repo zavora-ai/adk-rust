@@ -47,6 +47,8 @@ pub struct AnthropicClient {
     request_adapter: Option<RequestAdapter>,
     /// Latest rate-limit information from the most recent API response.
     latest_rate_limit: Arc<RwLock<RateLimitInfo>>,
+    /// The tools each conversation started with, for inline tool changes.
+    tool_ledgers: Arc<super::tool_changes::ToolLedgers>,
 }
 
 /// The identifier from `claude-` on, so a platform ID such as `anthropic.claude-sonnet-5-5`
@@ -102,6 +104,32 @@ impl AnthropicClient {
                     })
             })
         })
+    }
+
+    /// Whether `model` accepts tool definitions in a mid-conversation message (beta
+    /// `inline-tools-2026-09-15`): every model with mid-conversation tool changes but Claude
+    /// Sonnet 5.
+    fn supports_inline_tools(model: &str) -> bool {
+        let model = claude_id(model);
+        [
+            "claude-fable-5",
+            "claude-mythos-5",
+            "claude-opus-5",
+            "claude-opus-4-8",
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
+        ]
+        .iter()
+        .any(|prefix| model.starts_with(prefix))
+    }
+
+    /// The tool ledgers inline tool changes use for this client's requests, if enabled.
+    fn inline_tool_ledgers(&self) -> Option<Arc<super::tool_changes::ToolLedgers>> {
+        let first_party = self.config.base_url.as_deref().is_none_or(|url| {
+            crate::provider::url_host(url).as_deref() == Some("api.anthropic.com")
+        });
+        (self.config.inline_tool_changes && first_party && Self::supports_inline_tools(&self.model))
+            .then(|| self.tool_ledgers.clone())
     }
 
     fn supports_fast_mode(model: &str) -> bool {
@@ -209,6 +237,7 @@ impl AnthropicClient {
             retry_config: RetryConfig::default(),
             request_adapter: None,
             latest_rate_limit: Arc::new(RwLock::new(RateLimitInfo::default())),
+            tool_ledgers: Arc::default(),
         })
     }
 
@@ -905,6 +934,7 @@ impl Llm for AnthropicClient {
         let request_for_retry = request.clone();
         let anthropic_config = self.config.clone();
         let request_adapter = self.request_adapter.clone();
+        let tool_ledgers = self.inline_tool_ledgers();
 
         let response_stream = try_stream! {
             if stream {
@@ -915,10 +945,14 @@ impl Llm for AnthropicClient {
                     let request = request_for_retry.clone();
                     let cfg = &anthropic_config;
                     let adapter = request_adapter.as_ref();
+                    let ledgers = tool_ledgers.as_deref();
                     async move {
                         let mut params = Self::build_message_params(model_ref, max_tokens, &request, cfg)?;
                         params.stream = true;
                         let forms = super::toolsets::ToolsetForms::of(params.tools.as_deref().unwrap_or_default());
+                        if let Some(ledgers) = ledgers {
+                            ledgers.apply(&mut params);
+                        }
                         if let Some(adapter) = adapter {
                             let (params, headers) = super::request::prepare(client_ref, params, adapter)?;
                             client_ref
@@ -950,23 +984,39 @@ impl Llm for AnthropicClient {
                     let request = request_for_retry.clone();
                     let cfg = &anthropic_config;
                     let adapter = request_adapter.as_ref();
+                    let ledgers = tool_ledgers.as_deref();
                     async move {
-                        let params = Self::build_message_params(model_ref, max_tokens, &request, cfg)?;
+                        let mut params = Self::build_message_params(model_ref, max_tokens, &request, cfg)?;
                         let forms = super::toolsets::ToolsetForms::of(params.tools.as_deref().unwrap_or_default());
-                        if let Some(adapter) = adapter {
+                        // A compaction request remembers its tools for the conversation that
+                        // continues from the summary.
+                        let compaction_tools = match ledgers {
+                            Some(ledgers) => {
+                                let tools = params
+                                    .compaction
+                                    .is_some()
+                                    .then(|| ledgers.compaction_tools(&params))
+                                    .flatten();
+                                ledgers.apply(&mut params);
+                                tools.map(|tools| (tools, params.clone()))
+                            }
+                            None => None,
+                        };
+                        let message = if let Some(adapter) = adapter {
                             let (params, headers) = super::request::prepare(client_ref, params, adapter)?;
                             client_ref
                                 .send_with_headers(params, headers)
                                 .await
-                                .map(|message| (message, forms))
                                 .map_err(convert_anthropic_error)
                         } else {
-                            client_ref
-                                .send(params)
-                                .await
-                                .map(|message| (message, forms))
-                                .map_err(convert_anthropic_error)
+                            client_ref.send(params).await.map_err(convert_anthropic_error)
+                        }?;
+                        if let (Some(ledgers), Some((tools, sent))) = (ledgers, compaction_tools)
+                            && let Some(ContentBlock::Compaction(block)) = message.content.first()
+                        {
+                            ledgers.continue_after(&sent.model, &sent, block, tools);
                         }
+                        Ok((message, forms))
                     }
                 })
                 .await?;

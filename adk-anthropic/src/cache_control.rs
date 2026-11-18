@@ -127,6 +127,8 @@ fn clear_cache_control_on_block(block: &mut ContentBlock) {
         ContentBlock::Compaction(compaction) => {
             compaction.extra.remove("cache_control");
         }
+        // A tool change carries no breakpoint this client places.
+        ContentBlock::ToolAddition(_) | ContentBlock::ToolRemoval(_) => {}
         ContentBlock::Unknown(value) => {
             if let Some(object) = value.as_object_mut() {
                 object.remove("cache_control");
@@ -185,6 +187,8 @@ fn set_cache_control_on_block(block: &mut ContentBlock) {
         | ContentBlock::CodeExecutionToolResult(_)
         | ContentBlock::BashCodeExecutionToolResult(_)
         | ContentBlock::TextEditorCodeExecutionToolResult(_)
+        | ContentBlock::ToolAddition(_)
+        | ContentBlock::ToolRemoval(_)
         | ContentBlock::Unknown(_) => {}
     }
 }
@@ -209,6 +213,7 @@ fn block_has_cache_control(block: &ContentBlock) -> bool {
         | ContentBlock::BashCodeExecutionToolResult(result)
         | ContentBlock::TextEditorCodeExecutionToolResult(result) => result.cache_control.is_some(),
         ContentBlock::Compaction(compaction) => compaction.extra.contains_key("cache_control"),
+        ContentBlock::ToolAddition(_) | ContentBlock::ToolRemoval(_) => false,
         ContentBlock::Unknown(value) => value.get("cache_control").is_some(),
     }
 }

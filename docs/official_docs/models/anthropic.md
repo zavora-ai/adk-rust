@@ -342,6 +342,39 @@ fn build(api_key: String) -> Result<AnthropicClient, adk_core::AdkError> {
 | `CacheTtl::five_minutes()` (default; also `CacheTtl::standard()`) | 1.25× base input | Requests sharing a prefix arrive within five minutes |
 | `CacheTtl::one_hour()` (also `CacheTtl::long()`) | 2× base input | Requests sharing a prefix are more than five minutes apart, such as a conversation waiting on a person |
 
+#### Tools Added Mid-Conversation
+
+The `tools` array opens the cached prefix, so a request whose tools differ from the previous
+request's — an MCP server that lists a new tool, a toolset that offers more after sign-in —
+misses the whole cache and, on models with preserved thinking, invalidates earlier thinking.
+`with_inline_tool_changes(true)` keeps each conversation's `tools` array as first sent and sends a
+tool added, redefined or removed later as a `tool_addition` or `tool_removal` block in a
+`role: "system"` message after the user turn where the change happened (beta
+`inline-tools-2026-09-15`, added by the client).
+
+```rust
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
+
+fn build(api_key: String) -> Result<AnthropicClient, adk_core::AdkError> {
+    AnthropicClient::new(
+        AnthropicConfig::new(api_key, "claude-sonnet-5-5").with_inline_tool_changes(true),
+    )
+}
+```
+
+| Request after a tool is added (Claude Haiku 5.5, 5,800-token prefix) | Cache read | Cache written |
+|---|---|---|
+| Tools array changed (default) | 0 | 5,950 |
+| Inline tool change | 5,787 | 300 |
+
+| Rule | Behaviour |
+|------|-----------|
+| Models | Claude API models with mid-conversation tool changes: Fable 5.x, Mythos 5.x, Opus 5.5 / 5 / 4.8, Sonnet 5.5, Haiku 5.5; others send the tools array as it is |
+| Conversation | Told apart by model, system prompt and first block, and remembered in memory for an hour; a conversation the client does not remember starts with its tools as they are |
+| History edits | A change is tied to the exact messages before it; a request whose history no longer starts with them sends its tools as they are |
+| Placement | A change follows a user turn; a change that cannot starts the conversation over |
+| Compaction | A provider-native compaction request carries the changes before the messages it summarizes, so the summary records them, and the conversation that continues from it keeps the same `tools` array; thinking in kept turns that followed a change the summary does not record is left out |
+
 `pricing::estimate_cost` bills the 1-hour share of `usage.cache_creation_input_tokens`,
 reported as `usage.cache_creation_input_tokens_1h`, at the 1-hour rate and the remainder at
 the 5-minute rate.
