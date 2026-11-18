@@ -1,0 +1,13 @@
+{
+  "service": {
+    "activeConfigurations": [],
+    "cluster": "arn:aws:ecs:us-east-1:123456789012:cluster/default",
+    "createdAt": 1794960000.0,
+    "infrastructureRoleArn": "arn:aws:iam::123456789012:role/ecsInfrastructureRoleForExpressServices",
+    "serviceArn": "arn:aws:ecs:us-east-1:123456789012:service/default/support-desk",
+    "serviceName": "support-desk",
+    "status": { "statusCode": "ACTIVE", "statusReason": "Provisioning resources" },
+    "tags": [ { "key": "managed-by", "value": "adk-deploy" } ],
+    "updatedAt": 1794960000.0
+  }
+}

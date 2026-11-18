@@ -141,6 +141,8 @@ pub mod budget;
 pub mod callbacks;
 /// Time sources for stores whose behaviour depends on the current time.
 pub mod clock;
+/// Provider-neutral computer actuation: actions, screenshots, and the actuator trait.
+pub mod computer;
 /// Conformance suites that every durable store backend runs against its implementation.
 #[cfg(feature = "conformance")]
 pub mod conformance;
@@ -261,6 +263,10 @@ pub use callbacks::{
     HistoryProcessor, InstructionProvider, InvocationHooks, OnToolErrorCallback, guard_callback,
 };
 pub use clock::{Clock, ManualClock, SystemClock};
+pub use computer::{
+    ActuationOutput, ComputerAction, ComputerActionKind, ComputerActuator, MouseButton,
+    ScreenPoint, Screenshot, ScrollDirection,
+};
 pub use context::{
     Artifacts, BUILTIN_TOOL_ORIGIN, BackpressurePolicy, BatchCall, CallbackContext,
     IncludeContents, InvocationContext, MAX_STATE_KEY_LEN, Memory, MemoryEntry, ReadonlyContext,
@@ -362,8 +368,9 @@ pub use subagent::{
     ToolCeiling,
 };
 pub use tool::{
-    DUPLICATE_TOOL_NAME_CODE, RetryBudget, Tool, ToolContext, ToolEffect, ToolExecutionStrategy,
-    ToolPredicate, ToolRegistry, Toolset, ValidationMode, ensure_unique_tool_names,
+    BatchGroup, DUPLICATE_TOOL_NAME_CODE, RetryBudget, Tool, ToolContext, ToolEffect,
+    ToolExecutionStrategy, ToolPredicate, ToolRegistry, Toolset, ValidationMode,
+    ensure_unique_tool_names,
 };
 pub use tool_concurrency::{ConcurrencyPermit, ToolConcurrencyManager};
 pub use tool_response::{

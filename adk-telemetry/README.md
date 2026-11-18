@@ -15,12 +15,18 @@ OpenTelemetry integration for Rust Agent Development Kit (ADK-Rust) agent observ
 - **Metrics** - OTLP metrics export with the `otlp` feature
 - **In-process spans** - `AdkSpanExporter` keeps recent spans for the server's debug endpoints
 - **SQLite and Google Cloud export** - behind the `sqlite` and `gcp` features
-- **GenAI Semantic Conventions** - OTel GenAI semconv v1.41.0 attributes:
-  - `GenAiSpanBuilder` — fluent API for model call spans with `gen_ai.*` attributes
-  - `GenAiResponseRecorder` — records response model, finish reasons, token usage
-  - `GenAiProvider` / `GenAiOperation` enums for all supported providers
-  - `map_finish_reason()` — provider-specific finish reason mapping
-  - `ContentEventEmitter` — opt-in prompt/completion capture
+- **GenAI Semantic Conventions** - the OpenTelemetry GenAI conventions of the
+  [`semantic-conventions-genai`](https://github.com/open-telemetry/semantic-conventions-genai)
+  repository (`main` as of 2026-11-18, schema `gen-ai-dev/1.42.0-dev`; the conventions left the
+  core repository in v1.42.0, after v1.41.0):
+  - `llm_generate_span`, `agent_run_span`, `tool_execute_span` — `chat {model}` (client),
+    `invoke_agent {agent}` and `execute_tool {tool}` (internal) spans
+  - `GenAiSpanBuilder`, `GenAiResponseRecorder`, `record_llm_usage`, `record_str_array`
+  - `GenAiProvider` / `GenAiOperation` enums and `genai_provider_name`
+  - `map_finish_reason()` — provider finish reasons as `stop`, `length`, `content_filter`,
+    `tool_call`, `error`
+  - `config::capture_content` — opt-in conversation capture, `OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT`
+  - `ContentEventEmitter` — the `gen_ai.client.inference.operation.details` event
   - Feature: `genai-semconv` (enabled by default)
 
 ## Installation
@@ -32,7 +38,7 @@ adk-telemetry = "3.0.0"
 
 | Feature | Default | Enables |
 |---------|---------|---------|
-| `genai-semconv` | yes | The `semconv`, `config`, and `events` modules |
+| `genai-semconv` | yes | The `semconv` and `events` modules |
 | `otlp` | no | `init_with_otlp`, `build_otlp_layer`, and the OpenTelemetry re-exports (`global`, `Meter`) |
 | `json` | no | JSON log formatting |
 | `sqlite` | no | `init_with_sqlite`, `SqliteSpanExporter`, `SqliteTraceReader` |
@@ -231,7 +237,7 @@ fn main() {
 }
 ```
 
-Recorded fields: `gen_ai.usage.input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`, `cache_creation_tokens`, `thinking_tokens`, `audio_input_tokens`, `audio_output_tokens`.
+Recorded fields: `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_write.input_tokens`, `gen_ai.usage.reasoning.output_tokens`, `gen_ai.usage.audio.input_tokens`, `gen_ai.usage.audio.output_tokens`. `total_tokens` is not recorded: the conventions define no total.
 
 ## Re-exports
 

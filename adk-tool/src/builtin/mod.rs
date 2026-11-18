@@ -1,4 +1,5 @@
 mod anthropic;
+mod anthropic_advisor;
 mod bypass;
 mod deepseek;
 mod exit_loop;
@@ -13,6 +14,7 @@ pub use anthropic::{
     AnthropicBashTool20241022, AnthropicBashTool20250124, AnthropicTextEditorTool20250124,
     AnthropicTextEditorTool20250429, AnthropicTextEditorTool20250728,
 };
+pub use anthropic_advisor::AnthropicAdvisorTool;
 pub use bypass::{BypassBuiltinTool, BypassMultiToolsLimit};
 pub use deepseek::DeepSeekWebSearchTool;
 pub use exit_loop::ExitLoopTool;

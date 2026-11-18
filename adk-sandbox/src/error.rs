@@ -135,6 +135,34 @@ pub enum SandboxError {
         /// The timeout duration that was exceeded.
         timeout: Duration,
     },
+
+    /// The sandbox client does not support the operation, such as `pause` on a provider
+    /// without suspended environments.
+    #[cfg(feature = "workspace")]
+    #[error(
+        "{provider} does not support {operation}; check `SandboxClient::capabilities` before \
+         calling it"
+    )]
+    Unsupported {
+        /// The client's provider name (`SandboxClient::provider`).
+        provider: String,
+        /// The operation that is not supported.
+        operation: String,
+    },
+
+    /// A remote sandbox provider refused or failed a request.
+    #[cfg(feature = "workspace")]
+    #[error("{provider} {operation} failed{}: {message}", status.map(|s| format!(" with HTTP {s}")).unwrap_or_default())]
+    Remote {
+        /// The provider name, such as `e2b` or `daytona`.
+        provider: String,
+        /// The operation that failed, such as `create sandbox`.
+        operation: String,
+        /// The HTTP status the provider answered with; `None` when no response arrived.
+        status: Option<u16>,
+        /// The provider's message, cut to a bounded length.
+        message: String,
+    },
 }
 
 impl From<std::io::Error> for SandboxError {
@@ -192,8 +220,40 @@ impl From<SandboxError> for adk_core::AdkError {
             SandboxError::SessionTimeout { .. } => {
                 (ErrorCategory::Timeout, "code.sandbox_session_timeout")
             }
+            #[cfg(feature = "workspace")]
+            SandboxError::Unsupported { .. } => {
+                (ErrorCategory::Unsupported, "code.sandbox_unsupported")
+            }
+            #[cfg(feature = "workspace")]
+            SandboxError::Remote { status, .. } => {
+                let category = match status {
+                    Some(401) => ErrorCategory::Unauthorized,
+                    Some(403) => ErrorCategory::Forbidden,
+                    Some(404) => ErrorCategory::NotFound,
+                    Some(408 | 504) => ErrorCategory::Timeout,
+                    Some(409) => ErrorCategory::Conflict,
+                    Some(429) => ErrorCategory::RateLimited,
+                    Some(400..=499) => ErrorCategory::InvalidInput,
+                    Some(_) | None => ErrorCategory::Unavailable,
+                };
+                (category, "code.sandbox_remote")
+            }
         };
-        adk_core::AdkError::new(ErrorComponent::Code, category, code, err.to_string())
-            .with_source(err)
+        #[cfg(feature = "workspace")]
+        let remote = match &err {
+            SandboxError::Remote { provider, status, .. } => Some((provider.clone(), *status)),
+            _ => None,
+        };
+        let error = adk_core::AdkError::new(ErrorComponent::Code, category, code, err.to_string())
+            .with_source(err);
+        #[cfg(feature = "workspace")]
+        let error = match remote {
+            Some((provider, Some(status))) => {
+                error.with_provider(provider).with_upstream_status(status)
+            }
+            Some((provider, None)) => error.with_provider(provider),
+            None => error,
+        };
+        error
     }
 }

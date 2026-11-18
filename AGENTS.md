@@ -293,7 +293,7 @@ adk-rag/           Retrieval-augmented generation pipelines and vector store bac
 adk-action/        Action node types and variable interpolation for adk-graph
 adk-enterprise/    HTTP/SSE client for the ADK-Rust Enterprise Managed Agent Service
 adk-managed/       Provider-neutral managed agent runtime with durable, parked turns
-adk-deploy/        Deployment manifests, bundling, and the Agent Engine client (`gcp`)
+adk-deploy/        Deployment manifests, bundling, deploy targets: container, Agent Engine (`gcp`), ECS (`aws`)
 adk-payments/      Agentic commerce (ACP, AP2) and the owner-funded wallet (`wallet`)
 cargo-adk/         `cargo adk`: project templates, builds, eval runs, deployment
 adk-mistralrs/     In-process local inference via mistral.rs 0.8; GPU features opt-in

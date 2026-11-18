@@ -1,6 +1,7 @@
+use crate::history::{HistoryOutcome, ImportSessionRequest, RewriteHistoryRequest, SessionHistory};
 use crate::service::{
-    ambiguous_session_id, identity_not_found, rewind_event_not_found, rewind_steps_exceed,
-    session_already_exists, session_id_not_found, validate_scope, validate_session_id,
+    ambiguous_session_id, identity_not_found, session_already_exists, session_id_not_found,
+    validate_scope, validate_session_id,
 };
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
@@ -127,26 +128,13 @@ impl InMemorySessionService {
         Ok(())
     }
 
-    /// Keeps the first `keep(events)` events of `identity` and rebuilds its session tier from
-    /// the state it was created with and their deltas, under one write lock.
-    fn truncate(
-        &self,
-        identity: &AdkIdentity,
-        keep: impl FnOnce(&[Arc<Event>]) -> Result<usize>,
-    ) -> Result<Box<dyn Session>> {
-        let (events, state, updated_at) = {
-            let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
-            let data = sessions.get_mut(identity).ok_or_else(|| identity_not_found(identity))?;
-            let keep = keep(&data.events)?;
-            data.events.truncate(keep);
-            data.state = state_utils::rebuild_session_state(
-                &data.initial_state,
-                data.events.iter().map(Arc::as_ref),
-            );
-            data.updated_at = Utc::now();
-            (data.events.clone(), data.state.clone(), data.updated_at)
-        };
-        Ok(self.view(identity.clone(), &state, events, updated_at))
+    /// The stored history of `data`.
+    fn history_of(data: &SessionData) -> SessionHistory {
+        SessionHistory::new(
+            data.events.iter().map(|event| Event::clone(event)).collect(),
+            data.state.clone(),
+            Some(data.initial_state.clone()),
+        )
     }
 }
 
@@ -323,30 +311,60 @@ impl SessionService for InMemorySessionService {
         Ok(())
     }
 
-    async fn rewind(
-        &self,
-        identity: &AdkIdentity,
-        target_event_id: &str,
-    ) -> Result<Box<dyn Session>> {
-        self.truncate(identity, |events| {
-            events
-                .iter()
-                .position(|event| event.id == target_event_id)
-                .map(|index| index + 1)
-                .ok_or_else(|| rewind_event_not_found(identity, target_event_id))
-        })
+    async fn history(&self, identity: &AdkIdentity) -> Result<SessionHistory> {
+        let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
+        let data = sessions.get(identity).ok_or_else(|| identity_not_found(identity))?;
+        Ok(Self::history_of(data))
     }
 
-    async fn rewind_steps(&self, identity: &AdkIdentity, steps: usize) -> Result<Box<dyn Session>> {
-        if steps == 0 {
-            return self.get_for_identity(identity).await;
+    async fn rewrite_history(&self, req: RewriteHistoryRequest) -> Result<HistoryOutcome> {
+        let identity = &req.identity;
+        // One write lock covers the read, the checks, and the write.
+        let (rewritten, updated_at) = {
+            let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
+            let data = sessions.get_mut(identity).ok_or_else(|| identity_not_found(identity))?;
+            let rewritten = Self::history_of(data).rewrite(
+                identity,
+                &req.rewrite,
+                req.expected_version.as_deref(),
+            )?;
+            data.events = rewritten.events.iter().cloned().map(Arc::new).collect();
+            data.state = rewritten.state.clone();
+            data.updated_at = Utc::now();
+            (rewritten, data.updated_at)
+        };
+        let events = rewritten.events.into_iter().map(Arc::new).collect();
+        let session = self.view(identity.clone(), &rewritten.state, events, updated_at);
+        Ok(HistoryOutcome::new(session, rewritten.change))
+    }
+
+    async fn import_session(&self, req: ImportSessionRequest) -> Result<Box<dyn Session>> {
+        let identity = req.identity;
+        let (_, _, state) = state_utils::extract_state_deltas(&req.state);
+        let (_, _, initial_state) = state_utils::extract_state_deltas(&req.initial_state);
+        let events: Vec<Arc<Event>> = req.events.into_iter().map(Arc::new).collect();
+        let updated_at = events.last().map_or_else(Utc::now, |event| event.timestamp);
+        {
+            let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
+            if sessions.contains_key(&identity) {
+                return Err(session_already_exists(
+                    identity.app_name.as_ref(),
+                    identity.user_id.as_ref(),
+                    identity.session_id.as_ref(),
+                ));
+            }
+            sessions.insert(
+                identity.clone(),
+                SessionData {
+                    identity: identity.clone(),
+                    events: events.clone(),
+                    state: state.clone(),
+                    initial_state,
+                    updated_at,
+                },
+            );
         }
-        self.truncate(identity, |events| {
-            events
-                .len()
-                .checked_sub(steps)
-                .ok_or_else(|| rewind_steps_exceed(identity, steps, events.len()))
-        })
+        Ok(self.view(identity, &state, events, updated_at))
     }
 }
 

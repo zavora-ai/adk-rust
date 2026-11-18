@@ -69,6 +69,7 @@ pub mod event;
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 /// SQL-backed governance state stores for a kill switch shared by every replica.
 pub mod governance_state;
+pub mod history;
 /// In-memory session backend for testing and lightweight use cases.
 pub mod inmemory;
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
@@ -195,6 +196,11 @@ pub mod vertex;
 
 pub use consent_gate::ConsentGatedSessionService;
 pub use event::{Event, EventActions, Events};
+pub use history::{
+    FORK_ORIGIN_KEY, ForkOrigin, ForkRequest, HistoryChange, HistoryEdit, HistoryOperation,
+    HistoryOutcome, HistoryRewrite, ImportSessionRequest, RewriteHistoryRequest, RewrittenHistory,
+    SessionHistory,
+};
 pub use inmemory::InMemorySessionService;
 pub use service::{
     AppendEventRequest, CreateRequest, DeleteRequest, GetRequest, ListRequest, SessionService,

@@ -298,8 +298,6 @@ where
                 "adk.user_id",
                 #[cfg(feature = "genai-semconv")]
                 "gen_ai.provider.name",
-                #[cfg(feature = "genai-semconv")]
-                "gen_ai.system",
             ];
 
             for key in context_keys {

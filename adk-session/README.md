@@ -494,20 +494,28 @@ for `session_continuity`, and `user:` keys only with consent for `persistent_pro
 it a session lives in process memory and the keys are dropped. A subject being erased can write
 nothing. See [Subject Rights](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/security/subject-rights.md#consent-gates).
 
-## Rewind
+## Fork, Rewind, and Edit History
 
-`rewind(&identity, event_id)` removes the events after `event_id`, and `rewind_steps(&identity, n)` removes the last `n`. Both address the session by its full `AdkIdentity` — app, user, and session — and rebuild the session-scoped state from the state the session was created with plus the remaining events' deltas; app and user state are shared with other sessions and are not rewound. The in-memory and SQLite backends and `EncryptedSession` implement rewind; every other backend returns `session.rewind.unsupported`.
+`fork(ForkRequest)` creates a session of the same app and user holding the source's events up to an event, with the state the source had there, and records its origin under `adk:forked_from`. `rewind(&identity, event_id)` removes the events after `event_id`, `rewind_steps(&identity, n)` removes the last `n`, and `rewrite_history` with `HistoryRewrite::Edit` replaces or removes events. Each rebuilds the session-scoped state from the state the session was created with plus the kept events' deltas; app and user state are shared with other sessions and do not change. A result never separates a tool call from its response, a call held for a decision blocks rewinds and edits, and `expected_version` refuses a rewrite of a history that changed since it was read.
+
+| Backend | Fork | Rewind and edit |
+|---------|------|-----------------|
+| In-memory, SQLite, PostgreSQL, Redis, MongoDB, Neo4j, Firestore | Yes | Yes, atomically per session |
+| Vertex AI | Yes | `session.history.unsupported`: the Session API cannot delete events |
+| `EncryptedSession`, `ConsentGatedSessionService` | Yes | Through the inner backend |
 
 ```rust
 use adk_core::{AdkIdentity, AppName, SessionId, UserId};
-use adk_session::{InMemorySessionService, SessionService};
+use adk_session::{ForkRequest, InMemorySessionService, SessionService};
 
-async fn undo_last_turn(service: &InMemorySessionService) -> adk_core::Result<()> {
+async fn branch_and_undo(service: &InMemorySessionService, event_id: &str) -> adk_core::Result<()> {
     let identity = AdkIdentity::new(
         AppName::try_from("my_app")?,
         UserId::try_from("user_123")?,
         SessionId::try_from("session_456")?,
     );
+    let fork = service.fork(ForkRequest::new(identity.clone()).at_event(event_id)).await?;
+    println!("fork {} holds {} events", fork.session.id(), fork.session.events().len());
     let _session = service.rewind_steps(&identity, 2).await?;
     Ok(())
 }
@@ -515,10 +523,16 @@ async fn undo_last_turn(service: &InMemorySessionService) -> adk_core::Result<()
 
 | Error | Category |
 |-------|----------|
-| `session.rewind.unsupported` | `Unsupported` |
+| `session.history.unsupported` | `Unsupported` |
 | `session.not_found` | `NotFound` |
 | `session.event_not_found` | `NotFound` |
+| `session.already_exists` | `Conflict` |
+| `session.history.held_call` | `Conflict` |
+| `session.history.version_mismatch` | `Conflict` |
+| `session.history.splits_tool_call` | `InvalidInput` |
 | `session.rewind.too_many_steps` | `InvalidInput` |
+
+See [Fork, Rewind, and Edit History](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/sessions/history.md).
 
 ## Changes in 3.0
 

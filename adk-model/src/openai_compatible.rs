@@ -1011,7 +1011,7 @@ impl Llm for OpenAICompatible {
             &SCHEMA_CACHE,
         )?;
 
-        let usage_span = adk_telemetry::llm_generate_span(&provider_name, &model, stream);
+        let usage_span = crate::telemetry::inference_span(&provider_name, &model, stream, &request);
 
         if stream {
             // ── Streaming path ──────────────────────────────────────

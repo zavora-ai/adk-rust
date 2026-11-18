@@ -55,6 +55,8 @@ vertex-eval = ["dep:adk-gcp", "dep:google-cloud-auth", "dep:reqwest"]
 
 [dev-dependencies]
 adk-agent = { path = "../adk-agent" }
+# The live tests (`tests/live_anthropic.rs`, ignored by default) run on Claude.
+adk-model = { path = "../adk-model", features = ["anthropic"] }
 tokio = { workspace = true, features = ["rt", "macros"] }
 tempfile = "3.0"
 proptest = "1.5"

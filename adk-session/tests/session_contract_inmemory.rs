@@ -60,6 +60,12 @@ async fn test_inmemory_rewind_contract() {
 }
 
 #[tokio::test]
+async fn test_inmemory_history_contract() {
+    let service = InMemorySessionService::new();
+    common::history_contract::assert_history_contract(&service, "history_app").await;
+}
+
+#[tokio::test]
 async fn test_inmemory_delete_all_sessions_erases_the_user_tier() {
     let service = InMemorySessionService::new();
     common::state_contract::assert_delete_all_sessions_contract(

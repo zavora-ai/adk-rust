@@ -110,6 +110,8 @@ dependencies = [
  "futures",
  "jsonschema",
  "notify",
+ "opentelemetry 0.32.0",
+ "opentelemetry_sdk 0.32.1",
  "proptest",
  "reqwest 0.13.5",
  "schemars 1.2.3",
@@ -120,6 +122,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-opentelemetry 0.33.0",
  "tracing-subscriber",
  "uuid 1.29.2",
  "wiremock",
@@ -297,6 +300,7 @@ dependencies = [
  "adk-core",
  "async-trait",
  "base64 0.22.1",
+ "image",
  "serde",
  "serde_json",
  "tempfile",
@@ -424,6 +428,7 @@ version = "3.0.0"
 dependencies = [
  "adk-agent",
  "adk-auth",
+ "adk-browser",
  "adk-core",
  "adk-eval",
  "adk-graph",
@@ -432,8 +437,10 @@ dependencies = [
  "adk-session",
  "adk-tool",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "futures",
+ "image",
  "proptest",
  "rmcp",
  "serde",
@@ -442,6 +449,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "url",
  "uuid 1.29.2",
 ]
 
@@ -478,6 +486,10 @@ version = "3.0.0"
 dependencies = [
  "adk-core",
  "adk-gcp",
+ "async-trait",
+ "aws-config",
+ "aws-credential-types",
+ "aws-sigv4",
  "axum",
  "chrono",
  "dirs 7.0.0",
@@ -486,6 +498,7 @@ dependencies = [
  "hex",
  "reqwest 0.13.5",
  "serde",
+ "serde-saphyr 2.1.1",
  "serde_json",
  "sha2 0.10.9",
  "tar",
@@ -495,6 +508,7 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "url",
+ "wiremock",
 ]
 
 [[package]]
@@ -1192,12 +1206,14 @@ version = "3.0.0"
 dependencies = [
  "adk-core",
  "async-trait",
+ "base64 0.22.1",
  "bollard",
  "chrono",
  "find-msvc-tools",
  "futures",
  "libc",
  "proptest",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "tar",
@@ -1209,6 +1225,7 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "windows-sys 0.61.2",
+ "wiremock",
 ]
 
 [[package]]

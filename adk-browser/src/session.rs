@@ -164,6 +164,11 @@ impl BrowserSession {
         })
     }
 
+    /// A live WebDriver handle, starting the session when needed.
+    pub(crate) async fn driver(&self) -> Result<WebDriver> {
+        self.live_driver().await
+    }
+
     /// The WebDriver handle of a running session, without starting one or checking it
     /// responds. Watchers such as [`frames`](Self::frames) use it so that watching never
     /// starts a browser.

@@ -59,5 +59,7 @@ gcp = [
 sqlite = ["dep:rusqlite", "dep:serde_json"]
 
 [dev-dependencies]
+# The in-memory span exporter the GenAI convention tests assert against.
+opentelemetry_sdk = { version = "0.32", features = ["testing"] }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry"] }
