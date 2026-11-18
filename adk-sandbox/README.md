@@ -37,8 +37,10 @@ adk-rust = { version = "3.0.0", features = ["sandbox"] }
 | `sandbox-native` | All three enforcers; only the target platform's compiles | off | All of the above |
 | `process-tree` | `process_tree::JobObject` and `ContainedChild`: a process tree held in a Job Object on Windows (implied by `sandbox-windows`); `process_tree::ProcessGroup`: one held in a session and process group of its own on Unix | off | `windows-sys` on Windows |
 | `egress-proxy` | `egress_proxy::EgressProxy`: the HTTP egress proxy that admits a sandboxed call's connections by an `EgressPolicy`, with SNI matching and per-call audit records ([Network Egress Policy](../docs/official_docs/security/egress.md#egress-proxy-for-sandboxed-processes)) | off | `chrono` |
-| `workspace` | Workspace lifecycle + `LocalUnixClient` | off | `tar`, `uuid`      |
+| `workspace` | Workspace lifecycle, `LocalUnixClient`, and `SessionBackend`, the `SandboxBackend` over any `SandboxClient` | off | `tar`, `uuid`      |
 | `workspace-docker` | `DockerClient` (implies `workspace`) | off | `bollard`, `futures` |
+| `remote-e2b` | `E2bClient`: workspaces in E2B Firecracker microVMs over the E2B REST API and the in-VM `envd` daemon ([Remote Sandbox Providers](../docs/official_docs/sandbox/remote-providers.md)) | off | `reqwest`, `futures`, `base64` |
+| `remote-daytona` | `DaytonaClient`: workspaces in Daytona sandboxes over the Daytona REST and toolbox APIs | off | `reqwest`, `futures` |
 
 ## Backend Comparison
 
@@ -105,7 +107,9 @@ fn sandbox_agent(model: Arc<dyn Llm>) -> adk_core::Result<LlmAgent> {
 }
 ```
 
-The tool accepts `language`, `code`, optional `stdin`, and optional `timeout_secs` parameters. It requires the `code:execute` scope. `timeout_secs` is clamped to the schema's 1–300 second range; a missing or non-numeric value uses 30 seconds.
+The tool accepts `language`, `code`, optional `stdin`, and optional `timeout_secs` parameters. It requires the `code:execute` scope. `timeout_secs` is clamped to the schema's 1–300 second range; a missing or non-numeric value uses 30 seconds. Inside a run, a frozen governance control refuses the call, a freeze while code runs ends it, and the timeout is cut to the wall time left in the run's budget.
+
+With the `workspace` feature, `SessionBackend::new(client)` is a backend over any `SandboxClient`, so the tool runs code in a Docker container or in an E2B or Daytona microVM.
 
 ## Error Handling
 
@@ -124,6 +128,8 @@ crate needs a wildcard arm.
 | `PolicyViolation`  | A policy path could not be resolved           |
 | `Unenforceable`    | The enforcer cannot enforce part of the policy, such as its network mode, so the command does not run |
 | `ProvisionFailed`, `SessionNotFound`, `SnapshotNotFound`, `PathTraversal`, `DockerUnavailable`, `SessionTimeout` | Workspace lifecycle failures (`workspace` feature only) |
+| `Unsupported` | The client does not support the operation, such as `pause` (`workspace` feature only) |
+| `Remote` | A remote provider refused or failed a request; carries the provider, operation and HTTP status (`workspace` feature only) |
 
 Non-zero exit codes are **not** errors — they are returned in `ExecResult.exit_code`.
 
@@ -356,6 +362,10 @@ remounted. Content under a mount stays on the host, so `snapshot` does not captu
 Session paths are relative: an absolute path or a `..` that leaves the root fails with
 `SandboxError::PathTraversal`. Writing a file with more than one hard link replaces it, keeping
 its permissions, instead of truncating it, so a link outside the workspace keeps its contents.
+
+### Remote providers
+
+`E2bClient` (`remote-e2b`) and `DaytonaClient` (`remote-daytona`) run the same lifecycle in a provider's microVMs, created with a provider-side lifetime and destroyed by `stop` or when the client drops. `SandboxSession::exec(CommandRequest)` takes a per-command timeout, environment and working directory; `upload`, `download` and `SandboxClient::pause` round out the interface. Modal is not supported: its only API is gRPC. See [Remote Sandbox Providers](../docs/official_docs/sandbox/remote-providers.md) for the configuration, the API each operation calls, and the contract and live tests.
 
 `LocalUnixClient` is not an isolation boundary for commands. Use `DockerClient` when workspace commands are untrusted. `DockerClient` passes paths, URLs, and branch names as command arguments rather than shell text, reads files as raw bytes, and needs a network mode other than `none` for `GitRepo` manifest entries. A provisioning that fails after its container was created removes that container before the error is returned.
 
