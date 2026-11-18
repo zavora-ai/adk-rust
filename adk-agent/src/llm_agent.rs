@@ -3368,16 +3368,38 @@ impl ToolExecutor<'_> {
                     });
                 }
 
+                // The GenAI `execute_tool` span; `tool.name` and the `gcp.vertex.agent.*`
+                // fields stay for the in-process debug exporter.
                 let span_name = format!("execute_tool {name}");
                 let tool_span = tracing::info_span!(
                     "",
                     otel.name = %span_name,
+                    otel.kind = "internal",
+                    "gen_ai.operation.name" = "execute_tool",
+                    "gen_ai.tool.name" = %name,
+                    "gen_ai.tool.type" = "function",
+                    "gen_ai.tool.call.id" = tracing::field::Empty,
+                    "gen_ai.tool.description" = %tool.description(),
+                    "gen_ai.agent.name" = %self.agent_name,
+                    "gen_ai.tool.call.arguments" = tracing::field::Empty,
+                    "gen_ai.tool.call.result" = tracing::field::Empty,
+                    "error.type" = tracing::field::Empty,
                     tool.name = %name,
                     "gcp.vertex.agent.event_id" = %format!("{}_{}", self.invocation_id, name),
                     "gcp.vertex.agent.invocation_id" = %self.invocation_id,
                     "gcp.vertex.agent.session_id" = %self.ctx.session_id(),
                     "gen_ai.conversation.id" = %self.ctx.session_id()
                 );
+                // Conditionally required: only an id the model supplied.
+                if let Some(call_id) =
+                    id.as_deref().filter(|id| !id.starts_with(adk_core::GENERATED_CALL_ID_PREFIX))
+                {
+                    tool_span.record("gen_ai.tool.call.id", call_id);
+                }
+                let capture_on_span = adk_telemetry::config::capture_content().on_spans();
+                if capture_on_span {
+                    tool_span.record("gen_ai.tool.call.arguments", final_args.to_string().as_str());
+                }
 
                 // Only a call that cannot repeat a side effect is retried.
                 let budget = self
@@ -3479,6 +3501,10 @@ impl ToolExecutor<'_> {
                                 self.ctx.run_config().trace_payload_max_bytes,
                             );
                             tracing::debug!(tool.name = %name, tool.result = %result_payload, "tool_result");
+                            if capture_on_span {
+                                tool_span
+                                    .record("gen_ai.tool.call.result", value.to_string().as_str());
+                            }
                             retry_result = Some(value);
                             break;
                         }
@@ -3495,6 +3521,9 @@ impl ToolExecutor<'_> {
                                 tracing::warn!(tool.name = %name, error.code = %error.code, error.category = %error.category, error.message = %message, "tool_error");
                             }
                             let retry = retryable && attempt + 1 < max_attempts;
+                            if !retry {
+                                tool_span.record("error.type", error.code);
+                            }
                             last_error = Some(Arc::new(error));
                             if !retry {
                                 break;
