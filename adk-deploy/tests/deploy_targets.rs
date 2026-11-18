@@ -329,6 +329,28 @@ fn kubernetes_documents_parse_and_wire_probes_secrets_and_scaling() {
 }
 
 #[test]
+fn a_sqlite_store_needs_a_persistent_volume() {
+    let manifest = minimal(
+        r#"
+        [scaling]
+        maxInstances = 1
+
+        [[services]]
+        name = "sessions"
+        kind = "sqlite"
+        mode = "external"
+        connectionUrl = "sqlite:///data/sessions.db?mode=rwc"
+        "#,
+    );
+    let target = ContainerTarget::from_manifest(".", &manifest).unwrap();
+    let error = target.plan(&DeployRequest::new(manifest, "demo:0.1.0")).unwrap_err().to_string();
+    assert!(
+        error.contains("a SQLite session store is durable only on a persistent volume"),
+        "{error}"
+    );
+}
+
+#[test]
 fn a_sqlite_store_gets_a_volume_and_one_replica() {
     let manifest = minimal(
         r#"

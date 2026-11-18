@@ -53,7 +53,7 @@ use super::{
     DeployPlan, DeployRequest, DeployTarget, DeploymentOutcome, DeploymentStatus, PlannedResource,
     RuntimeOptions, RuntimeSpec,
 };
-use crate::{DeployError, DeployResult, DeploymentManifest, DeploymentStrategyKind};
+use crate::{DeployError, DeployResult, DeploymentManifest, DeploymentStrategyKind, ServiceKind};
 
 /// The builder image, kept in lockstep with `rust-toolchain.toml`, which pins Rust 1.95.0.
 pub const DEFAULT_BUILDER_IMAGE: &str = "rust:1.95-slim";
@@ -660,6 +660,14 @@ impl DeployTarget for ContainerTarget {
         let manifest = &request.manifest;
         let mut runtime =
             RuntimeSpec::from_manifest(manifest, &request.image, &self.runtime_options())?;
+        let sqlite = manifest.services.iter().any(|binding| binding.kind == ServiceKind::Sqlite);
+        if sqlite && self.config.data_dir.is_none() {
+            return Err(DeployError::InvalidManifest {
+                message: "a SQLite session store is durable only on a persistent volume: set \
+                          [targets.container] dataDir to the directory its connection URL names"
+                    .to_string(),
+            });
+        }
         if self.config.data_dir.is_some() && runtime.scaling.max_instances > 1 {
             return Err(DeployError::InvalidManifest {
                 message: "[targets.container] dataDir is a ReadWriteOnce volume one replica \

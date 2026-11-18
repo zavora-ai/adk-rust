@@ -143,7 +143,7 @@ The container target needs no cloud account. `--plan` writes four files into
 | `namespace` | `kubectl`'s current namespace | Kubernetes namespace |
 | `secretName` | `<name>-secrets` | Kubernetes `Secret` holding the `[[secrets]]` keys |
 | `cpu`, `memory` | `250m`, `256Mi` | Kubernetes requests; `memory` is also the limit |
-| `dataDir` | none | Directory on a persistent volume, for a SQLite session store; one replica, `Recreate` rollouts |
+| `dataDir` | none | Directory on a persistent volume, for a SQLite session store, which requires it; one replica, `Recreate` rollouts |
 | `dataSize` | `1Gi` | Size of the persistent volume |
 | `context` | `.` | Docker build context relative to the manifest; the workspace root when the agent is a workspace member or has path dependencies |
 | `outDir` | `.adk-deploy/container` | Where the files are written |
