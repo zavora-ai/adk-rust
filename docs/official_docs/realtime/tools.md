@@ -271,8 +271,9 @@ fn build(model: BoxedModel) -> adk_realtime::Result<RealtimeRunner> {
 ledger write, and the outcome is recorded when the tool returns. A call the provider issues twice
 under the same call ID runs once, and a call that timed out keeps its begun record, so a replay
 is answered `outcome_unknown` instead of running again. Each call also counts against the run's
-`RunBudget::max_tool_calls`. `RealtimeRunner` and `IntegratedRealtimeRunner` do not ledger calls
-or count them against a budget.
+`RunBudget::max_tool_calls`. `IntegratedRealtimeRunner` does the same for its ADK tools under
+the `tool_governance` configuration (`action_ledger`, `budget_tracker`). A `RealtimeRunner`
+native handler is neither ledgered nor counted against a budget.
 
 `RealtimeAgent` and `IntegratedRealtimeRunner` record each answer in the session with the
 [tool result status](../tools/function-tools.md#tool-result-status) `LlmAgent` gives it: `not_run`, `refused`, `held`,

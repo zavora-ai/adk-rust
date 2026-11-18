@@ -534,7 +534,13 @@ async fn a_timeout_is_an_unknown_outcome_only_for_a_non_idempotent_tool() {
 
         let result = runner.execute_tool_with_plugins_for_test(&tool, &call).await.unwrap();
 
-        assert_eq!(result, json!({ "error": "Tool 'charge' timed out after 50ms" }));
+        // A non-idempotent call may have taken effect, so it is answered as `LlmAgent` answers it.
+        let message = "Tool 'charge' timed out after 50ms";
+        let answer = match effect {
+            ToolEffect::NonIdempotent => adk_core::interrupted_call_response(message),
+            _ => json!({ "error": message }),
+        };
+        assert_eq!(result, answer, "{effect:?}");
         assert_eq!(
             recorded_answer(&events_of(&sessions).await, "call-9"),
             annotated(
@@ -603,7 +609,7 @@ async fn an_unknown_outcome_supersedes_a_delegates_request_and_withdraws_it() {
 
     let result = runner.execute_tool_with_plugins_for_test(&tool, &call).await.unwrap();
 
-    assert_eq!(result, json!({ "error": "Tool 'reviewer' timed out after 50ms" }));
+    assert_eq!(result, adk_core::interrupted_call_response("Tool 'reviewer' timed out after 50ms"));
     assert_eq!(
         recorded_answer(&events_of(&sessions).await, "call-3"),
         annotated(

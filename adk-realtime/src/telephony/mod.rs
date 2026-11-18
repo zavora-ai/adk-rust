@@ -18,8 +18,11 @@
 //! outbound calls reach only destinations the application configured: the model picks a
 //! destination by name and never supplies a number.
 //!
-//! Providers: `openai-sip` (OpenAI Realtime SIP) and `livekit-sip` (LiveKit SIP).
+//! Providers: `openai-sip` (OpenAI Realtime SIP, `openai::sip`) and `livekit-sip` (LiveKit
+//! SIP, [`livekit`] when enabled).
 
+#[cfg(feature = "livekit-sip")]
+pub mod livekit;
 mod tools;
 
 pub use tools::{EndCallTool, PlaceCallTool, SendDtmfTool, TransferCallTool};
