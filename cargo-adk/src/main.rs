@@ -19,6 +19,7 @@
 //! cargo adk deploy --stream-output          # deploy with JSON event streaming
 //! cargo adk deploy --target container --plan  # render the Dockerfile, Compose and Kubernetes files
 //! cargo adk deploy --target agent-engine --image IMAGE  # deploy to Agent Engine (feature gcp)
+//! cargo adk deploy --target ecs-express --image IMAGE   # deploy to Amazon ECS Express Mode (feature aws)
 //! cargo adk eval tests/ --agent-cmd "target/release/my-agent --eval"  # run eval sets
 //! cargo adk eval --ledger ledger.jsonl      # gate on drift in an exported activity ledger
 //! ```
@@ -1227,6 +1228,8 @@ enum TargetName {
     Container,
     /// Agent Engine on Google Cloud (cargo-adk feature `gcp`)
     AgentEngine,
+    /// Amazon ECS Express Mode (cargo-adk feature `aws`)
+    EcsExpress,
 }
 
 impl TargetName {
@@ -1235,9 +1238,14 @@ impl TargetName {
             Self::Platform => "platform",
             Self::Container => "container",
             Self::AgentEngine => "agent-engine",
+            Self::EcsExpress => "ecs-express",
         }
     }
 }
+
+/// How long `cargo adk deploy --target` waits for a new endpoint to pass its health check; a
+/// cloud load balancer takes minutes to register its first target.
+const VERIFY_TIMEOUT_SECS: u64 = 300;
 
 /// What `cargo adk deploy --target` does.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1266,10 +1274,17 @@ async fn build_target(
             .map_err(|e| e.to_string()),
         #[cfg(not(feature = "gcp"))]
         TargetName::AgentEngine => Err(missing_target_feature(name, "gcp")),
+        #[cfg(feature = "aws")]
+        TargetName::EcsExpress => adk_deploy::aws::EcsExpressTarget::from_manifest(manifest)
+            .await
+            .map(|target| Box::new(target) as Box<dyn adk_deploy::targets::DeployTarget>)
+            .map_err(|e| e.to_string()),
+        #[cfg(not(feature = "aws"))]
+        TargetName::EcsExpress => Err(missing_target_feature(name, "aws")),
     }
 }
 
-#[cfg(not(feature = "gcp"))]
+#[cfg(any(not(feature = "gcp"), not(feature = "aws")))]
 fn missing_target_feature(name: TargetName, feature: &str) -> String {
     format!(
         "--target {} needs cargo-adk built with the `{feature}` feature: cargo install cargo-adk --features {feature}",
@@ -1316,7 +1331,7 @@ async fn run_target(
     action: TargetAction,
 ) -> Result<(), String> {
     use adk_deploy::DeploymentManifest;
-    use adk_deploy::targets::{DeployRequest, verify_endpoint};
+    use adk_deploy::targets::{DeployRequest, verify_endpoint_within};
 
     let manifest = DeploymentManifest::from_path(manifest_path)
         .map_err(|e| format!("failed to load manifest: {e}"))?;
@@ -1356,8 +1371,17 @@ async fn run_target(
             let outcome = target.deploy(&request).await.map_err(|e| e.to_string())?;
             println!("{}", serde_json::to_string_pretty(&outcome).unwrap_or_default());
             if let (true, Some(endpoint)) = (verify, outcome.endpoint.as_deref()) {
-                let report =
-                    verify_endpoint(endpoint, &plan.runtime).await.map_err(|e| e.to_string())?;
+                println!(
+                    "Checking {endpoint} (up to {VERIFY_TIMEOUT_SECS}s for it to pass its health check)..."
+                );
+                let report = verify_endpoint_within(
+                    endpoint,
+                    &plan.runtime,
+                    std::time::Duration::from_secs(VERIFY_TIMEOUT_SECS),
+                    std::time::Duration::from_secs(10),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
                 println!(
                     "Verified {endpoint}: health {}, unauthenticated API {}",
                     report.health_status, report.unauthenticated_status
@@ -2790,6 +2814,19 @@ mod tests {
         }
         let compose = fs::read_to_string(out.join("compose.yaml")).unwrap();
         assert!(compose.contains("image: \"demo:0.1.0\""), "{compose}");
+    }
+
+    #[cfg(not(feature = "aws"))]
+    #[tokio::test]
+    async fn a_target_compiled_out_names_the_feature_to_enable() {
+        let error = build_target(TargetName::EcsExpress, Path::new("."), &target_manifest(""))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(
+            error,
+            "--target ecs-express needs cargo-adk built with the `aws` feature: cargo install cargo-adk --features aws"
+        );
     }
 
     #[tokio::test]

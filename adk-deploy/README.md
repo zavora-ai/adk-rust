@@ -14,7 +14,7 @@ Deployment manifest, bundling, and control-plane client for ADK-Rust agents.
 - **Bundle builder** — compiles the agent binary, packages it with assets into a `.tar.gz` archive, and generates SHA-256 integrity checksums
 - **Control-plane client** — HTTP client for push deployments, status checks, rollbacks, promotions, secret management, and dashboard queries
 - **Validation** — manifests are validated before build or push (unique bindings, secret refs, auth mode consistency, graph checkpoint requirements, trigger field completeness)
-- **Deploy targets** — `targets::DeployTarget` deploys the manifest and a container image to one provider: `container` (Dockerfile, Docker Compose, Kubernetes) and `agent-engine` (feature `gcp`), each enforcing the deployment guarantees first
+- **Deploy targets** — `targets::DeployTarget` deploys the manifest and a container image to one provider: `container` (Dockerfile, Docker Compose, Kubernetes), `agent-engine` (feature `gcp`), and `ecs-express` (feature `aws`), each enforcing the deployment guarantees first
 
 ## Installation
 
@@ -29,6 +29,7 @@ adk-deploy = "3.0.0"
 | Feature | Description |
 |---------|-------------|
 | `gcp` | `gcp::GcpDeployClient` for Gemini Enterprise Agent Platform ReasoningEngine BYOC deployment, and `gcp::AgentEngineTarget`; forwarded by `adk-rust` as `gcp-deploy` |
+| `aws` | `aws::EcsExpressClient` and `aws::EcsExpressTarget` for Amazon ECS Express Mode, signed with SigV4 over the AWS credential chain |
 
 No feature is enabled by default. 3.0.0 removes the features named after optional dependencies (`adk-core`, `adk-gcp`, `google-cloud-auth`); enable `gcp` instead.
 
@@ -333,6 +334,7 @@ provisions no stores, SQLite beyond one replica, or public ingress without `[aut
 |--------|------|---------|
 | `container` | `targets::container::ContainerTarget` — `Dockerfile`, `compose.yaml`, `kubernetes.yaml` | none |
 | `agent-engine` | `gcp::AgentEngineTarget` — Agent Engine ReasoningEngine | `gcp` |
+| `ecs-express` | `aws::EcsExpressTarget` — Amazon ECS Express Mode service | `aws` |
 
 ```rust
 use adk_deploy::DeploymentManifest;

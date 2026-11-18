@@ -14,6 +14,7 @@
 //! |--------|--------|---------|
 //! | `container` — Dockerfile, Compose, Kubernetes | [`targets::container`] | none |
 //! | `agent-engine` — Agent Engine (ReasoningEngine) | `gcp::AgentEngineTarget` | `gcp` |
+//! | `ecs-express` — Amazon ECS Express Mode | `aws::EcsExpressTarget` | `aws` |
 //!
 //! # Example
 //!
@@ -25,6 +26,8 @@
 //! assert_eq!(manifest.agent.name, "my-agent");
 //! ```
 
+#[cfg(feature = "aws")]
+pub mod aws;
 mod bundle;
 mod client;
 mod config;

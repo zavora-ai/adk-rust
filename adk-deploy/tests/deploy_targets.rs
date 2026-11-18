@@ -10,6 +10,7 @@ use std::path::Path;
 use adk_deploy::targets::container::ContainerTarget;
 use adk_deploy::targets::{
     DeployRequest, DeployTarget, RuntimeOptions, RuntimeSpec, verify_endpoint,
+    verify_endpoint_within,
 };
 use adk_deploy::{DeploymentManifest, HealthCheckConfig};
 use serde_json::{Value, json};
@@ -438,4 +439,72 @@ async fn verification_fails_an_unhealthy_agent() {
     let server = agent(401, 503).await;
     let error = verify_endpoint(&server.uri(), &authenticated_runtime()).await.unwrap_err();
     assert!(error.to_string().contains("answered 503, not 200"), "{error}");
+}
+
+#[tokio::test]
+async fn verification_waits_for_a_warming_load_balancer() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/health"))
+        .respond_with(ResponseTemplate::new(503))
+        .up_to_n_times(2)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/health"))
+        .respond_with(ResponseTemplate::new(200))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/apps"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+    let report = verify_endpoint_within(
+        &server.uri(),
+        &authenticated_runtime(),
+        std::time::Duration::from_secs(5),
+        std::time::Duration::from_millis(10),
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.health_status, 200);
+    let health_checks = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == "/api/health")
+        .count();
+    assert_eq!(health_checks, 4, "two 503s, the 200 that ends the wait, and the verification");
+}
+
+#[tokio::test]
+async fn verification_gives_up_on_an_endpoint_that_never_becomes_healthy() {
+    let server = agent(401, 503).await;
+    let error = verify_endpoint_within(
+        &server.uri(),
+        &authenticated_runtime(),
+        std::time::Duration::from_millis(50),
+        std::time::Duration::from_millis(10),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("/api/health answered 503 after 0s"), "{error}");
+}
+
+#[tokio::test]
+async fn verification_fails_at_once_on_an_open_api() {
+    let server = agent(200, 200).await;
+    let error = verify_endpoint_within(
+        &server.uri(),
+        &authenticated_runtime(),
+        std::time::Duration::from_secs(60),
+        std::time::Duration::from_secs(10),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("without credentials"), "{error}");
 }

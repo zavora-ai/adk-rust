@@ -789,6 +789,61 @@ pub async fn verify_endpoint(
     Ok(EndpointReport { health_status, unauthenticated_status, warnings })
 }
 
+/// [`verify_endpoint`] after waiting up to `timeout` for the health path to answer `200`,
+/// checking every `interval`. A cloud load balancer can take minutes to pass its first health
+/// check after the provider reports the deployment; an endpoint that answers unauthenticated
+/// requests fails at once, without waiting.
+///
+/// # Errors
+///
+/// Returns [`DeployError::Client`] when the health path does not answer `200` within `timeout`,
+/// and the errors of [`verify_endpoint`].
+///
+/// # Example
+///
+/// ```no_run
+/// use adk_deploy::targets::{RuntimeSpec, verify_endpoint_within};
+/// use std::time::Duration;
+///
+/// # async fn check(runtime: &RuntimeSpec) -> adk_deploy::DeployResult<()> {
+/// let endpoint = "https://support-desk-a1b2c3.ecs.us-east-1.on.aws";
+/// verify_endpoint_within(endpoint, runtime, Duration::from_secs(300), Duration::from_secs(10))
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn verify_endpoint_within(
+    endpoint: &str,
+    runtime: &RuntimeSpec,
+    timeout: Duration,
+    interval: Duration,
+) -> DeployResult<EndpointReport> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    let health = format!("{}{}", endpoint.trim_end_matches('/'), runtime.health.path);
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let observed = match client.get(&health).send().await {
+            Ok(response) if response.status().as_u16() == 200 => {
+                return verify_endpoint(endpoint, runtime).await;
+            }
+            Ok(response) => format!("answered {}", response.status().as_u16()),
+            Err(error) => format!("was unreachable: {error}"),
+        };
+        if std::time::Instant::now() >= deadline {
+            return Err(DeployError::Client {
+                message: format!(
+                    "{health} {observed} after {}s; the deployment is not healthy",
+                    timeout.as_secs()
+                ),
+            });
+        }
+        tokio::time::sleep(interval).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

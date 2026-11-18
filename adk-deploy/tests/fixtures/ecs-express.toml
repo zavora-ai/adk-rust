@@ -1,0 +1,54 @@
+# The support-desk manifest with ECS Express Mode settings.
+[agent]
+name = "support-desk"
+binary = "support-desk"
+version = "1.4.0"
+
+[scaling]
+minInstances = 2
+maxInstances = 6
+targetCpuPercent = 65
+
+[health]
+path = "/api/health"
+
+[[services]]
+name = "sessions"
+kind = "postgres"
+mode = "external"
+secretRef = "DATABASE_URL"
+
+[[secrets]]
+key = "DATABASE_URL"
+
+[[secrets]]
+key = "ANTHROPIC_API_KEY"
+
+[[secrets]]
+key = "ADK_API_TOKEN"
+
+[env]
+RUST_LOG = "info"
+ANTHROPIC_API_KEY = { secretRef = "ANTHROPIC_API_KEY" }
+ADK_API_TOKEN = { secretRef = "ADK_API_TOKEN" }
+
+[auth]
+mode = "bearer"
+requiredScopes = ["agent:invoke"]
+
+[targets.ecs-express]
+image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/support-desk:1.4.0"
+region = "us-east-1"
+executionRoleArn = "arn:aws:iam::123456789012:role/ecsTaskExecutionRole"
+infrastructureRoleArn = "arn:aws:iam::123456789012:role/ecsInfrastructureRoleForExpressServices"
+cpu = "512"
+memory = "1024"
+subnets = ["subnet-0a1b2c3d", "subnet-4e5f6a7b"]
+securityGroups = ["sg-0123456789abcdef0"]
+logGroup = "/adk/support-desk"
+allowedHosts = ["support.example.com"]
+ssmParameterPrefix = "/support-desk/"
+
+[targets.ecs-express.secrets]
+ANTHROPIC_API_KEY = "arn:aws:secretsmanager:us-east-1:123456789012:secret:support-desk/anthropic-AbCdEf"
+DATABASE_URL = "arn:aws:secretsmanager:us-east-1:123456789012:secret:support-desk/database-url-GhIjKl"

@@ -8,6 +8,7 @@ resources, and every target enforces the same deployment guarantees before it cr
 |--------|-----------|--------------------|---------|---------|
 | Container | `container` | `Dockerfile`, Docker Compose file, Kubernetes `Deployment`, `Service`, `HorizontalPodAutoscaler` | none | none |
 | Agent Engine | `agent-engine` | Gemini Enterprise Agent Platform ReasoningEngine | `gcp` | Google Cloud |
+| Amazon ECS Express Mode | `ecs-express` | Express service on Fargate, with the load balancer, TLS certificate and autoscaling ECS provisions | `aws` | AWS |
 
 ```bash
 cargo adk deploy --target container --plan                  # write and print, deploy nothing
@@ -103,7 +104,7 @@ location = "us-central1"
 
 | Flag | Effect |
 |------|--------|
-| `--target <name>` | `platform` (default), `container`, or `agent-engine` |
+| `--target <name>` | `platform` (default), `container`, `agent-engine`, or `ecs-express` |
 | `--image <ref>` | The image to deploy; default `[targets.<name>] image`, then `<agent name>:<version>` for `container` |
 | `--manifest <path>` | The manifest (default `adk-deploy.toml`); the target resolves paths from its directory |
 | `--plan` | Writes the files or provider request bodies and prints the plan; deploys nothing |
@@ -116,9 +117,10 @@ provider requests to `.adk-deploy/<target>/`. The plan names the secrets the pro
 store must hold, the ingress, and whether callers authenticate.
 
 After `deploy`, when the target reports an endpoint, `cargo adk deploy` calls
-`adk_deploy::targets::verify_endpoint`: the health path must answer `200`, and with `[auth]`, an
-unauthenticated `GET /api/apps` must answer `401` or `403`. A deployment that answers it with
-`200` fails the command, since runs and the kill switch are then open.
+`adk_deploy::targets::verify_endpoint_within`: it waits up to five minutes for the health path to
+answer `200` — a new load balancer takes minutes to register its first task — and then, with
+`[auth]`, requires an unauthenticated `GET /api/apps` to answer `401` or `403`. A deployment that
+answers it with `200` fails the command at once, since runs and the kill switch are then open.
 
 ## Container
 
@@ -217,6 +219,99 @@ platform's to assign. Each `deploy` creates an engine; `--destroy <engine>` dele
 | The engine's identity | `roles/secretmanager.secretAccessor` on each referenced secret | Reads `secretEnv` at start |
 | The engine's identity | `roles/artifactregistry.reader` on the image repository, when it is not already readable | Pulls the image |
 | The engine's identity | `roles/aiplatform.user`, when it is a custom service account | Reaches Vertex AI Sessions and Memory Bank |
+
+## Amazon ECS Express Mode
+
+`ecs-express` deploys through `adk_deploy::aws::EcsExpressClient` (cargo-adk feature `aws`,
+`cargo install cargo-adk --features aws`), which calls the Amazon ECS API's
+`CreateExpressGatewayService`, `UpdateExpressGatewayService`, `DescribeExpressGatewayService`,
+and `DeleteExpressGatewayService` over its JSON protocol, signed with Signature Version 4.
+Credentials come from the AWS default chain: environment variables, shared config and SSO
+profiles, web identity (GitHub Actions OIDC), and the ECS and EC2 metadata endpoints.
+
+ECS Express Mode runs the image on Fargate and provisions the Application Load Balancer, target
+group, security groups, TLS certificate, and autoscaling policy. The agent answers at
+`https://<name>.ecs.<region>.on.aws`; the target adds `.ecs.<region>.on.aws` to
+`ADK_ALLOWED_HOSTS`. Push the image to Amazon ECR first:
+
+```bash
+cargo adk deploy --target container --plan
+docker build -f .adk-deploy/container/Dockerfile -t 123456789012.dkr.ecr.us-east-1.amazonaws.com/support-desk:1.4.0 .
+docker push 123456789012.dkr.ecr.us-east-1.amazonaws.com/support-desk:1.4.0
+cargo adk deploy --target ecs-express
+```
+
+| `[targets.ecs-express]` key | Default | Meaning |
+|-----------------------------|---------|---------|
+| `image` | none | Image URI |
+| `region` | `$AWS_REGION`, then `$AWS_DEFAULT_REGION` | Region |
+| `executionRoleArn` | required | Pulls the image, writes logs, reads the secrets |
+| `infrastructureRoleArn` | required | Manages the load balancer, security groups, and scaling |
+| `taskRoleArn` | none | The agent's own AWS calls |
+| `serviceArn` | none | The service to update; without it, `deploy` creates one and prints its ARN |
+| `cluster` | `default` | Cluster |
+| `serviceName` | `[agent] name` | Service name |
+| `cpu`, `memory` | `256`, `512` (platform) | Task CPU units and MiB |
+| `cpuArchitecture` | `X86_64` | `X86_64` or `ARM64` |
+| `subnets`, `securityGroups` | the default VPC | Networking; public subnets give an internet-facing load balancer |
+| `ingress` | `public` | `internal` with private subnets keeps the agent off the internet; `public` requires `[auth]` |
+| `port`, `args`, `allowedHosts` | `8080`, none, none | As for the container target |
+| `logGroup` | none | CloudWatch Logs group |
+| `secrets` | none | Secrets Manager secret ARN, or Parameter Store parameter, for each `[[secrets]]` key |
+| `ssmParameterPrefix` | none | Parameter Store prefix for keys `secrets` does not map: `/support-desk/` reads `/support-desk/ANTHROPIC_API_KEY` |
+
+Every `[[secrets]]` key the container reads must resolve through `secrets` or
+`ssmParameterPrefix`; the plan names any that do not. Tasks have no persistent volume, so a
+SQLite session store is refused; use PostgreSQL (Amazon RDS or Aurora), Redis (ElastiCache), or
+another network store. `[scaling]` becomes the scaling target:
+`targetConcurrentRequests` scales on `REQUEST_COUNT_PER_TARGET`, otherwise `targetCpuPercent` on
+`AVERAGE_CPU`. `[health] path` becomes the load balancer health check. `deploy` waits up to
+fifteen minutes for the service to report an endpoint. Record the printed ARN as `serviceArn`, so
+the next `deploy` rolls out a new revision of the same service instead of creating another.
+
+### IAM
+
+The deployer — the identity `cargo adk deploy` runs as:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecs:CreateExpressGatewayService",
+        "ecs:UpdateExpressGatewayService",
+        "ecs:DescribeExpressGatewayService",
+        "ecs:DeleteExpressGatewayService",
+        "ecs:TagResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+        "arn:aws:iam::123456789012:role/ecsInfrastructureRoleForExpressServices"
+      ],
+      "Condition": {
+        "StringEquals": { "iam:PassedToService": ["ecs.amazonaws.com", "ecs-tasks.amazonaws.com"] }
+      }
+    }
+  ]
+}
+```
+
+Add the task role to `iam:PassRole` when `taskRoleArn` is set. The first Express service in an
+account also needs `iam:CreateServiceLinkedRole` for `ecs.amazonaws.com`, unless
+`AWSServiceRoleForECS` exists.
+
+| Role | Trusts | Policies |
+|------|--------|----------|
+| Execution role | `ecs-tasks.amazonaws.com` | `AmazonECSTaskExecutionRolePolicy`; `secretsmanager:GetSecretValue` on each secret ARN; `ssm:GetParameters` on `arn:aws:ssm:<region>:<account>:parameter/<prefix>*`; `kms:Decrypt` on a customer-managed key that encrypts them |
+| Infrastructure role | `ecs.amazonaws.com` | `AmazonECSInfrastructureRoleforExpressGatewayServices` |
+| Task role (optional) | `ecs-tasks.amazonaws.com` | What the agent itself calls; nothing for the agent alone |
 
 ## Related
 
