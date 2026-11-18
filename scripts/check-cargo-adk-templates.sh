@@ -39,6 +39,7 @@ templates=(
   "harness:openai"
   "harness:anthropic"
   "harness:gemini:telemetry,mcp"
+  "autonomous:anthropic"
   "website:"
 )
 
@@ -89,8 +90,8 @@ PATCH
     # info, so the dependencies compile once and the build stays within the disk.
     export CARGO_TARGET_DIR="$CHECK_TARGET_DIR" CARGO_PROFILE_DEV_DEBUG=0
     cargo check --manifest-path "$name/Cargo.toml"
-    # The harness and website templates ship smoke tests that need no API key.
-    if [[ "$template" == "harness" || "$template" == "website" ]]; then
+    # The harness, autonomous and website templates ship tests that need no API key.
+    if [[ "$template" == "harness" || "$template" == "autonomous" || "$template" == "website" ]]; then
       cargo test --manifest-path "$name/Cargo.toml"
     fi
   )
