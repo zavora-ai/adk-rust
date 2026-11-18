@@ -695,6 +695,39 @@ mod snoozing {
         assert_eq!(refused.unwrap().to_string(), "It moved since you saw this");
     }
 
+    /// A process a worker claimed only to park it on its wake set has not started, as one
+    /// queued to park has not (K-I2); once a wake consumed its set, it runs. A `kill -9` in
+    /// that moment leaves its run `Running` until the lease lapses.
+    #[tokio::test]
+    async fn a_process_claimed_only_to_park_has_not_started() {
+        use adk_core::{DurableRunStore, InMemoryRunStore, NewRun};
+        use adk_kernel::{
+            AgendaHandle, InMemoryProcessStore, ProcessKind, ProcessSpec, ProcessStore,
+            ProcessTable,
+        };
+        use adk_surface::verbs::{AgendaAccess, KernelAgenda};
+
+        let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+        let processes: Arc<dyn ProcessStore> = Arc::new(InMemoryProcessStore::new());
+        let table = ProcessTable::new(Arc::clone(&runs), Arc::clone(&processes));
+        let agenda = KernelAgenda::new(AgendaHandle::new(), table.clone());
+        let at = digest_at();
+        let item = scheduled(DIGEST, "News digest", OWNER, "default", at);
+        let asleep = ProcessSpec::new(ProcessKind::Proposed)
+            .with_agenda_item(DIGEST)
+            .with_wake(WakeSet::any_of([Wake::At(at)]));
+        let run = NewRun::new("background", APP, OWNER, APP, json!("News digest"));
+        let pid = table.spawn(run, asleep).await.unwrap().meta.pid;
+        assert!(!agenda.started(&item).await.unwrap(), "queued to park");
+
+        let claimed = runs.claim("background", "k1", Duration::from_secs(60)).await.unwrap();
+        assert_eq!(claimed.map(|claimed| claimed.record.run_id), Some(pid.clone()));
+        assert!(!agenda.started(&item).await.unwrap(), "claimed only to park");
+
+        processes.set_wake(&pid, None).await.unwrap();
+        assert!(agenda.started(&item).await.unwrap(), "its wake consumed, it runs");
+    }
+
     /// Spec 3.3 S-I8: an agent sees only its own area's items; another person's are not found.
     #[tokio::test]
     async fn an_agent_sees_its_own_area_and_never_another_persons_item() {

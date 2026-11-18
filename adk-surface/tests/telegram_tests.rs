@@ -153,7 +153,9 @@ async fn world(model: Arc<ScriptedLlm>) -> World {
                 .with_worker(
                     DurableWorkerConfig::default()
                         .with_worker_id("k1")
-                        .with_lease_ttl(Duration::from_millis(600))
+                        // A lease a starved runner keeps: a lost one drops the attempt after
+                        // a model reply, and the scripted model has no reply to give again.
+                        .with_lease_ttl(Duration::from_secs(30))
                         .with_poll_interval(Duration::from_millis(20)),
                 )
                 .with_scheduler_tick(Duration::from_millis(50))

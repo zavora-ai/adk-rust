@@ -1409,9 +1409,19 @@ impl HarnessLauncher {
         #[cfg(feature = "genui-apps")]
         let sandbox = this.bind_apps(addr).await?;
         let app = this.build_app()?;
-        let listener = tokio::net::TcpListener::bind(addr)
-            .await
-            .map_err(|e| AdkError::config(format!("failed to bind {addr}: {e}")))?;
+        // Bound now, so a taken address fails before anything starts; it accepts no
+        // connection until it listens, which a resident kernel's start comes before.
+        let refused = |e: std::io::Error| AdkError::config(format!("failed to bind {addr}: {e}"));
+        let socket = match addr {
+            SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4(),
+            SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6(),
+        }
+        .map_err(refused)?;
+        // As `TcpListener::bind` sets it: a quick restart rebinds at once. Not on Windows,
+        // where it would let another process take the port.
+        #[cfg(not(windows))]
+        socket.set_reuseaddr(true).map_err(refused)?;
+        socket.bind(addr).map_err(refused)?;
         // The apps origin serves the checked apps' pages and nothing else; it ends with the
         // process (spec 3.3 §6.1 `genui-apps`).
         #[cfg(feature = "genui-apps")]
@@ -1423,8 +1433,9 @@ impl HarnessLauncher {
             });
         }
         if let Some(kernel) = kernel {
-            return serve_resident(kernel, listener, app, addr, &info).await;
+            return serve_resident(kernel, socket, app, addr, &info).await;
         }
+        let listener = listening(socket, addr)?;
         println!("ADK-Rust harness serving on http://{addr}");
         println!("  mode {} · shell {}", info.default_mode, terminal_safe(&shell_label(&info)));
         #[cfg(feature = "surface")]
@@ -1464,17 +1475,32 @@ pub(crate) fn shell_label(info: &adk_harness::HarnessInfo) -> String {
     info.shell().map_or_else(|| "none".to_string(), ToString::to_string)
 }
 
-/// Serves `app` on `listener` with `kernel` resident: the kernel starts before the first
-/// request and drains and stops on Ctrl-C, `SIGTERM` or a Windows service stop (spec 3.2
-/// §7.2, §8.1, §10 W3).
+/// Starts accepting connections on `socket`, bound to `addr`.
+fn listening(socket: tokio::net::TcpSocket, addr: SocketAddr) -> Result<tokio::net::TcpListener> {
+    socket.listen(1024).map_err(|e| AdkError::config(format!("failed to listen on {addr}: {e}")))
+}
+
+/// Serves `app` on `socket` with `kernel` resident: the kernel starts before the socket
+/// listens, so a client that reaches the address finds the kernel and its control socket up,
+/// and it drains and stops on Ctrl-C, `SIGTERM` or a Windows service stop (spec 3.2 §7.2,
+/// §8.1, §10 W3).
 async fn serve_resident(
     kernel: adk_kernel::Kernel,
-    listener: tokio::net::TcpListener,
+    socket: tokio::net::TcpSocket,
     app: Router,
     addr: SocketAddr,
     info: &adk_harness::HarnessInfo,
 ) -> Result<()> {
     kernel.start().await.map_err(AdkError::from)?;
+    let listener = match listening(socket, addr) {
+        Ok(listener) => listener,
+        Err(error) => {
+            if let Err(stop) = kernel.stop().await {
+                tracing::warn!(error = %stop, "could not stop the kernel after the listener failed");
+            }
+            return Err(error);
+        }
+    };
     let config = kernel.config();
     println!("ADK-Rust kernel up on http://{addr}");
     #[cfg(windows)]

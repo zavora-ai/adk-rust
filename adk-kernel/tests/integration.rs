@@ -10,6 +10,7 @@ mod driver_support;
 mod managed_support;
 mod wake_support;
 
+mod agenda_schedule;
 mod agenda_store;
 mod agenda_store_postgres;
 mod agenda_store_redis;

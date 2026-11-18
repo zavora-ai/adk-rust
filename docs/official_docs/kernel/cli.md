@@ -71,6 +71,10 @@ ADK-Rust kernel up on http://127.0.0.1:8080
 Press Ctrl+C to drain and stop
 ```
 
+`up` binds its address first, so a taken port fails before anything starts, and listens only
+once the kernel and its socket are up: a connection to the address, such as a readiness probe,
+succeeds only when control commands reach the kernel too.
+
 > **Note:** a Unix socket path is limited to about 100 bytes, so a deep `--home` is refused
 > at start with that remedy; choose a short kernel home.
 

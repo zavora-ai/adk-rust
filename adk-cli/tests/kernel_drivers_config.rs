@@ -3,6 +3,9 @@
 //! terminal. A driver already mounted as approved is not asked about again, and without a
 //! terminal a changed one keeps its approved manifest until the person approves the change.
 //!
+//! `up` listens only once its kernel has started, so a command run as soon as its address
+//! answers reaches the kernel's socket.
+//!
 //! The binary runs as a process with a scripted model; the drivers are lazy, so none of
 //! their commands runs.
 
@@ -139,4 +142,42 @@ fn up_mounts_the_drivers_the_user_config_lists_once_each_is_approved() {
         "{text}"
     );
     assert!(!text.contains("Mount this driver?") && !text.contains("`email`"), "{text}");
+}
+
+/// The first connection `up`'s address accepts finds the kernel's socket answering: the
+/// kernel starts before `up` listens (spec 3.2 §7.1), on every start.
+#[cfg(feature = "harness")]
+#[test]
+fn up_listens_only_once_its_kernel_socket_answers() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let kernel = home.path().join("kernel");
+    let socket = adk_kernel::control::ControlPlaneConfig::default()
+        .socket_path(&kernel)
+        .expect("a kernel serves a socket by default");
+    let (at, dir) = (kernel.display().to_string(), ws.path().display().to_string());
+    for _ in 0..3 {
+        let port = free_port();
+        let bind = format!("127.0.0.1:{port}");
+        let mut command = Command::new(env!("CARGO_BIN_EXE_adk-rust"));
+        command
+            .args(up_args(&at, &bind, &dir))
+            .current_dir(ws.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        common::isolate(&mut command, home.path());
+        let mut child = command.spawn().expect("adk-rust starts");
+        let started = Instant::now();
+        while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+            assert!(child.try_wait().unwrap().is_none(), "up exited before it listened");
+            assert!(started.elapsed() < common::TIMEOUT, "up did not listen on {port}");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let answered = std::os::unix::net::UnixStream::connect(&socket);
+        // SAFETY: the child is alive; SIGTERM asks `up` to drain and stop.
+        unsafe { libc::kill(i32::try_from(child.id()).unwrap(), libc::SIGTERM) };
+        assert!(child.wait().unwrap().success(), "up stops on SIGTERM");
+        assert!(answered.is_ok(), "the socket answers once the address does: {answered:?}");
+    }
 }
