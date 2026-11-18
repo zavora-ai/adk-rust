@@ -141,6 +141,8 @@ pub mod budget;
 pub mod callbacks;
 /// Time sources for stores whose behaviour depends on the current time.
 pub mod clock;
+/// Provider-neutral computer actuation: actions, screenshots, and the actuator trait.
+pub mod computer;
 /// Conformance suites that every durable store backend runs against its implementation.
 #[cfg(feature = "conformance")]
 pub mod conformance;
@@ -230,9 +232,10 @@ pub use acting::{
     SubjectDelegationPolicy, SubjectDelegationRequest, subject_mismatch_error,
 };
 pub use action_ledger::{
-    ActionLedger, ActionOutcome, ActionRecord, InMemoryActionLedger, NOT_RUN_PREFIX,
-    OUTCOME_UNKNOWN_STATUS, is_not_run, is_outcome_unknown, json_digest, not_run_text,
-    outcome_unknown_response,
+    ActionLedger, ActionOutcome, ActionRecord, InMemoryActionLedger, LedgerAnswer, LedgeredCall,
+    NOT_RUN_PREFIX, OUTCOME_UNKNOWN_STATUS, begin_ledgered_call, held_call_ledger_key,
+    interrupted_call_response, is_not_run, is_outcome_unknown, json_digest, not_run_text,
+    outcome_unknown_response, record_outcome_unknown,
 };
 pub use agent::{
     Agent, AgentCapabilities, AgentInteractionMode, AgentKind, AgentProfile, AgentRelationshipKind,
@@ -260,6 +263,10 @@ pub use callbacks::{
     HistoryProcessor, InstructionProvider, InvocationHooks, OnToolErrorCallback, guard_callback,
 };
 pub use clock::{Clock, ManualClock, SystemClock};
+pub use computer::{
+    ActuationOutput, ComputerAction, ComputerActionKind, ComputerActuator, MouseButton,
+    ScreenPoint, Screenshot, ScrollDirection,
+};
 pub use context::{
     Artifacts, BUILTIN_TOOL_ORIGIN, BackpressurePolicy, BatchCall, CallbackContext,
     IncludeContents, InvocationContext, MAX_STATE_KEY_LEN, Memory, MemoryEntry, ReadonlyContext,
@@ -306,7 +313,7 @@ pub use identity::{
 pub use instruction_template::inject_session_state;
 pub use intra_compaction::{
     CompactedHistory, CompactionTrigger, HistoryCompactionRequest, HistoryCompactor,
-    IntraCompactionConfig,
+    IntraCompactionConfig, NativeCompactionRequest,
 };
 pub use lease::{InMemoryLeaseStore, Lease, LeaseStore};
 pub use metering::{
@@ -320,7 +327,7 @@ pub use model::{
     ToolDeclarations, ToolDeclarationsIter, ToolDeclarationsKeys, ToolDeclarationsValues,
     UsageMetadata, nullable_count,
 };
-pub use model::{NativeWebSearch, NativeWebSearchTool};
+pub use model::{NativeCompaction, NativeWebSearch, NativeWebSearchTool};
 pub use policy::{
     ArgPredicate, DeclarativePolicy, DeclarativePolicyBuilder, PolicyCall, PolicyDecision,
     PolicyRule, StrictestPolicy, ToolPolicy, ToolPolicyRequest,
@@ -361,8 +368,9 @@ pub use subagent::{
     ToolCeiling,
 };
 pub use tool::{
-    DUPLICATE_TOOL_NAME_CODE, RetryBudget, Tool, ToolContext, ToolEffect, ToolExecutionStrategy,
-    ToolPredicate, ToolRegistry, Toolset, ValidationMode, ensure_unique_tool_names,
+    BatchGroup, DUPLICATE_TOOL_NAME_CODE, RetryBudget, Tool, ToolContext, ToolEffect,
+    ToolExecutionStrategy, ToolPredicate, ToolRegistry, Toolset, ValidationMode,
+    ensure_unique_tool_names,
 };
 pub use tool_concurrency::{ConcurrencyPermit, ToolConcurrencyManager};
 pub use tool_response::{

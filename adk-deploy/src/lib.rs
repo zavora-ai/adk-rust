@@ -7,6 +7,15 @@
 //!   plane, and manages its secrets.
 //! - `gcp::GcpDeployClient` (feature `gcp`) creates, polls, gets, and deletes Gemini
 //!   Enterprise Agent Platform ReasoningEngines for BYOC containers.
+//! - [`targets::DeployTarget`] deploys a manifest and a container image to one provider, with
+//!   the deployment guarantees enforced by [`targets::RuntimeSpec::from_manifest`]:
+//!
+//! | Target | Module | Feature |
+//! |--------|--------|---------|
+//! | `container` — Dockerfile, Compose, Kubernetes | [`targets::container`] | none |
+//! | `agent-engine` — Agent Engine (ReasoningEngine) | `gcp::AgentEngineTarget` | `gcp` |
+//! | `ecs-express` — Amazon ECS Express Mode | `aws::EcsExpressTarget` | `aws` |
+//! | `azure-container-apps` — Azure Container Apps | `azure::ContainerAppsTarget` | `azure` |
 //!
 //! # Example
 //!
@@ -18,6 +27,10 @@
 //! assert_eq!(manifest.agent.name, "my-agent");
 //! ```
 
+#[cfg(feature = "aws")]
+pub mod aws;
+#[cfg(feature = "azure")]
+pub mod azure;
 mod bundle;
 mod client;
 mod config;
@@ -26,6 +39,7 @@ mod error;
 pub mod gcp;
 mod manifest;
 mod models;
+pub mod targets;
 
 pub use bundle::{BundleArtifact, BundleBuilder};
 pub use client::DeployClient;
@@ -35,7 +49,7 @@ pub use manifest::{
     A2aConfig, AgentAuthConfig, AgentConfig, AuthModeSpec, BindingMode, BuildConfig,
     DeploymentManifest, DeploymentStrategyConfig, DeploymentStrategyKind, EnvVarSpec, GraphConfig,
     GuardrailConfig, HealthCheckConfig, InteractionConfig, ManualInteractionConfig, PluginRef,
-    RealtimeConfig, SecretRef, ServiceBinding, ServiceKind, SkillConfig, SourceInfo,
+    RealtimeConfig, ScalingPolicy, SecretRef, ServiceBinding, ServiceKind, SkillConfig, SourceInfo,
     TelemetryConfig, TriggerInteractionConfig, TriggerKind,
 };
 pub use models::{

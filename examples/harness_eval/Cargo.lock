@@ -85,6 +85,7 @@ version = "3.0.0"
 dependencies = [
  "adk-core",
  "adk-model",
+ "adk-plugin",
  "adk-runner",
  "adk-session",
  "async-trait",
@@ -93,6 +94,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
  "tracing",
  "uuid",
 ]
@@ -169,6 +171,16 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower",
+ "tracing",
+]
+
+[[package]]
+name = "adk-plugin"
+version = "3.0.0"
+dependencies = [
+ "adk-core",
+ "serde_json",
+ "tokio",
  "tracing",
 ]
 

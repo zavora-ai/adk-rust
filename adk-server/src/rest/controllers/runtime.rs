@@ -1779,7 +1779,8 @@ pub(crate) async fn run_sse_for_request(
             .app_name(app_name.clone())
             .agent(agent)
             .session_service(controller.config.session_service.clone())
-            .governance(controller.config.governance.clone());
+            .governance(controller.config.governance.clone())
+            .session_activity(controller.config.session_activity.clone());
         if let Some(ref artifact_service) = controller.config.artifact_service {
             runner_builder = runner_builder.artifact_service(artifact_service.clone());
         }
@@ -2127,6 +2128,7 @@ pub(crate) async fn run_sse_compat_for_request(
         .agent(agent)
         .session_service(controller.config.session_service.clone())
         .governance(controller.config.governance.clone())
+        .session_activity(controller.config.session_activity.clone())
         .run_config(run_config.build());
     if let Some(ref artifact_service) = controller.config.artifact_service {
         runner_builder = runner_builder.artifact_service(artifact_service.clone());
@@ -2262,6 +2264,7 @@ pub(crate) async fn run_collect_for_request(
         .agent(agent)
         .session_service(controller.config.session_service.clone())
         .governance(controller.config.governance.clone())
+        .session_activity(controller.config.session_activity.clone())
         .run_config(
             adk_core::RunConfig::builder().streaming_mode(adk_core::StreamingMode::None).build(),
         );

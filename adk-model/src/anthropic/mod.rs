@@ -94,7 +94,9 @@ mod rate_limit;
 mod request;
 pub mod schema_adapter;
 mod streaming;
+mod threads;
 mod token_count;
+mod tool_changes;
 mod toolsets;
 
 pub use client::AnthropicClient;

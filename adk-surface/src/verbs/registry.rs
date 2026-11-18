@@ -61,7 +61,7 @@ pub trait AgendaAccess: Send + Sync {
     async fn item(&self, id: &str) -> Result<Option<AgendaItem>, VerbError>;
 
     /// Whether `item`'s process runs, or is queued to run next: about to start, or started. A
-    /// process queued only to park on its wake has not started.
+    /// process queued, or claimed, only to park on its wake has not started.
     ///
     /// # Errors
     ///
@@ -169,14 +169,13 @@ impl AgendaAccess for KernelAgenda {
     async fn started(&self, item: &AgendaItem) -> Result<bool, VerbError> {
         let filter = ProcessFilter::default().partition(item.partition.clone());
         let processes = self.processes.ps(filter).await?;
-        // A process queued with its wake set parks on it when it is claimed: it has not
-        // started. One queued without a wake runs next.
+        // A process queued or claimed with its wake set still on its row parks on it before
+        // its first model call (K-I2): it has not started. Without one, it runs.
         Ok(processes.iter().any(|process| {
             process.meta.agenda_item.as_deref() == Some(item.id.as_str())
                 && process.meta.kind == ProcessKind::Proposed
                 && match process.run.state {
-                    RunState::Running => true,
-                    RunState::Queued => process.meta.wake.is_none(),
+                    RunState::Running | RunState::Queued => process.meta.wake.is_none(),
                     _ => false,
                 }
         }))

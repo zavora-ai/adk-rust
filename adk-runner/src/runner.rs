@@ -274,6 +274,8 @@ struct ActiveRunCleanup {
     active_runs: ActiveRuns,
     run_id: u64,
     inbox: adk_core::SteeringInbox,
+    /// Keeps the run in the runner's session activity until the stream ends.
+    _activity: crate::history::ActivityGuard,
 }
 
 /// A newly registered runner invocation and its event stream.
@@ -592,6 +594,9 @@ pub struct Runner {
     intra_compaction: adk_core::IntraCompactionConfig,
     /// The summarizer auto-compaction uses; `None` uses the agent's model.
     intra_summarizer: Option<Arc<dyn adk_core::BaseEventsSummarizer>>,
+    /// Summaries written off the critical path, kept across runs so a session's next turn
+    /// swaps in what the last one started.
+    background_compactions: Arc<crate::intra_compaction::BackgroundCompactions>,
     /// A compaction strategy auto-compaction applies in place of a summary.
     #[cfg(feature = "context-compaction")]
     context_compaction: Option<Arc<crate::compaction::CompactionConfig>>,
@@ -600,6 +605,8 @@ pub struct Runner {
     /// Per-session cancellation tokens for the interrupt API.
     /// Each `run()` call registers a token here; `interrupt()` cancels it.
     active_runs: ActiveRuns,
+    /// The sessions this runner's runs are on, shared with other runners a host builds.
+    session_activity: crate::history::SessionActivity,
     next_run_id: Arc<std::sync::atomic::AtomicU64>,
     /// Policy installed on runs that carry none.
     tool_policy: Option<Arc<dyn adk_core::ToolPolicy>>,
@@ -692,10 +699,12 @@ impl Runner {
             cancellation_token: config.cancellation_token,
             intra_compaction,
             intra_summarizer,
+            background_compactions: Arc::default(),
             #[cfg(feature = "context-compaction")]
             context_compaction: config.context_compaction.map(Arc::new),
             llm_spend_estimate: crate::spend::LlmSpendEstimate::default(),
             active_runs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            session_activity: crate::history::SessionActivity::new(),
             next_run_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             tool_policy: config.tool_policy,
             egress_policy: config.egress_policy,
@@ -1039,6 +1048,7 @@ impl Runner {
         } else {
             self.intra_compactor(run_config.intra_compaction.as_ref())
         };
+        let background_compactions = self.background_compactions.clone();
 
         // Built once and used for every persistence write, so a backend with a
         // composite natural key can bind each event to its tenant.
@@ -1084,6 +1094,7 @@ impl Runner {
             active_runs: active_runs.clone(),
             run_id,
             inbox: steering_inbox.clone(),
+            _activity: self.session_activity.enter(identity.clone()),
         };
         let stop_invocation_id = invocation_id.to_string();
         let stop_default_author = self.root_agent.name().to_string();
@@ -1255,11 +1266,14 @@ impl Runner {
             // Agents compact their history through the run config, and each compaction is
             // recorded in this run's session.
             if let Some(compactor) = intra_compactor.take() {
+                let background =
+                    compactor.config().background.then(|| background_compactions.clone());
                 run_config.history_compactor = Some(Arc::new(
                     crate::intra_compaction::RunCompactor::new(
                         compactor,
                         invocation_ctx.mutable_session().clone(),
-                    ),
+                    )
+                    .with_background(background),
                 ));
             }
 
@@ -1546,8 +1560,15 @@ impl Runner {
             }
 
             // Run the agent with instrumentation (ADK-Go style attributes)
+            // The GenAI `invoke_agent` span of an in-process agent; the tracing name and the
+            // `gcp.vertex.agent.*` fields stay for the in-process debug exporter.
             let agent_span = tracing::info_span!(
                 "agent.execute",
+                otel.name = %format!("invoke_agent {}", agent_to_run.name()),
+                otel.kind = "internal",
+                "gen_ai.operation.name" = "invoke_agent",
+                "gen_ai.agent.name" = %agent_to_run.name(),
+                "gen_ai.agent.description" = tracing::field::Empty,
                 "gcp.vertex.agent.invocation_id" = ctx.invocation_id(),
                 "gcp.vertex.agent.session_id" = ctx.session_id(),
                 "gcp.vertex.agent.event_id" = ctx.invocation_id(), // Use invocation_id as event_id for agent spans
@@ -1561,6 +1582,9 @@ impl Runner {
 
             if let Some(user) = &telemetry_user_id {
                 agent_span.record("adk.user_id", user.as_str());
+            }
+            if !agent_to_run.description().is_empty() {
+                agent_span.record("gen_ai.agent.description", agent_to_run.description());
             }
 
             let mut agent_stream = match agent_to_run.run(ctx.clone()).instrument(agent_span.clone()).await {
@@ -2583,6 +2607,53 @@ impl Runner {
     pub fn active_runs(&self) -> Vec<adk_core::AdkIdentity> {
         let runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
         runs.values().map(|run| run.identity.clone()).collect()
+    }
+
+    /// Records this runner's runs in `activity` instead of a registry of its own, so a
+    /// [`HistoryControl`](crate::HistoryControl) over another runner, or over the sessions
+    /// alone, sees them.
+    ///
+    /// Set it before the first run.
+    #[must_use]
+    pub fn with_session_activity(mut self, activity: crate::history::SessionActivity) -> Self {
+        self.session_activity = activity;
+        self
+    }
+
+    /// The registry this runner records its runs in.
+    pub fn session_activity(&self) -> &crate::history::SessionActivity {
+        &self.session_activity
+    }
+
+    /// Fork, rewind, and edit of this runner's sessions under the runtime's rules: refused
+    /// while a run of this runner, or of any runner sharing its
+    /// [`session_activity`](Self::session_activity), is on the session, and recorded in the
+    /// runner's audit trail. The runner's durable run store, when set, also refuses sessions a
+    /// worker is running.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::audit_log::AuditActor;
+    /// use adk_core::principal::SubjectRef;
+    /// use adk_session::ForkRequest;
+    ///
+    /// let actor = AuditActor::subject(SubjectRef::human("alice"));
+    /// let fork = runner
+    ///     .history_control()
+    ///     .fork(&actor, ForkRequest::new(identity).at_event(event_id))
+    ///     .await?;
+    /// ```
+    pub fn history_control(&self) -> crate::history::HistoryControl {
+        let mut control = crate::history::HistoryControl::new(self.session_service.clone())
+            .with_activity(self.session_activity.clone());
+        if let Some(trail) = self.audit_trail() {
+            control = control.with_audit(trail.clone());
+        }
+        if let Some(store) = &self.durable_runs {
+            control = control.with_run_store(store.clone());
+        }
+        control
     }
 
     /// Returns the session IDs of all currently running agent executions.

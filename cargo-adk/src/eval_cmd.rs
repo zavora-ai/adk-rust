@@ -21,10 +21,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use adk_core::{AdkError, Agent, Content, Event, EventStream, InvocationContext, Llm, Part};
+use adk_core::{
+    AdkError, Agent, Content, Event, EventStream, InvocationContext, Llm, Part, RunBudget,
+    RunConfig,
+};
 use adk_eval::{
-    BaselineStore, EvalCase, EvaluationConfig, EvaluationCriteria, EvaluationReport,
-    EvaluationResult, Evaluator, Failure, JunitReporter, TestFile,
+    BaselineStore, EvalCase, EvalError, EvaluationConfig, EvaluationCriteria, EvaluationReport,
+    EvaluationResult, Evaluator, Failure, JunitReporter, MultiRunConfig, MultiRunReport, TestFile,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -57,21 +60,30 @@ pub(crate) struct EvalOptions {
     pub format: EvalFormat,
     pub output: Option<PathBuf>,
     pub turn_timeout: Duration,
+    pub num_runs: usize,
+    pub min_pass_rate: f64,
+    pub judge_max_calls: Option<u64>,
+    pub judge_max_cost_usd: Option<f64>,
 }
 
-/// Runs the eval sets at `options.path` against the agent `options.agent_cmd` starts.
+/// Runs the eval sets at `options.path` `options.num_runs` times against the agent
+/// `options.agent_cmd` starts.
 ///
-/// Returns `Ok(true)` when every case passed and no regression was found, and
-/// `Ok(false)` when a case failed or regressed; the report has been written either way.
+/// Returns `Ok(true)` when every case reached the minimum pass rate (every run, by
+/// default), no regression was found and every run completed, and `Ok(false)` otherwise;
+/// the report has been written either way.
 ///
 /// # Errors
 ///
-/// Returns an error, before running any case, when the eval set, criteria, or judge
-/// model cannot be loaded, an eval set has no cases, or `--check-regression` has no
+/// Returns an error, before running any case, when the eval set, criteria, judge model or
+/// run settings cannot be loaded, an eval set has no cases, or `--check-regression` has no
 /// baseline to compare with; and
 /// after the run when the baseline cannot be read or saved, or the report cannot be
 /// written.
 pub(crate) async fn run_eval(options: &EvalOptions) -> Result<bool, String> {
+    let multi_run = MultiRunConfig::new(options.num_runs)
+        .and_then(|config| config.with_min_pass_rate(options.min_pass_rate))
+        .map_err(|e| e.to_string())?;
     let files = discover_test_files(&options.path)?;
     let mut test_files = Vec::with_capacity(files.len());
     for file in &files {
@@ -92,7 +104,7 @@ pub(crate) async fn run_eval(options: &EvalOptions) -> Result<bool, String> {
         collect_turn_details: true,
         ..EvaluationConfig::with_criteria(criteria)
     };
-    let evaluator = match options.judge_model.as_deref() {
+    let mut evaluator = match options.judge_model.as_deref() {
         Some(model) => Evaluator::with_llm_judge(config, judge_from_env(model)?),
         None => {
             let needs_judge = judged_criteria(&config.criteria);
@@ -106,6 +118,12 @@ pub(crate) async fn run_eval(options: &EvalOptions) -> Result<bool, String> {
             Evaluator::new(config)
         }
     };
+    // Judge calls count against one budget across every run; an unlimited budget still
+    // counts them for the report.
+    let judge_budget = judge_budget(options)?;
+    if options.judge_model.is_some() {
+        evaluator.set_run_config(RunConfig::builder().budget(judge_budget).build());
+    }
 
     // Checked before any case runs, so a missing baseline does not cost a full eval run.
     let baseline_path = options.baseline.clone().unwrap_or_else(|| default_baseline(&options.path));
@@ -118,15 +136,62 @@ pub(crate) async fn run_eval(options: &EvalOptions) -> Result<bool, String> {
     }
 
     let command = Arc::new(AgentCommand::new(&options.agent_cmd, options.turn_timeout));
-    let mut reports = Vec::with_capacity(test_files.len());
-    for test_file in &test_files {
-        reports.push(evaluate_file(&evaluator, &command, test_file).await);
+    let mut runs: Vec<Vec<EvaluationReport>> = vec![Vec::new(); test_files.len()];
+    let mut stopped = None;
+    'runs: for run in 0..multi_run.num_runs {
+        let mut this_run = Vec::with_capacity(test_files.len());
+        for test_file in &test_files {
+            match evaluate_file(&evaluator, &command, test_file).await {
+                Ok(report) => this_run.push(report),
+                Err(refusal) => {
+                    stopped = Some(format!("run {} of {}: {refusal}", run + 1, multi_run.num_runs));
+                    break 'runs;
+                }
+            }
+        }
+        for (file_runs, report) in runs.iter_mut().zip(this_run) {
+            file_runs.push(report);
+        }
     }
     command.shutdown().await;
 
-    let results: Vec<&EvaluationResult> = reports.iter().flat_map(|r| &r.results).collect();
-    let metrics = baseline_metrics(&results);
-    write_report(options, &reports, &results)?;
+    let reports: Vec<MultiRunReport> = test_files
+        .iter()
+        .zip(runs)
+        .map(|(test_file, file_runs)| {
+            let report = MultiRunReport::from_runs(
+                &test_file.eval_set_id,
+                multi_run.num_runs,
+                multi_run.min_pass_rate,
+                file_runs,
+            );
+            match &stopped {
+                Some(reason) => report.with_stopped(reason.clone()),
+                None => report,
+            }
+        })
+        .collect();
+    let mut metrics: HashMap<String, HashMap<String, f64>> = HashMap::new();
+    for report in &reports {
+        for (metric, cases) in report.baseline_metrics() {
+            metrics.entry(metric).or_default().extend(cases);
+        }
+    }
+    write_report(options, &reports)?;
+    if let Some(usage) = evaluator.run_config().and_then(|config| config.budget_tracker.as_ref()) {
+        let usage = usage.usage();
+        eprintln!(
+            "judge: {} model call(s), {} tokens, ${:.4}",
+            usage.model_calls,
+            usage.total_tokens,
+            usage.cost_micro_usd as f64 / 1_000_000.0
+        );
+    }
+    if let Some(reason) = &stopped {
+        eprintln!(
+            "stopped: {reason}; raise --judge-max-calls or --judge-max-cost-usd to finish every run"
+        );
+    }
 
     let regressions = if options.check_regression {
         BaselineStore::new(&baseline_path)
@@ -150,11 +215,21 @@ pub(crate) async fn run_eval(options: &EvalOptions) -> Result<bool, String> {
     }
 
     if options.save_baseline {
-        let incomplete: Vec<&str> = results
+        if stopped.is_some() {
+            return Err(format!(
+                "not saving a baseline: only {} of {} runs completed",
+                reports.first().map_or(0, MultiRunReport::completed_runs),
+                multi_run.num_runs
+            ));
+        }
+        let mut incomplete: Vec<&str> = reports
             .iter()
+            .flat_map(|report| report.runs.iter().flat_map(|run| &run.results))
             .filter(|r| r.failures.iter().any(|f| f.criterion == "execution"))
             .map(|r| r.eval_id.as_str())
             .collect();
+        incomplete.sort_unstable();
+        incomplete.dedup();
         if !incomplete.is_empty() {
             return Err(format!(
                 "not saving a baseline: case(s) {} did not run to completion, so the baseline \
@@ -170,21 +245,52 @@ pub(crate) async fn run_eval(options: &EvalOptions) -> Result<bool, String> {
         eprintln!("baseline saved to {}", baseline_path.display());
     }
 
-    Ok(results.iter().all(|r| r.passed) && regressions.is_empty())
+    Ok(reports.iter().all(MultiRunReport::all_passed) && regressions.is_empty())
+}
+
+/// The budget judge calls count against across every run.
+fn judge_budget(options: &EvalOptions) -> Result<RunBudget, String> {
+    let mut budget = RunBudget::new();
+    if let Some(calls) = options.judge_max_calls {
+        if calls == 0 {
+            return Err("--judge-max-calls must be at least 1".to_string());
+        }
+        budget = budget.max_model_calls(calls);
+    }
+    if let Some(usd) = options.judge_max_cost_usd {
+        if !(usd.is_finite() && usd > 0.0) {
+            return Err(format!("--judge-max-cost-usd must be a positive amount, got {usd}"));
+        }
+        budget = budget.max_cost_usd(usd);
+    }
+    if !budget.is_unlimited() && options.judge_model.is_none() {
+        return Err(
+            "--judge-max-calls and --judge-max-cost-usd limit --judge-model's calls; pass \
+                    --judge-model too"
+                .to_string(),
+        );
+    }
+    Ok(budget)
 }
 
 /// Runs every case of `test_file`, each as its own conversation with the agent.
+///
+/// # Errors
+///
+/// Returns the refusal when the judge budget stops the evaluation.
 async fn evaluate_file(
     evaluator: &Evaluator,
     command: &Arc<AgentCommand>,
     test_file: &TestFile,
-) -> EvaluationReport {
+) -> Result<EvaluationReport, EvalError> {
     let started_at = chrono::Utc::now();
     let mut results = Vec::with_capacity(test_file.eval_cases.len());
     for eval_case in &test_file.eval_cases {
         let agent: Arc<dyn Agent> = Arc::new(CommandAgent::new(Arc::clone(command), eval_case));
-        let result = evaluator.evaluate_case(agent, eval_case).await.unwrap_or_else(|e| {
-            EvaluationResult::failed(
+        let result = match evaluator.evaluate_case(agent, eval_case).await {
+            Ok(result) => result,
+            Err(e) if e.is_refusal() => return Err(e),
+            Err(e) => EvaluationResult::failed(
                 &eval_case.eval_id,
                 HashMap::new(),
                 vec![
@@ -198,12 +304,12 @@ async fn evaluate_file(
                     .with_details(&e.to_string()),
                 ],
                 Duration::ZERO,
-            )
-        });
+            ),
+        };
         results.push(result);
     }
     let run_id = format!("{}_{}", test_file.eval_set_id, started_at.format("%Y%m%dT%H%M%S%.6fZ"));
-    EvaluationReport::new(&run_id, results, started_at)
+    Ok(EvaluationReport::new(&run_id, results, started_at))
 }
 
 /// The `.test.json` files at `path`: the file itself, or a directory's files sorted by name.
@@ -296,39 +402,32 @@ fn judge_from_env(model: &str) -> Result<Arc<dyn Llm>, String> {
     Ok(judge)
 }
 
-/// Metric name → case id → score, the shape `BaselineStore` stores.
-fn baseline_metrics(results: &[&EvaluationResult]) -> HashMap<String, HashMap<String, f64>> {
-    let mut metrics: HashMap<String, HashMap<String, f64>> = HashMap::new();
-    for result in results {
-        for (criterion, &score) in &result.scores {
-            metrics.entry(criterion.clone()).or_default().insert(result.eval_id.clone(), score);
-        }
-    }
-    metrics
-}
-
 /// `.eval-baseline.json` inside a directory eval set, or beside a single eval file.
 fn default_baseline(path: &Path) -> PathBuf {
     let dir = if path.is_dir() { path } else { path.parent().unwrap_or(Path::new(".")) };
     dir.join(".eval-baseline.json")
 }
 
-fn write_report(
-    options: &EvalOptions,
-    reports: &[EvaluationReport],
-    results: &[&EvaluationResult],
-) -> Result<(), String> {
+/// Writes the report: with one run, the run's reports as before; with several, a
+/// per-case summary of pass rates and score statistics.
+fn write_report(options: &EvalOptions, reports: &[MultiRunReport]) -> Result<(), String> {
+    let single: Vec<&EvaluationReport> =
+        reports.iter().flat_map(|report| report.runs.first()).collect();
+    let several = options.num_runs > 1;
+    let results: Vec<EvaluationResult> = if several {
+        reports.iter().flat_map(MultiRunReport::case_results).collect()
+    } else {
+        single.iter().flat_map(|report| report.results.iter().cloned()).collect()
+    };
     let rendered = match options.format {
-        EvalFormat::Json => serde_json::to_string_pretty(reports)
+        EvalFormat::Json if several => serde_json::to_string_pretty(reports)
+            .map_err(|e| format!("failed to serialize the report: {e}"))?,
+        EvalFormat::Json => serde_json::to_string_pretty(&single)
             .map_err(|e| format!("failed to serialize the report: {e}"))?,
         EvalFormat::Junit => {
             let started_at =
                 reports.first().map_or_else(chrono::Utc::now, |report| report.started_at);
-            let combined = EvaluationReport::new(
-                "cargo-adk-eval",
-                results.iter().map(|result| (*result).clone()).collect(),
-                started_at,
-            );
+            let combined = EvaluationReport::new("cargo-adk-eval", results, started_at);
             let suite = options
                 .path
                 .file_stem()
@@ -337,7 +436,12 @@ fn write_report(
             JunitReporter::generate(&combined, suite)
                 .map_err(|e| format!("failed to render JUnit XML: {e}"))?
         }
-        EvalFormat::Table => table(reports, results),
+        EvalFormat::Table if several => multi_run_table(reports, &results),
+        EvalFormat::Table => {
+            let results: Vec<&EvaluationResult> = results.iter().collect();
+            let single: Vec<EvaluationReport> = single.into_iter().cloned().collect();
+            table(&single, &results)
+        }
     };
     match &options.output {
         Some(path) => {
@@ -385,6 +489,24 @@ fn table(reports: &[EvaluationReport], results: &[&EvaluationResult]) -> String 
     let _ = writeln!(out, "\nDuration: {:.2}s", duration.as_secs_f64());
 
     for result in results.iter().filter(|r| !r.passed) {
+        let _ = writeln!(out, "\nFAILED {}", result.eval_id);
+        for failure in &result.failures {
+            let _ = writeln!(out, "  {}", failure.format().replace('\n', "\n  "));
+        }
+    }
+    out
+}
+
+/// One summary per eval set, then the cases that did not reach the minimum pass rate.
+fn multi_run_table(reports: &[MultiRunReport], case_results: &[EvaluationResult]) -> String {
+    use std::fmt::Write;
+
+    let mut out = String::new();
+    for report in reports {
+        let _ = writeln!(out, "Eval set: {}", report.eval_set_id);
+        out.push_str(&report.format_summary());
+    }
+    for result in case_results.iter().filter(|r| !r.passed) {
         let _ = writeln!(out, "\nFAILED {}", result.eval_id);
         for failure in &result.failures {
             let _ = writeln!(out, "  {}", failure.format().replace('\n', "\n  "));

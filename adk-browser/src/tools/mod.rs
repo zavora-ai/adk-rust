@@ -26,6 +26,8 @@ mod wait;
 mod windows;
 
 // Navigation tools
+pub(crate) use actions::resolve_upload;
+pub(crate) use navigate::UrlPolicy;
 pub(crate) use navigate::default_allowed_schemes;
 pub use navigate::{
     BackTool, DEFAULT_ALLOWED_SCHEMES, ForwardTool, NavigateTool, RefreshTool,

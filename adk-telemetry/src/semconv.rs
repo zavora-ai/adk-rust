@@ -1,26 +1,32 @@
-//! OpenTelemetry GenAI Semantic Convention attribute constants and helpers.
+//! OpenTelemetry GenAI semantic convention attribute constants and helpers.
 //!
-//! Based on OTel Semantic Conventions v1.41.0:
-//! <https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/>
+//! Follows the GenAI conventions of the
+//! [`semantic-conventions-genai`](https://github.com/open-telemetry/semantic-conventions-genai)
+//! repository, where the conventions moved in core semantic conventions v1.42.0. That
+//! repository has no tagged release yet; these names follow its `main` branch as of
+//! 2026-11-18 (schema `https://opentelemetry.io/schemas/gen-ai-dev/1.42.0-dev`), and
+//! [`SCHEMA_URL`] names it. Core v1.41.0 was the last release that defined them itself.
 //!
-//! This module provides:
-//! - All `gen_ai.*` attribute name constants
-//! - [`GenAiProvider`] and [`GenAiOperation`] enums
-//! - [`GenAiSpanBuilder`] fluent API for creating model call spans
-//! - [`GenAiResponseRecorder`] for recording response attributes
-//! - [`map_finish_reason`] for provider-specific finish reason mapping
-//! - [`tool_call_semconv_span`] and [`agent_run_semconv_span`] helpers
+//! | Span | Name | Kind |
+//! |---|---|---|
+//! | Inference ([`crate::llm_generate_span`], [`GenAiSpanBuilder`]) | `{gen_ai.operation.name} {gen_ai.request.model}` | `client` |
+//! | Agent invocation ([`agent_run_semconv_span`]) | `invoke_agent {gen_ai.agent.name}` | `internal` |
+//! | Tool execution ([`tool_call_semconv_span`]) | `execute_tool {gen_ai.tool.name}` | `internal` |
+//!
+//! The conventions type the content attributes (`gen_ai.input.messages` and the rest) as
+//! structured values; the OpenTelemetry Rust span API (0.32) takes no map-valued attribute,
+//! so they are recorded as JSON strings in the conventions' message schema.
 
 use tracing::Span;
 
 use crate::LlmUsage;
 
+/// The schema URL of the conventions this module follows.
+pub const SCHEMA_URL: &str = "https://opentelemetry.io/schemas/gen-ai-dev/1.42.0-dev";
+
 // --- Provider & Operation ---
 
-/// The `gen_ai.system` attribute (legacy, kept for backward compatibility).
-pub const GEN_AI_SYSTEM: &str = "gen_ai.system";
-
-/// The `gen_ai.provider.name` attribute (v1.41.0+).
+/// The `gen_ai.provider.name` attribute.
 pub const GEN_AI_PROVIDER_NAME: &str = "gen_ai.provider.name";
 
 /// The `gen_ai.operation.name` attribute.
@@ -40,10 +46,10 @@ pub const GEN_AI_REQUEST_TEMPERATURE: &str = "gen_ai.request.temperature";
 /// The `gen_ai.request.top_p` attribute.
 pub const GEN_AI_REQUEST_TOP_P: &str = "gen_ai.request.top_p";
 
-/// The `gen_ai.request.top_k` attribute.
+/// The `gen_ai.request.top_k` attribute, an integer.
 pub const GEN_AI_REQUEST_TOP_K: &str = "gen_ai.request.top_k";
 
-/// The `gen_ai.request.stream` attribute.
+/// The `gen_ai.request.stream` attribute, set only when the request streams.
 pub const GEN_AI_REQUEST_STREAM: &str = "gen_ai.request.stream";
 
 /// The `gen_ai.request.frequency_penalty` attribute.
@@ -52,12 +58,21 @@ pub const GEN_AI_REQUEST_FREQUENCY_PENALTY: &str = "gen_ai.request.frequency_pen
 /// The `gen_ai.request.presence_penalty` attribute.
 pub const GEN_AI_REQUEST_PRESENCE_PENALTY: &str = "gen_ai.request.presence_penalty";
 
+/// The `gen_ai.request.seed` attribute.
+pub const GEN_AI_REQUEST_SEED: &str = "gen_ai.request.seed";
+
+/// The `gen_ai.request.stop_sequences` attribute, a string array.
+pub const GEN_AI_REQUEST_STOP_SEQUENCES: &str = "gen_ai.request.stop_sequences";
+
+/// The `gen_ai.output.type` attribute: `text`, `json`, `image` or `speech`.
+pub const GEN_AI_OUTPUT_TYPE: &str = "gen_ai.output.type";
+
 // --- Response Attributes ---
 
 /// The `gen_ai.response.model` attribute.
 pub const GEN_AI_RESPONSE_MODEL: &str = "gen_ai.response.model";
 
-/// The `gen_ai.response.finish_reasons` attribute.
+/// The `gen_ai.response.finish_reasons` attribute, a string array.
 pub const GEN_AI_RESPONSE_FINISH_REASONS: &str = "gen_ai.response.finish_reasons";
 
 /// The `gen_ai.response.id` attribute.
@@ -65,61 +80,93 @@ pub const GEN_AI_RESPONSE_ID: &str = "gen_ai.response.id";
 
 // --- Token Usage ---
 
-/// The `gen_ai.usage.input_tokens` attribute.
+/// The `gen_ai.usage.input_tokens` attribute: every input token, cached ones included.
 pub const GEN_AI_USAGE_INPUT_TOKENS: &str = "gen_ai.usage.input_tokens";
 
-/// The `gen_ai.usage.output_tokens` attribute.
+/// The `gen_ai.usage.output_tokens` attribute: every output token, reasoning included.
 pub const GEN_AI_USAGE_OUTPUT_TOKENS: &str = "gen_ai.usage.output_tokens";
 
-/// The `gen_ai.usage.total_tokens` attribute.
-pub const GEN_AI_USAGE_TOTAL_TOKENS: &str = "gen_ai.usage.total_tokens";
+/// The `gen_ai.usage.cache_read.input_tokens` attribute.
+pub const GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: &str = "gen_ai.usage.cache_read.input_tokens";
 
-/// The `gen_ai.usage.cache_read_tokens` attribute.
-pub const GEN_AI_USAGE_CACHE_READ_TOKENS: &str = "gen_ai.usage.cache_read_tokens";
+/// The `gen_ai.usage.cache_write.input_tokens` attribute.
+pub const GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: &str = "gen_ai.usage.cache_write.input_tokens";
 
-/// The `gen_ai.usage.cache_creation_tokens` attribute.
-pub const GEN_AI_USAGE_CACHE_CREATION_TOKENS: &str = "gen_ai.usage.cache_creation_tokens";
+/// The `gen_ai.usage.reasoning.output_tokens` attribute.
+pub const GEN_AI_USAGE_REASONING_OUTPUT_TOKENS: &str = "gen_ai.usage.reasoning.output_tokens";
 
-/// The `gen_ai.usage.thinking_tokens` attribute.
-pub const GEN_AI_USAGE_THINKING_TOKENS: &str = "gen_ai.usage.thinking_tokens";
-
-// --- Conversation ---
+// --- Conversation and content (opt-in) ---
 
 /// The `gen_ai.conversation.id` attribute.
 pub const GEN_AI_CONVERSATION_ID: &str = "gen_ai.conversation.id";
+
+/// The opt-in `gen_ai.system_instructions` attribute.
+pub const GEN_AI_SYSTEM_INSTRUCTIONS: &str = "gen_ai.system_instructions";
+
+/// The opt-in `gen_ai.input.messages` attribute.
+pub const GEN_AI_INPUT_MESSAGES: &str = "gen_ai.input.messages";
+
+/// The opt-in `gen_ai.output.messages` attribute.
+pub const GEN_AI_OUTPUT_MESSAGES: &str = "gen_ai.output.messages";
+
+/// The opt-in `gen_ai.tool.definitions` attribute.
+pub const GEN_AI_TOOL_DEFINITIONS: &str = "gen_ai.tool.definitions";
+
+// --- Agent Attributes ---
+
+/// The `gen_ai.agent.name` attribute.
+pub const GEN_AI_AGENT_NAME: &str = "gen_ai.agent.name";
+
+/// The `gen_ai.agent.description` attribute.
+pub const GEN_AI_AGENT_DESCRIPTION: &str = "gen_ai.agent.description";
 
 // --- Tool Attributes ---
 
 /// The `gen_ai.tool.name` attribute.
 pub const GEN_AI_TOOL_NAME: &str = "gen_ai.tool.name";
 
-/// The `gen_ai.tool.call_id` attribute.
-pub const GEN_AI_TOOL_CALL_ID: &str = "gen_ai.tool.call_id";
+/// The `gen_ai.tool.call.id` attribute.
+pub const GEN_AI_TOOL_CALL_ID: &str = "gen_ai.tool.call.id";
 
-// --- Content Events ---
+/// The `gen_ai.tool.type` attribute: `function`, `extension` or `datastore`.
+pub const GEN_AI_TOOL_TYPE: &str = "gen_ai.tool.type";
 
-/// The `gen_ai.content.prompt` event name.
-pub const GEN_AI_CONTENT_PROMPT: &str = "gen_ai.content.prompt";
+/// The `gen_ai.tool.description` attribute.
+pub const GEN_AI_TOOL_DESCRIPTION: &str = "gen_ai.tool.description";
 
-/// The `gen_ai.content.completion` event name.
-pub const GEN_AI_CONTENT_COMPLETION: &str = "gen_ai.content.completion";
+/// The opt-in `gen_ai.tool.call.arguments` attribute.
+pub const GEN_AI_TOOL_CALL_ARGUMENTS: &str = "gen_ai.tool.call.arguments";
+
+/// The opt-in `gen_ai.tool.call.result` attribute, recorded only for a call that succeeded.
+pub const GEN_AI_TOOL_CALL_RESULT: &str = "gen_ai.tool.call.result";
+
+// --- Events and errors ---
+
+/// The event that carries an inference's content apart from the trace.
+pub const GEN_AI_INFERENCE_DETAILS_EVENT: &str = "gen_ai.client.inference.operation.details";
+
+/// The `error.type` attribute.
+pub const ERROR_TYPE: &str = "error.type";
 
 // =============================================================================
 // Enums
 // =============================================================================
 
-/// Well-known GenAI provider identifiers per OTel semconv registry.
+/// Well-known `gen_ai.provider.name` values.
 ///
 /// # Example
 /// ```
 /// use adk_telemetry::semconv::GenAiProvider;
 /// assert_eq!(GenAiProvider::Gemini.as_str(), "gcp.gemini");
-/// assert_eq!(GenAiProvider::OpenAI.as_str(), "openai");
+/// assert_eq!(GenAiProvider::MistralAi.as_str(), "mistral");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum GenAiProvider {
-    /// Google Gemini (via AI Studio or Vertex AI).
+    /// Google Gemini API (AI Studio).
     Gemini,
+    /// Gemini on Vertex AI.
+    VertexAi,
     /// OpenAI.
     OpenAI,
     /// Anthropic.
@@ -142,13 +189,20 @@ pub enum GenAiProvider {
     Perplexity,
     /// xAI (Grok).
     XAi,
+    /// Cohere.
+    Cohere,
+    /// IBM watsonx.ai.
+    IbmWatsonx,
+    /// Moonshot AI.
+    MoonshotAi,
 }
 
 impl GenAiProvider {
-    /// Returns the OTel semconv `gen_ai.provider.name` string.
+    /// Returns the `gen_ai.provider.name` string.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Gemini => "gcp.gemini",
+            Self::VertexAi => "gcp.vertex_ai",
             Self::OpenAI => "openai",
             Self::Anthropic => "anthropic",
             Self::DeepSeek => "deepseek",
@@ -157,22 +211,26 @@ impl GenAiProvider {
             Self::AzureOpenAI => "azure.ai.openai",
             Self::AzureAiInference => "azure.ai.inference",
             Self::AwsBedrock => "aws.bedrock",
-            Self::MistralAi => "mistral_ai",
+            Self::MistralAi => "mistral",
             Self::Perplexity => "perplexity",
             Self::XAi => "x_ai",
+            Self::Cohere => "cohere",
+            Self::IbmWatsonx => "ibm.watsonx.ai",
+            Self::MoonshotAi => "moonshot_ai",
         }
     }
 }
 
-/// Well-known GenAI operation names per OTel semconv.
+/// Well-known `gen_ai.operation.name` values ADK-Rust emits.
 ///
 /// # Example
 /// ```
 /// use adk_telemetry::semconv::GenAiOperation;
 /// assert_eq!(GenAiOperation::Chat.as_str(), "chat");
-/// assert_eq!(GenAiOperation::Embeddings.as_str(), "embeddings");
+/// assert_eq!(GenAiOperation::InvokeAgent.as_str(), "invoke_agent");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum GenAiOperation {
     /// Chat completion.
     Chat,
@@ -186,10 +244,16 @@ pub enum GenAiOperation {
     ExecuteTool,
     /// Agent invocation.
     InvokeAgent,
+    /// Agent creation.
+    CreateAgent,
+    /// Retrieval.
+    Retrieval,
+    /// Realtime inference.
+    RealtimeInference,
 }
 
 impl GenAiOperation {
-    /// Returns the OTel semconv operation name string.
+    /// Returns the `gen_ai.operation.name` string.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Chat => "chat",
@@ -198,6 +262,9 @@ impl GenAiOperation {
             Self::Embeddings => "embeddings",
             Self::ExecuteTool => "execute_tool",
             Self::InvokeAgent => "invoke_agent",
+            Self::CreateAgent => "create_agent",
+            Self::Retrieval => "retrieval",
+            Self::RealtimeInference => "realtime_inference",
         }
     }
 }
@@ -206,16 +273,16 @@ impl GenAiOperation {
 // GenAiSpanBuilder
 // =============================================================================
 
-/// Builder for creating model call spans with full OTel GenAI semconv attributes.
+/// Builder for an inference span with request parameters set at creation.
 ///
-/// Providers use this to construct spans with all available metadata.
-/// Fields not set are omitted from the span (recorded as `Empty`).
+/// The span is the one [`crate::llm_generate_span`] creates, named
+/// `{gen_ai.operation.name} {gen_ai.request.model}` in OpenTelemetry export, kind `client`.
 ///
 /// # Example
 /// ```
 /// use adk_telemetry::semconv::{GenAiSpanBuilder, GenAiProvider, GenAiOperation};
 ///
-/// let span = GenAiSpanBuilder::new(GenAiProvider::Gemini, GenAiOperation::Chat, "gemini-3.8-flash")
+/// let span = GenAiSpanBuilder::new(GenAiProvider::Gemini, GenAiOperation::Chat, "gemini-3.7-flash")
 ///     .stream(true)
 ///     .temperature(0.7)
 ///     .max_tokens(4096)
@@ -229,7 +296,7 @@ pub struct GenAiSpanBuilder {
     temperature: Option<f64>,
     max_tokens: Option<i64>,
     top_p: Option<f64>,
-    top_k: Option<f64>,
+    top_k: Option<i64>,
     conversation_id: Option<String>,
 }
 
@@ -278,7 +345,7 @@ impl GenAiSpanBuilder {
     }
 
     /// Set the top_k parameter.
-    pub fn top_k(mut self, k: f64) -> Self {
+    pub fn top_k(mut self, k: i64) -> Self {
         self.top_k = Some(k);
         self
     }
@@ -290,56 +357,48 @@ impl GenAiSpanBuilder {
     }
 
     /// Build and return the tracing [`Span`].
-    ///
-    /// The span name follows the pattern: `gen_ai.{operation_name} {model}`.
-    /// All `gen_ai.*` response and usage fields are pre-declared as `Empty`
-    /// so they can be recorded later via [`GenAiResponseRecorder`].
     pub fn build(self) -> Span {
-        let span_name = format!("gen_ai.{} {}", self.operation.as_str(), self.model);
-        let provider_str = self.provider.as_str();
-        let operation_str = self.operation.as_str();
-
         let span = tracing::info_span!(
             "gen_ai.call",
-            "otel.name" = %span_name,
-            "gen_ai.system" = %provider_str,
-            "gen_ai.provider.name" = %provider_str,
-            "gen_ai.operation.name" = %operation_str,
-            "gen_ai.request.model" = %self.model,
-            "gen_ai.request.stream" = self.stream,
-            "gen_ai.request.temperature" = tracing::field::Empty,
-            "gen_ai.request.max_tokens" = tracing::field::Empty,
-            "gen_ai.request.top_p" = tracing::field::Empty,
-            "gen_ai.request.top_k" = tracing::field::Empty,
-            "gen_ai.conversation.id" = tracing::field::Empty,
-            "gen_ai.response.model" = tracing::field::Empty,
-            "gen_ai.response.finish_reasons" = tracing::field::Empty,
-            "gen_ai.usage.input_tokens" = tracing::field::Empty,
-            "gen_ai.usage.output_tokens" = tracing::field::Empty,
-            "gen_ai.usage.total_tokens" = tracing::field::Empty,
-            "gen_ai.usage.cache_read_tokens" = tracing::field::Empty,
-            "gen_ai.usage.cache_creation_tokens" = tracing::field::Empty,
-            "gen_ai.usage.thinking_tokens" = tracing::field::Empty,
-            "otel.kind" = "client",
+            otel.name = %format!("{} {}", self.operation.as_str(), self.model),
+            otel.kind = "client",
+            gen_ai.operation.name = self.operation.as_str(),
+            gen_ai.provider.name = self.provider.as_str(),
+            gen_ai.request.model = %self.model,
+            gen_ai.request.stream = tracing::field::Empty,
+            gen_ai.request.temperature = tracing::field::Empty,
+            gen_ai.request.max_tokens = tracing::field::Empty,
+            gen_ai.request.top_p = tracing::field::Empty,
+            gen_ai.request.top_k = tracing::field::Empty,
+            gen_ai.conversation.id = tracing::field::Empty,
+            gen_ai.response.model = tracing::field::Empty,
+            gen_ai.response.id = tracing::field::Empty,
+            gen_ai.response.finish_reasons = tracing::field::Empty,
+            gen_ai.usage.input_tokens = tracing::field::Empty,
+            gen_ai.usage.output_tokens = tracing::field::Empty,
+            gen_ai.usage.cache_read.input_tokens = tracing::field::Empty,
+            gen_ai.usage.cache_write.input_tokens = tracing::field::Empty,
+            gen_ai.usage.reasoning.output_tokens = tracing::field::Empty,
+            error.type = tracing::field::Empty,
         );
-
-        // Record optional fields that were set
+        if self.stream {
+            span.record(GEN_AI_REQUEST_STREAM, true);
+        }
         if let Some(temp) = self.temperature {
-            span.record("gen_ai.request.temperature", temp);
+            span.record(GEN_AI_REQUEST_TEMPERATURE, temp);
         }
         if let Some(max) = self.max_tokens {
-            span.record("gen_ai.request.max_tokens", max);
+            span.record(GEN_AI_REQUEST_MAX_TOKENS, max);
         }
         if let Some(p) = self.top_p {
-            span.record("gen_ai.request.top_p", p);
+            span.record(GEN_AI_REQUEST_TOP_P, p);
         }
         if let Some(k) = self.top_k {
-            span.record("gen_ai.request.top_k", k);
+            span.record(GEN_AI_REQUEST_TOP_K, k);
         }
         if let Some(ref conv_id) = self.conversation_id {
-            span.record("gen_ai.conversation.id", conv_id.as_str());
+            span.record(GEN_AI_CONVERSATION_ID, conv_id.as_str());
         }
-
         span
     }
 }
@@ -348,10 +407,7 @@ impl GenAiSpanBuilder {
 // GenAiResponseRecorder
 // =============================================================================
 
-/// Records response-time attributes on the current span.
-///
-/// Call after receiving the model response to populate response model,
-/// finish reasons, and token usage.
+/// Records response attributes on the current span.
 ///
 /// # Example
 /// ```
@@ -359,7 +415,7 @@ impl GenAiSpanBuilder {
 /// use adk_telemetry::LlmUsage;
 ///
 /// // After receiving model response:
-/// GenAiResponseRecorder::record_response_model("gemini-3.8-flash");
+/// GenAiResponseRecorder::record_response_model("gemini-3.7-flash");
 /// GenAiResponseRecorder::record_finish_reasons(&["stop"]);
 /// GenAiResponseRecorder::record_usage(&LlmUsage {
 ///     input_tokens: 100,
@@ -373,18 +429,15 @@ pub struct GenAiResponseRecorder;
 impl GenAiResponseRecorder {
     /// Record the response model (may differ from request model).
     pub fn record_response_model(model: &str) {
-        Span::current().record("gen_ai.response.model", model);
+        Span::current().record(GEN_AI_RESPONSE_MODEL, model);
     }
 
-    /// Record finish reasons as a comma-separated string.
-    ///
-    /// OTel semconv specifies this as a string array; tracing encodes as CSV.
+    /// Record the finish reasons, a string array ([`crate::record_str_array`]).
     pub fn record_finish_reasons(reasons: &[&str]) {
-        let joined = reasons.join(",");
-        Span::current().record("gen_ai.response.finish_reasons", joined.as_str());
+        crate::record_str_array(&Span::current(), GEN_AI_RESPONSE_FINISH_REASONS, reasons);
     }
 
-    /// Record token usage (delegates to existing [`record_llm_usage`](crate::record_llm_usage)).
+    /// Record token usage (delegates to [`record_llm_usage`](crate::record_llm_usage)).
     pub fn record_usage(usage: &LlmUsage) {
         crate::record_llm_usage(usage);
     }
@@ -394,7 +447,8 @@ impl GenAiResponseRecorder {
 // Finish Reason Mapping
 // =============================================================================
 
-/// Maps provider-specific finish reason strings to OTel semconv values.
+/// Maps provider-specific finish reason strings to the conventions' values: `stop`,
+/// `length`, `content_filter`, `tool_call`, `compaction` and `error`.
 ///
 /// Known mappings are converted; unknown values pass through unchanged.
 ///
@@ -403,29 +457,34 @@ impl GenAiResponseRecorder {
 /// use adk_telemetry::semconv::{map_finish_reason, GenAiProvider};
 ///
 /// assert_eq!(map_finish_reason(GenAiProvider::Gemini, "STOP"), "stop");
-/// assert_eq!(map_finish_reason(GenAiProvider::OpenAI, "length"), "max_tokens");
-/// assert_eq!(map_finish_reason(GenAiProvider::Anthropic, "end_turn"), "stop");
+/// assert_eq!(map_finish_reason(GenAiProvider::OpenAI, "length"), "length");
+/// assert_eq!(map_finish_reason(GenAiProvider::Anthropic, "tool_use"), "tool_call");
 /// assert_eq!(map_finish_reason(GenAiProvider::Gemini, "UNKNOWN"), "UNKNOWN");
 /// ```
 pub fn map_finish_reason(provider: GenAiProvider, raw: &str) -> &str {
     match provider {
-        GenAiProvider::Gemini => match raw {
+        GenAiProvider::Gemini | GenAiProvider::VertexAi => match raw {
             "STOP" => "stop",
-            "MAX_TOKENS" => "max_tokens",
-            "SAFETY" => "content_filter",
+            "MAX_TOKENS" => "length",
+            "SAFETY" | "RECITATION" | "BLOCKLIST" | "PROHIBITED_CONTENT" | "SPII" => {
+                "content_filter"
+            }
+            "MALFORMED_FUNCTION_CALL" => "error",
             _ => raw,
         },
         GenAiProvider::OpenAI | GenAiProvider::AzureOpenAI => match raw {
             "stop" => "stop",
-            "length" => "max_tokens",
-            "tool_calls" => "tool_calls",
+            "length" => "length",
+            "tool_calls" | "function_call" => "tool_call",
             "content_filter" => "content_filter",
             _ => raw,
         },
         GenAiProvider::Anthropic => match raw {
-            "end_turn" => "stop",
-            "max_tokens" => "max_tokens",
-            "tool_use" => "tool_calls",
+            "end_turn" | "stop_sequence" => "stop",
+            "max_tokens" | "model_context_window_exceeded" => "length",
+            "tool_use" => "tool_call",
+            "refusal" => "content_filter",
+            "compaction" => "compaction",
             _ => raw,
         },
         _ => raw,
@@ -436,11 +495,8 @@ pub fn map_finish_reason(provider: GenAiProvider, raw: &str) -> &str {
 // Tool Call Span
 // =============================================================================
 
-/// Create a span for tool execution with GenAI semconv attributes.
-///
-/// Emits `gen_ai.tool.name` always and `gen_ai.tool.call_id` when provided.
-/// Pre-declares `gen_ai.conversation.id` and `gen_ai.system` as `Empty` for
-/// propagation from parent spans via [`AdkSpanLayer`](crate::AdkSpanLayer).
+/// Creates the span of one tool execution ([`crate::tool_execute_span`]), with
+/// `gen_ai.tool.call.id` when the model supplied one.
 ///
 /// # Example
 /// ```
@@ -450,20 +506,10 @@ pub fn map_finish_reason(provider: GenAiProvider, raw: &str) -> &str {
 /// let _enter = span.enter();
 /// ```
 pub fn tool_call_semconv_span(tool_name: &str, call_id: Option<&str>) -> Span {
-    let span = tracing::info_span!(
-        "execute_tool",
-        "gen_ai.tool.name" = %tool_name,
-        "gen_ai.tool.call_id" = tracing::field::Empty,
-        "gen_ai.conversation.id" = tracing::field::Empty,
-        "gen_ai.system" = tracing::field::Empty,
-        "gen_ai.provider.name" = tracing::field::Empty,
-        "otel.kind" = "internal",
-    );
-
+    let span = crate::tool_execute_span(tool_name);
     if let Some(id) = call_id {
-        span.record("gen_ai.tool.call_id", id);
+        span.record(GEN_AI_TOOL_CALL_ID, id);
     }
-
     span
 }
 
@@ -471,10 +517,8 @@ pub fn tool_call_semconv_span(tool_name: &str, call_id: Option<&str>) -> Span {
 // Agent Run Span
 // =============================================================================
 
-/// Create a span for agent execution with conversation ID.
-///
-/// Sets `gen_ai.conversation.id` to `session_id` when provided, which
-/// propagates to all child spans via [`AdkSpanLayer`](crate::AdkSpanLayer).
+/// Creates the span of one agent invocation ([`crate::agent_run_span`]), with
+/// `gen_ai.conversation.id` set to `session_id` when provided.
 ///
 /// # Example
 /// ```
@@ -488,18 +532,10 @@ pub fn agent_run_semconv_span(
     invocation_id: &str,
     session_id: Option<&str>,
 ) -> Span {
-    let span = tracing::info_span!(
-        "agent.execute",
-        "agent.name" = %agent_name,
-        "invocation.id" = %invocation_id,
-        "gen_ai.conversation.id" = tracing::field::Empty,
-        "otel.kind" = "internal",
-    );
-
+    let span = crate::agent_run_span(agent_name, invocation_id);
     if let Some(sid) = session_id {
-        span.record("gen_ai.conversation.id", sid);
+        span.record(GEN_AI_CONVERSATION_ID, sid);
     }
-
     span
 }
 
@@ -526,7 +562,7 @@ mod tests {
         assert_eq!(GenAiProvider::AzureOpenAI.as_str(), "azure.ai.openai");
         assert_eq!(GenAiProvider::AzureAiInference.as_str(), "azure.ai.inference");
         assert_eq!(GenAiProvider::AwsBedrock.as_str(), "aws.bedrock");
-        assert_eq!(GenAiProvider::MistralAi.as_str(), "mistral_ai");
+        assert_eq!(GenAiProvider::MistralAi.as_str(), "mistral");
         assert_eq!(GenAiProvider::Perplexity.as_str(), "perplexity");
         assert_eq!(GenAiProvider::XAi.as_str(), "x_ai");
     }
@@ -544,7 +580,7 @@ mod tests {
     #[test]
     fn test_map_finish_reason_gemini() {
         assert_eq!(map_finish_reason(GenAiProvider::Gemini, "STOP"), "stop");
-        assert_eq!(map_finish_reason(GenAiProvider::Gemini, "MAX_TOKENS"), "max_tokens");
+        assert_eq!(map_finish_reason(GenAiProvider::Gemini, "MAX_TOKENS"), "length");
         assert_eq!(map_finish_reason(GenAiProvider::Gemini, "SAFETY"), "content_filter");
         assert_eq!(map_finish_reason(GenAiProvider::Gemini, "UNKNOWN_REASON"), "UNKNOWN_REASON");
     }
@@ -552,8 +588,8 @@ mod tests {
     #[test]
     fn test_map_finish_reason_openai() {
         assert_eq!(map_finish_reason(GenAiProvider::OpenAI, "stop"), "stop");
-        assert_eq!(map_finish_reason(GenAiProvider::OpenAI, "length"), "max_tokens");
-        assert_eq!(map_finish_reason(GenAiProvider::OpenAI, "tool_calls"), "tool_calls");
+        assert_eq!(map_finish_reason(GenAiProvider::OpenAI, "length"), "length");
+        assert_eq!(map_finish_reason(GenAiProvider::OpenAI, "tool_calls"), "tool_call");
         assert_eq!(map_finish_reason(GenAiProvider::OpenAI, "content_filter"), "content_filter");
         assert_eq!(map_finish_reason(GenAiProvider::OpenAI, "other"), "other");
     }
@@ -561,9 +597,9 @@ mod tests {
     #[test]
     fn test_map_finish_reason_anthropic() {
         assert_eq!(map_finish_reason(GenAiProvider::Anthropic, "end_turn"), "stop");
-        assert_eq!(map_finish_reason(GenAiProvider::Anthropic, "max_tokens"), "max_tokens");
-        assert_eq!(map_finish_reason(GenAiProvider::Anthropic, "tool_use"), "tool_calls");
-        assert_eq!(map_finish_reason(GenAiProvider::Anthropic, "stop_sequence"), "stop_sequence");
+        assert_eq!(map_finish_reason(GenAiProvider::Anthropic, "max_tokens"), "length");
+        assert_eq!(map_finish_reason(GenAiProvider::Anthropic, "tool_use"), "tool_call");
+        assert_eq!(map_finish_reason(GenAiProvider::Anthropic, "stop_sequence"), "stop");
     }
 
     #[test]
@@ -578,7 +614,7 @@ mod tests {
             let span = GenAiSpanBuilder::new(
                 GenAiProvider::Gemini,
                 GenAiOperation::Chat,
-                "gemini-2.5-flash",
+                "gemini-3.7-flash",
             )
             .stream(true)
             .temperature(0.7)

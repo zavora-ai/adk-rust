@@ -406,6 +406,12 @@ I wrote RISKS.md with 4 lines, which is under the ten-line limit. …
 Goal check `test $(wc -l < RISKS.md) -ge 4` passed on iteration 1. The goal is done.
 ```
 
+Undo a turn that went wrong, or try another answer from an earlier point, without losing the
+original: `adk-rust sessions fork ID --turns N` copies a session up to a turn, and the server's
+`POST …/sessions/{id}/rewind` with `{"beforeInvocationId": …}` removes a turn and everything
+after it. Both refuse while a turn runs on the session or a call waits for a decision, and both
+are recorded in the audit log ([Fork, Rewind, and Edit History](../sessions/history.md)).
+
 Verify the signed audit log:
 
 ```bash
@@ -423,6 +429,12 @@ root:                 d96168f80119e79af0e235beaad0d9e5ac65d57b825677174e06010fc9
 unsigned tail:        40
 result:               VALID
 ```
+
+An unattended agent has no one reading its answers. [Online evaluation](../evaluation/online-evaluation.md)
+judges a seeded sample of its finished runs on a background worker — rubrics, safety,
+hallucination, tool-call efficiency and whole-session metrics — under a judge budget of its own
+and the same kill switch, and records failed runs where a dashboard or the self-improvement loop
+reads them. Install its plugin on the runner you register with `KernelBuilder::agent`.
 
 ## 9. Delegate in the background
 
@@ -463,6 +475,8 @@ Every page of these docs that imports a member crate has the same item under `ad
 - [Tool authorization](../security/tool-authorization.md): policy, approvals and the kill switch
 - [Remote sandbox providers](../sandbox/remote-providers.md): `bash` and agent code in E2B or
   Daytona microVMs, under the same kill switch and run budget
+- [Governed computer use and browser use](../computer-use/toolsets.md): Claude's toolsets with
+  each click, keystroke and navigation on the governed path
 - [Spend ledger](../security/spend-ledger.md) and [audit log](../security/audit-log.md)
 - [Model fallback](../models/fallback.md): keep an unattended run going through a provider
   outage, with every attempt counted against its budget

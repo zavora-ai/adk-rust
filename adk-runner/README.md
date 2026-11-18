@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `identity_source`, `agent_principal` | The principal the root agent acts as |
 | `subject_delegation` | Which runs may act for a subject other than the session's user |
 | `compaction_config` | Post-invocation `EventsCompactionConfig` |
-| `intra_compaction_config`, `intra_compaction_summarizer`, `without_intra_compaction` | Auto-compaction before each model call; on by default at 80% of the model's context window |
+| `intra_compaction_config`, `intra_compaction_summarizer`, `without_intra_compaction` | Auto-compaction before each model call; on by default at 80% of the model's context window; `IntraCompactionConfig::in_background` writes the summary off the critical path |
 | `context_compaction` | A compaction strategy in place of the summary (`context-compaction`) |
 | `context_cache_config`, `cache_capable` | Provider prompt-cache lifecycle |
 | `request_context` | Auth middleware context |
@@ -189,6 +189,15 @@ When `RunConfig::spend_ledger` is set, every model call of the run — agent tur
 
 `temp:` state keys stay visible for the rest of their invocation — to later tools, transferred agents, and `{temp:key}` instructions — and session services drop them when they persist the event.
 
+## Session History
+
+`runner.history_control()` forks, rewinds, and edits sessions under the runtime's rules: it
+refuses a session while a turn runs on it (`session.history.run_active`), across every runner
+sharing a `SessionActivity` (`RunnerBuilder::session_activity`) and the durable run store, and
+records a decision and an outcome per operation in the runner's audit trail.
+`RewindTarget::BeforeInvocation` undoes a turn. See
+[Fork, Rewind, and Edit History](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/sessions/history.md).
+
 ## Context Compaction
 
 ```rust
@@ -219,7 +228,7 @@ fn compacting(
 
 Compaction runs after each invocation completes. When the session's count of user events is a multiple of the interval, older events are summarized into a single compacted event, and `MutableSession::conversation_history()` uses the most recent summary instead of the original events. No compaction covers a tool call still held for confirmation: session compaction and auto-compaction both stop before it, so its approval can still resume it.
 
-Auto-compaction is on by default. Before every model call, `LlmAgent` and `CodeActAgent` pass their history to the compactor the runner installs on `RunConfig::history_compactor` (`IntraInvocationCompactor`); once the request passes 80% of the model's context window (`Llm::context_window`), or 100,000 estimated tokens when the model reports none, all but the most recent history entries (at most 10, within half the threshold) are summarized by the agent's model, and the compaction is recorded in the session so later runs start from the summary. A request the model rejects as too long is compacted and sent once more. See [Context Compaction](../docs/official_docs/sessions/context-compaction.md#auto-compaction-within-a-run). `BaseEventsSummarizer` and `EventsCompactionConfig` are re-exported from `adk-core`.
+Auto-compaction is on by default. Before every model call, `LlmAgent` and `CodeActAgent` pass their history to the compactor the runner installs on `RunConfig::history_compactor` (`IntraInvocationCompactor`); once the request passes 80% of the model's context window (`Llm::context_window`), or 100,000 estimated tokens when the model reports none, all but the most recent history entries (at most 10, within half the threshold) are summarized by the agent's model — by its provider when the model compacts natively (`Llm::native_compaction`, such as Claude on the Claude API), whose signed result then opens later requests — and the compaction is recorded in the session so later runs start from the summary. A request the model rejects as too long is compacted and sent once more. See [Context Compaction](../docs/official_docs/sessions/context-compaction.md#auto-compaction-within-a-run). `BaseEventsSummarizer` and `EventsCompactionConfig` are re-exported from `adk-core`.
 
 See [Context Compaction](../docs/official_docs/sessions/context-compaction.md) for the full guide.
 

@@ -14,6 +14,7 @@ Deployment manifest, bundling, and control-plane client for ADK-Rust agents.
 - **Bundle builder** — compiles the agent binary, packages it with assets into a `.tar.gz` archive, and generates SHA-256 integrity checksums
 - **Control-plane client** — HTTP client for push deployments, status checks, rollbacks, promotions, secret management, and dashboard queries
 - **Validation** — manifests are validated before build or push (unique bindings, secret refs, auth mode consistency, graph checkpoint requirements, trigger field completeness)
+- **Deploy targets** — `targets::DeployTarget` deploys the manifest and a container image to one provider: `container` (Dockerfile, Docker Compose, Kubernetes), `agent-engine` (feature `gcp`), `ecs-express` (feature `aws`), and `azure-container-apps` (feature `azure`), each enforcing the deployment guarantees first
 
 ## Installation
 
@@ -27,7 +28,9 @@ adk-deploy = "3.0.0"
 
 | Feature | Description |
 |---------|-------------|
-| `gcp` | `gcp::GcpDeployClient` for Gemini Enterprise Agent Platform ReasoningEngine BYOC deployment; forwarded by `adk-rust` as `gcp-deploy` |
+| `gcp` | `gcp::GcpDeployClient` for Gemini Enterprise Agent Platform ReasoningEngine BYOC deployment, and `gcp::AgentEngineTarget`; forwarded by `adk-rust` as `gcp-deploy` |
+| `aws` | `aws::EcsExpressClient` and `aws::EcsExpressTarget` for Amazon ECS Express Mode, signed with SigV4 over the AWS credential chain |
+| `azure` | `azure::ContainerAppsClient` and `azure::ContainerAppsTarget` for Azure Container Apps through Azure Resource Manager and `DefaultAzureCredential` |
 
 No feature is enabled by default. 3.0.0 removes the features named after optional dependencies (`adk-core`, `adk-gcp`, `google-cloud-auth`); enable `gcp` instead.
 
@@ -253,6 +256,7 @@ async fn secrets(client: &DeployClient) -> DeployResult<()> {
 | `skills` | Skills directory, hot reload |
 | `interaction` | Manual input config, webhook/schedule/event triggers |
 | `source` | Source metadata: kind, project ID and project name |
+| `targets` | One `[targets.<name>]` table of settings per deploy target |
 
 ## Service Binding Kinds
 
@@ -319,6 +323,45 @@ directory (`DeployClientConfig::default_path`): `~/.config/adk-deploy/config.jso
 ```
 
 Load with `DeployClientConfig::load()` (defaults to `http://127.0.0.1:8090` if no config exists).
+
+## Deploy targets
+
+`targets::DeployTarget` deploys a manifest and a container image to one provider. Every target
+derives a `targets::RuntimeSpec` first, which refuses a manifest that breaks a deployment
+guarantee: a literal secret, no declared session store, a `managed` binding on a target that
+provisions no stores, SQLite beyond one replica, or public ingress without `[auth]`.
+
+| Target | Type | Feature |
+|--------|------|---------|
+| `container` | `targets::container::ContainerTarget` — `Dockerfile`, `compose.yaml`, `kubernetes.yaml` | none |
+| `agent-engine` | `gcp::AgentEngineTarget` — Agent Engine ReasoningEngine | `gcp` |
+| `ecs-express` | `aws::EcsExpressTarget` — Amazon ECS Express Mode service | `aws` |
+| `azure-container-apps` | `azure::ContainerAppsTarget` — Azure Container Apps app | `azure` |
+
+```rust
+use adk_deploy::DeploymentManifest;
+use adk_deploy::targets::container::ContainerTarget;
+use adk_deploy::targets::{DeployRequest, DeployTarget};
+use std::path::Path;
+
+async fn plan() -> adk_deploy::DeployResult<()> {
+    let manifest = DeploymentManifest::from_path(Path::new("adk-deploy.toml"))?;
+    let target = ContainerTarget::from_manifest(".", &manifest)?;
+    let plan = target.plan(&DeployRequest::new(manifest, "ghcr.io/acme/support:1.0.0"))?;
+    target.write_files(&plan).await?;
+    for warning in &plan.runtime.warnings {
+        println!("warning: {warning}");
+    }
+    Ok(())
+}
+```
+
+Each target reads its `[targets.<name>]` table, and sets the deploy contract variables
+(`targets::contract`) on the container: `PORT`, `BIND_HOST`, `ADK_ALLOWED_HOSTS`,
+`ADK_SERVICE_<NAME>_URL` for each binding, and `ADK_AUTH_*`. `targets::verify_endpoint` checks a
+deployed agent's health path and that it refuses unauthenticated calls.
+`cargo adk deploy --target <name>` drives all of it; see
+[Deploy Targets](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/deployment/deploy-targets.md).
 
 ## Agent Engine deployment (feature `gcp`)
 

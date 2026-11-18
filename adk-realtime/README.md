@@ -25,6 +25,10 @@ runner.
   switch, the `ToolPolicy`, and confirmation
 - **Context mutation** — swap instructions and tools mid-session (OpenAI: in-place update; Gemini:
   session resumption)
+- **Telephony** — phone calls for voice agents (`telephony`, `openai-sip`, `livekit-sip`):
+  verified webhooks, accept, reject, transfer and hang up over OpenAI Realtime SIP, inbound and
+  outbound calls over LiveKit SIP for any realtime provider, and governed `transfer_call`, `end_call`, `send_dtmf` and `place_call` tools; a kill-switch
+  freeze hangs up the call
 - **Video avatars** — HeyGen and D-ID providers (`heygen-avatar`, `did-avatar`)
 - **Opt-in dependencies** — no provider or transport is compiled by default
 
@@ -389,6 +393,9 @@ provider's reason.
 | `vertex-live` | Vertex AI Live API with ADC (implies `gemini`) | GCP credentials |
 | `openai-webrtc` | OpenAI WebRTC transport with Opus (implies `openai`) | cmake |
 | `livekit` | LiveKit WebRTC bridge | a LiveKit server |
+| `telephony` | Provider-neutral call control (`CallControl`, `CallAnswerer`, `OutboundDialer`), `hang_up_on_freeze`, and the call-control tools | |
+| `openai-sip` | OpenAI Realtime SIP: webhook verification, accept, reject, refer, hang up, and a session attached to a call (implies `openai`, `telephony`) | an OpenAI SIP trunk |
+| `livekit-sip` | LiveKit SIP over the server API: trunks, dispatch rules, `participant_joined` webhooks, outbound calls, transfer, hang up (implies `telephony`; no WebRTC stack) | a LiveKit server with SIP |
 | `video-avatar` | Avatar configuration and the `AvatarProvider` trait | |
 | `heygen-avatar` | HeyGen LiveAvatar provider (implies `video-avatar`, `livekit`) | |
 | `did-avatar` | D-ID Realtime Agents provider (implies `video-avatar`) | |

@@ -27,7 +27,7 @@ cargo install cargo-adk --features bench
 | `cargo adk addons` | List capability addons |
 | `cargo adk build` | Compile the project (`cargo build --release`, or `--debug`) |
 | `cargo adk validate` | Check a YAML agent definition (`--yaml`) or a Rust source file (`--rust`) |
-| `cargo adk deploy` | Build, bundle, and push to a deployment control plane |
+| `cargo adk deploy` | Build, bundle, and push to a deployment control plane, or deploy to a target: `--target container`, `agent-engine`, `ecs-express`, or `azure-container-apps` |
 | `cargo adk eval` | Run eval sets against an agent binary, or gate on drift in an exported activity ledger |
 | `cargo adk bench` | Run performance benchmarks against real LLM APIs (feature `bench`) |
 
@@ -154,6 +154,46 @@ Deploy flow:
 6. Compute the SHA-256 checksum
 7. Push to the control plane
 
+### `cargo adk deploy --target` — Deploy to a container runtime or a cloud
+
+`--target` deploys `adk-deploy.toml` through a provider-neutral deploy target instead of the
+control plane. Each target checks the deployment guarantees first: secrets by reference only, an
+explicit session store, and `[auth]` before public ingress.
+
+```bash
+# Write the Dockerfile, compose.yaml and kubernetes.yaml to .adk-deploy/container/
+cargo adk deploy --target container --plan
+
+# Deploy, then check the endpoint's health and that it refuses unauthenticated calls
+cargo adk deploy --target container
+
+# Agent Engine on Google Cloud (cargo install cargo-adk --features gcp)
+cargo adk deploy --target agent-engine --image us-central1-docker.pkg.dev/p/agents/a:1.0.0
+
+# Amazon ECS Express Mode (cargo install cargo-adk --features aws)
+cargo adk deploy --target ecs-express --image 123456789012.dkr.ecr.us-east-1.amazonaws.com/a:1.0.0
+
+# Azure Container Apps (cargo install cargo-adk --features azure)
+cargo adk deploy --target azure-container-apps --image acme.azurecr.io/a:1.0.0
+```
+
+| Flag | Description |
+|------|-------------|
+| `--target` | `platform` (default), `container`, `agent-engine`, `ecs-express`, or `azure-container-apps` |
+| `--image` | Image to deploy; default `[targets.<name>] image` |
+| `--manifest` | Manifest path (default `adk-deploy.toml`) |
+| `--plan` | Write and print what would be created; deploy nothing |
+| `--status <id>`, `--destroy <id>` | Report or remove a deployment |
+| `--no-verify` | Skip the endpoint check after deploying |
+
+| Feature | Enables |
+|---------|---------|
+| `gcp` | `--target agent-engine` |
+| `aws` | `--target ecs-express` |
+| `azure` | `--target azure-container-apps` |
+
+See [Deploy Targets](../docs/official_docs/deployment/deploy-targets.md).
+
 ### `cargo adk eval` — Run eval sets against an agent binary
 
 ```bash
@@ -170,7 +210,7 @@ The agent runs as its own process: it reads one JSON request per line on stdin a
 | Response | `{"text", "tool_calls": [{"name", "args"}]}` |
 | Error response | `{"error"}` — fails the case |
 
-Responses are scored with `adk_eval::Evaluator` against `--criteria` (an `EvaluationCriteria` JSON file; default an exact tool trajectory and a response similarity of 0.8). LLM-judged criteria need `--judge-model` and the provider's API key. `--tolerance` (default 0.05) is the largest score drop that is not a regression, and `--turn-timeout` (default 300 seconds) bounds each response. The command exits non-zero when a case fails, the agent misbehaves, the baseline is missing for `--check-regression`, or a score regresses. See the [evaluation guide](../docs/official_docs/evaluation/evaluation.md) for every flag and an example agent binary.
+Responses are scored with `adk_eval::Evaluator` against `--criteria` (an `EvaluationCriteria` JSON file; default an exact tool trajectory and a response similarity of 0.8). LLM-judged criteria need `--judge-model` and the provider's API key. `--tolerance` (default 0.05) is the largest score drop that is not a regression, and `--turn-timeout` (default 300 seconds) bounds each response. `--num-runs N` runs the eval sets N times and reports each case's pass rate, score mean and standard deviation, and flakiness; `--min-pass-rate` (default 1.0) is the fraction of runs a case must pass, and a saved baseline holds each case's `pass_rate`. `--judge-max-calls` and `--judge-max-cost-usd` bound the judge's calls across every run; the evaluation stops when they are spent. The command exits non-zero when a case fails, the agent misbehaves, the baseline is missing for `--check-regression`, or a score regresses. See the [evaluation guide](../docs/official_docs/evaluation/evaluation.md) for every flag and an example agent binary.
 
 #### `cargo adk eval --ledger` — Gate on drift in an activity ledger
 

@@ -529,7 +529,13 @@ mod sealed {
             thread_id: &str,
             policy: &RetentionPolicy,
         ) -> adk_graph::Result<usize> {
-            self.inner.prune(thread_id, policy).await
+            if policy.is_unlimited() {
+                return Ok(0);
+            }
+            // The inner store sees sealed metadata, so it cannot find the open pauses and
+            // effect-log entries a resume needs; they are read here and pinned.
+            let needed = adk_graph::checkpoint::needed_to_resume(&self.list(thread_id).await?);
+            self.inner.prune(thread_id, &policy.clone().pinning(needed)).await
         }
     }
 }

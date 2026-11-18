@@ -8,6 +8,7 @@ mod error_details;
 pub mod governance;
 pub mod runtime;
 pub mod session;
+pub mod session_history;
 pub mod ui;
 
 pub use a2a::A2aController;

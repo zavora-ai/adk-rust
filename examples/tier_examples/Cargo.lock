@@ -167,6 +167,7 @@ dependencies = [
  "adk-core",
  "async-trait",
  "base64 0.22.1",
+ "image",
  "serde",
  "serde_json",
  "thirtyfour",
@@ -291,6 +292,7 @@ dependencies = [
 name = "adk-deploy"
 version = "3.0.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "dirs",
  "flate2",
@@ -301,6 +303,7 @@ dependencies = [
  "sha2 0.10.9",
  "tar",
  "thiserror",
+ "tokio",
  "toml",
  "tracing",
  "url",
@@ -359,6 +362,7 @@ version = "3.0.0"
 dependencies = [
  "adk-core",
  "adk-model",
+ "adk-plugin",
  "adk-runner",
  "adk-session",
  "async-trait",
@@ -368,6 +372,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
  "tracing",
  "uuid",
 ]

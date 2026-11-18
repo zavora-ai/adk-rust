@@ -256,6 +256,57 @@ async fn a_delegates_hold_holds_the_agent_tool_call() {
     assert_eq!(held[0].request.function_call_id.as_deref(), Some("call-1"));
 }
 
+/// The integrated runner, which a LiveKit-bridged call runs on, ledgers a non-idempotent call
+/// as `RealtimeAgent` does: a call redelivered under its call ID runs once.
+#[tokio::test]
+async fn the_integrated_runner_runs_a_redelivered_call_once() {
+    let executions = Arc::new(AtomicUsize::new(0));
+    let tool: Arc<dyn Tool> = Arc::new(Shell { executions: executions.clone() });
+    let runner = IntegratedRealtimeRunner::builder()
+        .model(Arc::new(QueueModel { events: vec![] }))
+        .identity(APP, USER, SESSION)
+        .session_service(sessions().await)
+        .adk_tool(tool.clone())
+        .tool_governance(
+            RunConfig::builder()
+                .action_ledger(Arc::new(adk_core::InMemoryActionLedger::new()))
+                .build(),
+        )
+        .build()
+        .unwrap();
+
+    let first = runner.execute_tool_with_plugins_for_test(&tool, &call("bash")).await.unwrap();
+    let again = runner.execute_tool_with_plugins_for_test(&tool, &call("bash")).await.unwrap();
+
+    assert_eq!(executions.load(Ordering::SeqCst), 1);
+    assert_eq!(first, json!({ "ran": true }));
+    assert_eq!(again["status"], "already_succeeded");
+}
+
+/// The run's tool-call budget bounds the integrated runner: the call past it ends the session.
+#[tokio::test]
+async fn the_integrated_runner_counts_calls_against_the_run_budget() {
+    let executions = Arc::new(AtomicUsize::new(0));
+    let tool: Arc<dyn Tool> = Arc::new(Shell { executions: executions.clone() });
+    let tracker =
+        Arc::new(adk_core::BudgetTracker::new(adk_core::RunBudget::new().max_tool_calls(1)));
+    let runner = IntegratedRealtimeRunner::builder()
+        .model(Arc::new(QueueModel { events: vec![] }))
+        .identity(APP, USER, SESSION)
+        .session_service(sessions().await)
+        .adk_tool(tool.clone())
+        .tool_governance(RunConfig { budget_tracker: Some(tracker), ..RunConfig::default() })
+        .build()
+        .unwrap();
+
+    runner.execute_tool_with_plugins_for_test(&tool, &call("bash")).await.unwrap();
+    let second = ToolCall { call_id: "call-2".to_string(), ..call("bash") };
+    let error = runner.execute_tool_with_plugins_for_test(&tool, &second).await.unwrap_err();
+
+    assert_eq!(executions.load(Ordering::SeqCst), 1);
+    assert!(error.to_string().contains("budget"), "{error}");
+}
+
 /// A response that reports usage, as OpenAI's `response.done` does.
 fn metered_response() -> Vec<ServerEvent> {
     vec![

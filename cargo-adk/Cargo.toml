@@ -23,6 +23,15 @@ default = []
 # `cargo adk bench`: performance benchmarks against real LLM APIs through `adk-bench`. Off by
 # default because adk-bench links an agent runtime the other subcommands do not use.
 bench = ["dep:adk-bench", "dep:tracing-subscriber"]
+# `cargo adk deploy --target agent-engine`: Agent Engine on Google Cloud through Application
+# Default Credentials. Off by default because it links the Google Cloud auth stack.
+gcp = ["adk-deploy/gcp"]
+# `cargo adk deploy --target ecs-express`: Amazon ECS Express Mode through the AWS credential
+# chain. Off by default because it links the AWS config and signing stack.
+aws = ["adk-deploy/aws"]
+# `cargo adk deploy --target azure-container-apps`: Azure Container Apps through
+# DefaultAzureCredential. Off by default because it links the Azure identity stack.
+azure = ["adk-deploy/azure"]
 
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }

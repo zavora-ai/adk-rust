@@ -310,7 +310,8 @@ impl Llm for DeepSeekClient {
             &mut request.contents,
             &adk_core::history::ProviderOrigin::new("deepseek", &self.config.model),
         );
-        let usage_span = adk_telemetry::llm_generate_span("deepseek", &self.config.model, stream);
+        let usage_span =
+            crate::telemetry::inference_span("deepseek", &self.config.model, stream, &request);
         let api_url = self.api_url();
         let api_key = self.config.api_key.clone();
         let chat_request = self.build_request(&request, stream)?;

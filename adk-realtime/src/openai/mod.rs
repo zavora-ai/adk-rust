@@ -31,6 +31,8 @@
 mod model;
 pub mod protocol;
 mod session;
+#[cfg(feature = "openai-sip")]
+pub mod sip;
 #[cfg(feature = "openai-webrtc")]
 pub mod webrtc;
 

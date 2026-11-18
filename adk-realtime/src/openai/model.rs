@@ -27,6 +27,7 @@ pub struct OpenAIRealtimeModel {
     model_id: String,
     base_url: Option<String>,
     transport: OpenAITransport,
+    call_id: Option<String>,
 }
 
 impl OpenAIRealtimeModel {
@@ -42,6 +43,7 @@ impl OpenAIRealtimeModel {
             model_id: model_id.into(),
             base_url: None,
             transport: OpenAITransport::default(),
+            call_id: None,
         }
     }
 
@@ -74,10 +76,44 @@ impl OpenAIRealtimeModel {
         self
     }
 
+    /// Attaches every session this model connects to the SIP call `call_id`, instead of
+    /// creating a new session.
+    ///
+    /// OpenAI answers the call with the session configured when the call was accepted
+    /// (`POST /v1/realtime/calls/{call_id}/accept`); the WebSocket joins that session at
+    /// `wss://api.openai.com/v1/realtime?call_id={call_id}`, without a `model` parameter, and
+    /// its session updates leave the audio format to the call. The model ID still prices the
+    /// session's usage. The `openai::sip` module (feature `openai-sip`) accepts calls.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_realtime::openai::OpenAIRealtimeModel;
+    ///
+    /// let model = OpenAIRealtimeModel::new("sk-...", "gpt-realtime-2.1").with_call_id("rtc_123");
+    /// assert_eq!(model.websocket_url(), "wss://api.openai.com/v1/realtime?call_id=rtc_123");
+    /// ```
+    pub fn with_call_id(mut self, call_id: impl Into<String>) -> Self {
+        self.call_id = Some(call_id.into());
+        self
+    }
+
+    /// The SIP call this model attaches to, if any.
+    pub fn call_id(&self) -> Option<&str> {
+        self.call_id.as_deref()
+    }
+
     /// Get the WebSocket URL for connection.
     pub fn websocket_url(&self) -> String {
         let base = self.base_url.as_deref().unwrap_or(OPENAI_REALTIME_URL);
-        format!("{}?model={}", base, self.model_id)
+        match &self.call_id {
+            Some(call_id) => {
+                let call_id: String =
+                    url::form_urlencoded::byte_serialize(call_id.as_bytes()).collect();
+                format!("{base}?call_id={call_id}")
+            }
+            None => format!("{}?model={}", base, self.model_id),
+        }
     }
 
     /// Get the API key.
@@ -111,14 +147,23 @@ impl RealtimeModel for OpenAIRealtimeModel {
     async fn connect(&self, config: RealtimeConfig) -> Result<BoxedSession> {
         match self.transport {
             OpenAITransport::WebSocket => {
-                let session =
-                    OpenAIRealtimeSession::connect(&self.websocket_url(), &self.api_key, config)
-                        .await?;
+                let url = self.websocket_url();
+                let session = match self.call_id {
+                    Some(_) => {
+                        OpenAIRealtimeSession::connect_to_call(&url, &self.api_key, config).await?
+                    }
+                    None => OpenAIRealtimeSession::connect(&url, &self.api_key, config).await?,
+                };
                 let handler = crate::openai::protocol::OpenAIProtocolHandler::new(session);
                 Ok(Box::new(handler))
             }
             #[cfg(feature = "openai-webrtc")]
             OpenAITransport::WebRTC => {
+                if self.call_id.is_some() {
+                    return Err(crate::error::RealtimeError::config(
+                        "a SIP call is attached over WebSocket; use OpenAITransport::WebSocket",
+                    ));
+                }
                 let session = super::webrtc::OpenAIWebRTCSession::connect(
                     &self.api_key,
                     &self.model_id,
@@ -139,6 +184,7 @@ impl Default for OpenAIRealtimeModel {
             model_id: DEFAULT_MODEL.to_string(),
             base_url: None,
             transport: OpenAITransport::default(),
+            call_id: None,
         }
     }
 }

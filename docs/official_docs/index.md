@@ -128,6 +128,7 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 - [Architecture](realtime/architecture.md) - The four layers, event loop, audio pipeline, and turn lifecycle
 - [Providers](realtime/providers.md) - OpenAI Realtime & Gemini Live models, voices, and how to choose
 - [Tools](realtime/tools.md) - Server-side actions: native handlers, bridged `adk_core::Tool`s, parallel calls
+- [Telephony](realtime/telephony.md) - Phone calls: OpenAI Realtime SIP, governed transfer, hang-up, DTMF and dialling tools, freeze ends the call
 - [Multimodal](realtime/multimodal.md) - Video input via `send_video_frame` and browser camera capture
 - [Affective Dialogue](realtime/affective-dialogue.md) - Emotion-aware responses on Gemini native-audio
 - [Memory](realtime/memory.md) - Context injection, turn storage, and knowledge-graph self-curation
@@ -160,6 +161,7 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 - [Vertex AI RAG Engine](rag/vertex-rag-engine.md) - Retrieval from managed RAG Engine corpora
 - [Agent Retrieval](rag/agent-retrieval.md) - The Agent Retrieval (Vector Search 2.0) vector store
 - [Governed Desktop Automation](computer-use/index.md) - `adk-computer-use` over the `computer-use-mcp` server
+- [Governed Computer Use and Browser Use](computer-use/toolsets.md) - Claude's computer use and browser use toolsets, every action on the governed tool path
 - [ACP Tools](tools/acp-tools.md) - Use an ACP coding agent as a typed ADK-Rust tool
 - [Retry & Reflect](tools/retry-reflect.md) - Tool failure recovery with reflection prompts
 - [Advisor Tool](tools/advisor.md) - Let an agent consult a stronger model mid-task, under the run's budget and kill switch
@@ -232,12 +234,14 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Playbook Learning](deployment/website-learning.md) - Experiment decisions and KPIs short of the owner's targets propose playbook revisions; the owner accepts, edits or declines each, and accepted revisions are versioned
 - [Publishing from Git](deployment/website-repository.md) - A signed push from an authorised committer proposes a release on the owner's decision card: GitHub, GitLab or the plain signed form, a local repository or a forge's raw endpoint
 - [Website Experiments and Measurement](deployment/website-experiments.md) - Experiments on the charter's KPIs with guardrails that stop them, variants as static files, and the KPI sources that are not drivers
+- [Deploy Targets](deployment/deploy-targets.md) - One manifest to Docker Compose, Kubernetes, Agent Engine, Amazon ECS Express Mode or Azure Container Apps through `cargo adk deploy --target`, with secrets by reference, explicit stores and authenticated endpoints enforced
 - [Agent Engine](deployment/agent-engine.md) - Deploying on the Gemini Enterprise Agent Platform
 - [Agent Registry](deployment/agent-registry.md) - Discovery, registration, and remote invocation on the Agent Platform
 
 ## Evaluation
 
 - [Agent Evaluation](evaluation/evaluation.md) - Testing and validating agent behavior
+- [Online Evaluation](evaluation/online-evaluation.md) - Judging a seeded sample of production runs off the request path, under its own budget and the kill switch
 - [Benchmark Results](evaluation/benchmarks.md) - Published performance comparison data
 - [Vertex AI Evaluation](evaluation/vertex-eval.md) - The Gen AI Evaluation Service bridge
 - [Web Experiments](evaluation/experiments.md) - Sequential A/B analysis with guardrails and a Bayesian option

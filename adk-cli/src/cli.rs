@@ -1194,6 +1194,24 @@ pub enum SessionsCommands {
         /// Session id
         id: String,
     },
+    /// Copy a session into a new one, up to a turn or an event, and leave the original as it is
+    ///
+    /// The fork keeps the conversation and the session state at the fork point and records
+    /// where it came from; continue it with `adk-rust --session <new id>`. Refused while a
+    /// kernel worker runs the session.
+    Fork {
+        /// Session id
+        id: String,
+        /// Keep only the first N turns
+        #[arg(long, conflicts_with = "at", value_parser = clap::value_parser!(u32).range(1..))]
+        turns: Option<u32>,
+        /// Keep the events up to and including this event id
+        #[arg(long)]
+        at: Option<String>,
+        /// The new session's id; generated when absent
+        #[arg(long = "as", value_name = "NEW_ID")]
+        new_id: Option<String>,
+    },
     /// Go back to before a turn: files, transcript and plan from its snapshot
     ///
     /// Without TURN, lists the session's turns with their changed-file counts. With TURN,

@@ -13,6 +13,7 @@
 //! | [`load_by_id_reads_any_version`] | An older checkpoint reads back by ID |
 //! | [`delete_removes_one_thread`] | `delete` removes the thread's checkpoints and IDs and leaves other threads alone |
 //! | [`prune_applies_policies`] | `prune` removes what a policy selects, never the newest, and only in its thread |
+//! | [`prune_keeps_what_a_resume_needs`] | `prune` keeps open pauses, effect-log entries and pinned checkpoints; `delete` removes them |
 //! | [`threads_are_isolated`] | Threads keep separate version sequences |
 //! | [`stale_writes_are_refused`] | An equal, lower, or zero version and a stored ID are refused, and leave the thread unchanged |
 //! | [`concurrent_writers_never_interleave`] | Of concurrent saves of one version across two handles, exactly one succeeds |
@@ -312,6 +313,58 @@ pub async fn prune_applies_policies<H: CheckpointerHarness + ?Sized>(harness: &H
     assert!(is_conflict(&error, 5), "got {error}");
 }
 
+/// `prune` keeps every checkpoint a resume still needs, whatever the policy's limits:
+/// the pauses the newest checkpoint lists as open, effect-log entries, and pinned
+/// checkpoints. A pause is released once the newest no longer lists it, and `delete`
+/// removes the whole thread regardless.
+pub async fn prune_keeps_what_a_resume_needs<H: CheckpointerHarness + ?Sized>(harness: &H) {
+    let store = harness.open().await;
+    let thread = unique("resume-needs");
+    let old = whole_microsecond(Utc::now() - chrono::Duration::days(2));
+    let aged = |version: u64| {
+        let mut checkpoint = checkpoint(&thread, version);
+        checkpoint.created_at = old;
+        checkpoint
+    };
+
+    let plain = aged(1);
+    let pause = aged(2).with_cleared_interrupt("approve");
+    let pinned = aged(3);
+    let effect = aged(4).with_metadata(
+        crate::governed::EFFECT_METADATA_KEY,
+        json!({"node": "pay", "writes": {"charge": 4200}}),
+    );
+    let superseded = aged(5);
+    // The newest lists the pause, and an ID the thread does not hold, as open.
+    let newest = checkpoint(&thread, 6).with_metadata(
+        crate::record::OPEN_PAUSES_METADATA_KEY,
+        json!([pause.checkpoint_id, "not-in-this-thread"]),
+    );
+    for checkpoint in [&plain, &pause, &pinned, &effect, &superseded, &newest] {
+        save(&*store, checkpoint).await;
+    }
+
+    let tightest = RetentionPolicy::keep_last(1)
+        .with_max_age(Duration::from_secs(3600))
+        .pinning([pinned.checkpoint_id.clone()]);
+    assert_eq!(store.prune(&thread, &tightest).await.expect("prune"), 2);
+    assert_eq!(versions(&*store, &thread).await, vec![2, 3, 4, 6]);
+    assert_eq!(
+        store.load_by_id(&pause.checkpoint_id).await.expect("load_by_id"),
+        Some(pause.clone()),
+        "the open pause still loads for its resume"
+    );
+
+    // A run resumed the pause: the newest no longer lists it, and nothing pins version 3.
+    save(&*store, &checkpoint(&thread, 7)).await;
+    assert_eq!(store.prune(&thread, &RetentionPolicy::keep_last(1)).await.expect("prune"), 3);
+    assert_eq!(versions(&*store, &thread).await, vec![4, 7], "the effect-log entry stays");
+
+    store.delete(&thread).await.expect("delete");
+    assert!(versions(&*store, &thread).await.is_empty(), "delete removes what prune keeps");
+    assert_eq!(store.load_by_id(&effect.checkpoint_id).await.expect("load_by_id"), None);
+}
+
 /// Threads keep separate version sequences.
 pub async fn threads_are_isolated<H: CheckpointerHarness + ?Sized>(harness: &H) {
     let store = harness.open().await;
@@ -514,6 +567,11 @@ macro_rules! checkpointer_conformance_tests {
         #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn checkpointer_prune_applies_policies() {
             $crate::conformance::prune_applies_policies(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn checkpointer_prune_keeps_what_a_resume_needs() {
+            $crate::conformance::prune_keeps_what_a_resume_needs(&$harness).await;
         }
         $(#[$attr])*
         #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]

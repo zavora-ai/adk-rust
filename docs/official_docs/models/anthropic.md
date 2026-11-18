@@ -342,9 +342,100 @@ fn build(api_key: String) -> Result<AnthropicClient, adk_core::AdkError> {
 | `CacheTtl::five_minutes()` (default; also `CacheTtl::standard()`) | 1.25× base input | Requests sharing a prefix arrive within five minutes |
 | `CacheTtl::one_hour()` (also `CacheTtl::long()`) | 2× base input | Requests sharing a prefix are more than five minutes apart, such as a conversation waiting on a person |
 
+#### Tools Added Mid-Conversation
+
+The `tools` array opens the cached prefix, so a request whose tools differ from the previous
+request's — an MCP server that lists a new tool, a toolset that offers more after sign-in —
+misses the whole cache and, on models with preserved thinking, invalidates earlier thinking.
+`with_inline_tool_changes(true)` keeps each conversation's `tools` array as first sent and sends a
+tool added, redefined or removed later as a `tool_addition` or `tool_removal` block in a
+`role: "system"` message after the user turn where the change happened (beta
+`inline-tools-2026-09-15`, added by the client).
+
+```rust
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
+
+fn build(api_key: String) -> Result<AnthropicClient, adk_core::AdkError> {
+    AnthropicClient::new(
+        AnthropicConfig::new(api_key, "claude-sonnet-5-5").with_inline_tool_changes(true),
+    )
+}
+```
+
+| Request after a tool is added (Claude Haiku 5.5, 5,800-token prefix) | Cache read | Cache written |
+|---|---|---|
+| Tools array changed (default) | 0 | 5,950 |
+| Inline tool change | 5,787 | 300 |
+
+| Rule | Behaviour |
+|------|-----------|
+| Models | Claude API models with mid-conversation tool changes: Fable 5.x, Mythos 5.x, Opus 5.5 / 5 / 4.8, Sonnet 5.5, Haiku 5.5; others send the tools array as it is |
+| Conversation | Told apart by model, system prompt and first block, and remembered in memory for an hour; a conversation the client does not remember starts with its tools as they are |
+| History edits | A change is tied to the exact messages before it; a request whose history no longer starts with them sends its tools as they are |
+| Placement | A change follows a user turn; a change that cannot starts the conversation over |
+| Compaction | A provider-native compaction request carries the changes before the messages it summarizes, so the summary records them, and the conversation that continues from it keeps the same `tools` array; thinking in kept turns that followed a change the summary does not record is left out |
+
 `pricing::estimate_cost` bills the 1-hour share of `usage.cache_creation_input_tokens`,
 reported as `usage.cache_creation_input_tokens_1h`, at the 1-hour rate and the remainder at
 the 5-minute rate.
+
+### Message Threads
+
+With `with_message_threads(true)`, the API keeps each conversation for a short time (beta
+`message-threads-2026-08-12`, added by the client), so a request sends only the messages since
+the previous response. Requests stay small and time to first token steadier as a tool loop grows,
+at the same price.
+
+```rust
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
+
+fn build(api_key: String) -> Result<AnthropicClient, adk_core::AdkError> {
+    AnthropicClient::new(
+        AnthropicConfig::new(api_key, "claude-sonnet-5-5").with_message_threads(true),
+    )
+}
+```
+
+| Rule | Behaviour |
+|------|-----------|
+| Source of truth | The agent's session. A request continues its thread only when the conversation it sends starts with exactly what the thread holds — the messages it was sent and the reply as the client renders it from the agent's history — and its `system`, `tools`, thinking, output config, cache control and beta set are unchanged; otherwise it creates a new thread with the whole conversation |
+| Refused thread | A continue or create request the API refuses (an expired thread, one continued elsewhere, a request a thread cannot hold) is sent again without a thread; a conversation whose create request is refused is sent without one from then on |
+| Compaction | A compaction request, and a conversation that carries a compaction block, are sent without a thread: threads cannot hold one |
+| Lifetime | A thread not used for five minutes is replaced by a new one |
+| Data retention | Message threads are not ZDR eligible |
+
+| Ledger audit with Claude Haiku 5.5 (9 requests over two turns) | Messages sent | Body |
+|---|---|---|
+| First request (creates the thread) | 1 | 978 bytes |
+| Later tool-loop requests (continue) | 1 each | about 2,100 bytes each |
+| First request of the second turn (continue) | 1 | 327 bytes; 13,463 bytes without a thread |
+
+### On-Demand Compaction
+
+Claude summarizes a conversation when a request sets `compaction`, and returns one signed
+`compaction` block in place of a reply, with `stop_reason` `"compaction"`. Every later request
+sends the block first in `messages`, exactly as returned, in place of the turns it summarizes.
+The client adds the `compact-2026-09-04` beta header to both
+(`MessageCreateParams::requires_compaction_beta`).
+
+```rust
+use adk_anthropic::{CompactionParam, MessageCreateParams, MessageParam, Model};
+
+fn compaction_request(conversation: Vec<MessageParam>) -> MessageCreateParams {
+    let mut params = MessageCreateParams::new(4_096, conversation, Model::claude_sonnet_5_5());
+    params.compaction = Some(
+        CompactionParam::summarize()
+            .with_instructions("Keep every file name. Do not call tools; reply with the summary only."),
+    );
+    params
+}
+```
+
+Through `adk-model`, `AnthropicClient` reports `Llm::native_compaction` for the models that
+compact on demand on the Claude API, so the runner's auto-compaction has Claude write the summary
+and keeps the signed block in the agent's history; see
+[Provider-Native Compaction](../sessions/context-compaction.md#provider-native-compaction).
+The summarization call's usage comes from `usage.iterations`.
 
 ### Structured Output
 
@@ -534,7 +625,7 @@ Run with `cargo run -p adk-anthropic --example <name>`:
 | `structured_output` | JSON schema output |
 | `caching` | Multi-turn caching with costs |
 | `context_editing` | Tool and thinking clearing (beta) |
-| `compaction` | Server-side compaction |
+| `compaction` | On-demand compaction: a signed summary in place of a reply, then the conversation continued from it (beta) |
 | `token_counting` | Token counting before sending |
 | `stop_reasons` | Every stop reason |
 | `fast_mode` | Fast mode (beta) |

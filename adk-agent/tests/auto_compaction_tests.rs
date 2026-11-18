@@ -3,11 +3,15 @@
 //! compaction in the session, and compacts and resends a request the model rejects as too long.
 
 use adk_agent::LlmAgentBuilder;
-use adk_core::intra_compaction::{COMPACTION_SUMMARY_HEADING, estimate_content_tokens};
+use adk_core::history::ProviderOrigin;
+use adk_core::intra_compaction::{
+    COMPACTION_SUMMARY_HEADING, compaction_summary_text, estimate_content_tokens,
+    is_native_compaction,
+};
 use adk_core::{
     AdkError, Content, ErrorCategory, ErrorComponent, Event, FinishReason, IntraCompactionConfig,
-    Llm, LlmRequest, LlmResponse, LlmResponseStream, Part, Result, RunConfig, SessionId,
-    ToolContext, UserId,
+    Llm, LlmRequest, LlmResponse, LlmResponseStream, NativeCompaction, NativeCompactionRequest,
+    Part, Result, RunConfig, SessionId, ToolContext, UserId,
 };
 use adk_runner::Runner;
 use adk_runner::compaction::{CompactionConfig, CompactionStrategy, TruncationCompaction};
@@ -37,6 +41,14 @@ struct Scripted {
     requests: Mutex<Vec<Vec<Content>>>,
     summaries: AtomicUsize,
     rejections: AtomicUsize,
+    /// When set, the model's provider compacts natively; `Some(false)` answers every
+    /// compaction request with a plain reply instead.
+    native: Option<bool>,
+    native_requests: Mutex<Vec<LlmRequest>>,
+    /// How long a summary takes to write.
+    summary_delay: Duration,
+    /// When each summary started and ended, and when each agent request arrived.
+    timeline: Mutex<Vec<(&'static str, std::time::Instant)>>,
 }
 
 impl Scripted {
@@ -55,7 +67,51 @@ impl Scripted {
             requests: Mutex::new(Vec::new()),
             summaries: AtomicUsize::new(0),
             rejections: AtomicUsize::new(0),
+            native: None,
+            native_requests: Mutex::new(Vec::new()),
+            summary_delay: Duration::ZERO,
+            timeline: Mutex::new(Vec::new()),
         })
+    }
+
+    /// The same model, with summaries that take `delay` to write.
+    fn with_summary_delay(model: Arc<Self>, delay: Duration) -> Arc<Self> {
+        let mut model = Arc::into_inner(model).unwrap();
+        model.summary_delay = delay;
+        Arc::new(model)
+    }
+
+    fn mark(&self, what: &'static str) {
+        self.timeline.lock().unwrap().push((what, std::time::Instant::now()));
+    }
+
+    /// Whether an agent request arrived while a summary was being written.
+    fn worked_during_a_summary(&self) -> bool {
+        let timeline = self.timeline.lock().unwrap();
+        let mut writing = false;
+        timeline.iter().any(|(what, _)| match *what {
+            "summary-start" => {
+                writing = true;
+                false
+            }
+            "summary-end" => {
+                writing = false;
+                false
+            }
+            _ => writing,
+        })
+    }
+
+    /// A model whose provider compacts natively, or fails to when `works` is false. Its turns
+    /// carry signed thinking and record the provider's origin.
+    fn native(window: u64, steps: usize, works: bool) -> Arc<Self> {
+        let mut model = Arc::into_inner(Self::new(Some(window), steps)).unwrap();
+        model.native = Some(works);
+        Arc::new(model)
+    }
+
+    fn native_requests(&self) -> Vec<LlmRequest> {
+        self.native_requests.lock().unwrap().clone()
     }
 
     fn requests(&self) -> Vec<Vec<Content>> {
@@ -77,6 +133,18 @@ fn respond(content: Content) -> Result<LlmResponseStream> {
     Ok(Box::pin(futures::stream::iter([Ok(response)])))
 }
 
+/// A native turn: the provider's origin recorded, as an `adk-model` client records it.
+fn respond_natively(content: Content) -> Result<LlmResponseStream> {
+    let mut response = LlmResponse {
+        content: Some(content),
+        turn_complete: true,
+        finish_reason: Some(FinishReason::Stop),
+        ..Default::default()
+    };
+    ProviderOrigin::new("scripted-vendor", "scripted").record(&mut response.provider_metadata);
+    Ok(Box::pin(futures::stream::iter([Ok(response)])))
+}
+
 #[async_trait]
 impl Llm for Scripted {
     fn name(&self) -> &str {
@@ -87,12 +155,46 @@ impl Llm for Scripted {
         self.window
     }
 
+    fn native_compaction(&self) -> Option<NativeCompaction> {
+        self.native.map(|_| NativeCompaction::new("scripted-vendor").keeping_thinking())
+    }
+
     async fn generate_content(&self, req: LlmRequest, _stream: bool) -> Result<LlmResponseStream> {
+        if let Some(works) = self.native
+            && NativeCompactionRequest::of(&req).is_some()
+        {
+            self.mark("summary-start");
+            tokio::time::sleep(self.summary_delay).await;
+            self.mark("summary-end");
+            self.native_requests.lock().unwrap().push(req);
+            let count = self.native_requests.lock().unwrap().len();
+            if !works {
+                return respond(Content::new("model").with_text("I would rather keep going."));
+            }
+            let summary = format!("native summary {count}");
+            return respond_natively(Content {
+                role: "model".to_string(),
+                parts: vec![
+                    Part::Text { text: compaction_summary_text(&summary) },
+                    Part::ServerToolResponse {
+                        server_tool_response: json!({
+                            "type": "scripted_message",
+                            "adk_replay_only": true,
+                            "adk_native_compaction": true,
+                            "content": [{"type": "compaction", "content": summary, "signature": format!("sig-{count}")}],
+                        }),
+                    },
+                ],
+            });
+        }
         let summary_request = req.contents.len() == 1
             && req.contents[0].parts.iter().any(|part| {
                 part.text().is_some_and(|text| text.contains("Please summarize the conversation"))
             });
         if summary_request {
+            self.mark("summary-start");
+            tokio::time::sleep(self.summary_delay).await;
+            self.mark("summary-end");
             let count = self.summaries.fetch_add(1, Ordering::SeqCst) + 1;
             return respond(Content::new("model").with_text(format!("summary {count}")));
         }
@@ -109,6 +211,7 @@ impl Llm for Scripted {
             );
             return Ok(Box::pin(futures::stream::iter([Err(error)])));
         }
+        self.mark("agent");
         self.requests.lock().unwrap().push(req.contents);
         // A provider takes time to answer, so its turn is recorded after the tool result
         // before it, as a session store can tell apart.
@@ -129,15 +232,23 @@ impl Llm for Scripted {
             return respond(Content::new("model").with_text(format!("done after {made} lookups")));
         }
         let call = self.lookups.fetch_add(1, Ordering::SeqCst) + 1;
-        respond(Content {
-            role: "model".to_string(),
-            parts: vec![Part::FunctionCall {
-                name: "lookup".to_string(),
-                args: json!({ "page": call }),
-                id: Some(format!("call-{call}")),
-                thought_signature: None,
-            }],
-        })
+        let lookup = Part::FunctionCall {
+            name: "lookup".to_string(),
+            args: json!({ "page": call }),
+            id: Some(format!("call-{call}")),
+            thought_signature: None,
+        };
+        if self.native.is_some() {
+            let thinking = Part::Thinking {
+                thinking: String::new(),
+                signature: Some(format!("think-{call}")),
+            };
+            return respond_natively(Content {
+                role: "model".to_string(),
+                parts: vec![thinking, lookup],
+            });
+        }
+        respond(Content { role: "model".to_string(), parts: vec![lookup] })
     }
 }
 
@@ -488,4 +599,143 @@ async fn a_call_held_for_confirmation_stays_in_every_compacted_request() {
     let requests = model.requests();
     assert!(requests[held_at..].iter().all(|contents| holds_the_call(contents)));
     assert!(requests[held_at..].iter().all(|contents| balanced(contents)));
+}
+
+async fn session_events(sessions: &InMemorySessionService) -> Vec<Event> {
+    sessions
+        .get(GetRequest {
+            app_name: APP.to_string(),
+            user_id: "u".to_string(),
+            session_id: "s".to_string(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .unwrap()
+        .events()
+        .all()
+}
+
+#[tokio::test]
+async fn a_model_that_compacts_natively_writes_the_summary_and_reads_it_back() {
+    let model = Scripted::native(2_000, 20, true);
+    let (runner, sessions) = runner(model.clone(), Setup::default()).await;
+
+    let events = run(&runner, "read the record", None).await;
+
+    assert_eq!(errors(&events), Vec::<String>::new());
+    assert_eq!(final_text(&events).as_deref(), Some("done after 20 lookups"));
+    let compacted = compactions(&events);
+    assert!(compacted >= 1, "compacted {compacted} times");
+    assert_eq!(model.native_requests().len(), compacted, "the provider wrote every summary");
+    assert_eq!(model.summaries.load(Ordering::SeqCst), 0, "the runner's summarizer never ran");
+    // The provider reads the conversation with the agent's instructions and tools.
+    let asked = &model.native_requests()[0];
+    assert_eq!(asked.contents[0].role, "system");
+    assert!(asked.tools.contains_key("lookup") && asked.tools.contains_key("transfer"));
+    // Every later request opens with the signed compaction, after the instructions.
+    let last = model.requests().pop().unwrap();
+    assert!(is_native_compaction(&last[1]), "{last:?}");
+    assert!(model.requests().iter().all(|contents| balanced(contents)));
+
+    // The session records the compaction with the provider's origin, so the next run replays
+    // the signed copy to the same provider.
+    let recorded: Vec<Event> = session_events(&sessions)
+        .await
+        .into_iter()
+        .filter(|event| event.actions.compaction.is_some())
+        .collect();
+    assert_eq!(recorded.len(), compacted);
+    let latest = recorded.last().unwrap();
+    assert!(is_native_compaction(&latest.actions.compaction.as_ref().unwrap().compacted_content));
+    assert_eq!(
+        ProviderOrigin::of_response(latest.llm_response.provider_metadata.as_ref()),
+        Some(ProviderOrigin::new("scripted-vendor", "scripted"))
+    );
+    let before = model.requests().len();
+    let events = run(&runner, "and the summary?", None).await;
+    assert_eq!(errors(&events), Vec::<String>::new());
+    let next = &model.requests()[before];
+    assert!(is_native_compaction(&next[1]), "the next run starts from it: {next:?}");
+}
+
+#[tokio::test]
+async fn a_native_compaction_that_fails_falls_back_to_the_runner_summarizer() {
+    let model = Scripted::native(2_000, 12, false);
+    let (runner, _) = runner(model.clone(), Setup::default()).await;
+
+    let events = run(&runner, "read the record", None).await;
+
+    assert_eq!(errors(&events), Vec::<String>::new());
+    let compacted = compactions(&events);
+    assert!(compacted >= 1);
+    assert!(!model.native_requests().is_empty(), "the provider was asked first");
+    assert_eq!(model.summaries.load(Ordering::SeqCst), compacted);
+    let last = model.requests().pop().unwrap();
+    assert!(is_summary(&last[1]) && !is_native_compaction(&last[1]), "{last:?}");
+}
+
+#[tokio::test]
+async fn native_compaction_can_be_turned_off() {
+    let model = Scripted::native(2_000, 12, true);
+    let config = IntraCompactionConfig::default().with_native(false);
+    let (runner, _) = runner(model.clone(), Setup::intra(config)).await;
+
+    let events = run(&runner, "read the record", None).await;
+
+    assert!(compactions(&events) >= 1);
+    assert!(model.native_requests().is_empty());
+    assert_eq!(model.summaries.load(Ordering::SeqCst), compactions(&events));
+}
+
+#[tokio::test]
+async fn a_background_compaction_is_written_while_the_agent_goes_on() {
+    // Summaries take 40 ms; the agent's calls answer in about 2 ms.
+    let model =
+        Scripted::with_summary_delay(Scripted::native(2_000, 20, true), Duration::from_millis(40));
+    let config = IntraCompactionConfig::default().in_background(0.6);
+    let (runner, _) = runner(model.clone(), Setup::intra(config)).await;
+
+    let events = run(&runner, "read the record", None).await;
+
+    assert_eq!(errors(&events), Vec::<String>::new());
+    assert_eq!(final_text(&events).as_deref(), Some("done after 20 lookups"));
+    assert!(compactions(&events) >= 1);
+    assert!(
+        model.worked_during_a_summary(),
+        "the agent kept calling the model while it was summarized"
+    );
+    let sizes = model.sizes();
+    assert!(sizes.iter().all(|size| *size < 2_000), "request sizes {sizes:?}");
+    assert!(model.requests().iter().all(|contents| balanced(contents)));
+}
+
+#[tokio::test]
+async fn a_summary_started_at_the_end_of_a_turn_opens_the_next_turn() {
+    // Four lookups take the last request of the first turn past the background threshold
+    // (60% of 1,600 tokens) and below the threshold itself.
+    let model = Scripted::native(2_000, 4, true);
+    let config = IntraCompactionConfig::default().in_background(0.6);
+    let (runner, sessions) = runner(model.clone(), Setup::intra(config)).await;
+
+    let first = run(&runner, "read the record", None).await;
+    assert_eq!(errors(&first), Vec::<String>::new());
+    assert_eq!(compactions(&first), 0, "the first turn did not wait for a summary");
+    assert_eq!(model.native_requests().len(), 1, "a summary started during the first turn");
+    // The person takes a moment to reply; the summary is ready by then.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let before = model.requests().len();
+    let second = run(&runner, "and the summary?", None).await;
+
+    assert_eq!(errors(&second), Vec::<String>::new());
+    assert_eq!(compactions(&second), 1);
+    assert_eq!(model.native_requests().len(), 1, "the next turn wrote no summary of its own");
+    let next = &model.requests()[before];
+    assert!(is_native_compaction(&next[1]), "the next turn opens with the summary: {next:?}");
+    let recorded = session_events(&sessions)
+        .await
+        .into_iter()
+        .filter(|event| event.actions.compaction.is_some())
+        .count();
+    assert_eq!(recorded, 1, "the swap is recorded in the session");
 }

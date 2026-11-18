@@ -19,7 +19,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::{
-    AdkError, Content, ErrorCategory, ErrorComponent, Event, InvocationContext, Llm, Part,
+    AdkError, Content, ErrorCategory, ErrorComponent, Event, GenerateContentConfig,
+    InvocationContext, Llm, LlmRequest, Part, ToolDeclarations,
 };
 
 /// The threshold, in estimated tokens, when the model reports no context window.
@@ -32,6 +33,10 @@ pub const DEFAULT_TOKEN_THRESHOLD: u64 = 100_000;
 ///
 /// The rest leaves room for the response and for the error of a character-based estimate.
 pub const DEFAULT_CONTEXT_WINDOW_FRACTION: f64 = 0.8;
+
+/// The share of the threshold at which a background compaction starts
+/// ([`IntraCompactionConfig::background`]).
+pub const DEFAULT_BACKGROUND_FRACTION: f64 = 0.7;
 
 /// When an agent's history is compacted during a run.
 ///
@@ -78,6 +83,18 @@ pub struct IntraCompactionConfig {
     pub overlap_event_count: usize,
     /// Characters per token for the estimate (default: 4).
     pub chars_per_token: u32,
+    /// Whether a model whose provider compacts conversations itself
+    /// ([`Llm::native_compaction`]) writes the summary, in place of the runner's summarizer
+    /// (default: `true`). A summarizer or strategy configured on the runner takes precedence.
+    pub native: bool,
+    /// Whether the summary is written off the critical path (default: `false`): once a request
+    /// passes `background_fraction` of the threshold, the runner starts the summary while the
+    /// agent goes on, and swaps it in before a later model call, in this run or the session's
+    /// next. A request that reaches the threshold first waits for it.
+    pub background: bool,
+    /// The share of the threshold at which a background compaction starts. Values outside
+    /// `(0, 1)` use [`DEFAULT_BACKGROUND_FRACTION`].
+    pub background_fraction: f64,
 }
 
 impl Default for IntraCompactionConfig {
@@ -88,6 +105,9 @@ impl Default for IntraCompactionConfig {
             context_window_fraction: DEFAULT_CONTEXT_WINDOW_FRACTION,
             overlap_event_count: 10,
             chars_per_token: 4,
+            native: true,
+            background: false,
+            background_fraction: DEFAULT_BACKGROUND_FRACTION,
         }
     }
 }
@@ -113,6 +133,55 @@ impl IntraCompactionConfig {
     pub fn with_overlap_event_count(mut self, count: usize) -> Self {
         self.overlap_event_count = count;
         self
+    }
+
+    /// Whether a model whose provider compacts conversations itself writes the summary.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::IntraCompactionConfig;
+    ///
+    /// // Always summarize with the runner's summarizer, even on a model that compacts natively.
+    /// let config = IntraCompactionConfig::default().with_native(false);
+    /// assert!(!config.native);
+    /// ```
+    pub fn with_native(mut self, native: bool) -> Self {
+        self.native = native;
+        self
+    }
+
+    /// Writes summaries off the critical path, starting each once a request passes `fraction`
+    /// of the threshold.
+    ///
+    /// The summary costs a model call that may come earlier than the threshold requires, and
+    /// it is swapped in only when the history still starts with the entries it covers.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::IntraCompactionConfig;
+    ///
+    /// // Start summarizing at 60% of the threshold, so the next turn rarely waits for it.
+    /// let config = IntraCompactionConfig::default().in_background(0.6);
+    /// assert!(config.background);
+    /// assert_eq!(config.background_threshold_for(Some(1_000_000)), 480_000);
+    /// ```
+    pub fn in_background(mut self, fraction: f64) -> Self {
+        self.background = true;
+        self.background_fraction = fraction;
+        self
+    }
+
+    /// The estimated tokens at which a background compaction starts, for a model with
+    /// `context_window` tokens: `background_fraction` of [`threshold_for`](Self::threshold_for).
+    pub fn background_threshold_for(&self, context_window: Option<u64>) -> u64 {
+        let fraction = if self.background_fraction > 0.0 && self.background_fraction < 1.0 {
+            self.background_fraction
+        } else {
+            DEFAULT_BACKGROUND_FRACTION
+        };
+        (self.threshold_for(context_window) as f64 * fraction) as u64
     }
 
     /// The threshold, in estimated tokens, for a model with `context_window` tokens.
@@ -148,7 +217,24 @@ pub enum CompactionTrigger {
 }
 
 /// What an agent asks its run's [`HistoryCompactor`] to compact.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{CompactionTrigger, Content, HistoryCompactionRequest, ToolDeclarations};
+///
+/// let instructions = [Content::new("system").with_text("You are a release assistant.")];
+/// let history = [Content::new("user").with_text("Draft the release notes.")];
+/// let tools = ToolDeclarations::new();
+/// let request = HistoryCompactionRequest::new(&history, CompactionTrigger::BeforeModelCall)
+///     .with_preamble(&instructions)
+///     .with_tools(&tools)
+///     .with_reported_prompt_tokens(Some(12_000));
+/// assert_eq!(request.preamble.len(), 1);
+/// assert_eq!(request.reported_prompt_tokens, Some(12_000));
+/// ```
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct HistoryCompactionRequest<'a> {
     /// Contents sent with every request and never compacted, such as the agent's
     /// instructions. They count toward the estimate.
@@ -160,6 +246,49 @@ pub struct HistoryCompactionRequest<'a> {
     pub reported_prompt_tokens: Option<u64>,
     /// Why compaction is asked for.
     pub trigger: CompactionTrigger,
+    /// The tools the agent's next request declares. A provider that compacts natively reads
+    /// them with the conversation, and binds the kept turns' thinking to them.
+    pub tools: Option<&'a ToolDeclarations>,
+    /// The generation config of the agent's next request: its thinking and output settings.
+    pub config: Option<&'a GenerateContentConfig>,
+}
+
+impl<'a> HistoryCompactionRequest<'a> {
+    /// A request to compact `history`, with no preamble, tools or config.
+    pub fn new(history: &'a [Content], trigger: CompactionTrigger) -> Self {
+        Self {
+            preamble: &[],
+            history,
+            reported_prompt_tokens: None,
+            trigger,
+            tools: None,
+            config: None,
+        }
+    }
+
+    /// Contents sent ahead of the history and never compacted, such as instructions.
+    pub fn with_preamble(mut self, preamble: &'a [Content]) -> Self {
+        self.preamble = preamble;
+        self
+    }
+
+    /// The prompt tokens the provider reported for the agent's previous request.
+    pub fn with_reported_prompt_tokens(mut self, tokens: Option<u64>) -> Self {
+        self.reported_prompt_tokens = tokens;
+        self
+    }
+
+    /// The tools the agent's next request declares.
+    pub fn with_tools(mut self, tools: &'a ToolDeclarations) -> Self {
+        self.tools = Some(tools);
+        self
+    }
+
+    /// The generation config of the agent's next request.
+    pub fn with_config(mut self, config: Option<&'a GenerateContentConfig>) -> Self {
+        self.config = config;
+        self
+    }
 }
 
 /// A compacted history.
@@ -262,6 +391,136 @@ pub const COMPACTION_SUMMARY_HEADING: &str =
 /// ```
 pub fn compaction_summary(summary: &str) -> Content {
     crate::history::system_notice(&format!("{COMPACTION_SUMMARY_HEADING}\n{summary}"))
+}
+
+/// The text of a compaction summary: [`COMPACTION_SUMMARY_HEADING`], then `summary`.
+///
+/// A provider-native compaction ([`is_native_compaction`]) carries it as the text every
+/// provider reads, next to the signed copy only its own provider reads.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::intra_compaction::{COMPACTION_SUMMARY_HEADING, compaction_summary_text};
+///
+/// let text = compaction_summary_text("Two invoices were found.");
+/// assert_eq!(text, format!("{COMPACTION_SUMMARY_HEADING}\nTwo invoices were found."));
+/// ```
+pub fn compaction_summary_text(summary: &str) -> String {
+    format!("{COMPACTION_SUMMARY_HEADING}\n{summary}")
+}
+
+/// Key a provider sets to `true` in the replay-only copy
+/// ([`REPLAY_ONLY_KEY`](crate::history::REPLAY_ONLY_KEY)) of a compaction it wrote itself.
+pub const NATIVE_COMPACTION_KEY: &str = "adk_native_compaction";
+
+/// Whether `content` is a compaction a provider wrote itself: a model turn holding the
+/// summary as text ([`compaction_summary_text`]) and the provider's signed copy, flagged
+/// [`NATIVE_COMPACTION_KEY`].
+///
+/// The copy is a native item: it reaches only the provider and model that wrote it
+/// ([`retain_replayable`](crate::history::retain_replayable)); every other provider reads
+/// the text.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::intra_compaction::{compaction_summary_text, is_native_compaction};
+/// use adk_core::{Content, Part};
+///
+/// let mut compaction = Content::new("model").with_text(compaction_summary_text("Done so far."));
+/// assert!(!is_native_compaction(&compaction));
+/// compaction.parts.push(Part::ServerToolResponse {
+///     server_tool_response: serde_json::json!({
+///         "type": "anthropic_message",
+///         "adk_replay_only": true,
+///         "adk_native_compaction": true,
+///         "content": [{"type": "compaction", "content": "Done so far.", "signature": "sig"}],
+///     }),
+/// });
+/// assert!(is_native_compaction(&compaction));
+/// ```
+pub fn is_native_compaction(content: &Content) -> bool {
+    matches!(content.role.as_str(), "model" | "assistant")
+        && content.parts.iter().any(|part| {
+            let (Part::ServerToolCall { server_tool_call: payload }
+            | Part::ServerToolResponse { server_tool_response: payload }) = part
+            else {
+                return false;
+            };
+            payload.get(NATIVE_COMPACTION_KEY).and_then(serde_json::Value::as_bool) == Some(true)
+        })
+}
+
+/// Asks a model for its provider's own compaction of a request's conversation, in place of
+/// a reply.
+///
+/// The runner's auto-compaction sends it to a model that reports
+/// [`Llm::native_compaction`]: the request carries the conversation to summarize with the
+/// agent's instructions, tools and config, and the response's content is the compaction
+/// ([`is_native_compaction`]). A model that does not compact natively ignores it.
+///
+/// Carried in the request's `config.extensions` under [`EXTENSION_KEY`](Self::EXTENSION_KEY).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::LlmRequest;
+/// use adk_core::intra_compaction::NativeCompactionRequest;
+///
+/// let mut request = LlmRequest::new("claude-sonnet-5-5", vec![]);
+/// assert_eq!(NativeCompactionRequest::of(&request), None);
+/// NativeCompactionRequest::new().with_instructions("Keep every order number.").apply(&mut request);
+/// assert_eq!(
+///     NativeCompactionRequest::of(&request).and_then(|ask| ask.instructions),
+///     Some("Keep every order number.".to_string())
+/// );
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct NativeCompactionRequest {
+    /// A summarization prompt that replaces the provider's own.
+    pub instructions: Option<String>,
+}
+
+impl NativeCompactionRequest {
+    /// Key of the request in `GenerateContentConfig::extensions`.
+    pub const EXTENSION_KEY: &'static str = "adk_native_compaction";
+
+    /// A compaction with the provider's own summarization prompt.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replaces the provider's summarization prompt with `instructions`.
+    pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = Some(instructions.into());
+        self
+    }
+
+    /// Marks `request` as asking for this compaction.
+    pub fn apply(&self, request: &mut LlmRequest) {
+        let mut ask = serde_json::Map::new();
+        if let Some(instructions) = &self.instructions {
+            ask.insert("instructions".to_string(), serde_json::Value::from(instructions.clone()));
+        }
+        request
+            .config
+            .get_or_insert_with(GenerateContentConfig::default)
+            .extensions
+            .insert(Self::EXTENSION_KEY.to_string(), serde_json::Value::Object(ask));
+    }
+
+    /// The compaction `request` asks for, if any.
+    pub fn of(request: &LlmRequest) -> Option<Self> {
+        let ask = request.config.as_ref()?.extensions.get(Self::EXTENSION_KEY)?.as_object()?;
+        Some(Self {
+            instructions: ask
+                .get("instructions")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+        })
+    }
 }
 
 /// Whether `err` is a model's refusal of a request longer than its context window.
@@ -515,6 +774,9 @@ mod tests {
                 context_window_fraction: 0.8,
                 overlap_event_count: 10,
                 chars_per_token: 4,
+                native: true,
+                background: false,
+                background_fraction: DEFAULT_BACKGROUND_FRACTION,
             }
         );
     }

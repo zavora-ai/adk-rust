@@ -1110,7 +1110,7 @@ impl OpenAIResponsesClient {
             ),
         );
         let usage_span =
-            adk_telemetry::llm_generate_span(self.provider_name(), &self.model, stream);
+            crate::telemetry::inference_span(self.provider_name(), &self.model, stream, &request);
         // Responses are priced under the provider that bills them.
         let billed_by = self.provider_name.as_deref().unwrap_or("openai");
 

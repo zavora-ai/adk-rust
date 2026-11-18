@@ -254,7 +254,23 @@ impl ControlBackend for Kernel {
     }
 
     async fn put_partition(&self, partition: Partition, by: AuditActor) -> Result<Partition> {
+        let before = Kernel::partitions(self).get(&partition.id).await?;
         Kernel::partitions(self).put(partition.clone(), by).await?;
+        // A changed cap or quiet window meets the work admission held for the old one at its
+        // next step, as a changed setting does (spec 3.3 §10 K3).
+        if let Some(before) = before {
+            let reasons: Vec<&str> = [
+                (before.quotas != partition.quotas, "budget"),
+                (before.quiet_hours != partition.quiet_hours, "quiet_hours"),
+            ]
+            .into_iter()
+            .filter_map(|(changed, reason)| changed.then_some(reason))
+            .collect();
+            if !reasons.is_empty() {
+                let filter = ProcessFilter::default().partition(partition.id.clone());
+                self.supervision().readmit(&filter, &reasons).await;
+            }
+        }
         Ok(partition)
     }
 

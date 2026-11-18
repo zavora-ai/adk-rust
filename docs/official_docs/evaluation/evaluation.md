@@ -329,6 +329,99 @@ for report in &reports {
 }
 ```
 
+## Repeated Runs and Flakiness
+
+An agent on a sampling model can pass a case once and fail it the next time, so one run cannot
+tell a reliable case from a lucky one. `Evaluator::evaluate_test_file_runs` runs every case of
+an eval set `num_runs` times, each time in a fresh session, and summarises each case across the
+runs:
+
+```rust
+use std::sync::Arc;
+
+use adk_core::Agent;
+use adk_eval::{EvaluationConfig, EvaluationCriteria, Evaluator, MultiRunConfig, TestFile};
+
+async fn five_runs(agent: Arc<dyn Agent>) -> adk_eval::Result<()> {
+    let evaluator = Evaluator::new(EvaluationConfig::with_criteria(
+        EvaluationCriteria::exact_tools(),
+    ));
+    let test_file = TestFile::load("tests/weather.test.json")?;
+    // A case passes when it passes in at least 4 of the 5 runs.
+    let config = MultiRunConfig::new(5)?.with_min_pass_rate(0.8)?;
+
+    let report = evaluator.evaluate_test_file_runs(agent, &test_file, &config).await?;
+    for case in report.flaky_cases() {
+        println!("{} passed {} of {} runs", case.eval_id, case.passed_runs, case.runs);
+    }
+    assert!(report.all_passed(), "{}", report.format_summary());
+    Ok(())
+}
+```
+
+| `CaseRunSummary` field | Meaning |
+|------------------------|---------|
+| `runs`, `passed_runs`, `pass_rate` | Runs the case ran in, runs it passed, and their ratio; a case that errored fails that run |
+| `scores` | `ScoreStats` per criterion: `mean`, sample `variance` (`n − 1` denominator), `std_dev`, `min`, `max`, `count` |
+| `flaky` | The case passed in some runs and failed in others |
+| `passed` | `pass_rate` reached `MultiRunConfig::min_pass_rate`, which defaults to 1.0: every run |
+| `failed_criteria` | Runs in which each criterion failed |
+
+Every run evaluates every case, whatever `continue_on_failure` says. `MultiRunReport::all_passed`
+is `false` unless every requested run completed and every case passed.
+`MultiRunReport::baseline_metrics` holds the mean score of each criterion plus a `pass_rate`
+metric per case, so a [regression baseline](#regression-baselines) catches a case that became
+flaky. `MultiRunReport::case_results` gives one result per case for the JUnit reporter.
+
+## Metering an Evaluation
+
+`Evaluator::set_run_config` runs every case with a `RunConfig` and puts the judges under it: the
+agent's model calls and every LLM-judge call count against the config's budget and spend ledger,
+and both stop while one of its kill switches is frozen.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::{GovernanceControl, InMemorySpendLedger, RunBudget, RunConfig};
+use adk_eval::{EvaluationConfig, EvaluationCriteria, Evaluator};
+
+fn metered(judge: Arc<dyn adk_core::Llm>, kill_switch: GovernanceControl) -> Evaluator {
+    let mut evaluator = Evaluator::with_llm_judge(
+        EvaluationConfig::with_criteria(EvaluationCriteria::semantic_match(0.8)),
+        judge,
+    );
+    evaluator.set_run_config(
+        RunConfig::builder()
+            .budget(RunBudget::new().max_model_calls(200).max_cost_usd(2.0))
+            .spend_ledger(Arc::new(InMemorySpendLedger::default()))
+            .governance(kill_switch)
+            .build(),
+    );
+    evaluator
+}
+```
+
+- **One budget for the evaluation.** A `RunConfig::budget` without a `budget_tracker` becomes one
+  tracker shared by every run and judge call, so the budget bounds the whole evaluation rather
+  than each run.
+- **Judge spend is attributed separately.** Judge calls reserve under the case's app name and the
+  agent `eval-judge` (`JUDGE_AGENT_NAME`), so the ledger tells judging apart from the agent.
+- **A refusal is not a verdict.** A run or judge call refused by the budget, the spend ledger or a
+  frozen kill switch returns `EvalError::Refused` from `evaluate_case` and `evaluate_test_file`.
+  `evaluate_test_file_runs` keeps the runs that completed, drops the one the refusal
+  interrupted, and sets `MultiRunReport::stopped`.
+
+`LlmJudge` and `StructuredJudge` call their model through `adk_core::generate_metered`, which
+meters against whichever `ModelCallScope` is current; do not also wrap the judge model in
+`MeteredLlm`, which would meter each call twice.
+
+## Online Evaluation
+
+`adk_eval::online::OnlineEvaluator` applies the reference-free criteria — rubrics, safety,
+hallucination, trajectory efficiency and thread-level conversation metrics — to a seeded sample of
+production runs after they finish, off the request path and under its own budget and kill switch.
+See [Online Evaluation](online-evaluation.md).
+
 ## Integration with cargo test
 
 Use evaluation in standard Rust tests:
@@ -510,6 +603,8 @@ for reg in &regressions {
 ```
 
 Every metric and case recorded in the baseline must have a score in the current run. A case that errored or did not run has no scores, so it is reported as a regression with `current_value: None`.
+
+Baselines from [repeated runs](#repeated-runs-and-flakiness) (`MultiRunReport::baseline_metrics`) hold mean scores and a `pass_rate` metric per case, so a drop in pass rate is a regression like a drop in score.
 
 A missing baseline file is an error (`EvalError::BaselineError`), not an empty list, so a mistyped path or an uncommitted baseline cannot pass the gate. Save one with `BaselineStore::save` first.
 
@@ -705,8 +800,19 @@ cargo adk eval tests/ --agent-cmd "target/release/eval_agent" --check-regression
 | `--format` | `table`, `json`, or `junit` | `table` |
 | `--output` | Write the report to a file instead of stdout | stdout |
 | `--turn-timeout` | Seconds to wait for each response | `300` |
+| `--num-runs` | Run the eval sets this many times and report each case's pass rate, score statistics and flakiness | `1` |
+| `--min-pass-rate` | Fraction of runs, from 0.0 to 1.0, a case must pass | `1.0` (every run) |
+| `--judge-max-calls` | Most `--judge-model` calls across every run; the evaluation stops when they are spent | Unlimited |
+| `--judge-max-cost-usd` | Most `--judge-model` spend in US dollars across every run | Unlimited |
 
-The command exits with status 0 only when every case passed and no score regressed. A criteria file that sets no threshold, or sets `custom` criteria, which `Evaluator` does not score, is refused before any case runs.
+The command exits with status 0 only when every case reached the minimum pass rate, every run completed, and no score regressed.
+
+With `--num-runs` above 1, the table lists each case's passed runs, pass rate and verdict (`PASS`, `PASS (flaky)`, `FAIL (flaky)` or `FAIL`), then the mean, standard deviation, minimum and maximum of each criterion; `--format json` writes one `MultiRunReport` per eval set, and `--format junit` one test case per eval case, failing below the minimum pass rate. A baseline saved by `--save-baseline` holds each criterion's mean score and a `pass_rate` per case, and `--check-regression` reports a drop in either. Judge calls are counted across every run and printed after the report (`judge: 9 model call(s), 2982 tokens, $0.0007`); when `--judge-max-calls` or `--judge-max-cost-usd` is spent, the evaluation stops, keeps the runs that completed, and exits non-zero.
+
+```bash
+cargo adk eval tests/ --agent-cmd "target/release/eval_agent" --num-runs 5 --min-pass-rate 0.8 \
+  --judge-model claude-haiku-5-5 --judge-max-calls 100 --check-regression
+``` A criteria file that sets no threshold, or sets `custom` criteria, which `Evaluator` does not score, is refused before any case runs.
 
 A Rust agent binary that speaks the protocol, built from the same agent as the application:
 

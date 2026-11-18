@@ -506,6 +506,14 @@ impl Llm for FallbackLlm {
         let first = searches.next()??;
         searches.all(|search| search == Some(first)).then_some(first)
     }
+
+    // A compaction request may fall back to any model in the chain, so it is native only when
+    // every model compacts the same way.
+    fn native_compaction(&self) -> Option<adk_core::NativeCompaction> {
+        let mut compactions = self.models.iter().map(|model| model.native_compaction());
+        let first = compactions.next()??;
+        compactions.all(|compaction| compaction == Some(first)).then_some(first)
+    }
 }
 
 #[cfg(test)]

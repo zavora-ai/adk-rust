@@ -26,6 +26,9 @@ its request past the model's window.
 | — | 100,000 tokens | The threshold when the model reports no context window (`DEFAULT_TOKEN_THRESHOLD`) |
 | `overlap_event_count` | 10 | The most recent history entries kept as they are; they also stay within half the threshold, so the compacted request has room to grow |
 | `chars_per_token` | 4 | The character-per-token ratio of the estimate |
+| `native` | `true` | A model whose provider compacts conversations itself writes the summary ([Provider-Native Compaction](#provider-native-compaction)); `with_native(false)` keeps the runner's summarizer |
+| `background` | `false` | The summary is written off the critical path ([Background Compaction](#background-compaction)); `in_background(fraction)` turns it on |
+| `background_fraction` | `0.7` | The share of the threshold at which a background compaction starts |
 
 The estimate covers the agent's instructions and history, and the agent also passes the prompt
 size the provider reported for its previous call, so a history the character estimate
@@ -61,11 +64,104 @@ fn build(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<Runner> {
 }
 ```
 
-By default the summary is written by the model the agent is calling, through
-`LlmEventSummarizer`. A summarizer set with `intra_compaction_summarizer` takes its place, and a
-`CompactionStrategy` set with `context_compaction` replaces the summary altogether: before any call
-whose request passes its `context_budget`, the history is shortened with the strategy, applied
-up to `max_retries` times.
+By default the summary is written by the model the agent is calling: by its provider when the
+model compacts conversations itself (`Llm::native_compaction`), and otherwise through
+`LlmEventSummarizer`. A summarizer set with `intra_compaction_summarizer` takes the place of both,
+and a `CompactionStrategy` set with `context_compaction` replaces the summary altogether: before
+any call whose request passes its `context_budget`, the history is shortened with the strategy,
+applied up to `max_retries` times.
+
+### Provider-Native Compaction
+
+A model that reports `Llm::native_compaction` writes the summary on its provider's side. The
+runner sends the entries it compacts with the agent's instructions, tools and generation config,
+marked with `NativeCompactionRequest`, and the provider returns a signed compaction in place of a
+reply. The compaction becomes the first history entry, ahead of the kept entries, and every later
+request sends it back exactly as the provider returned it.
+
+| Provider | Models | Wire format | Kept entries keep their thinking |
+|----------|--------|-------------|----------------------------------|
+| Anthropic (`AnthropicClient`, Claude API) | Claude Fable 5.2 / 5.1 / 5, Mythos 5.2 / 5.1 / 5 / Preview, Opus 5.5 / 5 / 4.8 / 4.7 / 4.6, Sonnet 5.5 / 5 / 4.6, Haiku 5.5 | On-demand compaction: the `compaction` parameter and the signed `compaction` block, beta `compact-2026-09-04` | Yes |
+
+The compaction entry is a model turn with two parts:
+
+| Part | Read by |
+|------|---------|
+| The summary as text, headed `COMPACTION_SUMMARY_HEADING` | Every provider, including a fallback model of another vendor |
+| The provider's signed copy, flagged replay-only and `NATIVE_COMPACTION_KEY` (`is_native_compaction`) | Only the provider and model that wrote it (`retain_replayable`) |
+
+`AnthropicClient` sends the signed block first in `messages`, with the beta header, on every
+request that carries it. A block anywhere else in a request, or one whose summary text a callback
+rewrote, is sent as the summary's text instead, so the request never fails on it.
+
+The compaction call is a model call made on behalf of the run: it counts against the run's budget
+and spend ledger through the run's `ModelCallScope`, a frozen kill switch refuses it, and a call
+held for confirmation, with everything after it, stays out of it. Its usage is the summarization
+call's, which the Claude API reports in `usage.iterations`. A provider compaction that fails —
+the call is refused or declined, or returns no compaction — falls back to `LlmEventSummarizer`
+for that compaction.
+
+```rust
+use adk_core::{IntraCompactionConfig, Llm};
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
+use adk_runner::Runner;
+use adk_session::InMemorySessionService;
+use std::sync::Arc;
+
+fn build(agent: Arc<dyn adk_core::Agent>, api_key: &str) -> adk_core::Result<Runner> {
+    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-5-5"))?;
+    assert!(model.native_compaction().is_some());
+    Runner::builder()
+        .app_name("my_app")
+        .agent(agent)
+        .session_service(Arc::new(InMemorySessionService::new()))
+        // Claude writes the summary; `with_native(false)` would keep `LlmEventSummarizer`.
+        .intra_compaction_config(IntraCompactionConfig::default())
+        .build()
+}
+```
+
+### Background Compaction
+
+With `IntraCompactionConfig::in_background(fraction)`, the summary is written while the agent goes
+on, so no model call waits for it:
+
+| When a model call finds | The compactor |
+|-------------------------|---------------|
+| A finished background summary whose entries still open the history | Swaps it in: the summary, then every entry after the ones it covers, including those added while it was written |
+| A request past the threshold, or rejected as too long, with a summary still being written | Waits for that summary and swaps it in, instead of starting another |
+| A request past `background_fraction` of the threshold and no summary pending | Starts one in the background and lets the call go ahead |
+| A history that no longer starts with the entries a finished summary covers | Discards the summary |
+
+The runner keeps a pending summary across runs, per session, agent and branch, so a summary started
+during one turn opens the next turn without that turn paying for it; a summary no run takes within
+an hour is dropped. A swap is recorded in the session like any compaction.
+
+No background compaction starts while a call is held for confirmation, as OpenAI's Agents SDK
+defers auto-compaction while approvals are pending, or while a kill switch is frozen. The summary
+call runs in the run's `ModelCallScope`, so it counts against that run's budget and spend ledger
+and a freeze refuses it. A provider-native summary written in the background keeps the kept
+entries' thinking under the same conditions as one written in place.
+
+```rust
+use adk_core::IntraCompactionConfig;
+use adk_runner::Runner;
+use adk_session::InMemorySessionService;
+use std::sync::Arc;
+
+fn build(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<Runner> {
+    Runner::builder()
+        .app_name("my_app")
+        .agent(agent)
+        .session_service(Arc::new(InMemorySessionService::new()))
+        // Start summarizing at 60% of the threshold, while the agent works.
+        .intra_compaction_config(IntraCompactionConfig::default().in_background(0.6))
+        .build()
+}
+```
+
+Background compaction trades spend for latency: a summary starts before the threshold requires
+one, and a session that never continues pays for a summary it does not use.
 
 ### A Request the Model Rejects as Too Long
 
@@ -102,6 +198,11 @@ history-editing check rejects thinking replayed after earlier turns were replace
 compaction keeps are therefore sent without their thinking parts, both in the agent's working
 history and when a later run reads the session; their text, tool calls (with any thought
 signatures) and tool results stay. Session compaction's kept events are treated the same way.
+
+A provider-native compaction whose provider accepts the kept thinking
+(`NativeCompaction::keeps_thinking`) keeps it, when the first kept entry and the last summarized
+one have different speakers and no call the person asked for is among them. The compaction event
+records that decision, so a later run that reads the session replays the same entries.
 
 ### Limits
 

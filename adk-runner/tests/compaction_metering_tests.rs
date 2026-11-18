@@ -1,15 +1,19 @@
 //! Compaction summaries are model calls made on behalf of the run, so they count
-//! against the run's budget and spend ledger like the agent's own calls.
+//! against the run's budget and spend ledger like the agent's own calls, whether the runner's
+//! summarizer or the model's provider writes them.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
+use adk_core::history::ProviderOrigin;
+use adk_core::intra_compaction::{compaction_summary_text, is_native_compaction};
 use adk_core::{
     Agent, BaseEventsSummarizer, BudgetTracker, CompactionTrigger, Content, Event, EventActions,
-    EventCompaction, EventStream, EventsCompactionConfig, HistoryCompactionRequest,
-    InMemorySpendLedger, IntraCompactionConfig, InvocationContext, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, Result, RunBudget, RunConfig, SessionId, SpendKey, SpendLedger, SpendPeriod,
-    UsageMetadata, UserId,
+    EventCompaction, EventStream, EventsCompactionConfig, FunctionResponseData, GovernanceControl,
+    HistoryCompactionRequest, InMemorySpendLedger, IntraCompactionConfig, InvocationContext, Llm,
+    LlmRequest, LlmResponse, LlmResponseStream, NativeCompaction, NativeCompactionRequest, Part,
+    Result, RunBudget, RunConfig, SessionId, SpendKey, SpendLedger, SpendPeriod, ToolDeclarations,
+    UsageMetadata, UserId, confirmation_pending_response,
 };
 use adk_runner::Runner;
 use adk_session::{InMemorySessionService, SessionService};
@@ -60,12 +64,8 @@ impl Agent for CompactingReplyAgent {
         let mut events = Vec::new();
         if let Some(compactor) = ctx.run_config().history_compactor.clone() {
             let history = ctx.session().conversation_history();
-            let request = HistoryCompactionRequest {
-                preamble: &[],
-                history: &history,
-                reported_prompt_tokens: None,
-                trigger: CompactionTrigger::BeforeModelCall,
-            };
+            let request =
+                HistoryCompactionRequest::new(&history, CompactionTrigger::BeforeModelCall);
             let model: Arc<dyn Llm> = Arc::new(PricedModel { calls: Arc::default() });
             if let Some(compacted) = compactor.compact(ctx.clone(), model, request).await? {
                 events.extend(compacted.event);
@@ -306,4 +306,494 @@ async fn intra_invocation_compaction_is_metered_and_refused_over_budget() {
     fixture.run(&runner, run_config(&exhausted, &ledger)).await;
     assert_eq!(fixture.calls(), calls, "no summary call is sent over the budget");
     assert_eq!(exhausted.usage().model_calls, 0);
+}
+
+/// A model whose provider compacts conversations itself: a compaction request gets a signed
+/// compaction with fixed usage and cost, and every request is recorded.
+struct NativeModel {
+    requests: Mutex<Vec<LlmRequest>>,
+    /// How long a compaction request takes.
+    delay: std::time::Duration,
+}
+
+impl NativeModel {
+    fn new() -> Arc<Self> {
+        Self::slow(std::time::Duration::ZERO)
+    }
+
+    fn slow(delay: std::time::Duration) -> Arc<Self> {
+        Arc::new(Self { requests: Mutex::new(Vec::new()), delay })
+    }
+
+    fn requests(&self) -> Vec<LlmRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl Llm for NativeModel {
+    fn name(&self) -> &str {
+        "native-model"
+    }
+
+    fn native_compaction(&self) -> Option<NativeCompaction> {
+        Some(NativeCompaction::new("native-vendor").keeping_thinking())
+    }
+
+    async fn generate_content(
+        &self,
+        request: LlmRequest,
+        _stream: bool,
+    ) -> Result<LlmResponseStream> {
+        let asked = NativeCompactionRequest::of(&request).is_some();
+        self.requests.lock().unwrap().push(request);
+        if asked {
+            tokio::time::sleep(self.delay).await;
+        }
+        let content = if asked {
+            Content {
+                role: "model".to_string(),
+                parts: vec![
+                    Part::Text { text: compaction_summary_text("the user said hello") },
+                    Part::ServerToolResponse {
+                        server_tool_response: serde_json::json!({
+                            "type": "native_message",
+                            "adk_replay_only": true,
+                            "adk_native_compaction": true,
+                            "content": [{"type": "compaction", "content": "the user said hello", "signature": "sig"}],
+                        }),
+                    },
+                ],
+            }
+        } else {
+            Content::new("model").with_text("a reply")
+        };
+        let mut response = LlmResponse {
+            content: Some(content),
+            usage_metadata: Some(UsageMetadata {
+                prompt_token_count: 400,
+                candidates_token_count: 100,
+                total_token_count: 500,
+                cost: Some(0.002),
+                ..Default::default()
+            }),
+            provider: Some("native-vendor".to_string()),
+            model: Some("native-model".to_string()),
+            turn_complete: true,
+            ..Default::default()
+        };
+        ProviderOrigin::new("native-vendor", "native-model")
+            .record(&mut response.provider_metadata);
+        Ok(Box::pin(futures::stream::iter(vec![Ok(response)])))
+    }
+}
+
+/// Asks the run's compactor to compact `history` with a model that compacts natively, after
+/// freezing `freeze` when given, records what came back, then replies without a model.
+struct NativeCompactingAgent {
+    model: Arc<NativeModel>,
+    history: Vec<Content>,
+    tools: ToolDeclarations,
+    freeze: Option<GovernanceControl>,
+    compacted: Arc<Mutex<Option<Vec<Content>>>>,
+}
+
+#[async_trait]
+impl Agent for NativeCompactingAgent {
+    fn name(&self) -> &str {
+        "assistant"
+    }
+    fn description(&self) -> &str {
+        "compacts natively, then replies without a model"
+    }
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        if let Some(control) = &self.freeze {
+            control.freeze("incident review");
+        }
+        let mut events = Vec::new();
+        if let Some(compactor) = ctx.run_config().history_compactor.clone() {
+            let request =
+                HistoryCompactionRequest::new(&self.history, CompactionTrigger::BeforeModelCall)
+                    .with_tools(&self.tools);
+            let model: Arc<dyn Llm> = self.model.clone();
+            if let Some(compacted) = compactor.compact(ctx.clone(), model, request).await? {
+                *self.compacted.lock().unwrap() = Some(compacted.history);
+                events.extend(compacted.event);
+            }
+        }
+        let mut event = Event::new(ctx.invocation_id());
+        event.author = "assistant".to_string();
+        event.set_content(Content::new("model").with_text("done"));
+        events.push(event);
+        Ok(Box::pin(futures::stream::iter(events.into_iter().map(Ok))))
+    }
+}
+
+fn native_runner(fixture: &Fixture, agent: NativeCompactingAgent) -> Runner {
+    Runner::builder()
+        .app_name("acme")
+        .agent(Arc::new(agent))
+        .session_service(fixture.sessions.clone() as Arc<dyn SessionService>)
+        .intra_compaction_config(IntraCompactionConfig::at_tokens(1).with_overlap_event_count(1))
+        .build()
+        .unwrap()
+}
+
+fn lookup_tools() -> ToolDeclarations {
+    let mut tools = ToolDeclarations::new();
+    tools.insert("lookup".to_string(), serde_json::json!({"description": "reads a page"}));
+    tools
+}
+
+#[tokio::test]
+async fn a_native_compaction_is_written_by_the_provider_and_metered() {
+    let fixture = Fixture::new().await;
+    let model = NativeModel::new();
+    let compacted = Arc::new(Mutex::new(None));
+    let history = vec![
+        Content::new("user").with_text("hello there, ".repeat(40)),
+        Content::new("model").with_text("hello back"),
+        Content::new("user").with_text("what did I say?"),
+    ];
+    let runner = native_runner(
+        &fixture,
+        NativeCompactingAgent {
+            model: model.clone(),
+            history: history.clone(),
+            tools: lookup_tools(),
+            freeze: None,
+            compacted: compacted.clone(),
+        },
+    );
+    let tracker = Arc::new(BudgetTracker::new(RunBudget::new()));
+    let ledger = Arc::new(InMemorySpendLedger::default());
+
+    fixture.run(&runner, run_config(&tracker, &ledger)).await;
+
+    // One provider compaction, with the agent's tools, and no summarizer call.
+    let requests = model.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(NativeCompactionRequest::of(&requests[0]).is_some());
+    assert!(requests[0].tools.contains_key("lookup"));
+    assert_eq!(requests[0].contents, history[..2].to_vec());
+    let compacted = compacted.lock().unwrap().clone().expect("compacted");
+    assert!(is_native_compaction(&compacted[0]));
+    assert_eq!(compacted[1..], history[2..]);
+    // The compaction counts against the run's budget and spend ledger.
+    let usage = tracker.usage();
+    assert_eq!((usage.model_calls, usage.total_tokens, usage.cost_micro_usd), (1, 500, 2_000));
+    let key = SpendKey::org("acme")
+        .with_agent("urn:adk:agent:acme/assistant")
+        .with_vendor("native-vendor");
+    assert_eq!(ledger.spent(&key, SpendPeriod::Lifetime).await.unwrap(), 2_000);
+}
+
+#[tokio::test]
+async fn a_frozen_run_sends_no_native_compaction() {
+    let fixture = Fixture::new().await;
+    let model = NativeModel::new();
+    let compacted = Arc::new(Mutex::new(None));
+    let control = GovernanceControl::new();
+    let runner = Runner::builder()
+        .app_name("acme")
+        .agent(Arc::new(NativeCompactingAgent {
+            model: model.clone(),
+            history: vec![
+                Content::new("user").with_text("hello there, ".repeat(40)),
+                Content::new("model").with_text("hello back"),
+                Content::new("user").with_text("what did I say?"),
+            ],
+            tools: lookup_tools(),
+            freeze: Some(control.clone()),
+            compacted: compacted.clone(),
+        }))
+        .session_service(fixture.sessions.clone() as Arc<dyn SessionService>)
+        .intra_compaction_config(IntraCompactionConfig::at_tokens(1).with_overlap_event_count(1))
+        .governance(control)
+        .build()
+        .unwrap();
+    let tracker = Arc::new(BudgetTracker::new(RunBudget::new()));
+    let ledger = Arc::new(InMemorySpendLedger::default());
+
+    fixture.run(&runner, run_config(&tracker, &ledger)).await;
+
+    assert!(model.requests().is_empty(), "a frozen run sends no compaction call");
+    assert!(compacted.lock().unwrap().is_none());
+    assert_eq!(fixture.compaction_events().await, 0);
+    assert_eq!(tracker.usage().model_calls, 0);
+}
+
+#[tokio::test]
+async fn a_held_call_stays_out_of_a_native_summary() {
+    let fixture = Fixture::new().await;
+    let model = NativeModel::new();
+    let compacted = Arc::new(Mutex::new(None));
+    let held_call = Content {
+        role: "model".to_string(),
+        parts: vec![Part::FunctionCall {
+            name: "transfer".to_string(),
+            args: serde_json::json!({"amount": 10}),
+            id: Some("call-hold".to_string()),
+            thought_signature: None,
+        }],
+    };
+    let pending = Content {
+        role: "function".to_string(),
+        parts: vec![Part::FunctionResponse {
+            function_response: FunctionResponseData::new(
+                "transfer",
+                confirmation_pending_response("waiting for approval"),
+            ),
+            id: Some("call-hold".to_string()),
+            annotations: None,
+        }],
+    };
+    let history = vec![
+        Content::new("user").with_text("background, ".repeat(60)),
+        held_call.clone(),
+        pending.clone(),
+        Content::new("user").with_text("is it done?"),
+    ];
+    let runner = native_runner(
+        &fixture,
+        NativeCompactingAgent {
+            model: model.clone(),
+            history: history.clone(),
+            tools: lookup_tools(),
+            freeze: None,
+            compacted: compacted.clone(),
+        },
+    );
+    let tracker = Arc::new(BudgetTracker::new(RunBudget::new()));
+    let ledger = Arc::new(InMemorySpendLedger::default());
+
+    fixture.run(&runner, run_config(&tracker, &ledger)).await;
+
+    let requests = model.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].contents, history[..1].to_vec(), "the held call is not summarized");
+    let compacted = compacted.lock().unwrap().clone().expect("compacted");
+    assert_eq!(compacted[1..], [held_call, pending, history[3].clone()]);
+}
+
+type Steps = Box<
+    dyn Fn(Arc<dyn InvocationContext>) -> futures::future::BoxFuture<'static, Result<Vec<Event>>>
+        + Send
+        + Sync,
+>;
+
+/// Runs `steps` with the run's context, as an agent that calls a model itself would.
+struct StepsAgent(Steps);
+
+#[async_trait]
+impl Agent for StepsAgent {
+    fn name(&self) -> &str {
+        "assistant"
+    }
+    fn description(&self) -> &str {
+        "runs scripted compaction steps"
+    }
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        let mut events = (self.0)(ctx.clone()).await?;
+        let mut event = Event::new(ctx.invocation_id());
+        event.author = "assistant".to_string();
+        event.set_content(Content::new("model").with_text("done"));
+        events.push(event);
+        Ok(Box::pin(futures::stream::iter(events.into_iter().map(Ok))))
+    }
+}
+
+/// A runner whose compaction runs in the background from 400 estimated tokens, with a
+/// 1,000-token threshold.
+fn background_runner(
+    fixture: &Fixture,
+    steps: Steps,
+    control: Option<GovernanceControl>,
+) -> Runner {
+    let mut builder = Runner::builder()
+        .app_name("acme")
+        .agent(Arc::new(StepsAgent(steps)))
+        .session_service(fixture.sessions.clone() as Arc<dyn SessionService>)
+        .intra_compaction_config(
+            IntraCompactionConfig::at_tokens(1_000).with_overlap_event_count(1).in_background(0.4),
+        );
+    if let Some(control) = control {
+        builder = builder.governance(control);
+    }
+    builder.build().unwrap()
+}
+
+/// About `tokens` estimated tokens of conversation, ending on a user turn.
+fn conversation(tokens: usize) -> Vec<Content> {
+    vec![
+        Content::new("user").with_text("x".repeat(tokens * 4 - 40)),
+        Content::new("model").with_text("noted"),
+        Content::new("user").with_text("what next?"),
+    ]
+}
+
+/// Asks the run's compactor to compact `history` with `model`.
+async fn compact(
+    ctx: &Arc<dyn InvocationContext>,
+    model: &Arc<NativeModel>,
+    history: &[Content],
+) -> Result<Option<adk_core::CompactedHistory>> {
+    let compactor = ctx.run_config().history_compactor.clone().expect("a compactor");
+    let model: Arc<dyn Llm> = model.clone();
+    compactor
+        .compact(
+            ctx.clone(),
+            model,
+            HistoryCompactionRequest::new(history, CompactionTrigger::BeforeModelCall),
+        )
+        .await
+}
+
+#[tokio::test]
+async fn a_background_compaction_starts_ahead_of_the_limit_and_is_swapped_in_later() {
+    let fixture = Fixture::new().await;
+    let model = NativeModel::new();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (steps_model, steps_seen) = (model.clone(), seen.clone());
+    let steps: Steps = Box::new(move |ctx| {
+        let (model, seen) = (steps_model.clone(), steps_seen.clone());
+        Box::pin(async move {
+            let mut history = conversation(600);
+            // Past 400 tokens and below 1,000: the summary starts, the call goes on.
+            let first = compact(&ctx, &model, &history).await?;
+            seen.lock().unwrap().push(first.is_some());
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            // The agent went on meanwhile; the next call swaps the summary in.
+            history.push(Content::new("model").with_text("next step"));
+            history.push(Content::new("user").with_text("and then?"));
+            let second = compact(&ctx, &model, &history).await?.expect("swapped in");
+            seen.lock().unwrap().push(true);
+            assert!(is_native_compaction(&second.history[0]));
+            assert_eq!(second.history[1..], history[2..], "everything after the summary stays");
+            Ok(second.event.into_iter().collect())
+        })
+    });
+    let runner = background_runner(&fixture, steps, None);
+    let tracker = Arc::new(BudgetTracker::new(RunBudget::new()));
+    let ledger = Arc::new(InMemorySpendLedger::default());
+
+    fixture.run(&runner, run_config(&tracker, &ledger)).await;
+
+    assert_eq!(*seen.lock().unwrap(), vec![false, true], "the first call did not wait");
+    assert_eq!(model.requests().len(), 1, "one summary, written in the background");
+    assert_eq!(model.requests()[0].contents, conversation(600)[..2].to_vec());
+    assert_eq!(tracker.usage().model_calls, 1, "the background call is metered");
+}
+
+#[tokio::test]
+async fn a_request_that_reaches_the_threshold_waits_for_the_background_summary() {
+    let fixture = Fixture::new().await;
+    let model = NativeModel::slow(std::time::Duration::from_millis(100));
+    let steps_model = model.clone();
+    let steps: Steps = Box::new(move |ctx| {
+        let model = steps_model.clone();
+        Box::pin(async move {
+            let mut history = conversation(600);
+            assert!(compact(&ctx, &model, &history).await?.is_none());
+            // Past the threshold before the summary is ready: the call waits for it rather
+            // than starting another.
+            history.push(Content::new("model").with_text("y".repeat(2_000)));
+            history.push(Content::new("user").with_text("and then?"));
+            let compacted = compact(&ctx, &model, &history).await?.expect("waited and swapped in");
+            assert!(is_native_compaction(&compacted.history[0]));
+            Ok(Vec::new())
+        })
+    });
+    let runner = background_runner(&fixture, steps, None);
+    let tracker = Arc::new(BudgetTracker::new(RunBudget::new()));
+
+    fixture.run(&runner, run_config(&tracker, &Arc::default())).await;
+
+    assert_eq!(model.requests().len(), 1, "no second summary was started");
+}
+
+#[tokio::test]
+async fn no_background_compaction_starts_while_a_call_is_held_or_the_run_is_frozen() {
+    for frozen in [false, true] {
+        let fixture = Fixture::new().await;
+        let model = NativeModel::new();
+        let control = GovernanceControl::new();
+        let (steps_model, steps_control) = (model.clone(), control.clone());
+        let steps: Steps = Box::new(move |ctx| {
+            let (model, control) = (steps_model.clone(), steps_control.clone());
+            Box::pin(async move {
+                let mut history = conversation(600);
+                if frozen {
+                    control.freeze("incident review");
+                } else {
+                    history.push(Content {
+                        role: "model".to_string(),
+                        parts: vec![Part::FunctionCall {
+                            name: "transfer".to_string(),
+                            args: serde_json::json!({"amount": 10}),
+                            id: Some("call-hold".to_string()),
+                            thought_signature: None,
+                        }],
+                    });
+                    history.push(Content {
+                        role: "function".to_string(),
+                        parts: vec![Part::FunctionResponse {
+                            function_response: FunctionResponseData::new(
+                                "transfer",
+                                confirmation_pending_response("waiting for approval"),
+                            ),
+                            id: Some("call-hold".to_string()),
+                            annotations: None,
+                        }],
+                    });
+                }
+                assert!(compact(&ctx, &model, &history).await?.is_none());
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                assert!(compact(&ctx, &model, &history).await?.is_none());
+                Ok(Vec::new())
+            })
+        });
+        let runner = background_runner(&fixture, steps, Some(control));
+        let tracker = Arc::new(BudgetTracker::new(RunBudget::new()));
+
+        fixture.run(&runner, run_config(&tracker, &Arc::default())).await;
+
+        assert!(model.requests().is_empty(), "frozen: {frozen}");
+        assert_eq!(tracker.usage().model_calls, 0);
+    }
+}
+
+#[tokio::test]
+async fn a_background_summary_of_a_history_that_changed_is_discarded() {
+    let fixture = Fixture::new().await;
+    let model = NativeModel::new();
+    let steps_model = model.clone();
+    let steps: Steps = Box::new(move |ctx| {
+        let model = steps_model.clone();
+        Box::pin(async move {
+            assert!(compact(&ctx, &model, &conversation(600)).await?.is_none());
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            // A history processor rewrote the start of the history meanwhile.
+            let mut rewritten = conversation(600);
+            rewritten[0] = Content::new("user").with_text("z".repeat(2_360));
+            assert!(compact(&ctx, &model, &rewritten).await?.is_none());
+            // The summary started for the rewritten history runs before the run ends.
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            Ok(Vec::new())
+        })
+    });
+    let runner = background_runner(&fixture, steps, None);
+
+    fixture
+        .run(&runner, run_config(&Arc::new(BudgetTracker::new(RunBudget::new())), &Arc::default()))
+        .await;
+
+    // The stale summary is dropped and a new one starts for the rewritten history.
+    assert_eq!(model.requests().len(), 2);
 }

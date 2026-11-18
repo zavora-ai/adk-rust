@@ -6,7 +6,14 @@ Give an ADK agent safe, governed control of a real desktop.
 [![Documentation](https://docs.rs/adk-computer-use/badge.svg)](https://docs.rs/adk-computer-use)
 [![License](https://img.shields.io/crates/l/adk-computer-use.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
 
-This crate is the ADK-Rust orchestration layer for
+`ComputerUseToolset` runs each member of Claude's computer use toolset
+(`computer.left_click`, `computer.screenshot`, ...) as a governed tool call over an
+`adk_core::ComputerActuator` you supply, such as `adk_browser::WebDriverComputer`: tool
+policy, approvals, the kill switch, budgets and the action ledger decide every action, and
+an action that is refused or fails stops the rest of the model's batch. See
+[Governed Computer Use and Browser Use](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/computer-use/toolsets.md).
+
+This crate is also the ADK-Rust orchestration layer for
 [`computer-use-mcp`](https://github.com/zavora-ai/computer-use-mcp). It does not
 perform any desktop actuation itself. The actual clicking, typing, and
 screen-reading happens in `computer-use-mcp`, which remains authoritative for

@@ -12,7 +12,9 @@ use crate::scoring::{ResponseScorer, ToolTrajectoryScorer};
 use crate::structured_judge::StructuredJudge;
 use crate::trace_analyzer::TraceAnalyzer;
 
-use adk_core::{Agent, Content, Event, Llm, SessionId, UserId};
+use adk_core::{
+    Agent, BudgetTracker, Content, Event, Llm, ModelCallScope, RunConfig, SessionId, UserId,
+};
 use adk_runner::Runner;
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use futures::StreamExt;
@@ -74,7 +76,13 @@ pub struct Evaluator {
     embedding_scorer: Option<Arc<EmbeddingScorer>>,
     /// Optional conversation scorer for multi-turn metrics
     conversation_scorer: Option<Arc<crate::conversation_scorer::ConversationScorer>>,
+    /// Run configuration of every eval run, whose budget, spend ledger and kill switches
+    /// also govern the judges
+    run_config: Option<RunConfig>,
 }
+
+/// The agent judge calls are attributed to in the spend ledger.
+pub const JUDGE_AGENT_NAME: &str = "eval-judge";
 
 impl Evaluator {
     /// Create a new evaluator with default configuration
@@ -102,6 +110,7 @@ impl Evaluator {
             #[cfg(feature = "embedding")]
             embedding_scorer: None,
             conversation_scorer: None,
+            run_config: None,
         }
     }
 
@@ -130,6 +139,7 @@ impl Evaluator {
             #[cfg(feature = "embedding")]
             embedding_scorer: None,
             conversation_scorer: None,
+            run_config: None,
         }
     }
 
@@ -170,6 +180,80 @@ impl Evaluator {
         scorer: Arc<crate::conversation_scorer::ConversationScorer>,
     ) {
         self.conversation_scorer = Some(scorer);
+    }
+
+    /// Meters the evaluation: every eval run uses `config`, and the judges' calls count
+    /// against its budget and spend ledger and stop when one of its kill switches is frozen.
+    ///
+    /// A [`RunConfig::budget`] without a [`budget_tracker`](RunConfig::budget_tracker)
+    /// becomes one tracker shared by every run and judge call of the evaluation, so the
+    /// budget bounds the whole evaluation rather than each run. Judge spend is attributed
+    /// to the agent [`JUDGE_AGENT_NAME`] under the case's app name.
+    ///
+    /// A run or judge call the budget, the spend ledger or a kill switch refuses stops the
+    /// evaluation with [`EvalError::Refused`](crate::EvalError::Refused); it never counts
+    /// as a failed case.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_core::{GovernanceControl, RunBudget, RunConfig};
+    /// use adk_eval::{EvaluationConfig, EvaluationCriteria, Evaluator};
+    ///
+    /// let kill_switch = GovernanceControl::new();
+    /// let mut evaluator = Evaluator::new(EvaluationConfig::with_criteria(
+    ///     EvaluationCriteria::exact_tools(),
+    /// ));
+    /// evaluator.set_run_config(
+    ///     RunConfig::builder()
+    ///         .budget(RunBudget::new().max_model_calls(200))
+    ///         .governance(kill_switch.clone())
+    ///         .build(),
+    /// );
+    /// assert!(evaluator.run_config().unwrap().budget_tracker.is_some());
+    /// ```
+    pub fn set_run_config(&mut self, mut config: RunConfig) {
+        if config.budget_tracker.is_none()
+            && let Some(budget) = config.budget.clone()
+        {
+            config.budget_tracker = Some(Arc::new(BudgetTracker::new(budget)));
+        }
+        self.run_config = Some(config);
+    }
+
+    /// The run configuration set with [`set_run_config`](Self::set_run_config).
+    pub fn run_config(&self) -> Option<&RunConfig> {
+        self.run_config.as_ref()
+    }
+
+    /// The scope judge calls for a case of `app_name` meter against.
+    fn judge_scope(&self, app_name: &str) -> Option<ModelCallScope> {
+        self.run_config
+            .as_ref()
+            .map(|config| ModelCallScope::for_run(config, app_name, JUDGE_AGENT_NAME))
+    }
+
+    /// Fails with [`EvalError::Refused`](crate::EvalError::Refused) when a kill switch of
+    /// the run config is frozen or its budget is spent, before anything is sent.
+    pub(crate) fn check_allowed(&self) -> Result<()> {
+        let Some(config) = &self.run_config else { return Ok(()) };
+        config.check_governance().map_err(|e| crate::error::EvalError::Refused(Box::new(e)))?;
+        if let Some(tracker) = &config.budget_tracker {
+            tracker.check().map_err(|e| crate::error::EvalError::Refused(Box::new(e.into())))?;
+            if tracker.remaining().max_model_calls == Some(0) {
+                let usage = tracker.usage();
+                return Err(crate::error::EvalError::Refused(Box::new(adk_core::AdkError::new(
+                    adk_core::ErrorComponent::Eval,
+                    adk_core::ErrorCategory::ResourceExhausted,
+                    "budget.model_calls",
+                    format!(
+                        "budget exhausted: {} model calls used, none left for the evaluation",
+                        usage.model_calls
+                    ),
+                ))));
+            }
+        }
+        Ok(())
     }
 
     /// Check if a structured judge is configured
@@ -244,19 +328,135 @@ impl Evaluator {
     ///
     /// Returns [`EvalError::ConfigError`](crate::EvalError::ConfigError) when the file has
     /// no eval cases or the evaluator has no criteria, since the report would otherwise
-    /// read as a pass.
+    /// read as a pass, and [`EvalError::Refused`](crate::EvalError::Refused) when the
+    /// [run config](Self::set_run_config)'s budget, spend ledger or kill switch stops the
+    /// evaluation.
     pub async fn evaluate_test_file(
         &self,
         agent: Arc<dyn Agent>,
         test_file: &TestFile,
     ) -> Result<EvaluationReport> {
+        self.check_test_file(test_file)?;
+        self.run_test_file(agent, test_file, self.config.continue_on_failure).await
+    }
+
+    /// Runs a test file `config.num_runs` times and summarises each case's pass rate,
+    /// score statistics and flakiness ([`MultiRunReport`](crate::MultiRunReport)).
+    ///
+    /// Every run evaluates every case, whatever
+    /// [`continue_on_failure`](EvaluationConfig::continue_on_failure) says, each case in a
+    /// fresh session. The same agent instance serves every run.
+    ///
+    /// When the [run config](Self::set_run_config)'s budget, spend ledger or kill switch
+    /// refuses a run or a judge call, the runs stop: the report keeps the runs that
+    /// completed and says why in [`stopped`](crate::MultiRunReport::stopped), and
+    /// [`all_passed`](crate::MultiRunReport::all_passed) is `false`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvalError::ConfigError`](crate::EvalError::ConfigError) when the file has
+    /// no eval cases or the evaluator has no criteria.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    ///
+    /// use adk_core::Agent;
+    /// use adk_eval::{EvaluationConfig, EvaluationCriteria, Evaluator, MultiRunConfig, TestFile};
+    ///
+    /// async fn three_runs(agent: Arc<dyn Agent>, file: &TestFile) -> adk_eval::Result<()> {
+    ///     let evaluator = Evaluator::new(EvaluationConfig::with_criteria(
+    ///         EvaluationCriteria::exact_tools(),
+    ///     ));
+    ///     let report = evaluator.evaluate_test_file_runs(agent, file, &MultiRunConfig::new(3)?).await?;
+    ///     println!("{}", report.format_summary());
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn evaluate_test_file_runs(
+        &self,
+        agent: Arc<dyn Agent>,
+        test_file: &TestFile,
+        config: &crate::multi_run::MultiRunConfig,
+    ) -> Result<crate::multi_run::MultiRunReport> {
+        self.check_test_file(test_file)?;
+        let mut runs = Vec::with_capacity(config.num_runs);
+        let mut stopped = None;
+        for run in 0..config.num_runs {
+            match self.run_test_file(agent.clone(), test_file, true).await {
+                Ok(report) => {
+                    tracing::info!(
+                        eval.set = %test_file.eval_set_id,
+                        eval.run = run + 1,
+                        eval.runs = config.num_runs,
+                        eval.passed = report.summary.passed,
+                        eval.failed = report.summary.failed,
+                        "eval run completed"
+                    );
+                    runs.push(report);
+                }
+                Err(e) if e.is_refusal() => {
+                    tracing::warn!(
+                        eval.set = %test_file.eval_set_id,
+                        eval.run = run + 1,
+                        error = %e,
+                        "eval runs stopped by a refusal"
+                    );
+                    stopped = Some(format!("run {} of {}: {e}", run + 1, config.num_runs));
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        let report = crate::multi_run::MultiRunReport::from_runs(
+            &test_file.eval_set_id,
+            config.num_runs,
+            config.min_pass_rate,
+            runs,
+        );
+        Ok(match stopped {
+            Some(reason) => report.with_stopped(reason),
+            None => report,
+        })
+    }
+
+    /// Loads a test file and runs it `config.num_runs` times
+    /// ([`evaluate_test_file_runs`](Self::evaluate_test_file_runs)).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be loaded, has no eval cases, or the
+    /// evaluator has no criteria.
+    pub async fn evaluate_file_runs(
+        &self,
+        agent: Arc<dyn Agent>,
+        path: impl AsRef<Path>,
+        config: &crate::multi_run::MultiRunConfig,
+    ) -> Result<crate::multi_run::MultiRunReport> {
+        let test_file = TestFile::load(path)?;
+        self.evaluate_test_file_runs(agent, &test_file, config).await
+    }
+
+    /// Refuses a test file without cases and an evaluator without criteria.
+    fn check_test_file(&self, test_file: &TestFile) -> Result<()> {
         if test_file.eval_cases.is_empty() {
             return Err(crate::error::EvalError::ConfigError(format!(
                 "test file '{}' has no eval cases; add at least one case to evaluate",
                 test_file.eval_set_id
             )));
         }
-        self.check_criteria()?;
+        self.check_criteria()
+    }
+
+    /// Evaluates the cases of `test_file` once, stopping at the first failed case unless
+    /// `continue_on_failure`, and at the first refusal.
+    async fn run_test_file(
+        &self,
+        agent: Arc<dyn Agent>,
+        test_file: &TestFile,
+        continue_on_failure: bool,
+    ) -> Result<EvaluationReport> {
         let started_at = chrono::Utc::now();
         let run_id = format!("{}_{}", test_file.eval_set_id, uuid::Uuid::new_v4());
         let mut results = Vec::new();
@@ -268,10 +468,11 @@ impl Evaluator {
                 Ok(r) => {
                     let passed = r.passed;
                     results.push(r);
-                    if !passed && !self.config.continue_on_failure {
+                    if !passed && !continue_on_failure {
                         break;
                     }
                 }
+                Err(e) if e.is_refusal() => return Err(e),
                 Err(e) => {
                     // Create a failed result for the error
                     results.push(EvaluationResult::failed(
@@ -286,7 +487,7 @@ impl Evaluator {
                         )],
                         Duration::from_secs(0),
                     ));
-                    if !self.config.continue_on_failure {
+                    if !continue_on_failure {
                         break;
                     }
                 }
@@ -314,9 +515,11 @@ impl Evaluator {
     /// # Errors
     ///
     /// Returns [`EvalError::ConfigError`](crate::EvalError::ConfigError) when the case has
-    /// no turns or the evaluator has no criteria, and an error when the session cannot be
-    /// created from `session_input`, the agent fails to start, or its event stream yields
-    /// an error.
+    /// no turns or the evaluator has no criteria,
+    /// [`EvalError::Refused`](crate::EvalError::Refused) when the
+    /// [run config](Self::set_run_config)'s budget, spend ledger or kill switch refuses a
+    /// run or a judge call, and an error when the session cannot be created from
+    /// `session_input`, the agent fails to start, or its event stream yields an error.
     pub async fn evaluate_case(
         &self,
         agent: Arc<dyn Agent>,
@@ -329,6 +532,19 @@ impl Evaluator {
             )));
         }
         self.check_criteria()?;
+        self.check_allowed()?;
+        match self.judge_scope(app_name_of(&eval_case.session_input)) {
+            Some(scope) => scope.within(self.run_case(agent, eval_case)).await,
+            None => self.run_case(agent, eval_case).await,
+        }
+    }
+
+    /// Runs and scores one case; [`evaluate_case`](Self::evaluate_case) has checked it.
+    async fn run_case(
+        &self,
+        agent: Arc<dyn Agent>,
+        eval_case: &EvalCase,
+    ) -> Result<EvaluationResult> {
         let start = Instant::now();
         let mut score_totals: HashMap<String, (f64, usize)> = HashMap::new();
         let mut all_failures: Vec<Failure> = Vec::new();
@@ -336,7 +552,9 @@ impl Evaluator {
         let mut all_events: Vec<Event> = Vec::new();
         let mut last_turn: Option<TurnResult> = None;
 
-        let conversation = EvalConversation::start(agent, &eval_case.session_input).await?;
+        let conversation =
+            EvalConversation::start(agent, &eval_case.session_input, self.run_config.clone())
+                .await?;
 
         // Execute each turn in the conversation
         for turn in &eval_case.conversation {
@@ -344,7 +562,7 @@ impl Evaluator {
             all_events.extend(events);
 
             // Score this turn
-            let (scores, failures) = self.score_turn(turn, &turn_result).await;
+            let (scores, failures) = self.score_turn(turn, &turn_result).await?;
             for (criterion, score) in scores {
                 let (sum, count) = score_totals.entry(criterion).or_insert((0.0, 0));
                 *sum += score;
@@ -402,6 +620,7 @@ impl Evaluator {
                         }
                         verdicts.push(verdict);
                     }
+                    Err(e) if e.is_refusal() => return Err(e),
                     Err(e) => {
                         tracing::warn!(error = %e, "structured judge failed");
                         all_scores.insert("structured_judge".to_string(), 0.0);
@@ -503,7 +722,7 @@ impl Evaluator {
     }
 
     /// Extract response text and tool calls from events
-    fn extract_from_events(&self, events: &[Event]) -> (Option<String>, Vec<ToolUse>) {
+    pub(crate) fn extract_from_events(&self, events: &[Event]) -> (Option<String>, Vec<ToolUse>) {
         let mut response_text = String::new();
         let mut tool_calls = Vec::new();
         let complete_ids: std::collections::HashSet<_> = events
@@ -552,11 +771,14 @@ impl Evaluator {
     }
 
     /// Score a turn against criteria
-    async fn score_turn(
+    ///
+    /// A judge error fails its criterion, except a refusal by the evaluation's budget,
+    /// spend ledger or kill switch, which is returned.
+    pub(crate) async fn score_turn(
         &self,
         turn: &Turn,
         result: &TurnResult,
-    ) -> (HashMap<String, f64>, Vec<Failure>) {
+    ) -> Result<(HashMap<String, f64>, Vec<Failure>)> {
         let mut scores = HashMap::new();
         let mut failures = Vec::new();
 
@@ -658,6 +880,7 @@ impl Evaluator {
                             );
                         }
                     }
+                    Err(e) if e.is_refusal() => return Err(e),
                     Err(e) => {
                         scores.insert("semantic_match".to_string(), 0.0);
                         failures.push(
@@ -732,6 +955,7 @@ impl Evaluator {
                                 );
                             }
                         }
+                        Err(e) if e.is_refusal() => return Err(e),
                         Err(e) => {
                             scores.insert("rubric_quality".to_string(), 0.0);
                             failures.push(
@@ -796,6 +1020,7 @@ impl Evaluator {
                             );
                         }
                     }
+                    Err(e) if e.is_refusal() => return Err(e),
                     Err(e) => {
                         scores.insert("safety".to_string(), 0.0);
                         failures.push(
@@ -855,6 +1080,7 @@ impl Evaluator {
                                 );
                             }
                         }
+                        Err(e) if e.is_refusal() => return Err(e),
                         Err(e) => {
                             scores.insert("hallucination".to_string(), 0.0);
                             failures.push(
@@ -881,7 +1107,7 @@ impl Evaluator {
             }
         }
 
-        (scores, failures)
+        Ok((scores, failures))
     }
 
     /// Evaluate multiple test cases in parallel
@@ -982,7 +1208,9 @@ impl Evaluator {
         num_turns: usize,
     ) -> Result<Vec<Content>> {
         let mut history: Vec<Content> = Vec::new();
-        let conversation = EvalConversation::start(agent, &SessionInput::default()).await?;
+        let conversation =
+            EvalConversation::start(agent, &SessionInput::default(), self.run_config.clone())
+                .await?;
 
         for _turn_idx in 0..num_turns {
             // 1. Generate user message from the simulator
@@ -1035,14 +1263,20 @@ struct EvalConversation {
     session_id: SessionId,
 }
 
+/// The app name a case runs under: its `session_input.app_name`, or [`DEFAULT_APP_NAME`].
+fn app_name_of(session_input: &SessionInput) -> &str {
+    if session_input.app_name.is_empty() { DEFAULT_APP_NAME } else { &session_input.app_name }
+}
+
 impl EvalConversation {
-    /// Creates the session described by `session_input` and a runner for `agent`.
-    async fn start(agent: Arc<dyn Agent>, session_input: &SessionInput) -> Result<Self> {
-        let app_name = if session_input.app_name.is_empty() {
-            DEFAULT_APP_NAME
-        } else {
-            session_input.app_name.as_str()
-        };
+    /// Creates the session described by `session_input` and a runner for `agent` that runs
+    /// every turn with `run_config`, when there is one.
+    async fn start(
+        agent: Arc<dyn Agent>,
+        session_input: &SessionInput,
+        run_config: Option<RunConfig>,
+    ) -> Result<Self> {
+        let app_name = app_name_of(session_input);
         let user_id = if session_input.user_id.is_empty() {
             DEFAULT_USER_ID
         } else {
@@ -1069,34 +1303,44 @@ impl EvalConversation {
             SessionId::try_from(session.id()).map_err(|e| invalid_input(e.to_string()))?;
         let user_id = UserId::try_from(user_id).map_err(|e| invalid_input(e.to_string()))?;
 
-        let runner = Runner::builder()
-            .app_name(app_name)
-            .agent(agent)
-            .session_service(session_service)
-            .build()
-            .map_err(|e| {
-                crate::error::EvalError::ExecutionError(format!(
-                    "cannot build the eval runner: {e}"
-                ))
-            })?;
+        let builder =
+            Runner::builder().app_name(app_name).agent(agent).session_service(session_service);
+        let builder = match run_config {
+            Some(config) => builder.run_config(config),
+            None => builder,
+        };
+        let runner = builder.build().map_err(|e| {
+            crate::error::EvalError::ExecutionError(format!("cannot build the eval runner: {e}"))
+        })?;
 
         Ok(Self { runner, user_id, session_id })
     }
 
     /// Runs one turn and collects its events, failing on the first stream error.
+    ///
+    /// A refusal by the run's budget, spend ledger or kill switch is returned as
+    /// [`EvalError::Refused`](crate::EvalError::Refused).
     async fn send(&self, input: Content) -> Result<Vec<Event>> {
+        use crate::error::EvalError;
+
         let mut stream =
             self.runner.run(self.user_id.clone(), self.session_id.clone(), input).await.map_err(
-                |e| crate::error::EvalError::ExecutionError(format!("Agent run failed: {e}")),
+                |e| {
+                    EvalError::from_model_error(e, |e| {
+                        EvalError::ExecutionError(format!("Agent run failed: {e}"))
+                    })
+                },
             )?;
 
         let mut events = Vec::new();
         while let Some(item) = stream.next().await {
             let event = item.map_err(|e| {
-                crate::error::EvalError::ExecutionError(format!(
-                    "agent event stream failed after {} event(s): {e}",
-                    events.len()
-                ))
+                EvalError::from_model_error(e, |e| {
+                    EvalError::ExecutionError(format!(
+                        "agent event stream failed after {} event(s): {e}",
+                        events.len()
+                    ))
+                })
             })?;
             events.push(event);
         }
@@ -1643,7 +1887,7 @@ mod tests {
             scores: HashMap::new(),
         };
 
-        let (scores, failures) = evaluator.score_turn(&turn, &result).await;
+        let (scores, failures) = evaluator.score_turn(&turn, &result).await.unwrap();
         assert!(failures.is_empty());
         assert_eq!(scores.get("tool_trajectory"), Some(&1.0));
         assert_eq!(scores.get("response_similarity"), Some(&1.0));

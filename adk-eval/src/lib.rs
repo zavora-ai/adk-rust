@@ -19,6 +19,14 @@
 //!   baselines, human annotation, test generation, and conversation metrics
 //! - **Ledger statistics**: per-dimension median/MAD baselines and drift detection over a
 //!   content-free activity ledger ([`ledger`]), the statistics behind `cargo adk eval --ledger`
+//! - **Repeated runs**: [`Evaluator::evaluate_test_file_runs`] runs an eval set several times
+//!   and reports each case's pass rate, score mean and variance, and flakiness ([`multi_run`])
+//! - **Metered judging**: [`Evaluator::set_run_config`] puts every eval run and judge call
+//!   under one budget, spend ledger and kill switch; a refusal stops the evaluation
+//! - **Online evaluation**: [`online::OnlineEvaluator`] judges a seeded sample of finished
+//!   production runs on a background worker, under its own budget and the kill switch, and
+//!   records the verdicts in an [`online::OnlineEvalStore`] and as `gen_ai.evaluation.result`
+//!   telemetry
 //!
 //! | Feature | Enables |
 //! |---------|---------|
@@ -62,6 +70,8 @@ pub mod scoring;
 #[cfg(feature = "personas")]
 pub mod personas;
 
+pub mod multi_run;
+pub mod online;
 pub mod optimizer;
 pub mod outcome;
 
@@ -97,10 +107,11 @@ pub use criteria::{
     EvaluationCriteria, ResponseMatchConfig, Rubric, RubricConfig, ToolTrajectoryConfig,
 };
 pub use error::{EvalError, Result};
-pub use evaluator::{EvaluationConfig, Evaluator};
+pub use evaluator::{EvaluationConfig, Evaluator, JUDGE_AGENT_NAME};
 pub use llm_judge::{
     LlmJudge, LlmJudgeConfig, RubricEvaluationResult, RubricScore, SemanticMatchResult,
 };
+pub use multi_run::{CaseRunSummary, MultiRunConfig, MultiRunReport, PASS_RATE_METRIC, ScoreStats};
 pub use report::{EvaluationReport, EvaluationResult, Failure, TestCaseResult};
 pub use schema::{EvalCase, EvalSet, IntermediateData, SessionInput, TestFile, ToolUse, Turn};
 pub use scoring::{ResponseScorer, ToolTrajectoryScorer};
@@ -160,6 +171,7 @@ pub mod prelude {
     pub use crate::llm_judge::{
         LlmJudge, LlmJudgeConfig, RubricEvaluationResult, SemanticMatchResult,
     };
+    pub use crate::multi_run::{MultiRunConfig, MultiRunReport};
     pub use crate::report::{EvaluationReport, EvaluationResult, Failure, TestCaseResult};
     pub use crate::schema::{EvalCase, EvalSet, TestFile, ToolUse, Turn};
 }

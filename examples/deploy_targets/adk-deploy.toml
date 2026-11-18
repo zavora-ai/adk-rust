@@ -1,0 +1,48 @@
+# One manifest, every target: `cargo adk deploy --target <name> --plan` renders each.
+[agent]
+name = "support-desk"
+binary = "support-desk"
+version = "0.1.0"
+description = "Answers support questions; runs unchanged on every deploy target"
+
+[scaling]
+minInstances = 1
+maxInstances = 1
+
+[health]
+path = "/api/health"
+intervalSecs = 10
+timeoutSecs = 3
+failureThreshold = 3
+
+# SQLite on a persistent volume, so sessions survive restarts; one replica.
+[[services]]
+name = "sessions"
+kind = "sqlite"
+mode = "external"
+secretRef = "SESSIONS_DATABASE_URL"
+
+[[secrets]]
+key = "SESSIONS_DATABASE_URL"
+
+[[secrets]]
+key = "ANTHROPIC_API_KEY"
+
+[[secrets]]
+key = "ADK_API_TOKEN"
+
+[env]
+RUST_LOG = "info"
+ANTHROPIC_MODEL = "claude-haiku-5-5"
+ANTHROPIC_API_KEY = { secretRef = "ANTHROPIC_API_KEY" }
+ADK_API_TOKEN = { secretRef = "ADK_API_TOKEN" }
+
+[auth]
+mode = "bearer"
+requiredScopes = ["agent:invoke"]
+
+[targets.container]
+# Path dependencies reach back into the repository, so the build context is its root.
+context = "../.."
+dataDir = "/data"
+allowedHosts = ["support.example.com"]

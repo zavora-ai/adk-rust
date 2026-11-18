@@ -198,6 +198,46 @@ async fn an_agents_daily_limit_holds_its_unattended_work() {
     kernel.stop().await.unwrap();
 }
 
+/// Raising an agent's daily limit releases the unattended work the old limit held, at once
+/// rather than the next UTC day (spec 3.3 §5.7, K-I11).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_raised_daily_limit_releases_the_agents_held_work() {
+    let world = World::new();
+    let kernel = world.kernel("k1");
+    kernel.start().await.unwrap();
+    let record = add(&kernel, finance().with_daily_limit(1_000)).await;
+    let today = chrono::Utc::now().date_naive();
+    let earlier = spawn(&kernel, "finance").await;
+    in_state(&world.runs, &earlier, RunState::Completed).await;
+    world
+        .processes
+        .add_spend(&earlier, &"default".into(), today, SpendDelta::new(1_000))
+        .await
+        .unwrap();
+    let routine = kernel
+        .processes()
+        .spawn(run("finance", QueueClass::BACKGROUND), ProcessSpec::new(ProcessKind::Scheduled))
+        .await
+        .unwrap()
+        .meta
+        .pid;
+    in_state(&world.runs, &routine, RunState::Waiting).await;
+    let held = world.processes.get(&routine).await.unwrap().unwrap();
+    assert_eq!(
+        held.labels.get("kernel.admission").map(String::as_str),
+        Some("the agent's daily limit")
+    );
+
+    let change = adk_kernel::agents::AgentAction::Change {
+        id: "finance".into(),
+        expected_version: record.version,
+        definition: record.definition().with_daily_limit(2_000),
+    };
+    agents_support::apply(&kernel, &agents_support::local(), change).await.unwrap();
+    in_state(&world.runs, &routine, RunState::Completed).await;
+    kernel.stop().await.unwrap();
+}
+
 /// Adding an agent works while everything is stopped, and nothing it does starts until the
 /// freeze is lifted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

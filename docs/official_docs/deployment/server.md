@@ -322,6 +322,31 @@ GET /api/apps/{app_name}/users/{user_id}/sessions
 `DELETE` as well, and `POST /api/apps/{app_name}/users/{user_id}/sessions` creates a session with
 a generated ID.
 
+#### Fork, Rewind, and Edit History
+
+| Route | Body | Response |
+|-------|------|----------|
+| `GET …/sessions/{session_id}/history` | — | `200` `{session, version, forkedFrom?}` |
+| `POST …/sessions/{session_id}/fork` | `{eventId?, sessionId?}` | `201` `{session, change}`: the fork |
+| `POST …/sessions/{session_id}/rewind` | exactly one of `{eventId}`, `{steps}`, `{beforeInvocationId}`, plus `expectedVersion?` | `200` `{session, change}` |
+| `POST …/sessions/{session_id}/history/edit` | `{edits: [{op: "replace", event} \| {op: "remove", eventId}], expectedVersion?}` | `200` `{session, change}` |
+
+The routes carry the session routes' authentication: a caller reaches only its own user's
+sessions (`403`). They refuse while a turn runs on the session (`409`
+`session.history.run_active`), while a call waits for a decision (`409`
+`session.history.held_call`), when `expectedVersion` no longer matches (`409`
+`session.history.version_mismatch`), and when the result would split a tool call from its
+response (`400` `session.history.splits_tool_call`). Errors are problem JSON with the code. Each
+change is recorded in the audit trail attached to the server's kill switch: a decision before
+it is applied and its outcome after, naming events by ID with a digest of the changed content.
+`beforeInvocationId` undoes a turn: it removes that invocation and every event after it. See
+[Fork, Rewind, and Edit History](../sessions/history.md).
+
+```bash
+curl -X POST localhost:8080/api/apps/support/users/alice/sessions/s1/rewind \
+  -H 'content-type: application/json' -d '{"beforeInvocationId": "e-91c7"}'
+```
+
 ### Artifact Management
 
 #### List Artifacts

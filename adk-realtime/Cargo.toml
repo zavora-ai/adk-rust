@@ -16,7 +16,7 @@ homepage.workspace = true
 
 [package.metadata.docs.rs]
 # openai-webrtc builds the Opus C library with cmake and is left out.
-features = ["full", "heygen-avatar", "did-avatar", "integration"]
+features = ["full", "heygen-avatar", "did-avatar", "integration", "openai-sip", "livekit-sip"]
 
 [dependencies]
 # Core ADK dependencies
@@ -112,6 +112,10 @@ url = "2.5"
 anyhow = "1.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 criterion = "0.5"
+wiremock = "0.6"
+# LiveKit SIP contract tests: protobuf request bodies and signed webhooks.
+prost = "0.12"
+sha2 = { workspace = true }
 stats_alloc = "0.1.10"
 
 [[example]]
@@ -193,6 +197,16 @@ gemini = ["dep:tokio-tungstenite", "dep:adk-gemini"]
 vertex-live = ["gemini", "dep:google-cloud-auth"]
 # Enable LiveKit WebRTC bridge
 livekit = ["dep:livekit", "dep:livekit-api", "dep:tokio-tungstenite", "dep:libwebrtc", "dep:webrtc-sys", "dep:webrtc-sys-build", "dep:livekit-protocol", "dep:livekit-common", "dep:livekit-datatrack", "dep:livekit-data-stream"]
+# Provider-neutral phone-call control (`telephony`): call handles, the freeze guard, and the
+# transfer, end-call, DTMF and dialling tools.
+telephony = []
+# OpenAI Realtime SIP (`openai::sip`): verifies `realtime.call.incoming` webhooks, accepts,
+# rejects, transfers and hangs up calls, and attaches a session to a call.
+openai-sip = ["openai", "telephony", "dep:reqwest", "dep:chrono", "adk-core/webhooks"]
+# LiveKit SIP (`telephony::livekit`): inbound trunks and dispatch rules, verified
+# `participant_joined` webhooks, outbound calls, transfers and hang-up over LiveKit's server
+# API. TLS matches the `livekit` feature's, so enabling both links one stack.
+livekit-sip = ["telephony", "dep:livekit-api", "dep:livekit-protocol", "livekit-api/native-tls", "livekit-api/webhooks"]
 # Enable OpenAI WebRTC transport (requires openai + Sans-IO WebRTC + Opus codec)
 openai-webrtc = ["openai", "dep:str0m", "dep:audiopus", "dep:reqwest"]
 # Enable video avatar support for realtime sessions

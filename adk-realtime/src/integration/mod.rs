@@ -1259,8 +1259,53 @@ impl Inner {
         call: adk_core::GovernedCall,
     ) -> Result<GovernedOutcome> {
         let call_id = call.function_call_id.clone();
+        let failed = |error: adk_core::AdkError| RealtimeError::ToolError(error.to_string());
         Ok(match self.runner.authorize_tool_call(call).await? {
             adk_core::ToolAuthorization::Execute { args, .. } => {
+                // A non-idempotent call executes at most once per idempotency key, as under
+                // `LlmAgent` and `RealtimeAgent`; the run's tool-call budget counts it.
+                let config = self.runner.governance_config();
+                let effect = tool.effect();
+                let mut ledgered = None;
+                if let Some(config) = config {
+                    if let Some(tracker) = &config.budget_tracker
+                        && let Err(exceeded) = tracker.begin_tool_calls(1)
+                    {
+                        return Err(failed(exceeded.into()));
+                    }
+                    match adk_core::begin_ledgered_call(
+                        config,
+                        ctx.as_ref(),
+                        effect,
+                        adk_core::ToolContext::idempotency_key(ctx.as_ref()),
+                        tool.name(),
+                        &args,
+                    )
+                    .await
+                    .map_err(failed)?
+                    {
+                        Ok(begun) => ledgered = begun,
+                        Err(recorded) => {
+                            return Ok(GovernedOutcome {
+                                result: recorded.response,
+                                held: None,
+                                status: Some(recorded.status),
+                                cause: recorded.cause,
+                                executed: false,
+                            });
+                        }
+                    }
+                    // The kill switch again, after the ledger write.
+                    if let Err(refusal) = config.check_governance() {
+                        if let Some(ledgered) = ledgered {
+                            ledgered
+                                .complete(tool.name(), None, &adk_core::not_run_text(&refusal))
+                                .await;
+                        }
+                        return Err(failed(refusal));
+                    }
+                }
+                let ledger_args = args.clone();
                 let timeout = self.runner.tool_timeout();
                 let execution = adk_core::ModelCallScope::within_tool(
                     ctx.as_ref(),
@@ -1313,6 +1358,30 @@ impl Inner {
                         ));
                         serde_json::json!({ "error": message })
                     }
+                };
+                // A call that ended mid-flight keeps its begun record, so a replay is answered
+                // with an unknown outcome instead of executing again.
+                let result = if outcome_unknown {
+                    if let Some(config) = config {
+                        adk_core::record_outcome_unknown(
+                            config,
+                            ctx.as_ref(),
+                            tool.name(),
+                            &ledger_args,
+                            "interrupted",
+                        )
+                        .await
+                        .map_err(failed)?;
+                    }
+                    adk_core::interrupted_call_response(
+                        result["error"].as_str().unwrap_or("the tool timed out"),
+                    )
+                } else {
+                    if let Some(ledgered) = ledgered {
+                        let succeeded = cause.is_none().then_some(&result);
+                        ledgered.complete(tool.name(), succeeded, &result.to_string()).await;
+                    }
+                    result
                 };
                 // An agent tool whose delegate held a call of its own holds this call with
                 // it: the request is the delegate's, and this call resumes once that request

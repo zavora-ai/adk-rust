@@ -11,6 +11,7 @@ mod action_switch_property_tests;
 mod agent_interrupt_payload_tests;
 mod agent_node_context_tests;
 mod agent_node_failure_tests;
+mod agent_node_streaming_tests;
 mod branch_isolation_tests;
 mod cache_property_tests;
 mod channel_enforcement_tests;

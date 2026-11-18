@@ -218,6 +218,11 @@ and prints the engine resource name. The same client is available
 programmatically as `adk_deploy::gcp::GcpDeployClient` (umbrella feature
 `gcp-deploy`).
 
+`cargo adk deploy --target agent-engine` (cargo-adk feature `gcp`) deploys from
+`adk-deploy.toml` instead: `[env]` entries, Secret Manager references for
+`[[secrets]]`, and `[scaling]` become the engine's `deploymentSpec`. See
+[Deploy Targets](deploy-targets.md#agent-engine) for the settings and the IAM roles.
+
 ## Environment variables
 
 | Variable | Meaning |

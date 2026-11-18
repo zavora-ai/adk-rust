@@ -359,6 +359,40 @@ pub(super) fn server_tool_part(block: &ContentBlock) -> Option<Part> {
     }
 }
 
+/// The usage summed over `usage.iterations`, or `None` when the response reports none.
+///
+/// Each iteration is one model call the request made, such as a compaction's summarization
+/// call, with its own `input_tokens`, `output_tokens` and cache counts.
+fn iteration_usage(usage: &adk_anthropic::Usage) -> Option<adk_anthropic::Usage> {
+    let iterations = usage.raw.as_deref()?.get("iterations")?.as_array()?;
+    if iterations.is_empty() {
+        return None;
+    }
+    let count = |iteration: &Value, field: &str| {
+        iteration.get(field).and_then(Value::as_i64).and_then(|n| i32::try_from(n).ok())
+    };
+    let sum = |field: &str| -> i32 {
+        iterations
+            .iter()
+            .filter_map(|iteration| count(iteration, field))
+            .fold(0, i32::saturating_add)
+    };
+    let optional_sum = |field: &str| -> Option<i32> {
+        iterations
+            .iter()
+            .filter_map(|iteration| count(iteration, field))
+            .reduce(i32::saturating_add)
+    };
+    let mut summed = usage.clone();
+    summed.input_tokens = sum("input_tokens");
+    summed.output_tokens = sum("output_tokens");
+    summed.cache_read_input_tokens =
+        optional_sum("cache_read_input_tokens").or(usage.cache_read_input_tokens);
+    summed.cache_creation_input_tokens =
+        optional_sum("cache_creation_input_tokens").or(usage.cache_creation_input_tokens);
+    Some(summed)
+}
+
 /// Convert adk-anthropic Message to ADK LlmResponse.
 pub fn from_anthropic_message(
     message: &Message,
@@ -405,6 +439,13 @@ pub fn from_anthropic_message(
             // The advisor's result is advice for the executor, kept for replay by
             // `history::preserve`; its cost is in `usage.iterations`.
             ContentBlock::Unknown(raw) if raw["type"] == "advisor_tool_result" => {}
+            // Every provider reads the summary as text; `history::preserve` keeps the signed
+            // block, which only this provider reads back.
+            ContentBlock::Compaction(compaction) => {
+                parts.push(Part::Text {
+                    text: adk_core::intra_compaction::compaction_summary_text(&compaction.content),
+                });
+            }
             // No ADK part represents it; `history::preserve` keeps it for replay.
             ContentBlock::Unknown(raw) => {
                 tracing::warn!(
@@ -422,18 +463,24 @@ pub fn from_anthropic_message(
     let content =
         if parts.is_empty() { None } else { Some(Content { role: "model".to_string(), parts }) };
 
+    // A compaction reports its summarization call in `usage.iterations` and zero at the top
+    // level, so the call is counted from its iterations.
+    let usage = match message.stop_reason {
+        Some(StopReason::Compaction) => iteration_usage(&message.usage),
+        _ => None,
+    }
+    .unwrap_or_else(|| message.usage.clone());
     // Anthropic reports uncached input separately from cache reads and writes.
-    let prompt_token_count = message
-        .usage
+    let prompt_token_count = usage
         .input_tokens
-        .saturating_add(message.usage.cache_read_input_tokens.unwrap_or(0))
-        .saturating_add(message.usage.cache_creation_input_tokens.unwrap_or(0));
+        .saturating_add(usage.cache_read_input_tokens.unwrap_or(0))
+        .saturating_add(usage.cache_creation_input_tokens.unwrap_or(0));
     let usage_metadata = Some(UsageMetadata {
         prompt_token_count,
-        candidates_token_count: message.usage.output_tokens,
-        total_token_count: prompt_token_count.saturating_add(message.usage.output_tokens),
-        cache_read_input_token_count: message.usage.cache_read_input_tokens,
-        cache_creation_input_token_count: message.usage.cache_creation_input_tokens,
+        candidates_token_count: usage.output_tokens,
+        total_token_count: prompt_token_count.saturating_add(usage.output_tokens),
+        cache_read_input_token_count: usage.cache_read_input_tokens,
+        cache_creation_input_token_count: usage.cache_creation_input_tokens,
         // As received, so fields such as `service_tier` and the `cache_creation` breakdown survive.
         provider_usage: message
             .usage
@@ -450,7 +497,8 @@ pub fn from_anthropic_message(
         | StopReason::StopSequence
         | StopReason::ToolUse
         | StopReason::PauseTurn
-        | StopReason::PauseRun => FinishReason::Stop,
+        | StopReason::PauseRun
+        | StopReason::Compaction => FinishReason::Stop,
         StopReason::MaxTokens | StopReason::ModelContextWindowExceeded => FinishReason::MaxTokens,
         StopReason::Refusal => FinishReason::Refusal,
         StopReason::Unknown(reason) => {
