@@ -71,6 +71,7 @@ full = [
     "graph-node-cache",
     "graph-delta",
     "graph-time-travel",
+    "graph-yaml",
     "harness",
     "harness-kernel",
     # The kernel's daily baselines and observations (spec 3.2 §7.10, §13 Q4).
@@ -103,6 +104,7 @@ gemini-agent-platform = [
     "vertex-agent-registry", # Agent Registry discovery (adk-tool)
     "vertex-skill-registry", # Skill Registry consumption (adk-skill)
     "vertex-remote-engine", # remote ReasoningEngine sub-agents (adk-server)
+    "gcp-model-armor", # Model Armor guardrails (adk-guardrail)
 ]
 
 # gemini-agent-platform + realtime: adds the Vertex AI Live API (bidirectional
@@ -331,6 +333,8 @@ optimize = ["cli", "adk-cli/optimize"]
 aws-secrets = ["auth", "adk-auth/aws-secrets"]
 azure-keyvault = ["auth", "adk-auth/azure-keyvault"]
 gcp-secrets = ["auth", "adk-auth/gcp-secrets"]
+# Model Armor guardrails for input, output and tool results (forwarded to adk-guardrail)
+gcp-model-armor = ["guardrail", "adk-guardrail/model-armor"]
 # Video avatar support for realtime sessions (forwarded to adk-realtime)
 video-avatar = ["realtime", "adk-realtime/video-avatar"]
 
@@ -356,6 +360,8 @@ graph-functional = ["graph", "adk-graph/functional"]
 graph-node-cache = ["graph", "adk-graph/node-cache"]
 graph-delta = ["graph", "adk-graph/delta-checkpoint"]
 graph-time-travel = ["graph", "adk-graph/time-travel"]
+# Graph workflows from YAML or JSON files: `adk_rust::graph::definition`
+graph-yaml = ["graph", "adk-graph/yaml"]
 # These two need external infrastructure, so they stay out of `full` alongside
 # the other production backends.
 graph-sqlite = ["graph", "adk-graph/sqlite"]

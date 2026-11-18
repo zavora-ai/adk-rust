@@ -108,6 +108,7 @@ dependencies = [
  "cron",
  "dotenvy",
  "futures",
+ "google-cloud-auth 1.19.0",
  "jsonschema",
  "notify",
  "opentelemetry 0.32.0",
@@ -698,6 +699,7 @@ dependencies = [
  "async-trait",
  "blake3",
  "chrono",
+ "dotenvy",
  "firestore",
  "fred",
  "futures",
@@ -708,7 +710,9 @@ dependencies = [
  "proptest",
  "regex",
  "reqwest 0.13.5",
+ "schemars 1.2.3",
  "serde",
+ "serde-saphyr 2.1.1",
  "serde_json",
  "sha2 0.10.9",
  "similar",
@@ -726,10 +730,13 @@ name = "adk-guardrail"
 version = "3.0.0"
 dependencies = [
  "adk-core",
+ "adk-gcp",
  "async-trait",
  "futures",
+ "google-cloud-auth 1.19.0",
  "jsonschema",
  "regex",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "tempfile",
@@ -737,6 +744,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]

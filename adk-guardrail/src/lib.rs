@@ -14,6 +14,9 @@
 //! - Deliver, redact, or withhold a tool's result before the model sees it
 //!   ([`ToolGuardrail::validate_result`], [`ResultTextGuardrail`])
 //!
+//! With the `model-armor` feature, `ModelArmor` screens input, output, and tool results against
+//! a Google Cloud Model Armor template (module `model_armor`).
+//!
 //! A block is an error with category `InvalidInput`, code [`INPUT_BLOCKED_CODE`] or
 //! [`OUTPUT_BLOCKED_CODE`], and the blocking guardrail's name and severity in its details
 //! ([`GuardrailError::Blocked`]). A [`Severity::Low`] failure does not block: the content passes,
@@ -85,6 +88,8 @@ pub mod citation;
 pub mod content;
 pub mod error;
 pub mod executor;
+#[cfg(feature = "model-armor")]
+pub mod model_armor;
 pub mod pii;
 #[cfg(feature = "schema")]
 pub mod schema;
@@ -98,6 +103,8 @@ pub use error::{
     OUTPUT_BLOCKED_CODE, Result,
 };
 pub use executor::{GuardrailExecutor, GuardrailSet, Screening};
+#[cfg(feature = "model-armor")]
+pub use model_armor::{ModelArmor, ModelArmorGuardrail, ModelArmorToolGuardrail};
 pub use pii::{PiiRedactor, PiiType};
 #[cfg(feature = "schema")]
 pub use schema::SchemaValidator;

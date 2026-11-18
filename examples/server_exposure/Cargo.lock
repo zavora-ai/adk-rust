@@ -13,6 +13,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-action"
+version = "3.0.0"
+dependencies = [
+ "adk-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "adk-agent"
 version = "3.0.0"
 dependencies = [
@@ -190,13 +201,18 @@ dependencies = [
 name = "adk-graph"
 version = "3.0.0"
 dependencies = [
+ "adk-action",
+ "adk-agent",
  "adk-core",
  "async-stream",
  "async-trait",
  "chrono",
  "futures",
  "jsonschema",
+ "regex",
+ "schemars",
  "serde",
+ "serde-saphyr",
  "serde_json",
  "sha2",
  "thiserror",

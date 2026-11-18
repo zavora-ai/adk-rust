@@ -42,6 +42,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 - [Background Sub-Agents](agents/background-subagents.md) - Sub-agents a parent starts and does not wait for: notified on completion, follow-ups, cancel, fork mode, budget slices, crash resume
 - [Graph Agents](agents/graph-agents.md) - LangGraph-style workflow orchestration
 - [Graph Checkpointing](agents/graph-checkpointing.md) - Checkpointer backends, the version rule, durability modes, pending writes, and the conformance suite
+- [YAML Workflows](agents/graph-workflows-yaml.md) - Graph workflows from YAML or JSON files: nodes, conditional routes, interrupts, validation with locations, the JSON Schema, and `adk-rust graph run`
 - [Functional API](agents/functional-api.md) - Workflows as async functions with `#[entrypoint]`/`#[task]`, background runs, and cron scheduling
 - [Ambient Agents](agents/ambient-agents.md) - Agents driven by cron, file-watch, and webhook triggers
 - [Realtime Agents](agents/realtime-agents.md) - Voice-enabled agents with OpenAI/Gemini

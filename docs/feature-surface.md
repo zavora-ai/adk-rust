@@ -1,7 +1,7 @@
 # The `adk-rust` feature surface
 
 `adk-rust` is both a re-export facade and a dependency menu. Every new capability
-arrives as a new top-level feature, so the menu has grown to **150 features**
+arrives as a new top-level feature, so the menu has grown to **152 features**
 across 44 crates. This records what the surface currently is, which parts of it
 are load-bearing, and the rule that keeps it from growing further.
 
@@ -24,9 +24,9 @@ everyone.
 
 | Bucket | Count | Disposition |
 |---|---:|---|
-| Features | 150 | What `--report` lists by axis. Unadvertised members of a bundle keep working and keep their feature key. |
+| Features | 152 | What `--report` lists by axis. Unadvertised members of a bundle keep working and keep their feature key. |
 | Deprecated no-ops | 0 | The 19 aliases were folded into their siblings in 3.0.0; see [below](#the-19-aliases-removed-in-300). |
-| **Total** | **150** | |
+| **Total** | **152** | |
 
 Nothing is removed in a minor release. `STABILITY.md` (Deprecation Policy)
 requires an `#[deprecated]` announcement and an N+2 minor grace period before a
@@ -53,13 +53,13 @@ achievable reduction is the advertised surface, not the feature count.
 | cli | 7 | `cli` | `cli` compiles DeepSeek and Groq, which share its reqwest stack; `cli-mistralrs` links `adk-mistralrs` through the CLI (spec 3.1 §8.1) |
 | action | 4 | `action` / `action-full` | `action` includes the database and email placeholders, `action-http` the RSS node |
 | media | 10 | `audio` / `audio-onnx` | `audio-onnx` compiles every ONNX speech model on one `ort` runtime |
-| graph | 12 | `graph` | 6 demoted to members |
+| graph | 13 | `graph` | 6 demoted to members |
 | mcp | 3 | `mcp` / `mcp-http` | 2 demoted |
 | harness | 12 | `harness` | the `harness-*` packs and add-ons are members (spec 3.1 §8.4); `harness-encrypted` links `adk-session`'s envelope and the OS keychain, `harness-memory-local` links the `ort` runtime (spec 3.1 §7.12, §7.15.2); `harness-kernel` links `adk-kernel`, the agent kernel (spec 3.2 §8.2) |
 | surface | 1 | `surface` | links `adk-surface`, the engine and web home every agent surface runs on (spec 3.3 §6.1), and with `cli` the launcher's web home; opt-in, in no tier. One feature per surface (`web`, `tui`, `channels`, `mobile`, …) stays on `adk-surface`, so the umbrella grows by this one key |
 | website | 1 | `website` | links `adk-website`, the AWP 2.0 website product, and `adk-site`, its pipeline (spec 3.5 §7.1, D-14); turns on the edge (`adk-server/awp`), AWP signing and the kernel, and with `cli` the `adk-rust site` and `awp` commands. In `full`. Hosts, generators and backends stay features of `adk-site` and `adk-kernel`, so the umbrella grows by this one key |
 | autonomy | 1 | `autonomy` | everything an agent needs to run unattended ([guide](official_docs/autonomy/index.md)): turns on `harness-kernel`, `server`, `sessions` and `auth`, and the member features `adk-server` `background`, `webhook-ingress` and `approvals`, `adk-core` `cron`, `adk-session` and `adk-harness` `sqlite`, and `adk-auth` `signed-audit`. Over `harness-kernel` it links the cron scheduler (`cron`, `chrono-tz`) and compiles in background runs, the approvals service and the harness's SQLite stores. In `enterprise` and `full`, so the umbrella grows by this one key |
-| gcp | 12 | `gemini-agent-platform` | all demoted; already bundled |
+| gcp | 13 | `gemini-agent-platform` | all demoted; already bundled |
 | code | — | `code-tools` | 3 demoted |
 
 ## The 19 aliases removed in 3.0.0

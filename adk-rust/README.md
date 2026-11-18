@@ -188,6 +188,7 @@ fn graph() -> Result<GraphAgent> {
 | `graph-node-cache` | node result caching with content keys | yes |
 | `graph-delta` | delta checkpoints | yes |
 | `graph-time-travel` | step, fork, and state history | yes |
+| `graph-yaml` | workflows from YAML or JSON files (`graph::definition`) | yes |
 | `graph-sqlite` | the SQLite checkpointer | no — needs a database |
 | `graph-redis-cache` | Redis-backed node cache | no — needs a server |
 | `graph-postgres`, `graph-redis`, `graph-mongodb`, `graph-neo4j`, `graph-firestore` | shared-database checkpointers | no — need a server |
@@ -265,7 +266,7 @@ adk-rust = { version = "3.0.0", features = ["enterprise"] }
 adk-rust = { version = "3.0.0", features = ["minimal", "anthropic", "autonomy", "cli"] }
 
 # Full — enterprise + audio, code, sandbox, code-tools, the AWP website, and the
-# graph-functional, graph-node-cache, graph-delta, and graph-time-travel capabilities
+# graph-functional, graph-node-cache, graph-delta, graph-time-travel, and graph-yaml capabilities
 adk-rust = { version = "3.0.0", features = ["full"] }
 
 # Gemini Enterprise Agent Platform — every Vertex/EAP integration except realtime
@@ -294,7 +295,7 @@ Features outside the tiers, composable with any of them:
 | Harness packs | `harness-browser`, `harness-computer-use`, `harness-payments`, `harness-voice`, `harness-managed`, `harness-web`, `harness-mcp`, `harness-hooks`, `harness-encrypted`, `harness-memory-local` |
 | Surfaces | `surface` — the surface engine and the web home |
 | Graph actions | `action`, `action-http` (with RSS), `action-trigger`, `action-full` |
-| Other | `acp`, `skills-progressive-disclosure`, `sandbox-workspace`, `sandbox-docker`, `aws-secrets`, `azure-keyvault`, `gcp-secrets`, `gcs-artifacts`, `vertex-sandbox`, `vertex-eval`, `vertex-rag`, `agent-retrieval`, `vertex-skill-registry`, `gcp-deploy` |
+| Other | `acp`, `skills-progressive-disclosure`, `sandbox-workspace`, `sandbox-docker`, `aws-secrets`, `azure-keyvault`, `gcp-secrets`, `gcp-model-armor`, `gcs-artifacts`, `vertex-sandbox`, `vertex-eval`, `vertex-rag`, `agent-retrieval`, `vertex-skill-registry`, `gcp-deploy` |
 
 `adk-rust/Cargo.toml` is the authoritative list.
 

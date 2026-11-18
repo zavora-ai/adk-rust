@@ -935,6 +935,23 @@ impl AgentNode {
         }
     }
 
+    /// Names the node `name` instead of the agent's name, so one agent can back several
+    /// nodes, or a node id that differs from the agent's name.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use adk_graph::node::AgentNode;
+    /// # fn wire(node: AgentNode) -> AgentNode {
+    /// node.with_name("first_draft")
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
     /// Set custom input mapper
     pub fn with_input_mapper<F>(mut self, mapper: F) -> Self
     where
