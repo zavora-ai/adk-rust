@@ -17,6 +17,7 @@ own (spec 3.2 §8.1, K-I17).
 | `adk-rust nice PID QUEUE` | Moves a queued or sleeping process to `interactive`, `background` or `maintenance`; the moved process gets a new pid |
 | `adk-rust agenda [list\|approve ID\|reject ID\|schedule ID --at TIME\|--cron EXPR]` | The agenda: follow-ups proposed for later ([Proactivity](proactivity.md)) |
 | `adk-rust wake --file GLOB\|--cron EXPR\|--webhook NAME -- "task"` | A sleeping process that runs the task when it wakes |
+| `adk-rust run-now PID\|--trigger NAME [--request-id ID]` | Runs a cron sleeper or a standing cron trigger now, outside its schedule; the next tick still fires ([running a schedule now](scheduling.md#running-a-schedule-now)) |
 | `adk-rust freeze [--reason R]` / `unfreeze` | The kill switch, on every replica; `unfreeze` only over the kernel's socket or pipe, never `--server` (spec 3.3 S-I10) |
 | `adk-rust events [--follow] [--after CURSOR] [--json]` | The event bus |
 | `adk-rust proc [ledger\|baselines\|observations]` | The activity ledger (`--export FILE` for JSONL), each partition's baselines, the observations ([`/proc`](proc.md)) |
@@ -408,6 +409,19 @@ began.
 The woken turn reads why it woke, after its task: the source, the event's key, the time and
 the payload — the changed file's path, the webhook's body, the cron occurrence — as
 [data the agent does not take instructions from](index.md#what-a-woken-turn-is-told).
+
+### `adk-rust run-now`
+
+```text
+$ adk-rust run-now 64551be2
+queued a run now of 64551be2-d2e1-407e-92e2-8c96efea1597 (now:64551be2-d2e1-407e-92e2-8c96efea1597:6f1c…); the next scheduled tick still fires. `adk-rust events` shows the wake.
+$ adk-rust run-now --trigger ci-digest --request-id deploy-42
+queued a run now of trigger ci-digest (now:trigger:ci-digest:deploy-42); the next scheduled tick still fires. `adk-rust events` shows the wake.
+```
+
+The run passes quiet hours, budgets and quotas like a scheduled tick, and a freeze refuses
+it. A retry with the same `--request-id` queues nothing new
+([running a schedule now](scheduling.md#running-a-schedule-now)).
 
 ## `adk-rust partitions`
 

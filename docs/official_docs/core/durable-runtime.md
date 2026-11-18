@@ -526,9 +526,22 @@ While the governance control refuses work, nothing fires and nothing advances. O
 lifts, the missed-fire policy decides which fire times that fell due during it run.
 `start_cron_scheduler` runs the tick loop every second; start it on every replica.
 
+`DurableScheduler::with_jitter(Jitter)` spreads schedules that share a cadence. Each run is
+still enqueued at its fire time and keyed by it, and the schedule advances as planned; the
+run's `not_before` is the fire time plus the schedule's offset, a fixed share of up to
+`percent` of the gap to the next fire time, at most `max`, and always under half the gap.
+`Jitter::default()` is 15 percent, at most nine minutes. A run waiting out its offset is a
+queued run: a worker under a frozen kill switch claims nothing, so it starts once the freeze
+lifts.
+
+`Schedule::run_now(request_id)` is the run a manual "run now" enqueues: the template, its
+concurrency key and the service subject of a fire, keyed
+`schedule:{id}:manual:{request id}`. The schedule is not changed.
+
 ```rust
 use std::sync::Arc;
 
+use adk_core::schedule::Jitter;
 use adk_core::{DurableRunStore, GovernanceControl, ScheduleStore};
 use adk_server::background::DurableScheduler;
 
@@ -537,7 +550,10 @@ fn start(
     run_store: Arc<dyn DurableRunStore>,
     governance: GovernanceControl,
 ) -> tokio::task::JoinHandle<()> {
-    DurableScheduler::new(schedule_store, run_store).with_governance(governance).spawn()
+    DurableScheduler::new(schedule_store, run_store)
+        .with_governance(governance)
+        .with_jitter(Jitter::default())
+        .spawn()
 }
 ```
 

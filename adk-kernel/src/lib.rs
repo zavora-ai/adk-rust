@@ -146,7 +146,8 @@ pub use consolidation::{
 };
 pub use error::{KernelError, Result};
 pub use kernel::{
-    Kernel, KernelBuilder, KernelConfig, KernelHealth, KernelState, Steering, WorkerHealth,
+    Kernel, KernelBuilder, KernelConfig, KernelHealth, KernelState, RunNow, RunNowTarget, Steering,
+    WorkerHealth,
 };
 pub use partition::{
     CROSSING_PARTITION_ARG, CrossPartition, Crossing, CrossingAccess, CrossingFilter,
@@ -217,9 +218,9 @@ pub use subagents::{SUBAGENT_LABEL, SUBAGENT_NAME_LABEL, SUBAGENT_NOTICE_SOURCE,
 pub use wake::webhook_wake_hook;
 pub use wake::{
     ApprovalWakeSource, CronWakeSource, ExpiryAction, FileWakeSource, KERNEL_WAKE_TARGET,
-    KernelWakeExecutor, RunFinishedWakeSource, Trigger, WAKE_PAYLOAD_LIMIT, Wake, WakeEvent,
-    WakeOutcome, WakeReason, WakeReasonHooks, WakeRouter, WakeSet, WakeSource, kernel_wake_run,
-    keys, queue_wake_ingress,
+    KernelWakeExecutor, RUN_NOW_SOURCE, RunFinishedWakeSource, Trigger, WAKE_PAYLOAD_LIMIT, Wake,
+    WakeEvent, WakeOutcome, WakeReason, WakeReasonHooks, WakeRouter, WakeSet, WakeSource,
+    kernel_wake_run, keys, queue_wake_ingress,
 };
 pub use watermark::{CronWatermarkStore, SourceWatermark};
 

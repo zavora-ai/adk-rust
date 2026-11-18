@@ -35,6 +35,7 @@
 //! | Schedule | `DurableScheduler` | [`keys::schedule`]: `schedule:<id>:<time>` |
 //! | Approval decided | [`ApprovalWakeSource`], an `ApprovalNotifier` on `StoreApprovalService` | [`keys::approval`]: the approval request id |
 //! | Run finished | [`RunFinishedWakeSource`], the S1 `on_finish` hook | [`keys::run_finished`]: `run:<pid>:<final state>` |
+//! | Run now | `Kernel::run_now`, the control plane's `run-now` | [`keys::run_now`]: `now:<pid or trigger:name>:<request id>` |
 //!
 //! A trigger's run is keyed [`keys::trigger`], `<event key>#<trigger name>`, rather than by
 //! the bare event key of the §7.4 table, so two triggers that match one event on one queue
@@ -43,6 +44,12 @@
 //! Webhook and queue deliveries become `kernel.wake` runs ([`KERNEL_WAKE_TARGET`]) on the
 //! maintenance queue, which the [`KernelWakeExecutor`] turns into a routed wake, so their
 //! signature checks, keys and back-pressure hold unchanged.
+//!
+//! A cron source with a `Jitter` ([`CronWakeSource::with_jitter`],
+//! `KernelConfig::with_cron_jitter`) still submits each tick at its scheduled time and keyed
+//! by it, so watermarks and catch-up are unchanged; the tick's `kernel.wake` run carries
+//! [`WakeEvent::not_before`], the scheduled time plus the source's offset, so it is routed no
+//! earlier. The offset is under half the gap to the next tick.
 //!
 //! Missed wakes while the kernel was down follow `MissedFirePolicy` for schedules and
 //! `MissedTickPolicy` with watermarks for cron sources; file changes are reconciled by
@@ -59,7 +66,9 @@ use std::time::Duration;
 use adk_agent::ambient::{CronTrigger, EventSource, FileWatchTrigger, TickWatermark};
 use adk_core::approval::{ApprovalEventKind, ApprovalNotification, ApprovalNotifier};
 use adk_core::queue_source::{QueueIngress, QueueSource};
-use adk_core::schedule::{DEFAULT_MISFIRE_GRACE, MissedFirePolicy, ScheduleSpec, plan_fires};
+use adk_core::schedule::{
+    DEFAULT_MISFIRE_GRACE, Jitter, MissedFirePolicy, ScheduleSpec, plan_fires,
+};
 use adk_core::{Clock, DurableRunStore, Enqueued, NewRun, RunRecord, RunState, SystemClock};
 use adk_server::background::{WorkerHooks, WorkflowExecutor, WorkflowState};
 use async_trait::async_trait;
@@ -80,6 +89,9 @@ use crate::stores::{ProcessFilter, ProcessStore};
 /// The target of a `kernel.wake` run: a webhook or queue delivery the maintenance worker
 /// turns into a routed wake (spec 3.2 §7.4).
 pub const KERNEL_WAKE_TARGET: &str = "kernel.wake";
+
+/// The source of the wake `Kernel::run_now` submits.
+pub const RUN_NOW_SOURCE: &str = "run-now";
 
 /// One condition that wakes a sleeping process (spec 3.2 §7.4).
 ///
@@ -307,12 +319,41 @@ pub struct WakeEvent {
     pub principal: Option<String>,
     /// When the event happened.
     pub at: DateTime<Utc>,
+    /// The event is routed no earlier than this: its `kernel.wake` run's `not_before`. A
+    /// jittered cron tick sets it to its scheduled time plus the source's offset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_before: Option<DateTime<Utc>>,
 }
 
 impl WakeEvent {
     /// An event from `source` keyed `key`, happening now, with no principal.
     pub fn new(source: impl Into<String>, key: impl Into<String>, payload: Value) -> Self {
-        Self { source: source.into(), key: key.into(), payload, principal: None, at: Utc::now() }
+        Self {
+            source: source.into(),
+            key: key.into(),
+            payload,
+            principal: None,
+            at: Utc::now(),
+            not_before: None,
+        }
+    }
+
+    /// Routes the event no earlier than `at`: its `kernel.wake` run is not claimed before.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_kernel::{WakeEvent, kernel_wake_run};
+    ///
+    /// let at = chrono::Utc::now() + chrono::Duration::seconds(30);
+    /// let event = WakeEvent::new("nightly", "cron:nightly:2026-11-18T09:00:00Z", serde_json::json!({}))
+    ///     .with_not_before(at);
+    /// assert_eq!(kernel_wake_run(&event, "adk-rust").unwrap().not_before, Some(at));
+    /// ```
+    #[must_use]
+    pub fn with_not_before(mut self, at: DateTime<Utc>) -> Self {
+        self.not_before = Some(at);
+        self
     }
 
     /// Attributes the event to the verified subject `principal`.
@@ -406,6 +447,13 @@ pub mod keys {
         format!("run:{pid}:{state}")
     }
 
+    /// `now:<target>:<request id>`: a run now of a cron sleeper (`target` its pid) or a
+    /// standing trigger (`target` `trigger:<name>`); a retried request with the same id
+    /// routes once.
+    pub fn run_now(target: &str, request_id: &str) -> String {
+        format!("now:{target}:{request_id}")
+    }
+
     /// `budget:<partition>:<UTC day>:<asleep>`: the partition's budget has room on that day
     /// for the processes asleep on it, `asleep` a tag of those processes and their claims
     /// (spec 3.2 §7.9). One wake goes out per partition, day and set of sleepers, so work held
@@ -454,6 +502,9 @@ pub fn kernel_wake_run(event: &WakeEvent, app_name: &str) -> Result<NewRun> {
     .with_idempotency_key(event.key.clone());
     if event.principal.is_some() {
         run = run.with_authenticated_user();
+    }
+    if let Some(at) = event.not_before {
+        run = run.with_not_before(at);
     }
     let run = run.with_service_subject();
     run.validate()?;
@@ -1033,6 +1084,11 @@ impl WakeRouter {
     pub async fn route(&self, event: WakeEvent) -> Result<Vec<WakeOutcome>> {
         let _gate = self.gate.lock().await;
         let now = self.clock.now();
+        if event.key.starts_with("now:") {
+            let outcomes = self.run_now(&event, now).await?;
+            self.publish(&event.source, &event.key, &outcomes);
+            return Ok(outcomes);
+        }
         let mut outcomes = Vec::new();
         for (meta, wake, run) in self.sleepers().await? {
             let expired = wake.expires_at.is_some_and(|at| at <= now);
@@ -1202,6 +1258,32 @@ impl WakeRouter {
             outcomes.push(outcome);
         }
         Ok(outcomes)
+    }
+
+    /// Routes a run now ([`keys::run_now`]): wakes the one sleeper its payload's `pid` names,
+    /// or fires the one trigger its `trigger` names. A sleeper that woke, was suspended or
+    /// whose set expired since the request is left alone, so the run now does nothing.
+    async fn run_now(&self, event: &WakeEvent, now: DateTime<Utc>) -> Result<Vec<WakeOutcome>> {
+        let text = |field: &str| event.payload.get(field).and_then(Value::as_str);
+        if let Some(pid) = text("pid") {
+            let Some(meta) = self.processes.get(pid).await? else { return Ok(Vec::new()) };
+            let Some(wake) = meta.wake.as_ref() else { return Ok(Vec::new()) };
+            if meta.suspended_by.is_some() || wake.expires_at.is_some_and(|at| at <= now) {
+                return Ok(Vec::new());
+            }
+            let Some(run) = self.runs.get(pid).await? else { return Ok(Vec::new()) };
+            if run.state != RunState::Waiting {
+                return Ok(Vec::new());
+            }
+            self.wake_sleeper(&meta, &run, event).await?;
+            return Ok(vec![WakeOutcome::Woke { pid: meta.pid }]);
+        }
+        let trigger = text("trigger")
+            .and_then(|name| self.triggers.iter().find(|trigger| trigger.name == name));
+        match trigger {
+            Some(trigger) => Ok(self.fire(trigger, event).await?.into_iter().collect()),
+            None => Ok(Vec::new()),
+        }
     }
 
     /// The `Waiting` processes asleep on a wake set: not suspended, run still held.
@@ -1465,6 +1547,12 @@ impl WorkflowExecutor for KernelWakeExecutor {
 /// each tick goes out, so a tick is fired at most once, across restarts and replicas: an
 /// event repeated by a second replica has the same key and starts nothing (K-I3).
 ///
+/// With a [`Jitter`] ([`with_jitter`](Self::with_jitter)), each tick still goes out at its
+/// scheduled time, keyed by it, and its cursor is written as before; the event carries
+/// [`WakeEvent::not_before`], the scheduled time plus the source's offset, and its payload
+/// `jitter_ms`, so the tick is routed that much later. The offset is the same on every
+/// replica and under half the gap to the next tick.
+///
 /// # Example
 ///
 /// ```rust
@@ -1479,6 +1567,7 @@ pub struct CronWakeSource {
     name: String,
     trigger: CronTrigger,
     catch_up: Option<CatchUp>,
+    jitter: Option<Jitter>,
 }
 
 /// What a watermarked source plans its missed ticks with.
@@ -1493,6 +1582,7 @@ impl fmt::Debug for CronWakeSource {
         f.debug_struct("CronWakeSource")
             .field("name", &self.name)
             .field("missed", &self.catch_up.as_ref().map(|catch_up| catch_up.missed))
+            .field("jitter", &self.jitter)
             .finish_non_exhaustive()
     }
 }
@@ -1500,7 +1590,36 @@ impl fmt::Debug for CronWakeSource {
 impl CronWakeSource {
     /// A source named `name` over `trigger`, with its missed-tick policy and watermark.
     pub fn new(name: impl Into<String>, trigger: CronTrigger) -> Self {
-        Self { name: name.into(), trigger, catch_up: None }
+        Self { name: name.into(), trigger, catch_up: None, jitter: None }
+    }
+
+    /// Delays each tick by the source's [`Jitter`] offset, keyed by its name: the tick goes
+    /// out at its scheduled time with [`WakeEvent::not_before`] set that much later. Off by
+    /// default.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::schedule::{Jitter, MissedFirePolicy};
+    /// use adk_kernel::stores::InMemoryCronWatermarkStore;
+    /// use adk_kernel::{CronWakeSource, SourceWatermark};
+    ///
+    /// let watermark = SourceWatermark::new(Arc::new(InMemoryCronWatermarkStore::new()), "hourly");
+    /// let source = CronWakeSource::watermarked("hourly", "0 0 * * * *", MissedFirePolicy::Skip, Arc::new(watermark))?
+    ///     .with_jitter(Jitter::default());
+    /// assert_eq!(source.jitter(), Some(Jitter::default()));
+    /// # Ok::<(), adk_kernel::KernelError>(())
+    /// ```
+    #[must_use]
+    pub fn with_jitter(mut self, jitter: Jitter) -> Self {
+        self.jitter = Some(jitter);
+        self
+    }
+
+    /// The jitter each tick is delayed by, if any.
+    pub fn jitter(&self) -> Option<Jitter> {
+        self.jitter
     }
 
     /// A source named `name` on the six-field cron expression `expr` (seconds first, UTC)
@@ -1541,8 +1660,41 @@ impl CronWakeSource {
         }
         let trigger = CronTrigger::new(expr)?;
         let spec = ScheduleSpec::Cron { expr: expr.to_string(), timezone: "UTC".to_string() };
-        Ok(Self { name: name.into(), trigger, catch_up: Some(CatchUp { spec, missed, watermark }) })
+        Ok(Self {
+            name: name.into(),
+            trigger,
+            catch_up: Some(CatchUp { spec, missed, watermark }),
+            jitter: None,
+        })
     }
+}
+
+/// `event`, a tick of the cron source `source`, routed no earlier than its scheduled time plus
+/// the source's `jitter` offset; unchanged when the offset is zero or the tick names no
+/// scheduled time or expression.
+pub(crate) fn jittered_tick(event: WakeEvent, source: &str, jitter: &Jitter) -> WakeEvent {
+    let scheduled_for = event
+        .payload
+        .get("scheduled_for")
+        .and_then(Value::as_str)
+        .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+        .map(|at| at.with_timezone(&Utc));
+    let expression = event.payload.get("expression").and_then(Value::as_str);
+    let (Some(at), Some(expression)) = (scheduled_for, expression) else { return event };
+    let spec = ScheduleSpec::Cron { expr: expression.to_string(), timezone: "UTC".to_string() };
+    let offset = jitter.offset_in(&spec, source, at);
+    let Some(release) = chrono::Duration::from_std(offset)
+        .ok()
+        .filter(|offset| !offset.is_zero())
+        .and_then(|offset| at.checked_add_signed(offset))
+    else {
+        return event;
+    };
+    let mut event = event.with_not_before(release);
+    if let Value::Object(fields) = &mut event.payload {
+        fields.insert("jitter_ms".into(), json!(offset.as_millis()));
+    }
+    event
 }
 
 /// The payload of a tick at `scheduled_for`: the trigger's fields, and for a missed tick
@@ -1719,6 +1871,16 @@ impl WakeSource for CronWakeSource {
     /// and watermark, or for a [`watermarked`](Self::watermarked) source its
     /// `MissedFirePolicy` and watermark.
     async fn subscribe(&self) -> Result<BoxStream<'static, WakeEvent>> {
+        let ticks = self.ticks().await?;
+        let Some(jitter) = self.jitter else { return Ok(ticks) };
+        let name = self.name.clone();
+        Ok(ticks.map(move |event| jittered_tick(event, &name, &jitter)).boxed())
+    }
+}
+
+impl CronWakeSource {
+    /// The source's ticks before any jitter.
+    async fn ticks(&self) -> Result<BoxStream<'static, WakeEvent>> {
         let name = self.name.clone();
         if let Some(catch_up) = &self.catch_up {
             let restored = catch_up.watermark.read().await?;
@@ -2331,6 +2493,53 @@ mod tests {
         let more = tokio::time::timeout(Duration::from_millis(200), events.next()).await;
         assert!(more.is_err(), "nothing more is due");
         assert_eq!(store.read("daily").await.unwrap(), Some(latest), "no tick is due after it");
+    }
+
+    /// A jittered tick goes out keyed by, and recorded at, its scheduled time; its event is
+    /// routed no earlier than the source's offset after it, the same offset each time.
+    #[tokio::test]
+    async fn a_jittered_tick_keeps_its_key_and_watermark_and_carries_its_offset() {
+        use crate::stores::InMemoryCronWatermarkStore;
+        use crate::watermark::{CronWatermarkStore, SourceWatermark};
+
+        let store = Arc::new(InMemoryCronWatermarkStore::new());
+        let seeded = Utc::now() - chrono::Duration::days(1) - chrono::Duration::hours(1);
+        store.advance("daily", seeded).await.unwrap();
+        let jitter = Jitter::default();
+        let source = CronWakeSource::watermarked(
+            "daily",
+            "0 0 2 * * *",
+            MissedFirePolicy::FireOnce,
+            Arc::new(SourceWatermark::new(store.clone(), "daily")),
+        )
+        .unwrap()
+        .with_jitter(jitter);
+        let event = source.subscribe().await.unwrap().next().await.unwrap();
+        let at = DateTime::parse_from_rfc3339(event.payload["scheduled_for"].as_str().unwrap())
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(event.key, keys::cron("daily", at), "keyed by the scheduled time");
+        assert_eq!(
+            store.read("daily").await.unwrap(),
+            Some(at),
+            "the watermark is the scheduled time"
+        );
+        let spec = ScheduleSpec::Cron { expr: "0 0 2 * * *".into(), timezone: "UTC".into() };
+        let offset = jitter.offset_in(&spec, "daily", at);
+        assert!(offset < Jitter::DEFAULT_MAX);
+        if offset.is_zero() {
+            assert_eq!(event.not_before, None);
+        } else {
+            assert_eq!(event.not_before, Some(at + chrono::Duration::from_std(offset).unwrap()));
+            assert_eq!(event.payload["jitter_ms"], json!(offset.as_millis()));
+            let run = kernel_wake_run(&event, "adk-rust").unwrap();
+            assert_eq!(run.not_before, event.not_before);
+            assert_eq!(run.idempotency_key.as_deref(), Some(event.key.as_str()));
+        }
+        let unjittered = WakeEvent::new("daily", event.key.clone(), event.payload.clone());
+        assert_eq!(jittered_tick(unjittered, "daily", &jitter).not_before, event.not_before);
+        let not_a_tick = WakeEvent::new("daily", "cron:daily:x", json!({}));
+        assert_eq!(jittered_tick(not_a_tick, "daily", &jitter).not_before, None);
     }
 
     #[test]

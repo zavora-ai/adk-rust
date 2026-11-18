@@ -382,6 +382,9 @@ fn durable(
 | `/api/runs/{id}/wake` | POST | Make a run parked on a held tool call claimable now; the approval service calls it after a decision |
 | `/api/cron` | POST / GET | Create and list cron jobs |
 | `/api/cron/{id}` | GET / PATCH / DELETE | Read, pause or resume, and delete a cron job |
+| `/api/cron/{id}/run` | POST | Run a cron job now, outside its schedule; `Idempotency-Key` makes a retry return the same run; `503` while frozen, `409` while a `skip` job's run is active |
+
+`CronState::with_jitter(Jitter)` delays each fire by a fixed per-job share of the gap to the next fire (enqueued at the fire time with `notBefore` set, never past half the gap); `CronState::with_audit(trail)` records every run now.
 
 `POST /runs` takes `target` (or `workflowId`), `input`, `sessionId`, `idempotencyKey`, `concurrencyKey`, `onConflict` (`reject`, `enqueue`, `interrupt`), `notBefore`, and `maxRetries`. An existing idempotency key returns the existing run with `200` and `"existing": true`; a `reject` conflict returns `409` with `blockingRunId`; an unknown target returns `404`; a frozen or stale kill switch returns `503`.
 

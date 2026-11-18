@@ -322,6 +322,11 @@ async fn run() -> Result<()> {
             kernel_cli::act(&kernel, &pid, kernel_cli::Action::Resume).await
         }
         #[cfg(feature = "harness")]
+        Some(Commands::RunNow { pid, trigger, request_id, kernel }) => {
+            kernel_cli::run_now(&kernel, pid.as_deref(), trigger.as_deref(), request_id.as_deref())
+                .await
+        }
+        #[cfg(feature = "harness")]
         Some(Commands::Agents { output, yes, kernel, args }) => {
             harness_cli::agents::command(&kernel, &args, output == "json", yes).await
         }

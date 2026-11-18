@@ -15,12 +15,21 @@
 //! kill switch refuses work, nothing fires and nothing advances; once it is lifted the
 //! missed-fire policy decides which of the fire times that fell due during the freeze run.
 //!
+//! # Jitter
+//!
+//! With [`DurableScheduler::with_jitter`], each run is still enqueued at its fire time and
+//! keyed by it, but its `not_before` is the fire time plus the schedule's
+//! [`Jitter`] offset, so no worker claims it earlier. Planning, the idempotency key and the
+//! advance are unchanged, and the offset is under half the gap to the next fire time. A run
+//! waiting out its offset is a queued run like any other: a worker under a frozen kill
+//! switch claims nothing, and the run starts once the freeze lifts.
+//!
 //! [`MissedFirePolicy`]: adk_core::schedule::MissedFirePolicy
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use adk_core::schedule::{DEFAULT_MISFIRE_GRACE, Schedule, plan_fires};
+use adk_core::schedule::{DEFAULT_MISFIRE_GRACE, Jitter, Schedule, plan_fires};
 use adk_core::{Clock, DurableRunStore, Enqueued, GovernanceControl, ScheduleStore, SystemClock};
 
 /// What one scheduler tick did.
@@ -81,6 +90,7 @@ pub struct DurableScheduler {
     batch: usize,
     grace: Duration,
     clock: Arc<dyn Clock>,
+    jitter: Option<Jitter>,
 }
 
 impl std::fmt::Debug for DurableScheduler {
@@ -89,6 +99,7 @@ impl std::fmt::Debug for DurableScheduler {
             .field("tick_interval", &self.tick_interval)
             .field("batch", &self.batch)
             .field("grace", &self.grace)
+            .field("jitter", &self.jitter)
             .finish_non_exhaustive()
     }
 }
@@ -105,6 +116,7 @@ impl DurableScheduler {
             batch: 100,
             grace: DEFAULT_MISFIRE_GRACE,
             clock: Arc::new(SystemClock),
+            jitter: None,
         }
     }
 
@@ -141,6 +153,34 @@ impl DurableScheduler {
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
         self
+    }
+
+    /// Delays each fired run by its schedule's [`Jitter`] offset, keyed by the schedule id:
+    /// the run is enqueued at its fire time with `not_before` set that much later (see
+    /// [Jitter](self#jitter)). Off by default.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    /// use adk_core::{InMemoryRunStore, InMemoryScheduleStore};
+    /// use adk_core::schedule::Jitter;
+    /// use adk_server::background::DurableScheduler;
+    ///
+    /// let scheduler = DurableScheduler::new(Arc::new(InMemoryScheduleStore::new()), Arc::new(InMemoryRunStore::new()))
+    ///     .with_jitter(Jitter::new(15, Duration::from_secs(9 * 60)));
+    /// assert_eq!(scheduler.jitter(), Some(Jitter::default()));
+    /// ```
+    #[must_use]
+    pub fn with_jitter(mut self, jitter: Jitter) -> Self {
+        self.jitter = Some(jitter);
+        self
+    }
+
+    /// The jitter fired runs are delayed by, if any.
+    pub fn jitter(&self) -> Option<Jitter> {
+        self.jitter
     }
 
     /// Enqueues the fire times of every due schedule and advances each one.
@@ -191,7 +231,18 @@ impl DurableScheduler {
             return Ok(());
         }
         for fire_time in &plan.fire_times {
-            match self.runs.enqueue(schedule.run_for(*fire_time)).await? {
+            let mut run = schedule.run_for(*fire_time);
+            if let Some(jitter) = &self.jitter {
+                let offset = jitter.offset_in(&schedule.spec, &schedule.id, *fire_time);
+                if let Some(at) = chrono::Duration::from_std(offset)
+                    .ok()
+                    .filter(|offset| !offset.is_zero())
+                    .and_then(|offset| fire_time.checked_add_signed(offset))
+                {
+                    run.not_before = Some(at);
+                }
+            }
+            match self.runs.enqueue(run).await? {
                 Enqueued::Created(run) => {
                     tick.enqueued += 1;
                     tracing::info!(schedule.id = %schedule.id, run.id = %run.run_id, fire_time = %fire_time, "schedule fired");

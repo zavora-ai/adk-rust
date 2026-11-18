@@ -272,6 +272,36 @@ impl SpawnRequest {
     }
 }
 
+/// `POST /kernel/processes/{pid}/run-now` and `POST /kernel/triggers/{name}/run-now` body:
+/// an optional request id, so a retried request queues one run now
+/// ([`Kernel::run_now`](crate::Kernel::run_now)).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::control::api::RunNowRequest;
+///
+/// let request = RunNowRequest::default().with_request_id("r-1");
+/// assert_eq!(serde_json::to_value(&request).unwrap()["requestId"], "r-1");
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[non_exhaustive]
+pub struct RunNowRequest {
+    /// The request's id; generated when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+}
+
+impl RunNowRequest {
+    /// Sets the request id a retry repeats.
+    #[must_use]
+    pub fn with_request_id(mut self, request_id: impl Into<String>) -> Self {
+        self.request_id = Some(request_id.into());
+        self
+    }
+}
+
 /// `POST /kernel/sessions/{session}/steer` body: a message for the running turn of the
 /// caller's session (spec 3.3 §6 "steer"). The message is always the caller's own; any other
 /// field is refused with `422`.

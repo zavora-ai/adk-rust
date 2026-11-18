@@ -400,10 +400,49 @@ The `background` feature also includes cron jobs. A cron job is a `Schedule` in 
 | GET | `/cron` | List all jobs |
 | GET | `/cron/{job_id}` | Get one job |
 | PATCH | `/cron/{job_id}` | Pause/resume |
+| POST | `/cron/{job_id}/run` | Run the job now, outside its schedule |
 | DELETE | `/cron/{job_id}` | Delete a job |
 
 Expressions have five, six, or seven fields and are evaluated in `timezone` (an IANA name,
 default `UTC`). A second job with an existing name returns **409**.
+
+### Running a job now
+
+`POST /cron/{job_id}/run` enqueues the job's run now: its template, acting for the job's
+owner, with the job's concurrency key. Its idempotency key is
+`schedule:{id}:manual:{request id}`, the request id taken from the `Idempotency-Key` header or
+generated. The job is not changed — its next fire time and revision stay where they are — and
+a paused job still runs now.
+
+| Outcome | Status |
+|---------|--------|
+| Run enqueued | **202**, with `runId`, `status`, `idempotencyKey` |
+| The `Idempotency-Key` already enqueued a run | **200**, `"existing": true` |
+| The kill switch refuses work | **503**; nothing is enqueued |
+| The job's policy is `skip` and a run is active | **409**, with `blockingRunId` |
+| No such job for the caller | **404** |
+
+`CronState::with_audit(trail)` records each outcome but `404` as a `schedule.run_now` record
+with the caller, the job, the key and the run.
+
+### Jitter
+
+`CronState::with_jitter(Jitter::default())` spreads jobs that share a cadence: each fire is
+enqueued at its fire time and keyed by it, with `notBefore` set a share of the gap to the next
+fire time later — up to 15 percent, at most nine minutes for the default, always under half
+the gap. The share is fixed per job, so every replica agrees on it.
+
+```rust
+use adk_core::schedule::Jitter;
+use adk_server::background::{BackgroundState, CronState, start_cron_scheduler};
+
+#[tokio::main]
+async fn main() {
+    let cron = CronState::new(BackgroundState::new()).with_jitter(Jitter::default());
+    let scheduler = start_cron_scheduler(cron);
+    scheduler.abort();
+}
+```
 
 ### Concurrency Policies
 

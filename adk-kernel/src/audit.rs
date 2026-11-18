@@ -64,6 +64,8 @@ pub const PROCESS_REQUEUED: &str = "kernel.process.requeued";
 pub const WAKE: &str = "kernel.wake";
 /// A control-plane action.
 pub const CONTROL: &str = "kernel.control";
+/// A cron sleeper or standing cron trigger was run now, outside its schedule.
+pub const RUN_NOW: &str = "kernel.run_now";
 /// An agenda item was proposed (spec 3.2 §7.5).
 pub const AGENDA_PROPOSED: &str = "kernel.agenda.proposed";
 /// An agenda item was approved, by a person or an Auto partition's policy.

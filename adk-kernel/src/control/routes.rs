@@ -26,7 +26,7 @@ use super::api::{
     AgendaItemResponse, AgendaQuery, AgendaResponse, AttachRequest, AttachResponse, EventsQuery,
     FreezeRequest, FreezeResponse, KillRequest, NiceRequest, PartitionModeRequest,
     PartitionResponse, PartitionsResponse, ProcessResponse, ProcessesQuery, ProcessesResponse,
-    RejectRequest, ScheduleRequest, SpawnRequest, SteerRequest, SteerResponse,
+    RejectRequest, RunNowRequest, ScheduleRequest, SpawnRequest, SteerRequest, SteerResponse,
 };
 use super::{ControlTransport, paths};
 use crate::agenda::{Agenda, AgendaItem};
@@ -75,6 +75,16 @@ pub(crate) trait ControlBackend: Send + Sync + 'static {
     async fn nice(&self, pid: &str, queue: QueueClass) -> Result<Process>;
     async fn suspend(&self, pid: &str) -> Result<()>;
     async fn resume(&self, pid: &str) -> Result<()>;
+    /// Runs a cron sleeper or a standing cron trigger now ([`Kernel::run_now`]).
+    async fn run_now(
+        &self,
+        target: crate::kernel::RunNowTarget,
+        request_id: Option<&str>,
+        by: AuditActor,
+    ) -> Result<crate::kernel::RunNow> {
+        let _ = (target, request_id, by);
+        Err(KernelError::Config { reason: "this backend runs no schedules".into() })
+    }
     /// Freezes and returns how many running processes this replica parked.
     async fn freeze(&self, reason: &str, by: AuditActor) -> Result<usize>;
     async fn unfreeze(&self, by: AuditActor) -> Result<()>;
@@ -211,6 +221,15 @@ impl ControlBackend for Kernel {
         self.processes().resume(pid).await
     }
 
+    async fn run_now(
+        &self,
+        target: crate::kernel::RunNowTarget,
+        request_id: Option<&str>,
+        by: AuditActor,
+    ) -> Result<crate::kernel::RunNow> {
+        Kernel::run_now(self, target, request_id, by).await
+    }
+
     async fn freeze(&self, reason: &str, by: AuditActor) -> Result<usize> {
         // The delegate's freeze is `Kernel::freeze` with the count the response reports.
         Ok(FreezeDelegate::freeze(self, reason, by).await?.parked_runs)
@@ -294,6 +313,8 @@ pub(crate) fn routes(backend: Arc<dyn ControlBackend>) -> Router {
         .route(paths::NICE, post(nice))
         .route(paths::SUSPEND, post(suspend))
         .route(paths::RESUME, post(resume))
+        .route(paths::RUN_NOW, post(run_process_now))
+        .route(paths::TRIGGER_RUN_NOW, post(run_trigger_now))
         .route(paths::EVENTS, get(events))
         .route(paths::ATTACH, post(attach))
         .route(paths::SESSION_STEER, post(steer))
@@ -565,6 +586,42 @@ async fn resume(
     record(backend.as_ref(), &caller, "resume", Some(&pid), &[]).await?;
     backend.resume(&pid).await?;
     after_action(backend.as_ref(), &pid).await
+}
+
+async fn run_process_now(
+    State(backend): Backend,
+    caller: Caller,
+    UrlPath(pid): UrlPath<String>,
+    Json(request): Json<RunNowRequest>,
+) -> Result<Json<crate::kernel::RunNow>> {
+    caller.require_operator("run a schedule now")?;
+    let target = crate::kernel::RunNowTarget::Process { pid: pid.clone() };
+    run_now(backend.as_ref(), &caller, target, &pid, request).await
+}
+
+async fn run_trigger_now(
+    State(backend): Backend,
+    caller: Caller,
+    UrlPath(name): UrlPath<String>,
+    Json(request): Json<RunNowRequest>,
+) -> Result<Json<crate::kernel::RunNow>> {
+    caller.require_operator("run a schedule now")?;
+    let target = crate::kernel::RunNowTarget::Trigger { name: name.clone() };
+    run_now(backend.as_ref(), &caller, target, &format!("trigger:{name}"), request).await
+}
+
+/// Records the control action, then runs `target` now as the caller.
+async fn run_now(
+    backend: &dyn ControlBackend,
+    caller: &Caller,
+    target: crate::kernel::RunNowTarget,
+    named: &str,
+    request: RunNowRequest,
+) -> Result<Json<crate::kernel::RunNow>> {
+    record(backend, caller, "run-now", Some(named), &[("requestId", json!(request.request_id))])
+        .await?;
+    let run_now = backend.run_now(target, request.request_id.as_deref(), caller.actor()).await?;
+    Ok(Json(run_now))
 }
 
 async fn events(

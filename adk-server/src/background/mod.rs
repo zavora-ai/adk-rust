@@ -116,7 +116,8 @@ use tokio_util::sync::CancellationToken;
 
 pub use cron::{
     ConcurrencyPolicy, CreateCronJobRequest, CronJobResponse, CronJobStatus, CronState,
-    cron_jobs_router, cron_jobs_router_with_state, start_cron_scheduler, validate_cron_expression,
+    RUN_NOW_IDEMPOTENCY_HEADER, RunCronJobNowResponse, cron_jobs_router,
+    cron_jobs_router_with_state, run_cron_job_now, start_cron_scheduler, validate_cron_expression,
 };
 pub use scheduler::{DurableScheduler, SchedulerTick};
 pub use subagents::{

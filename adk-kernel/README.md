@@ -229,7 +229,12 @@ fires through one such source the kernel registers per expression, unless a regi
 ticks on it (`WakeSource::cron_expression`). A sleeper's cron wake keeps its cursor in
 the kernel's own store (`KernelBuilder::watermark_store`), so a restarted kernel or another replica
 fires the occurrences missed while no kernel ran, one at a time as each series sleeps again, and
-none from before a series began. A local event reaches `Running` in under 2 s: in-process sources
+none from before a series began. `KernelConfig::with_cron_jitter(Jitter)` spreads ticks that
+share a cadence: each is still keyed and watermarked at its scheduled time, and its `kernel.wake`
+run waits out a fixed per-source share of the gap to the next tick. `Kernel::run_now` (control
+plane `POST /api/kernel/{processes/{pid},triggers/{name}}/run-now`, `adk-rust run-now`) runs a
+cron sleeper or trigger now, refused while frozen, through admission like a tick, without
+moving the schedule. A local event reaches `Running` in under 2 s: in-process sources
 enqueue and claim at once, and the tick claims wake runs an external ingress or another
 replica enqueued.
 

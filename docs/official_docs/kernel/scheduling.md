@@ -164,3 +164,90 @@ occurrences its own policy picks ([cron sleepers](backends.md#cron-sleepers),
 [cron triggers](backends.md#cron-triggers)).
 A durable `Schedule` takes the same `MissedFirePolicy`
 ([schedules and the firing rule](../core/durable-runtime.md#schedules-and-the-firing-rule)).
+
+## Jitter
+
+Many schedules on one cadence — every agent on `0 0 * * * *` — would all start in the same
+second. `KernelConfig::with_cron_jitter(Jitter)` spreads them: each cron tick and each
+schedule fire is delayed by a share of the gap to the next one. Jitter is off by default.
+
+| Field | Meaning |
+|---|---|
+| `percent` | The share of the gap to the next occurrence a fire may be delayed by, 0 to 50; a larger value is clamped to 50 |
+| `max` | The longest delay, whatever the gap |
+| `seed` | Folded into every offset; the kernel salts it with its `app_name`, so tenants and kernels whose sources share names spread apart |
+
+`Jitter::default()` is 15 percent, at most nine minutes. The offset of a source is the same on
+every replica and after every restart: it is a fixed fraction of the window, derived from the
+source's name. It is always under half the gap, so a delayed tick lands before the next one
+is due.
+
+A jittered tick keeps its scheduled time as its identity. The kernel submits it when it falls
+due, keyed `cron:<source>:<scheduled time>`, and moves the expression's watermark to that
+time, as without jitter; the tick's `kernel.wake` run carries `not_before`, the scheduled time
+plus the offset, so the maintenance worker routes it no earlier. The missed-occurrence plan,
+the deduplication across replicas and the catch-up after downtime are therefore unchanged. The
+woken turn's wake payload carries `jitter_ms`.
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+
+use adk_core::schedule::Jitter;
+use adk_core::{InMemoryRunStore, MissedFirePolicy, NewRun};
+use adk_kernel::{Kernel, KernelConfig, Trigger, Wake};
+use serde_json::json;
+
+fn main() -> anyhow::Result<()> {
+    let digest =
+        NewRun::new("background", "ops", "ana", "ops", json!({ "text": "Summarize the hour" }));
+    let kernel = Kernel::builder()
+        .config(
+            KernelConfig::default()
+                .with_app_name("ops")
+                // Up to 15 percent of the hour, at most nine minutes.
+                .with_cron_jitter(Jitter::new(15, Duration::from_secs(9 * 60))),
+        )
+        .run_store(Arc::new(InMemoryRunStore::new()))
+        .trigger(Trigger::new(
+            "hourly-digest",
+            Wake::Cron { expr: "0 0 * * * *".into(), missed: MissedFirePolicy::Skip },
+            digest,
+        ))
+        .build()?;
+    println!("{:?}", kernel.inventory().wake_sources);
+    Ok(())
+}
+```
+
+The kernel applies the jitter to its own cron sources for standing triggers, to the cron
+wakes of sleepers, to a managed tenant's cron sources and to the `DurableScheduler` over its
+schedule store. A `CronWakeSource` you register takes its own:
+`CronWakeSource::watermarked(..)?.with_jitter(Jitter::default())`.
+
+## Running a schedule now
+
+`Kernel::run_now` runs a cron schedule now, outside its schedule, for a person or a program:
+
+| Target | `RunNowTarget` | Control plane | CLI |
+|---|---|---|---|
+| A process asleep on a cron wake | `Process { pid }` | `POST /api/kernel/processes/{pid}/run-now` | `adk-rust run-now PID` |
+| A standing trigger on a cron wake | `Trigger { name }` | `POST /api/kernel/triggers/{name}/run-now` | `adk-rust run-now --trigger NAME` |
+
+A run now is a wake like a tick's, keyed `now:<pid or trigger:name>:<request id>`: the
+router wakes the sleeper, or fires the trigger, as a tick would. The request body,
+`{"requestId": "…"}`, is optional; a retry with the same id queues nothing new. The run now:
+
+- **is refused while frozen** with `kernel.frozen`, and queues nothing;
+- **passes admission** like a tick's run: quiet hours defer it, a spent daily budget parks it,
+  a quota holds it;
+- **leaves the schedule alone**: no watermark moves, the next tick fires on time, and a
+  recurring sleeper's successor sleeps on the same cron wake after the run;
+- **tells the turn** it was run now: the wake payload carries `run_now`, the expression and
+  `requested_by`;
+- **is recorded** as a `kernel.control` record of the `run-now` action and a `kernel.run_now`
+  record with the target, the key and the `kernel.wake` run.
+
+A process that is not asleep on a cron wake is refused with `kernel.invalid_state`;
+`adk-rust resume` wakes any sleeper. The routes need the `operator` scope.
+

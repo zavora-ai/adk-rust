@@ -15,7 +15,8 @@ use serde_json::Value;
 use super::api::{
     AgendaItemResponse, AgendaQuery, AgendaResponse, ApprovalItem, AttachRequest, AttachResponse,
     FreezeRequest, FreezeResponse, KillRequest, NiceRequest, ProcessResponse, ProcessesQuery,
-    ProcessesResponse, RejectRequest, ScheduleRequest, SpawnRequest, SteerRequest, SteerResponse,
+    ProcessesResponse, RejectRequest, RunNowRequest, ScheduleRequest, SpawnRequest, SteerRequest,
+    SteerResponse,
 };
 use super::{ControlPlaneConfig, paths};
 use crate::agenda::AgendaItem;
@@ -611,6 +612,39 @@ impl ControlClient {
     /// error the kernel answered.
     pub async fn resume(&self, pid: &str) -> Result<Process> {
         self.process_action(paths::RESUME, pid, &()).await
+    }
+
+    /// `POST /kernel/processes/{pid}/run-now`: runs a cron sleeper now, outside its schedule
+    /// ([`Kernel::run_now`](crate::Kernel::run_now)); a retry with the same `request_id`
+    /// queues nothing new.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered, such as `kernel.frozen`.
+    pub async fn run_now(
+        &self,
+        pid: &str,
+        request_id: Option<&str>,
+    ) -> Result<crate::kernel::RunNow> {
+        let path = paths::RUN_NOW.replace("{pid}", &encode(pid));
+        self.call(Method::POST, path, Some(&run_now_request(request_id))).await
+    }
+
+    /// `POST /kernel/triggers/{name}/run-now`: runs a standing cron trigger now, outside its
+    /// schedule ([`Kernel::run_now`](crate::Kernel::run_now)).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    pub async fn run_trigger_now(
+        &self,
+        name: &str,
+        request_id: Option<&str>,
+    ) -> Result<crate::kernel::RunNow> {
+        let path = paths::TRIGGER_RUN_NOW.replace("{name}", &encode(name));
+        self.call(Method::POST, path, Some(&run_now_request(request_id))).await
     }
 
     /// `GET /kernel/drivers`: the mounted drivers (spec 3.2 §7.7).
@@ -1307,6 +1341,14 @@ fn known_code(code: &str) -> &'static str {
 }
 
 /// Percent-encodes `text` for a path segment or a query value.
+/// The body of a run now with `request_id`, when one is given.
+fn run_now_request(request_id: Option<&str>) -> RunNowRequest {
+    match request_id {
+        Some(id) => RunNowRequest::default().with_request_id(id),
+        None => RunNowRequest::default(),
+    }
+}
+
 pub(super) fn encode(text: &str) -> String {
     let mut encoded = String::with_capacity(text.len());
     for byte in text.bytes() {
