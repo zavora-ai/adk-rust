@@ -314,6 +314,20 @@ b2fc1c55-edd0-4f63-8d00-a5df096b0aba  completed  triggered:weekday-status  backg
 6b54fd29-baa1-4b6a-be3e-06bf954047a9  completed  triggered:weekday-status  background        1s    $0.0096        3/3
 ```
 
+A run that holds `publish_status` keeps the following minutes from starting anything; `ps`
+counts them on the held run, `events` names each one, and `adk-rust run-now --trigger
+weekday-status` is refused until the held run finishes:
+
+```text
+$ adk-rust ps --home .adk          # three minutes after a run held publish_status
+PID                                   STATE      KIND                      QUEUE            AGE      TODAY      CALLS  NOTE
+9e8591b9-e892-464e-8ade-10d9cca3580d  waiting    triggered:weekday-status  background     3m04s    $0.0022        5/9  waiting for a human · 3 later firing(s) skipped
+$ adk-rust events --home .adk
+#13     19:28:00  wake       trigger-cron:0_*_*_*_*_* cron:trigger-cron:0_*_*_*_*_*:2026-11-18T19:28:00Z → 9e8591b9-e892-464e-8ade-10d9cca3580d (skipped: still unfinished)
+```
+
+Once the call is decided and the run finishes, the next minute starts a run again.
+
 A webhook wakes the agent the same way: a `Trigger` on `Wake::Webhook { hook }` and a
 `WebhookIngress` given to `HarnessLauncher::with_webhook_ingress`
 ([wake-ups](../core/wake-ups.md)).
@@ -345,6 +359,9 @@ unfrozen; the processes the freeze parked resume.
 ```
 
 A goal started while frozen waits `queued` and makes no model call; after `unfreeze` it runs.
+The trigger's ticks that come due while frozen fire as its `MissedFirePolicy` picks them once
+the freeze lifts: under `FireOnce`, one run, and `adk-rust events` shows the earlier ticks as
+`missed: too late`.
 The freeze is kept in `.adk/state.db`, so a kernel restarted while frozen stays frozen.
 
 ## 7. Crash and resume
