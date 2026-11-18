@@ -27,7 +27,7 @@
 //!
 //! [`ContextUrls`] answers a different question: whether a URL a model chose already appeared
 //! in the conversation, so a fetch tool can refuse a URL the model composed to carry data out
-//! (see [`provenance`](ContextUrls) for the sources and the matching rule).
+//! (see [`provenance`] for the sources and the matching rule).
 //!
 //! [`GuardedClient`] (feature `egress-client`) is an HTTP client that enforces a policy on
 //! every request URL, every resolved address and every redirect hop, ignores the environment's
@@ -68,7 +68,7 @@
 mod address;
 #[cfg(feature = "egress-client")]
 mod client;
-mod provenance;
+pub mod provenance;
 
 use std::collections::HashMap;
 use std::fmt;
