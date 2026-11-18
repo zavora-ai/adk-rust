@@ -404,6 +404,7 @@ name = "adk-graph"
 version = "3.0.0"
 dependencies = [
  "adk-action",
+ "adk-agent",
  "adk-core",
  "async-stream",
  "async-trait",
@@ -412,7 +413,9 @@ dependencies = [
  "futures",
  "jsonschema",
  "regex",
+ "schemars",
  "serde",
+ "serde-saphyr",
  "serde_json",
  "sha2 0.10.9",
  "similar",

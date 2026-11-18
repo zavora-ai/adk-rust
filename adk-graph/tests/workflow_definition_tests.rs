@@ -414,10 +414,14 @@ fn the_sample_round_trips_through_yaml_and_json() {
 #[test]
 fn the_committed_json_schema_matches_the_types() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/workflow.schema.json");
-    let text = serde_json::to_string_pretty(&workflow_json_schema()).unwrap() + "\n";
-    if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
+    let schema = workflow_json_schema();
+    // Compared as JSON values: key order depends on whether a crate in the build enables
+    // serde_json's `preserve_order`.
+    let committed: Option<serde_json::Value> =
+        std::fs::read_to_string(&path).ok().and_then(|text| serde_json::from_str(&text).ok());
+    if committed.as_ref() != Some(&schema) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, &text).unwrap();
+        std::fs::write(&path, serde_json::to_string_pretty(&schema).unwrap() + "\n").unwrap();
         panic!("{} was out of date and has been rewritten; commit it", path.display());
     }
 }
