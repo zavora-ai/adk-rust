@@ -421,9 +421,10 @@ impl BudgetExceeded {
             max,
             code: "budget.units",
             message: format!(
-                "budget exhausted: the call needs {requested} {unit} with {used} of the run's \
-                 cap of {max} {unit} already used, so it was not sent; raise \
-                 RunBudget::max_units for {unit} or start a new run"
+                "budget exhausted: the call would bring {unit} to {}, past the run's cap of \
+                 {max} {unit}, so it was not sent; raise RunBudget::max_units for {unit} or \
+                 start a new run",
+                used.saturating_add(requested)
             ),
         }
     }
