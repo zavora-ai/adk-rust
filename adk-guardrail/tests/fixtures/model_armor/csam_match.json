@@ -1,0 +1,14 @@
+{
+  "sanitizationResult": {
+    "filterMatchState": "MATCH_FOUND",
+    "invocationResult": "SUCCESS",
+    "filterResults": {
+      "csam": {
+        "csamFilterFilterResult": {
+          "executionState": "EXECUTION_SUCCESS",
+          "matchState": "MATCH_FOUND"
+        }
+      }
+    }
+  }
+}

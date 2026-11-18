@@ -1,0 +1,31 @@
+{
+  "sanitizationResult": {
+    "filterMatchState": "MATCH_FOUND",
+    "invocationResult": "SUCCESS",
+    "filterResults": {
+      "rai": {
+        "raiFilterResult": {
+          "executionState": "EXECUTION_SUCCESS",
+          "matchState": "MATCH_FOUND",
+          "raiFilterTypeResults": {
+            "sexually_explicit": { "matchState": "NO_MATCH_FOUND" },
+            "hate_speech": { "matchState": "NO_MATCH_FOUND" },
+            "harassment": { "matchState": "NO_MATCH_FOUND" },
+            "dangerous": { "confidenceLevel": "MEDIUM_AND_ABOVE", "matchState": "MATCH_FOUND" }
+          }
+        }
+      },
+      "sdp": {
+        "sdpFilterResult": {
+          "inspectResult": {
+            "executionState": "EXECUTION_SUCCESS",
+            "matchState": "MATCH_FOUND",
+            "findings": [
+              { "infoType": "US_SOCIAL_SECURITY_NUMBER", "likelihood": "LIKELY", "location": { "byteRange": { "start": "12", "end": "23" } } }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

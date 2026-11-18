@@ -1,0 +1,19 @@
+{
+  "sanitizationResult": {
+    "filterMatchState": "NO_MATCH_FOUND",
+    "invocationResult": "PARTIAL",
+    "filterResults": {
+      "pi_and_jailbreak": {
+        "piAndJailbreakFilterResult": {
+          "executionState": "EXECUTION_SUCCESS",
+          "matchState": "NO_MATCH_FOUND"
+        }
+      }
+    },
+    "sanitizationMetadata": {
+      "errorCode": "500",
+      "errorMessage": "sdp filter failed",
+      "ignorePartialInvocationFailures": false
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "sanitizationResult": {
+    "filterMatchState": "MATCH_FOUND",
+    "invocationResult": "SUCCESS",
+    "filterResults": {
+      "pi_and_jailbreak": {
+        "piAndJailbreakFilterResult": {
+          "executionState": "EXECUTION_SUCCESS",
+          "matchState": "NO_MATCH_FOUND"
+        }
+      },
+      "sdp": {
+        "sdpFilterResult": {
+          "deidentifyResult": {
+            "executionState": "EXECUTION_SUCCESS",
+            "matchState": "MATCH_FOUND",
+            "data": { "text": "My SSN is [US_SOCIAL_SECURITY_NUMBER]" },
+            "transformedBytes": "11",
+            "infoTypes": ["US_SOCIAL_SECURITY_NUMBER"]
+          }
+        }
+      }
+    }
+  }
+}

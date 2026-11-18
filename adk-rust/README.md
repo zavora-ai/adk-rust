@@ -295,7 +295,7 @@ Features outside the tiers, composable with any of them:
 | Harness packs | `harness-browser`, `harness-computer-use`, `harness-payments`, `harness-voice`, `harness-managed`, `harness-web`, `harness-mcp`, `harness-hooks`, `harness-encrypted`, `harness-memory-local` |
 | Surfaces | `surface` — the surface engine and the web home |
 | Graph actions | `action`, `action-http` (with RSS), `action-trigger`, `action-full` |
-| Other | `acp`, `skills-progressive-disclosure`, `sandbox-workspace`, `sandbox-docker`, `aws-secrets`, `azure-keyvault`, `gcp-secrets`, `gcs-artifacts`, `vertex-sandbox`, `vertex-eval`, `vertex-rag`, `agent-retrieval`, `vertex-skill-registry`, `gcp-deploy` |
+| Other | `acp`, `skills-progressive-disclosure`, `sandbox-workspace`, `sandbox-docker`, `aws-secrets`, `azure-keyvault`, `gcp-secrets`, `gcp-model-armor`, `gcs-artifacts`, `vertex-sandbox`, `vertex-eval`, `vertex-rag`, `agent-retrieval`, `vertex-skill-registry`, `gcp-deploy` |
 
 `adk-rust/Cargo.toml` is the authoritative list.
 
