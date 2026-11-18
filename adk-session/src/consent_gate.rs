@@ -10,6 +10,10 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::Event;
+use crate::history::{
+    HistoryEdit, HistoryOutcome, HistoryRewrite, ImportSessionRequest, RewriteHistoryRequest,
+    SessionHistory,
+};
 use crate::inmemory::InMemorySessionService;
 use crate::service::{
     AppendEventRequest, CreateRequest, DeleteRequest, GetRequest, ListRequest, SessionService,
@@ -207,16 +211,36 @@ impl SessionService for ConsentGatedSessionService {
         self.durable.delete_all_sessions(app_name, user_id).await
     }
 
-    async fn rewind(
-        &self,
-        identity: &AdkIdentity,
-        target_event_id: &str,
-    ) -> Result<Box<dyn Session>> {
-        self.holder(identity).await?.rewind(identity, target_event_id).await
+    async fn history(&self, identity: &AdkIdentity) -> Result<SessionHistory> {
+        self.holder(identity).await?.history(identity).await
     }
 
-    async fn rewind_steps(&self, identity: &AdkIdentity, steps: usize) -> Result<Box<dyn Session>> {
-        self.holder(identity).await?.rewind_steps(identity, steps).await
+    async fn rewrite_history(&self, mut req: RewriteHistoryRequest) -> Result<HistoryOutcome> {
+        if let Some(subject) = self.writable(req.identity.user_id.as_ref()).await?
+            && let HistoryRewrite::Edit { edits } = &mut req.rewrite
+        {
+            for edit in edits {
+                if let HistoryEdit::Replace { event } = edit {
+                    self.profile_filter(&subject, &mut event.actions.state_delta).await?;
+                }
+            }
+        }
+        self.holder(&req.identity).await?.rewrite_history(req).await
+    }
+
+    /// Routes the new session as [`create`](SessionService::create) does.
+    async fn import_session(&self, mut req: ImportSessionRequest) -> Result<Box<dyn Session>> {
+        let Some(subject) = self.writable(req.identity.user_id.as_ref()).await? else {
+            return self.durable.import_session(req).await;
+        };
+        for event in &mut req.events {
+            self.profile_filter(&subject, &mut event.actions.state_delta).await?;
+        }
+        if self.gate.permits(&subject, &ConsentPurpose::SessionContinuity).await? {
+            self.durable.import_session(req).await
+        } else {
+            self.ephemeral.import_session(req).await
+        }
     }
 
     async fn health_check(&self) -> Result<()> {

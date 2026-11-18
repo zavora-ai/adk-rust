@@ -26,6 +26,10 @@ This crate provides 46 browser automation tools (44 enabled by default) as ADK `
 
 `BrowserToolset` implements the `adk_core::Toolset` trait, so it integrates directly with `LlmAgentBuilder::toolset()`.
 
+### Claude's browser use and computer use toolsets
+
+`BrowserUseToolset` offers the members of Claude's `browser_toolset_20260801` (`browser.navigate`, `browser.read_page`, `browser.left_click`, tab management with `browser_state`) over the same `BrowserSession` and navigation policy. `WebDriverComputer` implements `adk_core::ComputerActuator` over the viewport, so `adk_computer_use::ComputerUseToolset` can drive it. Every action runs on the governed tool path; see [Governed Computer Use and Browser Use](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/computer-use/toolsets.md).
+
 ## Security Defaults
 
 | Default | Opt out |
@@ -34,6 +38,7 @@ This crate provides 46 browser automation tools (44 enabled by default) as ADK `
 | `browser_navigate`, `browser_new_tab`, and `browser_new_window` accept only `http` and `https` URLs, so `file:`, `javascript:`, `data:`, and `chrome:` URLs are refused | `.with_allowed_schemes(["https", "file"])` |
 | The same tools refuse non-public addresses — loopback, private, link-local, shared-address and cloud metadata (`localhost`, `10.0.0.0/8`, `100.64.0.0/10`, `169.254.169.254`, and host names that resolve to them), and check the page they and `browser_back`, `browser_forward`, and `browser_refresh` end on after redirects, replacing a refused page with `about:blank` | `.with_private_network_access(true)` |
 | The same tools refuse host names that do not resolve on the agent host | `.with_unresolved_hosts(true)` |
+| Opt-in: the same tools open only a URL that already appeared in the conversation, in a user message or a tool result, so a model cannot carry data out in a URL it composed; a refused URL fails with `browser.url_not_in_context` before the browser moves | `.with_url_provenance(UrlSources::default())` turns it on |
 | `browser_file_upload` is not included in any toolset or profile; once enabled, it uploads only existing files inside the configured directories, after resolving symlinks | `.with_file_upload(["/srv/agent/uploads"])` |
 | Chrome runs with its sandbox on; `--no-sandbox` is never added, and `chrome_options` cannot replace the argument list | `BrowserConfig::new().add_arg("--no-sandbox")` for containers that run Chrome as root |
 

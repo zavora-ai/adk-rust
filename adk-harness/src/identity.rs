@@ -231,6 +231,10 @@ impl Tool for PermissionTool {
     fn egress(&self, args: &serde_json::Value) -> adk_core::egress::ToolEgress {
         self.inner.egress(args)
     }
+
+    fn batch_group(&self) -> Option<adk_core::BatchGroup> {
+        self.inner.batch_group()
+    }
     fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
         self.inner.timeout_override()
     }
@@ -602,6 +606,10 @@ impl Tool for CredentialedTool {
 
     fn egress(&self, args: &serde_json::Value) -> adk_core::egress::ToolEgress {
         self.inner.egress(args)
+    }
+
+    fn batch_group(&self) -> Option<adk_core::BatchGroup> {
+        self.inner.batch_group()
     }
     fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
         self.inner.timeout_override()

@@ -380,7 +380,7 @@ impl MuseRealtimeAsrClient {
             SessionMeter { hold, model: model.clone(), processed_ms: 0, transcribed: false };
         let span = tracing::info_span!(
             "muse.asr_realtime",
-            gen_ai.system = "muse",
+            gen_ai.provider.name = "muse",
             gen_ai.request.model = %model,
             asr.mode = self.options.mode.as_str(),
             asr.session_id = tracing::field::Empty,

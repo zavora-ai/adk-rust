@@ -885,6 +885,18 @@ fn sandbox_entry(shell: &crate::shell::IsolationStatus) -> SafetyEntry {
             covers: "bash runs in the container with the workspace mounted".into(),
             does_not_cover: "the workspace itself, which bash can change".into(),
         },
+        IsolationStatus::Remote { provider, off_host: true } => SafetyEntry {
+            mechanism: format!("remote sandbox ({provider})"),
+            covers: "bash runs off this host, out of reach of the workspace and the host".into(),
+            does_not_cover: "what the sandbox can reach on the network, and what was copied \
+                             into it"
+                .into(),
+        },
+        IsolationStatus::Remote { provider, off_host: false } => SafetyEntry {
+            mechanism: format!("sandbox client ({provider})"),
+            covers: "nothing beyond a separate working directory: bash runs on this host".into(),
+            does_not_cover: "anything the user's account can reach".into(),
+        },
         IsolationStatus::Degraded { requested, .. } => SafetyEntry {
             mechanism: "sandbox".into(),
             covers: format!(

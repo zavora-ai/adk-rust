@@ -2238,7 +2238,11 @@ impl Llm for GeminiModel {
         );
         adk_telemetry::info!("Generating content");
         self.validate_request_contract(&req)?;
-        let usage_span = adk_telemetry::llm_generate_span("gemini", &self.model_name, stream);
+        #[cfg(feature = "gemini-vertex")]
+        let provider = if self.vertex_backend { "gemini-vertex" } else { "gemini" };
+        #[cfg(not(feature = "gemini-vertex"))]
+        let provider = "gemini";
+        let usage_span = crate::telemetry::inference_span(provider, &self.model_name, stream, &req);
 
         // Dispatch on the configured transport. The default `GenerateContent`
         // path is unchanged; the Interactions path (task 7.3/7.4) is only

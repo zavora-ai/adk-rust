@@ -5,7 +5,7 @@
 //! deployment can fail at startup when it is unavailable.
 
 mod background;
-#[cfg(feature = "docker")]
+#[cfg(any(feature = "docker", feature = "remote-shell"))]
 mod container;
 mod gate;
 mod ledger;
@@ -14,6 +14,8 @@ mod os_sandbox;
 mod output;
 mod pids;
 mod protect;
+#[cfg(feature = "remote-shell")]
+mod remote;
 
 use std::fmt;
 
@@ -25,10 +27,12 @@ pub use background::{
     ShellKillTool, ShellStatus, ShellSupervisor,
 };
 pub(crate) use background::{Launch, LedgerNote, supervisor};
+#[cfg(any(feature = "docker", feature = "remote-shell"))]
+pub use container::ContainerBashTool;
+#[cfg(any(feature = "docker", feature = "remote-shell"))]
+pub(crate) use container::{ContainerCheckRefusal, ContainerPool, PoolSource};
 #[cfg(feature = "docker")]
-pub use container::{ContainerBashTool, ContainerConfig, DEFAULT_CONTAINER_IMAGE};
-#[cfg(feature = "docker")]
-pub(crate) use container::{ContainerCheckRefusal, ContainerPool};
+pub use container::{ContainerConfig, DEFAULT_CONTAINER_IMAGE};
 pub(crate) use gate::FileToolGate;
 #[cfg(feature = "sqlite")]
 pub use ledger::SqliteShellLedger;
@@ -41,6 +45,8 @@ pub use pids::SqliteShellPidRegistry;
 pub use pids::{InMemoryShellPidRegistry, ShellPidRecord, ShellPidRegistry, reap_orphaned_shells};
 pub use protect::SANDBOX_PROTECTED_PATHS;
 pub(crate) use protect::protected_paths;
+#[cfg(feature = "remote-shell")]
+pub use remote::RemoteShellConfig;
 
 use crate::policy::Isolation;
 
@@ -74,6 +80,10 @@ pub enum ShellIsolation {
     /// A container per session, with the workspace mounted at `/workspace`.
     #[cfg(feature = "docker")]
     Container(ContainerConfig),
+    /// An environment per session from a [`SandboxClient`](adk_sandbox::workspace::SandboxClient)
+    /// off this host — an E2B or Daytona microVM — with its own filesystem.
+    #[cfg(feature = "remote-shell")]
+    Remote(RemoteShellConfig),
 }
 
 impl ShellIsolation {
@@ -86,6 +96,8 @@ impl ShellIsolation {
             Self::OsSandbox(_) => "os_sandbox",
             #[cfg(feature = "docker")]
             Self::Container(_) => "container",
+            #[cfg(feature = "remote-shell")]
+            Self::Remote(_) => "remote",
         }
     }
 }
@@ -145,6 +157,7 @@ impl Default for ShellConfig {
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum IsolationStatus {
     /// The host shell.
     Host,
@@ -158,6 +171,15 @@ pub enum IsolationStatus {
         /// The container image.
         image: String,
     },
+    /// An environment from a sandbox client: a remote provider's microVM, or a client that
+    /// runs on this host.
+    Remote {
+        /// The client's provider name (`SandboxClient::provider`).
+        provider: String,
+        /// The environment runs off this host, so commands cannot reach the host's files.
+        #[serde(rename = "offHost")]
+        off_host: bool,
+    },
     /// A sandbox was requested and is unavailable; commands run on the host.
     Degraded {
         /// The requested isolation.
@@ -170,7 +192,7 @@ pub enum IsolationStatus {
 impl IsolationStatus {
     /// Whether commands run on the host.
     pub fn behaves_as_host(&self) -> bool {
-        matches!(self, Self::Host | Self::Degraded { .. })
+        matches!(self, Self::Host | Self::Degraded { .. } | Self::Remote { off_host: false, .. })
     }
 
     /// The enforcer name recorded in audit records and annotations.
@@ -179,6 +201,7 @@ impl IsolationStatus {
             Self::Host | Self::Degraded { .. } => "host",
             Self::OsSandbox { enforcer } => enforcer,
             Self::Container { .. } => "container",
+            Self::Remote { .. } => "remote",
         }
     }
 
@@ -200,6 +223,7 @@ impl IsolationStatus {
             Self::Host | Self::Degraded { .. } => false,
             Self::OsSandbox { enforcer } => enforcer != RESTRICTED_TOKEN,
             Self::Container { .. } => true,
+            Self::Remote { off_host, .. } => *off_host,
         }
     }
 
@@ -227,7 +251,10 @@ impl IsolationStatus {
         match self {
             Self::Host | Self::Degraded { .. } => Isolation::Host,
             Self::OsSandbox { .. } => Isolation::OsSandbox,
-            Self::Container { .. } => Isolation::Container,
+            // An environment off the host is governed as a container is; one on the host as
+            // the host shell is.
+            Self::Container { .. } | Self::Remote { off_host: true, .. } => Isolation::Container,
+            Self::Remote { off_host: false, .. } => Isolation::Host,
         }
     }
 }
@@ -250,6 +277,10 @@ impl fmt::Display for IsolationStatus {
             }
             Self::OsSandbox { enforcer } => write!(f, "OS sandbox ({enforcer}, no network)"),
             Self::Container { image } => write!(f, "container ({image})"),
+            Self::Remote { provider, off_host: true } => write!(f, "remote sandbox ({provider})"),
+            Self::Remote { provider, off_host: false } => {
+                write!(f, "{provider} sandbox client on this host (full user permissions, network)")
+            }
             Self::Degraded { requested, reason } => write!(
                 f,
                 "host (full user permissions, network); requested {requested} is unavailable: {reason}"
@@ -275,9 +306,9 @@ pub(crate) struct ShellRuntime {
     /// The launcher of an active OS sandbox.
     #[cfg(feature = "sandbox")]
     pub(crate) launcher: Option<SandboxLauncher>,
-    /// The configuration of an active container shell.
-    #[cfg(feature = "docker")]
-    pub(crate) container: Option<ContainerConfig>,
+    /// Where an active container or remote shell's environments come from.
+    #[cfg(any(feature = "docker", feature = "remote-shell"))]
+    pub(crate) pooled: Option<PoolSource>,
     /// The sandbox denies the network, keeps protected paths read-only (adk-sandbox S3, proven
     /// by the enforcer conformance probe) and keeps every root-level protected path from being
     /// created or replaced, so sandboxed commands may run without approval where the mode table
@@ -312,8 +343,8 @@ pub(crate) fn resolve_isolation(
             status: IsolationStatus::Host,
             #[cfg(feature = "sandbox")]
             launcher: None,
-            #[cfg(feature = "docker")]
-            container: None,
+            #[cfg(any(feature = "docker", feature = "remote-shell"))]
+            pooled: None,
             protects_paths: false,
             guards_protected_names: false,
             read_only_runs: false,
@@ -344,8 +375,8 @@ pub(crate) fn resolve_isolation(
                 read_only_runs: active && launcher.keeps_read_only(),
                 auto_allow_sandboxed: config.auto_allow_sandboxed && active && refusal.is_none(),
                 launcher: active.then_some(launcher),
-                #[cfg(feature = "docker")]
-                container: None,
+                #[cfg(any(feature = "docker", feature = "remote-shell"))]
+                pooled: None,
                 status,
             }
         }
@@ -380,7 +411,39 @@ pub(crate) fn resolve_isolation(
                 auto_allow_sandboxed: config.auto_allow_sandboxed && active && refusal.is_none(),
                 #[cfg(feature = "sandbox")]
                 launcher: None,
-                container: active.then(|| container.clone()),
+                pooled: active.then(|| PoolSource::Container(container.clone())),
+                status,
+            }
+        }
+        #[cfg(feature = "remote-shell")]
+        ShellIsolation::Remote(remote) => {
+            let status = IsolationStatus::Remote {
+                provider: remote.client.provider().to_string(),
+                off_host: remote.client.capabilities().remote,
+            };
+            let refusal = remote.auto_allow_refusal();
+            if config.auto_allow_sandboxed
+                && let Some(reason) = &refusal
+            {
+                return Err(AdkError::new(
+                    ErrorComponent::Agent,
+                    ErrorCategory::InvalidInput,
+                    AUTO_ALLOW_UNAVAILABLE_CODE,
+                    format!(
+                        "auto_allow_sandboxed cannot turn on: {reason} (spec 3.1 §9.2 I26); \
+                         drop auto_allow_sandboxed to approve remote commands one by one"
+                    ),
+                ));
+            }
+            ShellRuntime {
+                // A command off the host reaches none of its protected paths.
+                protects_paths: refusal.is_none(),
+                guards_protected_names: false,
+                read_only_runs: false,
+                auto_allow_sandboxed: config.auto_allow_sandboxed && refusal.is_none(),
+                #[cfg(feature = "sandbox")]
+                launcher: None,
+                pooled: Some(PoolSource::Remote(remote.clone())),
                 status,
             }
         }

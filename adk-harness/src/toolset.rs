@@ -166,7 +166,7 @@ pub struct HarnessToolset {
     facts: Option<Arc<crate::facts::runtime::FactsRuntime>>,
     /// The session containers of the container shell, stopped when the toolset closes
     /// (spec 3.1 §7.9 "Container").
-    #[cfg(feature = "docker")]
+    #[cfg(any(feature = "docker", feature = "remote-shell"))]
     containers: Option<Arc<crate::shell::ContainerPool>>,
     /// Background shells: named in the reminder when they end, killed when the toolset
     /// closes (spec 3.1 §7.29).
@@ -191,7 +191,7 @@ impl HarnessToolset {
             banner: mode_banner,
             #[cfg(feature = "memory")]
             facts: None,
-            #[cfg(feature = "docker")]
+            #[cfg(any(feature = "docker", feature = "remote-shell"))]
             containers: None,
             shells: None,
         }
@@ -210,7 +210,7 @@ impl HarnessToolset {
     }
 
     /// Stops the container shell's session containers when the toolset closes.
-    #[cfg(feature = "docker")]
+    #[cfg(any(feature = "docker", feature = "remote-shell"))]
     pub(crate) fn with_containers(mut self, containers: Arc<crate::shell::ContainerPool>) -> Self {
         self.containers = Some(containers);
         self
@@ -410,7 +410,7 @@ impl Toolset for HarnessToolset {
         if let Some(shells) = &self.shells {
             shells.close().await;
         }
-        #[cfg(feature = "docker")]
+        #[cfg(any(feature = "docker", feature = "remote-shell"))]
         if let Some(containers) = &self.containers {
             containers.close().await;
         }

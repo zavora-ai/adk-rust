@@ -16,15 +16,19 @@
 //! service.migrate().await?;
 //! ```
 
+use crate::history::{
+    HistoryOutcome, ImportSessionRequest, RewriteHistoryRequest, RewrittenHistory, SessionHistory,
+};
 use crate::service::{
-    session_already_exists, session_id_not_found, session_not_found_for, validate_scope,
-    validate_session_id,
+    identity_not_found, session_already_exists, session_id_not_found, session_not_found_for,
+    validate_scope, validate_session_id,
 };
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
     ListRequest, Session, SessionService, State, state_utils,
 };
-use adk_core::Result;
+use adk_core::identity::AdkIdentity;
+use adk_core::{ErrorCategory, ErrorComponent, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use mongodb::bson::{self, Document, doc};
@@ -332,6 +336,10 @@ fn is_duplicate_key(error: &mongodb::error::Error) -> bool {
     }
 }
 
+/// Attempts a history rewrite makes before giving up on a session that keeps changing between
+/// the read and the write.
+const MAX_REWRITE_ATTEMPTS: usize = 16;
+
 // ── BSON helpers ──
 
 fn state_to_bson(
@@ -461,6 +469,135 @@ impl MongoSessionService {
         Ok(())
     }
 
+    /// Reads the history of `identity`, with the session document's `event_seq` and
+    /// `updated_at` as stored, which a rewrite requires to be unchanged when it writes.
+    async fn load_history(
+        &self,
+        txn: &mut Option<mongodb::ClientSession>,
+        identity: &AdkIdentity,
+    ) -> Result<(SessionHistory, bson::Bson, bson::Bson)> {
+        let filter = doc! {
+            "app_name": identity.app_name.as_ref(),
+            "user_id": identity.user_id.as_ref(),
+            "session_id": identity.session_id.as_ref(),
+        };
+        let session_doc = with_optional_session!(
+            self.db.collection::<Document>("sessions").find_one(filter.clone()),
+            txn.as_mut()
+        )
+        .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
+        .ok_or_else(|| identity_not_found(identity))?;
+        let stored = session_doc.get_document("state").map(bson_to_state).unwrap_or_default();
+        // Documents written by earlier releases also hold a copy of the app and user tiers.
+        let (_, _, state) = state_utils::extract_state_deltas(&stored);
+        let initial_state = session_doc.get_document("initial_state").ok().map(bson_to_state);
+        let event_seq = session_doc.get("event_seq").cloned().unwrap_or(bson::Bson::Null);
+        let updated_at = session_doc.get("updated_at").cloned().unwrap_or(bson::Bson::Null);
+
+        let events_coll = self.db.collection::<Document>("events");
+        let options = FindOptions::builder().sort(doc! { "timestamp": 1, "seq": 1 }).build();
+        let query_error =
+            |e: mongodb::error::Error| adk_core::AdkError::session(format!("query failed: {e}"));
+        let mut docs = Vec::new();
+        match txn.as_mut() {
+            Some(session) => {
+                let mut cursor = events_coll
+                    .find(filter)
+                    .with_options(options)
+                    .session(&mut *session)
+                    .await
+                    .map_err(query_error)?;
+                while cursor.advance(&mut *session).await.map_err(query_error)? {
+                    docs.push(cursor.deserialize_current().map_err(query_error)?);
+                }
+            }
+            None => {
+                let mut cursor =
+                    events_coll.find(filter).with_options(options).await.map_err(query_error)?;
+                while cursor.advance().await.map_err(query_error)? {
+                    docs.push(cursor.deserialize_current().map_err(query_error)?);
+                }
+            }
+        }
+        let events = docs.iter().filter_map(doc_to_event).collect();
+        Ok((SessionHistory::new(events, state, initial_state), event_seq, updated_at))
+    }
+
+    /// One attempt at a rewrite: `None` when the session changed between the read and the
+    /// guarded write, so the caller reads it again.
+    async fn try_rewrite(
+        &self,
+        req: &RewriteHistoryRequest,
+    ) -> Result<Option<(RewrittenHistory, DateTime<Utc>)>> {
+        let identity = &req.identity;
+        let (app_name, user_id, session_id) =
+            (identity.app_name.as_ref(), identity.user_id.as_ref(), identity.session_id.as_ref());
+        let mut txn = self.maybe_start_transaction().await?;
+        let (history, event_seq, updated_at) = self.load_history(&mut txn, identity).await?;
+        let rewritten = history.rewrite(identity, &req.rewrite, req.expected_version.as_deref())?;
+
+        let now = Utc::now();
+        // The session document is written first and only while it still holds the append
+        // count and update time that were read, so without a transaction a concurrent append
+        // fails the guard instead of being overwritten.
+        let claimed = with_optional_session!(
+            self.db.collection::<Document>("sessions").update_one(
+                doc! {
+                    "app_name": app_name, "user_id": user_id, "session_id": session_id,
+                    "event_seq": event_seq, "updated_at": updated_at,
+                },
+                doc! { "$set": {
+                    "state": state_to_bson(&rewritten.state)?,
+                    "updated_at": chrono_to_bson_dt(now),
+                } }
+            ),
+            txn.as_mut()
+        )
+        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
+        if claimed.matched_count == 0 {
+            if let Some(session) = txn.as_mut() {
+                session.abort_transaction().await.ok();
+            }
+            return Ok(None);
+        }
+
+        let events_coll = self.db.collection::<Document>("events");
+        let change = &rewritten.change;
+        if !change.removed.is_empty() {
+            with_optional_session!(
+                events_coll.delete_many(doc! {
+                    "app_name": app_name, "user_id": user_id, "session_id": session_id,
+                    "id": { "$in": &change.removed },
+                }),
+                txn.as_mut()
+            )
+            .map_err(|e| adk_core::AdkError::session(format!("delete events failed: {e}")))?;
+        }
+        for event in rewritten.events.iter().filter(|e| change.replaced.contains(&e.id)) {
+            let replacement = event_doc(app_name, user_id, session_id, event, 0)?;
+            with_optional_session!(
+                events_coll.update_one(
+                    doc! {
+                        "app_name": app_name, "user_id": user_id, "session_id": session_id,
+                        "id": &event.id,
+                    },
+                    doc! { "$set": {
+                        "invocation_id": replacement.get("invocation_id").cloned(),
+                        "branch": replacement.get("branch").cloned(),
+                        "author": replacement.get("author").cloned(),
+                        "llm_response": replacement.get("llm_response").cloned(),
+                        "actions": replacement.get("actions").cloned(),
+                        "long_running_tool_ids": replacement.get("long_running_tool_ids").cloned(),
+                    } }
+                ),
+                txn.as_mut()
+            )
+            .map_err(|e| adk_core::AdkError::session(format!("update event failed: {e}")))?;
+        }
+        Self::maybe_commit(&mut txn).await?;
+        Ok(Some((rewritten, now)))
+    }
+
     /// Applies `event` to the session `(app_name, user_id, session_id)`: merges each
     /// tier's delta, bumps `updated_at`, and inserts the event.
     async fn apply_event(
@@ -508,19 +645,11 @@ impl MongoSessionService {
 
         self.apply_tier_deltas(txn, app_name, user_id, &app_delta, &user_delta, bson_ts).await?;
 
-        let llm_bson = bson::to_bson(&event.llm_response)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
-        let act_bson = bson::to_bson(&event.actions)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
-        let tid_bson = bson::to_bson(&event.long_running_tool_ids)
-            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
         with_optional_session!(
-            ev_coll.insert_one(doc! {
-                "id": &event.id, "session_id": session_id, "app_name": app_name, "user_id": user_id,
-                "invocation_id": &event.invocation_id, "branch": &event.branch, "author": &event.author,
-                "timestamp": bson_ts, "seq": seq, "llm_response": llm_bson, "actions": act_bson, "long_running_tool_ids": tid_bson,
-            }), txn.as_mut()
-        ).map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
+            ev_coll.insert_one(event_doc(app_name, user_id, session_id, event, seq)?),
+            txn.as_mut()
+        )
+        .map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
 
         Ok(())
     }
@@ -555,6 +684,7 @@ impl SessionService for MongoSessionService {
         }
         let session_bson = state_to_bson(&session_state)?;
         let mut session_doc = identity;
+        session_doc.insert("initial_state", session_bson.clone());
         session_doc.insert("state", session_bson);
         session_doc.insert("created_at", bson_now);
         session_doc.insert("updated_at", bson_now);
@@ -770,6 +900,111 @@ impl SessionService for MongoSessionService {
     }
 
     #[instrument(skip_all)]
+    async fn history(&self, identity: &AdkIdentity) -> Result<SessionHistory> {
+        Ok(self.load_history(&mut None, identity).await?.0)
+    }
+
+    async fn rewrite_history(&self, req: RewriteHistoryRequest) -> Result<HistoryOutcome> {
+        let identity = &req.identity;
+        for _ in 0..MAX_REWRITE_ATTEMPTS {
+            let Some((rewritten, updated_at)) = self.try_rewrite(&req).await? else {
+                continue;
+            };
+            let (app_state, user_state) = self
+                .read_tiers(&mut None, identity.app_name.as_ref(), identity.user_id.as_ref())
+                .await?;
+            let session = Box::new(MongoSession {
+                app_name: identity.app_name.as_ref().to_string(),
+                user_id: identity.user_id.as_ref().to_string(),
+                session_id: identity.session_id.as_ref().to_string(),
+                state: state_utils::merge_states(&app_state, &user_state, &rewritten.state),
+                events: rewritten.events,
+                updated_at,
+            });
+            return Ok(HistoryOutcome::new(session, rewritten.change));
+        }
+        Err(adk_core::AdkError::new(
+            ErrorComponent::Session,
+            ErrorCategory::Unavailable,
+            "session.mongodb.history_contention",
+            format!(
+                "session '{}' changed on each of {MAX_REWRITE_ATTEMPTS} rewrite attempts; retry \
+                 the rewrite",
+                identity.session_id
+            ),
+        ))
+    }
+
+    async fn import_session(&self, req: ImportSessionRequest) -> Result<Box<dyn Session>> {
+        let identity = &req.identity;
+        let (app_name, user_id, session_id) =
+            (identity.app_name.as_ref(), identity.user_id.as_ref(), identity.session_id.as_ref());
+        let (_, _, state) = state_utils::extract_state_deltas(&req.state);
+        let (_, _, initial_state) = state_utils::extract_state_deltas(&req.initial_state);
+        let updated_at = req.events.last().map_or_else(Utc::now, |event| event.timestamp);
+        let event_count = i64::try_from(req.events.len()).unwrap_or(i64::MAX);
+
+        let mut txn = self.maybe_start_transaction().await?;
+        // The session document goes first, so its unique index refuses an existing session
+        // before any event is written.
+        let session_doc = doc! {
+            "app_name": app_name, "user_id": user_id, "session_id": session_id,
+            "state": state_to_bson(&state)?,
+            "initial_state": state_to_bson(&initial_state)?,
+            "created_at": chrono_to_bson_dt(Utc::now()),
+            "updated_at": chrono_to_bson_dt(updated_at),
+            "event_seq": event_count,
+        };
+        with_optional_session!(
+            self.db.collection::<Document>("sessions").insert_one(session_doc),
+            txn.as_mut()
+        )
+        .map_err(|e| {
+            if is_duplicate_key(&e) {
+                session_already_exists(app_name, user_id, session_id)
+            } else {
+                adk_core::AdkError::session(format!("insert failed: {e}"))
+            }
+        })?;
+        if !req.events.is_empty() {
+            let docs = req
+                .events
+                .iter()
+                .zip(1_i64..)
+                .map(|(event, seq)| event_doc(app_name, user_id, session_id, event, seq))
+                .collect::<Result<Vec<_>>>()?;
+            let inserted = with_optional_session!(
+                self.db.collection::<Document>("events").insert_many(docs),
+                txn.as_mut()
+            );
+            if let Err(error) = inserted {
+                if txn.is_none() {
+                    // Without a transaction, take back the session document so no partial
+                    // import remains.
+                    let _ = self
+                        .db
+                        .collection::<Document>("sessions")
+                        .delete_one(doc! {
+                            "app_name": app_name, "user_id": user_id, "session_id": session_id,
+                        })
+                        .await;
+                }
+                return Err(adk_core::AdkError::session(format!("insert events failed: {error}")));
+            }
+        }
+        let (app_state, user_state) = self.read_tiers(&mut txn, app_name, user_id).await?;
+        MongoSessionService::maybe_commit(&mut txn).await?;
+
+        Ok(Box::new(MongoSession {
+            app_name: app_name.to_string(),
+            user_id: user_id.to_string(),
+            session_id: session_id.to_string(),
+            state: state_utils::merge_states(&app_state, &user_state, &state),
+            events: req.events,
+            updated_at,
+        }))
+    }
+
     async fn health_check(&self) -> Result<()> {
         self.db
             .run_command(doc! { "ping": 1 })
@@ -780,6 +1015,28 @@ impl SessionService for MongoSessionService {
 }
 
 // ── Event deserialization ──
+
+/// The stored document of `event`, at append position `seq`.
+fn event_doc(
+    app_name: &str,
+    user_id: &str,
+    session_id: &str,
+    event: &Event,
+    seq: i64,
+) -> Result<Document> {
+    let llm_bson = bson::to_bson(&event.llm_response)
+        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
+    let act_bson = bson::to_bson(&event.actions)
+        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
+    let tid_bson = bson::to_bson(&event.long_running_tool_ids)
+        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
+    Ok(doc! {
+        "id": &event.id, "session_id": session_id, "app_name": app_name, "user_id": user_id,
+        "invocation_id": &event.invocation_id, "branch": &event.branch, "author": &event.author,
+        "timestamp": chrono_to_bson_dt(event.timestamp), "seq": seq, "llm_response": llm_bson,
+        "actions": act_bson, "long_running_tool_ids": tid_bson,
+    })
+}
 
 fn doc_to_event(doc: &Document) -> Option<Event> {
     let llm_response_bson = doc.get("llm_response")?;

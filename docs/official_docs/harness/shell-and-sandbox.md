@@ -15,6 +15,7 @@ command is retried outside them, and what the harness records.
 | `OsSandbox(..)` with no working enforcer | the host, as `Host` | `Degraded { requested, reason }` |
 | `Container(ContainerConfig)` (feature `docker`) | `sh -c` in a container per session, the workspace mounted at `/workspace` | `Container { image }` |
 | `Container(..)` with no reachable Docker daemon | the host, as `Host` | `Degraded { requested: "container", reason }` |
+| `Remote(RemoteShellConfig)` (feature `remote-shell`) | `sh -c` in an environment per session from a `SandboxClient`, such as an E2B or Daytona microVM; the host workspace is not mounted | `Remote { provider, off_host }` |
 
 The enforcer — for a container, the Docker daemon — is probed when the harness is built,
 and the sandbox again on every call:
@@ -242,7 +243,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | First command of a session | `SandboxClient::provision` and `start` create the session's container; a probe then tries to write each protected path inside it and refuses the container if one write succeeds |
 | Later commands, later runs | The same container, one per (app, user, session) |
 | Idle for `idle_ttl` | The container is stopped; the next command provisions a new one |
-| A command times out, or a freeze stops it | The container is stopped, which ends the command and everything it started |
+| A command times out, a freeze stops it, or its call is cancelled | The container is stopped, which ends the command and everything it started |
 | `Harness::close` | Every session's container is stopped |
 
 A command runs through `SandboxSession::exec_command` with the workspace's timeout ceiling,
@@ -258,6 +259,18 @@ limits processes to 512.
 | A goal's `until` check | Refused, never run on the host in the container's place; the goal ends `exhausted` |
 | Shell credentials (`shell_credential`) | Refused at build |
 | Plan mode | Deny: the container has no read-only workspace mount |
+
+## The remote shell
+
+With feature `remote-shell`, `ShellIsolation::Remote(RemoteShellConfig::new(client))` runs
+each session's commands in an environment `client` provides — `E2bClient` and
+`DaytonaClient` from `adk-sandbox`, or any other `SandboxClient` — provisioned from the
+config's manifest. It shares the container shell's lifecycle, kill switch, audit records and
+refusals, and caps each call at the wall time left in the run's budget. The environment has
+its own filesystem, so `read_file` does not see what `bash` writes there. An off-host client
+is governed as the container column below; a client that reports itself on this host, such
+as `LocalUnixClient`, as the host shell. See
+[Remote Sandbox Providers](../sandbox/remote-providers.md#the-harness-shell).
 
 ## Modes and approvals
 

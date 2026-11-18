@@ -1,11 +1,13 @@
-//! The container shell (spec 3.1 §7.9 "Container", feature `docker`).
+//! The pooled shells: the container shell (spec 3.1 §7.9 "Container", feature `docker`)
+//! and the remote shell (feature `remote-shell`, see [`super::remote`]).
 //!
-//! One container per (app, user, session), provisioned through
+//! One environment per (app, user, session), provisioned through
 //! `SandboxClient::provision`/`start` on the session's first command, kept across runs and
-//! stopped when it has been idle for [`ContainerConfig::idle_ttl`] or when the harness
-//! closes. The host workspace is bind-mounted at `/workspace` (adk-sandbox S4), so the host
-//! file tools and the shell see the same files, and every protected path that exists is
-//! mounted read-only over it, which is the container's form of S3.
+//! stopped when it has been idle for its idle TTL, when a command times out, is frozen or
+//! is cancelled, or when the harness closes. A container has the host workspace
+//! bind-mounted at `/workspace` (adk-sandbox S4), so the host file tools and the shell see
+//! the same files, and every protected path that exists is mounted read-only over it, which
+//! is the container's form of S3. A remote environment shares no files with the host.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -18,12 +20,17 @@ use adk_core::audit_log::{AuditRecordDraft, AuditRecordKind, AuditRecordOutcome}
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result, Tool, ToolContext};
 use adk_devtools::Workspace;
 use adk_sandbox::SandboxError;
+#[cfg(feature = "docker")]
+use adk_sandbox::workspace::DockerClient;
+#[cfg(feature = "docker")]
+use adk_sandbox::workspace::Manifest;
 use adk_sandbox::workspace::{
-    DockerClient, ExecOutput, Manifest, SandboxClient, SandboxSession, SessionHandle,
+    CommandRequest, ExecOutput, SandboxClient, SandboxSession, SessionHandle,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
+#[cfg(feature = "docker")]
 use super::protect::protected_paths;
 use super::{
     FileToolGate, IsolationStatus, ShellLedger, ShellLedgerEntry, ShellOutputs, sandbox_unavailable,
@@ -39,16 +46,19 @@ use crate::tools::{GOVERNANCE_POLL_INTERVAL, HarnessBashTool, denial_suspected};
 /// ```rust
 /// assert_eq!(adk_harness::DEFAULT_CONTAINER_IMAGE, "ubuntu:22.04");
 /// ```
+#[cfg(feature = "docker")]
 pub const DEFAULT_CONTAINER_IMAGE: &str = "ubuntu:22.04";
 
-/// How long a session's container stays up after its last command unless
-/// [`ContainerConfig::idle_ttl`] says otherwise.
-const DEFAULT_IDLE_TTL: Duration = Duration::from_secs(15 * 60);
+/// How long a session's environment stays up after its last command unless its
+/// configuration says otherwise.
+pub(crate) const DEFAULT_IDLE_TTL: Duration = Duration::from_secs(15 * 60);
 
 /// Where the host workspace is mounted inside the container (adk-sandbox S4).
+#[cfg(feature = "docker")]
 const CONTAINER_WORKSPACE: &str = "/workspace";
 
 /// The Docker daemon address when `DOCKER_HOST` is unset.
+#[cfg(feature = "docker")]
 const DEFAULT_DOCKER_HOST: &str = "unix:///var/run/docker.sock";
 
 /// Configuration of the container shell (spec 3.1 §7.9 "Container").
@@ -71,6 +81,7 @@ const DEFAULT_DOCKER_HOST: &str = "unix:///var/run/docker.sock";
 /// assert!(!config.network);
 /// assert!(config.client.is_none());
 /// ```
+#[cfg(feature = "docker")]
 #[derive(Clone)]
 pub struct ContainerConfig {
     /// The image of every session's container.
@@ -96,6 +107,7 @@ pub struct ContainerConfig {
     pub client: Option<Arc<dyn SandboxClient>>,
 }
 
+#[cfg(feature = "docker")]
 impl Default for ContainerConfig {
     fn default() -> Self {
         Self {
@@ -112,6 +124,7 @@ impl Default for ContainerConfig {
     }
 }
 
+#[cfg(feature = "docker")]
 impl fmt::Debug for ContainerConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ContainerConfig")
@@ -128,6 +141,7 @@ impl fmt::Debug for ContainerConfig {
     }
 }
 
+#[cfg(feature = "docker")]
 impl ContainerConfig {
     /// Digest of the configuration: image, network, user, extra mounts, limits and whether a
     /// custom client is in use, as `sha256:<hex>` (spec 3.1 §9.2 I9).
@@ -190,6 +204,7 @@ impl ContainerConfig {
 /// A custom client was built by the caller, which proved the runtime then. Otherwise the
 /// Docker daemon named by `DOCKER_HOST` (default `unix:///var/run/docker.sock`) must accept
 /// a connection; the check is synchronous because `build()` is.
+#[cfg(feature = "docker")]
 pub(crate) fn probe(config: &ContainerConfig) -> std::result::Result<(), String> {
     if config.client.is_some() {
         return Ok(());
@@ -231,6 +246,7 @@ pub(crate) fn probe(config: &ContainerConfig) -> std::result::Result<(), String>
 
 /// Why container commands cannot run unapproved, or `None` when they can
 /// (spec 3.1 §7.9, §9.2 I26).
+#[cfg(feature = "docker")]
 pub(crate) fn auto_allow_refusal(config: &ContainerConfig, root: &Path) -> Option<String> {
     if config.network {
         return Some("the container allows the network".to_string());
@@ -249,6 +265,7 @@ pub(crate) fn auto_allow_refusal(config: &ContainerConfig, root: &Path) -> Optio
 /// Kills every process in the container but its own (PID 1) and this script's shell and its
 /// parent, so nothing a command started outlives it (spec 3.1 §9.2 I23). `kill` is a shell
 /// builtin, so the sweep forks nothing that it would then have to find.
+#[cfg(feature = "docker")]
 const REAP_SCRIPT: &str = r#"for p in /proc/[0-9]*; do pid=${p#/proc/}; case "$pid" in 1|"$$"|"$PPID") ;; *) kill -9 "$pid" 2>/dev/null ;; esac; done; exit 0"#;
 
 /// A session's container: the client that made it, its handle, and its live session.
@@ -260,6 +277,7 @@ struct Container {
     in_use: AtomicUsize,
     /// The harness built this container, so a `/proc` sweep inside it cannot reach the host;
     /// a caller's own client may run sessions on the host, where the sweep is never run.
+    #[cfg_attr(not(feature = "docker"), allow(dead_code))]
     reap: bool,
     /// One command at a time per container, so a reap never ends another command.
     exec: tokio::sync::Mutex<()>,
@@ -276,11 +294,17 @@ impl Lease {
         Self { container }
     }
 
-    /// Runs `command` in the workspace, then ends every process it left behind (I23).
-    pub(crate) async fn run(&self, command: &str) -> std::result::Result<ExecOutput, SandboxError> {
+    /// Runs `command` in the workspace, ended after `timeout`, then ends every process it
+    /// left behind in a container (I23).
+    pub(crate) async fn run(
+        &self,
+        command: &str,
+        timeout: Duration,
+    ) -> std::result::Result<ExecOutput, SandboxError> {
         let _one_at_a_time = self.container.exec.lock().await;
         let session = self.container.session.as_ref();
-        let output = session.exec_command(command, None).await;
+        let output = session.exec(CommandRequest::new(command).timeout(timeout)).await;
+        #[cfg(feature = "docker")]
         if self.container.reap
             && let Err(error) = session.exec_command(REAP_SCRIPT, None).await
         {
@@ -292,6 +316,16 @@ impl Lease {
         }
         output
     }
+
+    /// The provider of the environment, as `SandboxClient::provider` names it.
+    pub(crate) fn provider(&self) -> &str {
+        self.container.client.provider()
+    }
+
+    /// The environment's handle.
+    pub(crate) fn handle(&self) -> &str {
+        self.container.handle.as_str()
+    }
 }
 
 impl Drop for Lease {
@@ -301,9 +335,31 @@ impl Drop for Lease {
     }
 }
 
-/// The containers of a harness, one per (app, user, session) (spec 3.1 §7.9 "Container").
+/// Where a pooled shell's environments come from.
+#[derive(Clone, Debug)]
+pub(crate) enum PoolSource {
+    /// Containers on a Docker daemon, or a caller's own container client.
+    #[cfg(feature = "docker")]
+    Container(ContainerConfig),
+    /// Environments a remote provider runs.
+    #[cfg(feature = "remote-shell")]
+    Remote(super::remote::RemoteShellConfig),
+}
+
+impl PoolSource {
+    fn idle_ttl(&self) -> Duration {
+        match self {
+            #[cfg(feature = "docker")]
+            Self::Container(config) => config.idle_ttl,
+            #[cfg(feature = "remote-shell")]
+            Self::Remote(config) => config.idle_ttl,
+        }
+    }
+}
+
+/// The environments of a harness, one per (app, user, session) (spec 3.1 §7.9 "Container").
 pub(crate) struct ContainerPool {
-    config: ContainerConfig,
+    source: PoolSource,
     root: PathBuf,
     containers: tokio::sync::Mutex<HashMap<String, Arc<Container>>>,
     sweeper: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -312,7 +368,7 @@ pub(crate) struct ContainerPool {
 impl fmt::Debug for ContainerPool {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ContainerPool")
-            .field("config", &self.config)
+            .field("source", &self.source)
             .field("root", &self.root)
             .finish_non_exhaustive()
     }
@@ -323,9 +379,9 @@ fn pool_key(app: &str, user: &str, session: &str) -> String {
 }
 
 impl ContainerPool {
-    pub(crate) fn new(config: ContainerConfig, root: &Path) -> Self {
+    pub(crate) fn new(source: PoolSource, root: &Path) -> Self {
         Self {
-            config,
+            source,
             root: root.to_path_buf(),
             containers: tokio::sync::Mutex::new(HashMap::new()),
             sweeper: Mutex::new(None),
@@ -377,7 +433,7 @@ impl ContainerPool {
 
     /// Stops the containers no command has used for `idle_ttl`.
     async fn sweep(&self) {
-        let ttl = self.config.idle_ttl;
+        let ttl = self.source.idle_ttl();
         let idle: Vec<Arc<Container>> = {
             let mut containers = self.containers.lock().await;
             let idle_keys: Vec<String> = containers
@@ -406,7 +462,7 @@ impl ContainerPool {
             return;
         }
         let period =
-            (self.config.idle_ttl / 4).clamp(Duration::from_millis(50), Duration::from_secs(30));
+            (self.source.idle_ttl() / 4).clamp(Duration::from_millis(50), Duration::from_secs(30));
         let pool: Weak<Self> = Arc::downgrade(self);
         *sweeper = Some(tokio::spawn(async move {
             loop {
@@ -418,9 +474,50 @@ impl ContainerPool {
     }
 
     async fn provision(&self) -> std::result::Result<Arc<Container>, String> {
-        let (client, reap): (Arc<dyn SandboxClient>, bool) = match &self.config.client {
+        match &self.source {
+            #[cfg(feature = "docker")]
+            PoolSource::Container(config) => self.provision_container(config).await,
+            #[cfg(feature = "remote-shell")]
+            PoolSource::Remote(config) => {
+                let client = config.client.clone();
+                let handle = client.provision(&config.manifest).await.map_err(|error| {
+                    format!("the session's remote sandbox could not be provisioned: {error}")
+                })?;
+                let session: Arc<dyn SandboxSession> = match client.start(&handle).await {
+                    Ok(session) => Arc::from(session),
+                    Err(error) => {
+                        let _ = client.stop(&handle).await;
+                        return Err(format!(
+                            "the session's remote sandbox could not be started: {error}"
+                        ));
+                    }
+                };
+                tracing::info!(
+                    sandbox.provider = client.provider(),
+                    sandbox.handle = handle.as_str(),
+                    "started a session's remote sandbox"
+                );
+                Ok(Arc::new(Container {
+                    client,
+                    handle,
+                    session,
+                    last_used: Mutex::new(Instant::now()),
+                    in_use: AtomicUsize::new(0),
+                    reap: false,
+                    exec: tokio::sync::Mutex::new(()),
+                }))
+            }
+        }
+    }
+
+    #[cfg(feature = "docker")]
+    async fn provision_container(
+        &self,
+        config: &ContainerConfig,
+    ) -> std::result::Result<Arc<Container>, String> {
+        let (client, reap): (Arc<dyn SandboxClient>, bool) = match &config.client {
             Some(client) => (client.clone(), false),
-            None => (Arc::new(self.docker_client().await?), true),
+            None => (Arc::new(self.docker_client(config).await?), true),
         };
         let handle = client
             .provision(&Manifest { entries: vec![] })
@@ -446,7 +543,7 @@ impl ContainerPool {
             let _ = client.stop(&handle).await;
             return Err(reason);
         }
-        tracing::info!(container.handle = handle.as_str(), image = %self.config.image, "started a session container");
+        tracing::info!(container.handle = handle.as_str(), image = %config.image, "started a session container");
         Ok(Arc::new(Container {
             client,
             handle,
@@ -461,12 +558,16 @@ impl ContainerPool {
     /// A Docker client for one session's container: the workspace at `/workspace`
     /// read-write, its protected paths read-only over it, the extra mounts, no network
     /// unless allowed, and the configured user (adk-sandbox S4).
-    async fn docker_client(&self) -> std::result::Result<DockerClient, String> {
-        let mut client = DockerClient::with_image(&self.config.image)
+    #[cfg(feature = "docker")]
+    async fn docker_client(
+        &self,
+        config: &ContainerConfig,
+    ) -> std::result::Result<DockerClient, String> {
+        let mut client = DockerClient::with_image(&config.image)
             .await
             .map_err(|error| format!("no Docker daemon: {error}"))?
-            .with_network_mode(if self.config.network { "bridge" } else { "none" })
-            .with_resource_limits(self.config.memory_limit_bytes, self.config.cpu_limit)
+            .with_network_mode(if config.network { "bridge" } else { "none" })
+            .with_resource_limits(config.memory_limit_bytes, config.cpu_limit)
             .with_bind_mount(&self.root, CONTAINER_WORKSPACE, false);
         for path in protected_paths(&self.root).present {
             let relative = path.strip_prefix(&self.root).map_err(|_| {
@@ -478,13 +579,13 @@ impl ContainerPool {
             let target = format!("{CONTAINER_WORKSPACE}/{}", relative.replace('\\', "/"));
             client = client.with_bind_mount(&path, target, true);
         }
-        for (host, target) in &self.config.extra_read {
+        for (host, target) in &config.extra_read {
             client = client.with_bind_mount(host, target.clone(), true);
         }
-        for (host, target) in &self.config.extra_write {
+        for (host, target) in &config.extra_write {
             client = client.with_bind_mount(host, target.clone(), false);
         }
-        if let Some(user) = self.config.user() {
+        if let Some(user) = config.user() {
             client = client.with_user(user);
         }
         Ok(client)
@@ -502,6 +603,7 @@ async fn stop_container(container: &Container) {
 }
 
 /// Quotes `value` for `sh`.
+#[cfg(feature = "docker")]
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
@@ -510,6 +612,7 @@ fn shell_quote(value: &str) -> String {
 /// check, spec 3.1 §9.2 I26, I29): a write that gets through is a breach.
 ///
 /// Paths are relative to the workspace root, which is the command's working directory.
+#[cfg(feature = "docker")]
 async fn probe_protected(
     session: &dyn SandboxSession,
     targets: &[String],
@@ -605,24 +708,123 @@ pub struct ContainerBashTool {
     ledger: Arc<dyn ShellLedger>,
     annotations: Value,
     description: String,
+    /// What the commands run in, for descriptions, errors and hints.
+    place: Place,
     /// Held exclusive while a container command runs unapproved (spec 3.1 §9.2 I26).
     file_gate: Option<FileToolGate>,
     /// Keeps the whole output of a call whose result is cut (spec 3.1 §7.33 fix 8).
     outputs: Option<Arc<ShellOutputs>>,
 }
 
+/// What a pooled shell's commands run in.
+#[derive(Clone, Debug)]
+enum Place {
+    /// A container with the host workspace mounted at `/workspace`.
+    #[cfg(feature = "docker")]
+    Container { image: String, network: bool },
+    /// A remote environment with its own filesystem.
+    #[cfg(feature = "remote-shell")]
+    Remote { provider: String, network: bool, off_host: bool },
+}
+
+impl Place {
+    /// The enforcer name in annotations, audit records and the shell ledger.
+    fn enforcer(&self) -> &'static str {
+        match self {
+            #[cfg(feature = "docker")]
+            Self::Container { .. } => "container",
+            #[cfg(feature = "remote-shell")]
+            Self::Remote { .. } => "remote",
+        }
+    }
+
+    /// How errors and hints name the environment.
+    fn noun(&self) -> &'static str {
+        match self {
+            #[cfg(feature = "docker")]
+            Self::Container { .. } => "container",
+            #[cfg(feature = "remote-shell")]
+            Self::Remote { .. } => "remote sandbox",
+        }
+    }
+}
+
 impl ContainerBashTool {
     /// A `bash` tool over `workspace` whose commands run in containers configured by
     /// `config`. Unsandboxed retries are off (spec 3.1 §7.9 `allow_unsandboxed_retry`).
+    #[cfg(feature = "docker")]
     pub fn new(
         workspace: Workspace,
         config: ContainerConfig,
         ledger: Arc<dyn ShellLedger>,
     ) -> Self {
         let status = IsolationStatus::Container { image: config.image.clone() };
-        let digest = config.profile_digest();
-        let network = config.network;
-        let pool = Arc::new(ContainerPool::new(config, workspace.root()));
+        let place = Place::Container { image: config.image.clone(), network: config.network };
+        let annotations = json!({
+            "enforcer": "container",
+            "profileDigest": config.profile_digest(),
+            "network": config.network,
+            "reads": "confined",
+            "msys2Isolated": true,
+        });
+        let pool = Arc::new(ContainerPool::new(PoolSource::Container(config), workspace.root()));
+        Self::pooled(workspace, pool, status, place, annotations, ledger)
+    }
+
+    /// A `bash` tool over `workspace` whose commands run in remote environments that
+    /// `config.client` provides: one per session, provisioned from `config.manifest` on the
+    /// session's first command. Unsandboxed retries are off.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use adk_core::Tool;
+    /// use adk_harness::{ContainerBashTool, InMemoryShellLedger, RemoteShellConfig};
+    /// use adk_sandbox::workspace::LocalUnixClient;
+    ///
+    /// let client = Arc::new(LocalUnixClient::new(None, std::env::temp_dir().join("snapshots")));
+    /// let ws = adk_devtools::Workspace::new(".").allow_bash(true);
+    /// let bash = ContainerBashTool::remote(ws, RemoteShellConfig::new(client), Arc::new(InMemoryShellLedger::new()));
+    /// assert_eq!(bash.annotations().unwrap()["enforcer"], "remote");
+    /// assert_eq!(bash.annotations().unwrap()["provider"], "local");
+    /// ```
+    #[cfg(feature = "remote-shell")]
+    pub fn remote(
+        workspace: Workspace,
+        config: super::remote::RemoteShellConfig,
+        ledger: Arc<dyn ShellLedger>,
+    ) -> Self {
+        let capabilities = config.client.capabilities();
+        let provider = config.client.provider().to_string();
+        let status =
+            IsolationStatus::Remote { provider: provider.clone(), off_host: capabilities.remote };
+        let place = Place::Remote {
+            provider: provider.clone(),
+            network: !capabilities.network_blocked,
+            off_host: capabilities.remote,
+        };
+        let annotations = json!({
+            "enforcer": "remote",
+            "provider": provider,
+            "profileDigest": config.profile_digest(),
+            "network": !capabilities.network_blocked,
+            "reads": if capabilities.remote { "confined" } else { "host" },
+            "msys2Isolated": capabilities.remote,
+        });
+        let pool = Arc::new(ContainerPool::new(PoolSource::Remote(config), workspace.root()));
+        Self::pooled(workspace, pool, status, place, annotations, ledger)
+    }
+
+    fn pooled(
+        workspace: Workspace,
+        pool: Arc<ContainerPool>,
+        status: IsolationStatus,
+        place: Place,
+        annotations: Value,
+        ledger: Arc<dyn ShellLedger>,
+    ) -> Self {
         let mut tool = Self {
             // The unsandboxed retry path, when allowed: the same ledger-bound, once-only host
             // run as the OS sandbox's (I25).
@@ -633,14 +835,9 @@ impl ContainerBashTool {
             status,
             allow_unsandboxed_retry: false,
             ledger,
-            annotations: json!({
-                "enforcer": "container",
-                "profileDigest": digest,
-                "network": network,
-                "reads": "confined",
-                "msys2Isolated": true,
-            }),
+            annotations,
             description: String::new(),
+            place,
             file_gate: None,
             outputs: None,
         };
@@ -689,22 +886,36 @@ impl ContainerBashTool {
     }
 
     fn declare(&mut self) {
-        let network = if self.pool.config.network { "network access" } else { "no network" };
+        let noun = self.place.noun();
         let retry = if self.allow_unsandboxed_retry {
-            " If it fails because the container denied something, you may retry it once with \
-             unsandboxed: true, retry_of: <the failed call id> and a reason; the user must \
-             approve that retry."
+            format!(
+                " If it fails because the {noun} denied something, you may retry it once with \
+                 unsandboxed: true, retry_of: <the failed call id> and a reason; the user must \
+                 approve that retry."
+            )
         } else {
-            ""
+            String::new()
         };
-        self.description = format!(
-            "Run a shell command in /workspace inside a container ({}) with {network}. The host \
-             workspace is mounted at /workspace, so files you write there are visible to \
-             read_file and the user; AGENTS.md, git's hooks and config, and other protected \
-             paths are read-only (the rest of .git is writable, so git commit works), and \
-             nothing else on the host is reachable. Has a timeout.{retry}",
-            self.pool.config.image
-        );
+        self.description = match &self.place {
+            #[cfg(feature = "docker")]
+            Place::Container { image, network } => format!(
+                "Run a shell command in /workspace inside a container ({image}) with {}. The \
+                 host workspace is mounted at /workspace, so files you write there are visible \
+                 to read_file and the user; AGENTS.md, git's hooks and config, and other \
+                 protected paths are read-only (the rest of .git is writable, so git commit \
+                 works), and nothing else on the host is reachable. Has a timeout.{retry}",
+                if *network { "network access" } else { "no network" }
+            ),
+            #[cfg(feature = "remote-shell")]
+            Place::Remote { provider, network, off_host } => format!(
+                "Run a shell command in a {} sandbox ({provider}) with {}. The sandbox has its \
+                 own filesystem, kept for this session: files you create there are not visible \
+                 to read_file or the user, and the user's workspace is not in it unless it was \
+                 copied in when the sandbox started. Has a timeout.{retry}",
+                if *off_host { "remote" } else { "local" },
+                if *network { "network access" } else { "no network" }
+            ),
+        };
     }
 }
 
@@ -768,14 +979,40 @@ impl Tool for ContainerBashTool {
             (ctx.app_name().to_string(), ctx.user_id().to_string(), ctx.session_id().to_string());
         let call_id = ctx.function_call_id().to_string();
         let audit = HarnessAudit::for_tool(ctx.as_ref());
-        let enforcer = "container";
+        let enforcer = self.place.enforcer();
+        let noun = self.place.noun();
+        // The run's wall-time budget bounds the call: provisioning and the command, remote
+        // round trips included.
+        let call_started = Instant::now();
+        let budget = match &config.budget_tracker {
+            Some(tracker) => {
+                tracker.check().map_err(AdkError::from)?;
+                tracker.remaining().max_wall_time
+            }
+            None => None,
+        };
         // No host file tool runs while a container command does (I26).
         let _exclusive = match &self.file_gate {
             Some(gate) => Some(gate.exclusive(config).await?),
             None => None,
         };
 
-        let lease = match self.pool.lease(&app, &user, &session).await {
+        let provisioning = async {
+            match budget {
+                Some(left) => tokio::time::timeout(left, self.pool.lease(&app, &user, &session))
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(format!("provisioning the {noun} outlasted the run's wall-time budget"))
+                    }),
+                None => self.pool.lease(&app, &user, &session).await,
+            }
+        };
+        // A remote environment can take seconds to provision; a freeze ends the wait.
+        let leased = tokio::select! {
+            leased = provisioning => leased,
+            frozen = config.governance_refused() => return Err(frozen),
+        };
+        let lease = match leased {
             Ok(lease) => lease,
             Err(reason) => {
                 if let Some(audit) = &audit {
@@ -804,6 +1041,8 @@ impl Tool for ContainerBashTool {
                     json!({
                         "functionCallId": call_id,
                         "enforcer": enforcer,
+                        "provider": lease.provider(),
+                        "environment": lease.handle(),
                         "profileDigest": self.annotations["profileDigest"].clone(),
                         "network": self.annotations["network"].clone(),
                         "reads": self.annotations["reads"].clone(),
@@ -817,14 +1056,21 @@ impl Tool for ContainerBashTool {
                 .await?;
         }
 
-        // The operator's timeout is a ceiling: a model may ask for less time, never more.
+        // The operator's timeout is a ceiling: a model may ask for less time, never more, and
+        // the run's remaining wall time caps both.
         let limit = self.workspace.bash_timeout_value();
-        let timeout = args
+        let mut timeout = args
             .get("timeout_secs")
             .and_then(Value::as_u64)
             .map_or(limit, |requested| Duration::from_secs(requested).min(limit));
+        if let Some(left) = budget {
+            timeout = timeout.min(left.saturating_sub(call_started.elapsed()));
+        }
         let started = Instant::now();
-        let mut run = Box::pin(tokio::time::timeout(timeout, lease.run(&command)));
+        // A call dropped mid-command (a cancelled run) stops the environment, since nothing
+        // else would end the command; a timeout and a freeze stop it below.
+        let cancel = StopOnDrop::new(self.pool.clone(), (&app, &user, &session));
+        let mut run = Box::pin(tokio::time::timeout(timeout, lease.run(&command, timeout)));
         let mut poll = tokio::time::interval(GOVERNANCE_POLL_INTERVAL);
         poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let outcome = loop {
@@ -839,6 +1085,7 @@ impl Tool for ContainerBashTool {
         };
         drop(run);
         drop(lease);
+        cancel.disarm();
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
         let mut timed_out = false;
@@ -853,14 +1100,15 @@ impl Tool for ContainerBashTool {
             Ok(Err(_elapsed)) => {
                 self.pool.stop(&app, &user, &session).await;
                 timed_out = true;
-                Err(timeout_error(timeout))
+                Err(timeout_error(timeout, noun))
             }
             Ok(Ok(Err(error))) => {
-                Err(AdkError::tool(format!("the command could not run in the container: {error}")))
+                Err(AdkError::tool(format!("the command could not run in the {noun}: {error}")))
             }
             Ok(Ok(Ok(output))) if output.timed_out => {
+                self.pool.stop(&app, &user, &session).await;
                 timed_out = true;
-                Err(timeout_error(timeout))
+                Err(timeout_error(timeout, noun))
             }
             Ok(Ok(Ok(output))) => {
                 let bounded = adk_devtools::bound_output(
@@ -912,21 +1160,31 @@ impl Tool for ContainerBashTool {
                 value.get("stdout").and_then(Value::as_str).unwrap_or_default()
             );
             suspected = denial_suspected(&output);
+            let denied = match &self.place {
+                #[cfg(feature = "docker")]
+                Place::Container { .. } => {
+                    "writes to protected paths and anything outside /workspace, and network \
+                     access, are denied"
+                }
+                #[cfg(feature = "remote-shell")]
+                Place::Remote { .. } => {
+                    "the host's files are not there, and the network may be blocked"
+                }
+            };
             let hint = match (suspected, self.allow_unsandboxed_retry) {
                 (true, true) => format!(
-                    "The container may have refused this: writes to protected paths and \
-                     anything outside /workspace, and network access, are denied. If the \
-                     command needs them, retry it once with unsandboxed: true, retry_of: \
-                     \"{call_id}\" and a reason; the user must approve the retry."
+                    "The {noun} may have refused this: {denied}. If the command needs them, \
+                     retry it once with unsandboxed: true, retry_of: \"{call_id}\" and a \
+                     reason; the user must approve the retry."
                 ),
-                (true, false) => "The container may have refused this: writes to protected \
-                                  paths and anything outside /workspace, and network access, \
-                                  are denied. Unsandboxed retries are turned off; ask the user \
-                                  to run it."
-                    .to_string(),
-                (false, _) => "The command failed inside the container; nothing in its output \
-                               suggests the container refused it."
-                    .to_string(),
+                (true, false) => format!(
+                    "The {noun} may have refused this: {denied}. Unsandboxed retries are \
+                     turned off; ask the user to run it."
+                ),
+                (false, _) => format!(
+                    "The command failed inside the {noun}; nothing in its output suggests the \
+                     {noun} refused it."
+                ),
             };
             value["sandbox"] =
                 json!({ "enforcer": enforcer, "denialSuspected": suspected, "hint": hint });
@@ -974,16 +1232,71 @@ impl Tool for ContainerBashTool {
     }
 }
 
-fn timeout_error(timeout: Duration) -> AdkError {
+fn timeout_error(timeout: Duration, noun: &str) -> AdkError {
     AdkError::new(
         ErrorComponent::Tool,
         ErrorCategory::Timeout,
         "harness.bash.timeout",
-        format!("command timed out after {timeout:?}; the session's container was stopped"),
+        format!("command timed out after {timeout:?}; the session's {noun} was stopped"),
     )
 }
 
-#[cfg(test)]
+/// Stops a session's environment when the call running in it is dropped before it returns.
+struct StopOnDrop {
+    armed: Option<PoolSession>,
+}
+
+/// A pool and the (app, user, session) whose environment it holds.
+struct PoolSession {
+    pool: Arc<ContainerPool>,
+    app: String,
+    user: String,
+    session: String,
+}
+
+impl StopOnDrop {
+    fn new(pool: Arc<ContainerPool>, (app, user, session): (&str, &str, &str)) -> Self {
+        Self {
+            armed: Some(PoolSession {
+                pool,
+                app: app.to_string(),
+                user: user.to_string(),
+                session: session.to_string(),
+            }),
+        }
+    }
+
+    fn disarm(mut self) {
+        self.armed = None;
+    }
+}
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        let Some(PoolSession { pool, app, user, session }) = self.armed.take() else {
+            return;
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn(async move {
+                    tracing::info!(
+                        app.name = %app,
+                        session.id = %session,
+                        "a bash call was cancelled mid-command; stopping its environment"
+                    );
+                    pool.stop(&app, &user, &session).await;
+                });
+            }
+            Err(_) => tracing::warn!(
+                session.id = %session,
+                "a bash call was cancelled outside a runtime; its environment stays up until \
+                 its idle TTL or the provider's lifetime bound"
+            ),
+        }
+    }
+}
+
+#[cfg(all(test, feature = "docker"))]
 mod tests {
     use super::*;
 

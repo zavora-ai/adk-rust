@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::Span;
 
-pub(super) fn responses<S>(events: S) -> LlmResponseStream
+pub(super) fn responses<S>(events: S, forms: super::toolsets::ToolsetForms) -> LlmResponseStream
 where
     S: Stream<Item = Result<MessageStreamEvent, adk_anthropic::Error>> + Send + 'static,
 {
@@ -28,7 +28,7 @@ where
         });
         let (mut events, _) = AccumulatingStream::new(events);
         // Client tool calls by block index: id, name and the streamed argument JSON.
-        let mut tool_calls: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
+        let mut tool_calls: BTreeMap<usize, (ToolUseBlock, String)> = BTreeMap::new();
         // Provider-executed blocks by block index, with a `server_tool_use` block's streamed
         // input. Each is yielded as a partial response at its `content_block_stop`, so a
         // search shows before the answer it informs; the complete message still carries it.
@@ -60,7 +60,7 @@ where
             match event {
                 MessageStreamEvent::ContentBlockStart(start) => match start.content_block {
                     ContentBlock::ToolUse(tool) => {
-                        tool_calls.insert(start.index, (tool.id, tool.name, String::new()));
+                        tool_calls.insert(start.index, (tool, String::new()));
                     }
                     ContentBlock::Text(text) if !text.text.is_empty() => {
                         yield convert::from_text_delta(&text.text);
@@ -76,7 +76,7 @@ where
                 },
                 MessageStreamEvent::ContentBlockDelta(delta) => match delta.delta {
                     ContentBlockDelta::InputJsonDelta(json) => {
-                        if let Some((_, _, arguments)) = tool_calls.get_mut(&delta.index) {
+                        if let Some((_, arguments)) = tool_calls.get_mut(&delta.index) {
                             arguments.push_str(&json.partial_json);
                         } else if let Some((_, input)) = server_blocks.get_mut(&delta.index) {
                             input.push_str(&json.partial_json);
@@ -131,23 +131,21 @@ where
                     }
                     // The accumulator drops a call that `max_tokens` cut off. It is kept,
                     // marked as cut off, so the model is told instead of the call vanishing.
-                    for (id, name, arguments) in tool_calls.values() {
+                    for (started, arguments) in tool_calls.values() {
                         let kept = message.content.iter().any(
-                            |block| matches!(block, ContentBlock::ToolUse(tool) if &tool.id == id),
+                            |block| matches!(block, ContentBlock::ToolUse(tool) if tool.id == started.id),
                         );
                         if !kept {
-                            tracing::warn!(tool.name = %name, "anthropic tool call was cut off before it finished");
-                            message.content.push(ContentBlock::ToolUse(ToolUseBlock::new(
-                                id.clone(),
-                                name.clone(),
-                                adk_core::invalid_tool_arguments(
-                                    "the call was cut off before its arguments were complete",
-                                    arguments,
-                                ),
-                            )));
+                            tracing::warn!(tool.name = %started.name, "anthropic tool call was cut off before it finished");
+                            let mut cut_off = started.clone();
+                            cut_off.input = adk_core::invalid_tool_arguments(
+                                "the call was cut off before its arguments were complete",
+                                arguments,
+                            );
+                            message.content.push(ContentBlock::ToolUse(cut_off));
                         }
                     }
-                    let mut response = convert::from_anthropic_message(&message).0;
+                    let mut response = convert::from_anthropic_message(&message, forms).0;
                     // Replace deltas with the SDK's complete, ordered blocks.
                     // This also retains original text boundaries and signatures.
                     response.provider_metadata.get_or_insert_with(|| serde_json::json!({}))

@@ -68,7 +68,7 @@ The governed, durable harness agent (`adk-harness`, spec 3.1): modes, approvals,
 - [Configuration](harness/configuration.md) - Builder options and defaults, `.adk/harness.toml`, features, the `harness` template
 - [The Harness in Your Terminal](harness/cli.md) - `adk-rust`, `code`, `goal`, `ultracode`, slash commands, `harness.db`
 - [Serving the Harness](harness/serving.md) - `adk-rust serve`, request identity, the approval inbox, background runs
-- [Harness Shell and Sandbox](harness/shell-and-sandbox.md) - `bash` under Seatbelt or bubblewrap: isolation status, unsandboxed retry, `auto_allow_sandboxed`, audit records
+- [Harness Shell and Sandbox](harness/shell-and-sandbox.md) - `bash` under Seatbelt or bubblewrap, in a container, or in a remote microVM: isolation status, unsandboxed retry, `auto_allow_sandboxed`, audit records
 - [Harness Team](harness/team.md) - Members lowered to a `TeamSpec`: local, ACP and A2A members, isolation, budgets, discovery, review rounds
 - [Harness Plans and Goals](harness/plan-and-goals.md) - The plan graph with Approve and Review gates and rewind; loop-until goals, durable and ambient
 - [Harness Durability](harness/durability.md) - The durability invariants and the tests that prove them; what to run after a crash
@@ -145,6 +145,7 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 - [Code Execution](tools/code-execution.md) - Code tools over `adk-code` and `adk-sandbox`
 - [Python Code Execution](tools/python-code-execution.md) - In-process Python through the Monty interpreter
 - [Sandboxed Code Execution](sandbox/index.md) - `adk-sandbox` process and WASM backends with OS-level profiles
+- [Remote Sandbox Providers](sandbox/remote-providers.md) - E2B and Daytona microVMs behind `SandboxClient`: the harness's remote shell, `SessionBackend` for `SandboxTool` and CodeAct, lifetimes, the kill switch and run budgets
 - [MCP Tools](tools/mcp-tools.md) - Connecting MCP servers as agent tools
 - [MCP overview and architecture](mcp/index.md) - Where MCP fits and which ADK-Rust surface to use
 - [MCP client](mcp/client.md) - Tools, resources, prompts, completion, subscriptions, elicitation, tasks, and HTTP
@@ -159,6 +160,7 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 - [Vertex AI RAG Engine](rag/vertex-rag-engine.md) - Retrieval from managed RAG Engine corpora
 - [Agent Retrieval](rag/agent-retrieval.md) - The Agent Retrieval (Vector Search 2.0) vector store
 - [Governed Desktop Automation](computer-use/index.md) - `adk-computer-use` over the `computer-use-mcp` server
+- [Governed Computer Use and Browser Use](computer-use/toolsets.md) - Claude's computer use and browser use toolsets, every action on the governed tool path
 - [ACP Tools](tools/acp-tools.md) - Use an ACP coding agent as a typed ADK-Rust tool
 - [Retry & Reflect](tools/retry-reflect.md) - Tool failure recovery with reflection prompts
 - [Advisor Tool](tools/advisor.md) - Let an agent consult a stronger model mid-task, under the run's budget and kill switch
@@ -179,6 +181,7 @@ editor through stable ACP v1.
 
 - [Sessions](sessions/sessions.md) - Session management and lifecycle
 - [State Management](sessions/state.md) - Managing conversation state with prefixes
+- [Fork, Rewind, and Edit History](sessions/history.md) - Forking a session at an event, rewinding it, and editing its events on every backend
 - [Context Compaction](sessions/context-compaction.md) - Summarizing older events to bound request size
 
 ## Memory

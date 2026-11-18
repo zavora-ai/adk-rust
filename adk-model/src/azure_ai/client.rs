@@ -158,7 +158,8 @@ impl Llm for AzureAIClient {
             &mut request.contents,
             &adk_core::history::ProviderOrigin::new("azure-ai", &self.model),
         );
-        let usage_span = adk_telemetry::llm_generate_span("azure-ai", &self.model, stream);
+        let usage_span =
+            crate::telemetry::inference_span("azure-ai", &self.model, stream, &request);
         let api_url = self.api_url();
         let api_key = self.api_key.clone();
         let model = self.model.clone();

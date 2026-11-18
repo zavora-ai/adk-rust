@@ -83,6 +83,7 @@
 //! assert!(err.to_string().contains("429"));
 //! ```
 
+mod advisor;
 mod client;
 mod config;
 mod convert;
@@ -94,6 +95,7 @@ mod request;
 pub mod schema_adapter;
 mod streaming;
 mod token_count;
+mod toolsets;
 
 pub use client::AnthropicClient;
 pub use config::{AnthropicConfig, Effort, ThinkingMode};

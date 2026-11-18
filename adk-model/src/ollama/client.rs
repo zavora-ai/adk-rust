@@ -290,7 +290,8 @@ impl Llm for OllamaModel {
             &mut request.contents,
             &adk_core::history::ProviderOrigin::new("ollama", &self.model_name),
         );
-        let usage_span = adk_telemetry::llm_generate_span("ollama", &self.model_name, stream);
+        let usage_span =
+            crate::telemetry::inference_span("ollama", &self.model_name, stream, &request);
         let model = self.model_name.clone();
         crate::generation_config::reject_unsupported(
             "ollama",

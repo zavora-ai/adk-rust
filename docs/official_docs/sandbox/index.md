@@ -1,9 +1,10 @@
 # Sandboxed Code Execution
 
-The `adk-sandbox` crate provides isolated code execution for ADK agents, with two levels of isolation:
+The `adk-sandbox` crate provides isolated code execution for ADK agents, with three levels of isolation:
 
 1. **Process isolation** — child processes with environment isolation and timeout enforcement
 2. **OS-level sandbox profiles** — kernel-level restrictions on filesystem, network, and process spawning
+3. **Remote microVMs** — E2B and Daytona environments off this host, behind the same `SandboxClient` interface as the local and Docker clients ([Remote Sandbox Providers](remote-providers.md))
 
 ## Backends
 
@@ -12,6 +13,7 @@ The `adk-sandbox` crate provides isolated code execution for ADK agents, with tw
 | `ProcessBackend` | Environment + timeout | Rust, Python, JS, TS, Command | `process` (default) |
 | `ProcessBackend` + sandbox | Kernel-level | Same as above | `process` + `sandbox-native` |
 | `WasmBackend` | Full (memory, fs, network) | WASM only | `wasm` |
+| `SessionBackend` | That of its `SandboxClient`: none for `LocalUnixClient`, a container for `DockerClient`, a microVM for `E2bClient` and `DaytonaClient` | Python, JS, Command; Rust on request | `workspace` |
 
 ### Which Isolation Are You Getting?
 
@@ -418,6 +420,10 @@ server of `adk-tool`'s `McpServerManager`, and so each kernel driver, is held th
 ## Workspace Clients
 
 The `workspace` feature adds a `provision → session → exec → snapshot → resume` lifecycle.
+`LocalUnixClient` and `DockerClient` run it on this host; `E2bClient` (`remote-e2b`) and
+`DaytonaClient` (`remote-daytona`) run it in a provider's microVMs, as
+[Remote Sandbox Providers](remote-providers.md) describes. `SandboxSession::exec` takes a
+`CommandRequest` with its own timeout, environment and working directory.
 
 | Control | `LocalUnixClient` | `DockerClient` (`workspace-docker`) |
 |---------|-------------------|-------------------------------------|
