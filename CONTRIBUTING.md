@@ -205,8 +205,8 @@ ADK-Rust is a Cargo workspace of publishable crates organized by responsibility.
 adk-studio/        Retired in favour of adk-surface's workflow observer
                    (docs/official_docs/surfaces/workflow.md).
                    Repo: https://github.com/zavora-ai/adk-studio
-adk-ui/            Retired, for ADK-Rust 2 only: agent-drawn UI is adk-surface's
-                   `genui` feature (docs/official_docs/surfaces/genui.md).
+adk-ui/            Extension catalogs for adk-surface's `genui` (3.x); 2.x is for
+                   ADK-Rust 2 only (docs/official_docs/surfaces/genui.md).
                    Repo: https://github.com/zavora-ai/adk-ui
 ```
 

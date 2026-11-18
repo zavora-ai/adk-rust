@@ -39,9 +39,10 @@ Every drawing is checked on the server before any surface shows it. A refused dr
 tool error that tells the agent why, and the thread shows a plain notice such as "Finance
 tried to show something that looks like a decision. It wasn't shown."
 
-> **Note:** the `adk-ui` crate is retired (spec 3.3 decision 11). Its 2.2.0 release is built on
-> `adk-core` 2, so an ADK-Rust 3 agent cannot register its tools; see
-> [Moving from adk-ui](../surfaces/genui.md#moving-from-adk-ui) for each tool's replacement.
+> **Note:** `adk-ui` 2 is retired (spec 3.3 decision 11). Its 2.2 releases are built on `adk-core` 2,
+> so an ADK-Rust 3 agent cannot register its tools; see
+> [Moving from adk-ui 2](../surfaces/genui.md#moving-from-adk-ui-2) for each tool's replacement.
+> `adk-ui` 3 adds [extension catalogs](../surfaces/genui.md#extension-catalogs) to `genui` instead.
 
 ## UI protocols in adk-server
 

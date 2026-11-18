@@ -315,9 +315,10 @@ adk-studio/      Retired in favour of adk-surface's workflow observer
                  (docs/official_docs/surfaces/workflow.md).
                  Repo: https://github.com/zavora-ai/adk-studio
 
-adk-ui/          Retired, for ADK-Rust 2 only (spec 3.3 decision 11): agent-drawn UI is
-                 adk-surface's `genui` feature. Do not add code to it or depend on it.
-                 Repo: https://github.com/zavora-ai/adk-ui
+adk-ui/          Extension catalogs for genui (spec 3.3 decision 11, amended): charts,
+                 metrics, pages and scenes on `Catalog::extend`. It owns no render tool,
+                 protocol, provenance or approval path; no crate here depends on it.
+                 2.x is for ADK-Rust 2 only. Repo: https://github.com/zavora-ai/adk-ui
                  UI protocol constants stay in adk-server/src/ui_protocol.rs for the
                  deprecated `adk_ui` profile and the /api/ui bridge.
 ```
