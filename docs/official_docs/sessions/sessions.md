@@ -1044,7 +1044,7 @@ On PostgreSQL only tables in the connection's current schema (`current_schema()`
 - **Idempotent**: Running `migrate()` multiple times is safe
 - **Transactional**: Each SQL step runs in its own transaction and is recorded with its version, description, and time
 - **Serialized**: PostgreSQL `migrate()` holds an advisory lock (`PostgresSessionService::ADVISORY_LOCK_KEY`) on one connection for the whole run, so instances starting together do not race
-- **Concurrent**: MongoDB and Neo4j `migrate()` can run from several instances at once. Every index and constraint is created idempotently, a statement that loses a race to create the same rule succeeds, and each version is recorded once — with an upsert on MongoDB and `MERGE` on Neo4j
+- **Concurrent**: SQLite runs each step in a `BEGIN IMMEDIATE` transaction and re-reads the registry inside it, so processes migrating one file at once apply each step once. MongoDB and Neo4j `migrate()` can run from several instances at once: every index and constraint is created idempotently, a statement that loses a race to create the same rule succeeds, and each version is recorded once — with an upsert on MongoDB and `MERGE` on Neo4j
 
 ## Session Lifecycle
 

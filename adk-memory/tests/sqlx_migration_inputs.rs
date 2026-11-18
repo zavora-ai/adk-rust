@@ -118,3 +118,47 @@ async fn schema_version_is_zero_only_for_a_missing_registry() {
     pool.close().await;
     assert!(sqlite_runner::sql_schema_version(&pool, "_absent_migrations").await.is_err());
 }
+
+/// Processes that start together migrate one database file at once: every run succeeds,
+/// each step runs once, and the registry records each version once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_runs_on_one_file_apply_each_step_once() {
+    let path = std::env::temp_dir().join(format!("adk-memory-race-{}.db", uuid::Uuid::new_v4()));
+    let options = sqlx::sqlite::SqliteConnectOptions::new().filename(&path).create_if_missing(true);
+    let mut pools = Vec::new();
+    for _ in 0..16 {
+        pools.push(
+            sqlx::sqlite::SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(options.clone())
+                .await
+                .unwrap(),
+        );
+    }
+
+    let mut runs = tokio::task::JoinSet::new();
+    for pool in &pools {
+        let pool = pool.clone();
+        runs.spawn(async move {
+            sqlite_runner::run_sql_migrations(&pool, "_race_migrations", STEPS, || async {
+                Ok(false)
+            })
+            .await
+        });
+    }
+    let results = runs.join_all().await;
+    let rows: Vec<(i64, String)> =
+        sqlx::query_as("SELECT version, description FROM _race_migrations ORDER BY version")
+            .fetch_all(&pools[0])
+            .await
+            .unwrap();
+    for pool in pools {
+        pool.close().await;
+    }
+    let _ = std::fs::remove_file(&path);
+
+    for result in results {
+        result.expect("concurrent run");
+    }
+    assert_eq!(rows, vec![(1, "owner's table".to_string()), (2, "widget's name".to_string())]);
+}

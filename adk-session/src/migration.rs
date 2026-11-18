@@ -125,10 +125,11 @@ macro_rules! sql_migration_body {
             if existing {
                 if let Some(&(v, desc, _)) = steps.first() {
                     let now = Utc::now().to_rfc3339();
+                    // Another run may record the same baseline at the same moment.
                     let ins = format!(
                         "INSERT INTO {registry_table} \
                          (version, description, applied_at) \
-                         VALUES ($1, $2, $3)"
+                         VALUES ($1, $2, $3) ON CONFLICT (version) DO NOTHING"
                     );
                     sqlx::query(sqlx::AssertSqlSafe(ins))
                         .bind(v)
@@ -179,6 +180,26 @@ macro_rules! sql_migration_body {
                     }
                 ))
             })?;
+
+            // Another run that read the same registry may have applied this step since.
+            // On SQLite the transaction holds the write lock (`BEGIN IMMEDIATE`), and the
+            // PostgreSQL stores hold an advisory lock, so this read is current.
+            let applied_sql =
+                format!("SELECT COUNT(*) AS n FROM {registry_table} WHERE version = $1");
+            let applied: i64 = sqlx::query(sqlx::AssertSqlSafe(applied_sql))
+                .bind(version)
+                .fetch_one(&mut *tx)
+                .await
+                .and_then(|row| row.try_get("n"))
+                .map_err(|e| {
+                    adk_core::AdkError::session(format!("migration registry read failed: {e}"))
+                })?;
+            if applied > 0 {
+                tx.rollback().await.map_err(|e| {
+                    adk_core::AdkError::session(format!("transaction rollback failed: {e}"))
+                })?;
+                continue;
+            }
 
             // Execute the migration SQL (raw_sql supports multiple
             // semicolon-separated statements in a single call).
@@ -242,7 +263,14 @@ macro_rules! sql_migration_body {
 /// generic trait bounds.
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 macro_rules! impl_sql_migration_runner {
-    ($mod_name:ident, $pool_ty:ty, $conn_ty:ty, $int_type:expr, $missing_table:expr) => {
+    (
+        $mod_name:ident,
+        $pool_ty:ty,
+        $conn_ty:ty,
+        $int_type:expr,
+        $begin_sql:expr,
+        $missing_table:expr
+    ) => {
         /// SQL migration runner for this database backend.
         pub mod $mod_name {
             use super::MigrationError;
@@ -282,7 +310,12 @@ macro_rules! impl_sql_migration_runner {
             {
                 sql_migration_body!(
                     exec: pool,
-                    begin: pool.begin(),
+                    begin: async {
+                        match $begin_sql {
+                            Some(statement) => pool.begin_with(statement).await,
+                            None => pool.begin().await,
+                        }
+                    },
                     detect: detect_existing(),
                     registry_table: registry_table,
                     steps: steps,
@@ -321,7 +354,12 @@ macro_rules! impl_sql_migration_runner {
             {
                 sql_migration_body!(
                     exec: &mut *conn,
-                    begin: conn.begin(),
+                    begin: async {
+                        match $begin_sql {
+                            Some(statement) => conn.begin_with(statement).await,
+                            None => conn.begin().await,
+                        }
+                    },
                     detect: detect_existing(&mut *conn),
                     registry_table: registry_table,
                     steps: steps,
@@ -373,14 +411,20 @@ impl_sql_migration_runner!(
     sqlx::SqlitePool,
     sqlx::SqliteConnection,
     "INTEGER",
+    // Takes the write lock at once, so a step and its registry check see no other writer.
+    Some("BEGIN IMMEDIATE"),
     |error| error.message().starts_with("no such table")
 );
 
 #[cfg(feature = "postgres")]
-impl_sql_migration_runner!(pg_runner, sqlx::PgPool, sqlx::PgConnection, "BIGINT", |error| error
-    .code()
-    .as_deref()
-    == Some("42P01"));
+impl_sql_migration_runner!(
+    pg_runner,
+    sqlx::PgPool,
+    sqlx::PgConnection,
+    "BIGINT",
+    None::<&str>,
+    |error| { error.code().as_deref() == Some("42P01") }
+);
 
 /// Runs migrations for a PostgreSQL-backed store under a session-level advisory lock
 /// keyed by `registry_table`, so concurrent processes migrate one at a time.
