@@ -324,32 +324,37 @@ impl FileUploadTool {
 
     /// Resolves `requested` and returns it when it is an existing file inside an allowed root.
     fn resolve_upload(&self, requested: &str) -> Result<String> {
-        if self.allowed_roots.is_empty() {
-            return Err(AdkError::tool(
-                "File upload is disabled: no upload roots are configured. Enable it with \
-                 BrowserToolset::with_file_upload or FileUploadTool::with_allowed_roots.",
-            ));
-        }
-        let refused = || {
-            AdkError::tool(format!(
-                "File '{requested}' is not an existing file inside an allowed upload root"
-            ))
-        };
-        // WebDriver reads a newline as a separator between several files.
-        if requested.contains(['\n', '\r']) {
-            return Err(refused());
-        }
-        let resolved = std::fs::canonicalize(Path::new(requested)).map_err(|_| refused())?;
-        let inside = self
-            .allowed_roots
-            .iter()
-            .filter_map(|root| std::fs::canonicalize(root).ok())
-            .any(|root| resolved.starts_with(root));
-        if !inside || !resolved.is_file() {
-            return Err(refused());
-        }
-        resolved.into_os_string().into_string().map_err(|_| refused())
+        resolve_upload(&self.allowed_roots, requested)
     }
+}
+
+/// Resolves `requested` and returns it when it is an existing file inside one of `roots`,
+/// following symlinks and `..` segments.
+pub(crate) fn resolve_upload(roots: &[PathBuf], requested: &str) -> Result<String> {
+    if roots.is_empty() {
+        return Err(AdkError::tool(
+            "File upload is disabled: no upload roots are configured. Enable it with \
+             BrowserToolset::with_file_upload or FileUploadTool::with_allowed_roots.",
+        ));
+    }
+    let refused = || {
+        AdkError::tool(format!(
+            "File '{requested}' is not an existing file inside an allowed upload root"
+        ))
+    };
+    // WebDriver reads a newline as a separator between several files.
+    if requested.contains(['\n', '\r']) {
+        return Err(refused());
+    }
+    let resolved = std::fs::canonicalize(Path::new(requested)).map_err(|_| refused())?;
+    let inside = roots
+        .iter()
+        .filter_map(|root| std::fs::canonicalize(root).ok())
+        .any(|root| resolved.starts_with(root));
+    if !inside || !resolved.is_file() {
+        return Err(refused());
+    }
+    resolved.into_os_string().into_string().map_err(|_| refused())
 }
 
 #[async_trait]

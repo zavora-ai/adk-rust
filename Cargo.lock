@@ -297,6 +297,7 @@ dependencies = [
  "adk-core",
  "async-trait",
  "base64 0.22.1",
+ "image",
  "serde",
  "serde_json",
  "tempfile",
@@ -424,6 +425,7 @@ version = "3.0.0"
 dependencies = [
  "adk-agent",
  "adk-auth",
+ "adk-browser",
  "adk-core",
  "adk-eval",
  "adk-graph",
@@ -432,8 +434,10 @@ dependencies = [
  "adk-session",
  "adk-tool",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "futures",
+ "image",
  "proptest",
  "rmcp",
  "serde",
@@ -442,6 +446,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "url",
  "uuid 1.29.2",
 ]
 

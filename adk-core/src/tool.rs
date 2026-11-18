@@ -297,6 +297,51 @@ pub trait Tool: Send + Sync {
         false
     }
 
+    /// The ordered batch this tool's calls belong to, if any.
+    ///
+    /// Calls to tools that name the same group run in the order the model listed them, one
+    /// at a time. The first call in the group that does not succeed — it fails, is refused,
+    /// does not run, or is held for approval — stops the group for the rest of the model's
+    /// turn: every later call in the group is answered with the group's
+    /// [`halt_text`](BatchGroup::halt_text) instead of running, because the model planned it
+    /// assuming the earlier calls succeeded. Computer use and browser use actions need this.
+    /// `None` by default.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{BatchGroup, Result, Tool, ToolContext};
+    /// use async_trait::async_trait;
+    /// use serde_json::Value;
+    /// use std::sync::Arc;
+    ///
+    /// struct Click;
+    ///
+    /// #[async_trait]
+    /// impl Tool for Click {
+    ///     fn name(&self) -> &str {
+    ///         "click"
+    ///     }
+    ///
+    ///     fn description(&self) -> &str {
+    ///         "Clicks at a position"
+    ///     }
+    ///
+    ///     fn batch_group(&self) -> Option<BatchGroup> {
+    ///         Some(BatchGroup::new("desktop", "Not executed: an earlier action failed."))
+    ///     }
+    ///
+    ///     async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+    ///         Ok(Value::Null)
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(Click.batch_group().unwrap().name, "desktop");
+    /// ```
+    fn batch_group(&self) -> Option<BatchGroup> {
+        None
+    }
+
     /// Indicates whether this tool delegates work to another agent.
     ///
     /// Agent implementations can use this marker to overlap consecutive
@@ -350,6 +395,26 @@ pub trait Tool: Send + Sync {
 
     /// Executes the tool with the given context and arguments.
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
+}
+
+/// An ordered batch of tool calls that stops at its first failure; see
+/// [`Tool::batch_group`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchGroup {
+    /// The group's name; tools that return the same name share one batch.
+    pub name: std::borrow::Cow<'static, str>,
+    /// The exact result text for each call skipped after a failure.
+    pub halt_text: std::borrow::Cow<'static, str>,
+}
+
+impl BatchGroup {
+    /// A group called `name` that answers skipped calls with `halt_text`.
+    pub fn new(
+        name: impl Into<std::borrow::Cow<'static, str>>,
+        halt_text: impl Into<std::borrow::Cow<'static, str>>,
+    ) -> Self {
+        Self { name: name.into(), halt_text: halt_text.into() }
+    }
 }
 
 /// Context available to tools during execution.

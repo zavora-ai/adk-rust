@@ -23,6 +23,8 @@ serde_json.workspace = true
 tracing.workspace = true
 base64 = "0.22"
 url = "2.5"
+# Crops and resizes screenshots for zoom and Claude's image limits.
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 tempfile = "3"

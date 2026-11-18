@@ -4,6 +4,10 @@
 //! [`computer-use-mcp`](https://github.com/zavora-ai/computer-use-mcp)
 //! desktop-automation server.
 //!
+//! [`ComputerUseToolset`] runs Claude's computer use toolset as governed tools over an
+//! [`adk_core::ComputerActuator`] the application supplies; every action passes through the
+//! governed tool path, and this crate ships no desktop actuator of its own.
+//!
 //! This crate **does not** perform desktop actuation. Desktop policy, target
 //! validation, lease ownership, physical-user interruption, and idempotent
 //! effects remain authoritative in `computer-use-mcp`. Instead, this crate
@@ -56,6 +60,8 @@ mod eval;
 mod graph;
 /// Runtime adapters and response binding.
 pub mod runtime;
+/// Claude's computer use toolset as governed tools over a [`adk_core::ComputerActuator`].
+pub mod toolset;
 
 pub use auth::{AuthorizationError, ComputerUseAuthContext, ScopeAuthorizer};
 pub use cancellation::{AgentInterrupter, CancellationBridge, CancellationError};
@@ -68,6 +74,9 @@ pub use graph::{build_reference_graph, build_reference_graph_with_checkpointer};
 pub use runtime::{
     ComputerUseMcpConfig, ComputerUseMcpRuntime, ComputerUseRuntime, TraceCorrelation,
     VerificationOutcome,
+};
+pub use toolset::{
+    COMPUTER_BATCH_HALT_TEXT, COMPUTER_TOOLSET, ComputerUseMember, ComputerUseToolset,
 };
 
 // Wire contracts are re-exported at the crate root for ergonomic access.
