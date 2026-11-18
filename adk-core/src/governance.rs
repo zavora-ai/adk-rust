@@ -1635,6 +1635,10 @@ pub struct RequestedVia {
     pub version: u64,
     /// The declared action the person used.
     pub action_id: String,
+    /// The digest of the drawing the person saw, when the surface records one: what an
+    /// approval seal binds the call to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
 }
 
 impl RequestedVia {
@@ -1645,8 +1649,41 @@ impl RequestedVia {
             surface_id: surface_id.into(),
             version,
             action_id: action_id.into(),
+            digest: None,
         }
     }
+
+    /// The same, naming the digest of the drawing the person saw.
+    #[must_use]
+    pub fn with_digest(mut self, digest: impl Into<String>) -> Self {
+        self.digest = Some(digest.into());
+        self
+    }
+}
+
+/// A requested call, approved and about to run, as a [`RequestedCallSeal`] checks it.
+#[derive(Debug, Clone, Copy)]
+pub struct SealedCall<'a> {
+    /// The call's function-call id.
+    pub function_call_id: &'a str,
+    /// The tool.
+    pub tool_name: &'a str,
+    /// The arguments it would run with, after any edit the approver made.
+    pub args: &'a Value,
+}
+
+/// Checks a requested call — one a person asked for through something an agent drew — against
+/// the seal made when the person approved it, right before it runs (spec 3.3 §7.4 rule 5): a
+/// call whose tool or arguments changed since, or whose seal was forged or spent, is refused.
+/// Set it on [`RunConfig::requested_call_seal`](crate::RunConfig::requested_call_seal).
+pub trait RequestedCallSeal: std::fmt::Debug + Send + Sync {
+    /// `Ok` when `call` may run: its seal matches and is spent now, or it has no seal and none
+    /// is required. `Err` says why it may not, in plain words.
+    ///
+    /// # Errors
+    ///
+    /// The reason the call is refused.
+    fn verify(&self, call: &SealedCall<'_>) -> std::result::Result<(), String>;
 }
 
 /// A tool call a person asked for through something an agent drew — a form's Send, or a
@@ -2509,8 +2546,8 @@ pub async fn authorize_tool_call(
                     .await?;
                 return Err(frozen);
             }
-            match edited {
-                Some(edited) => authorize_edited_args(&audited, edited).await,
+            let authorization = match edited {
+                Some(edited) => authorize_edited_args(&audited, edited).await?,
                 None => {
                     audited
                         .decision(
@@ -2520,12 +2557,33 @@ pub async fn authorize_tool_call(
                             None,
                         )
                         .await?;
-                    Ok(ToolAuthorization::Execute {
+                    ToolAuthorization::Execute {
                         args,
                         confirmation: Some(ToolConfirmationDecision::Approve),
-                    })
+                    }
                 }
+            };
+            // A requested call runs only as the person approved it: its seal, made when they
+            // decided, must still match the tool and the arguments it is about to run with.
+            if requested
+                && resumes.is_some()
+                && let Some(seal) = &config.requested_call_seal
+                && let ToolAuthorization::Execute { args: final_args, .. } = &authorization
+                && let Err(why) = seal.verify(&SealedCall {
+                    function_call_id: &function_call_id,
+                    tool_name: &tool_name,
+                    args: final_args,
+                })
+            {
+                audited
+                    .decision(final_args, AuditDecision::Denied, Some(POLICY_REF_GOVERNANCE), None)
+                    .await?;
+                return Ok(ToolAuthorization::Refuse {
+                    reason: format!("Tool '{tool_name}' was not run: {why}"),
+                    confirmation: Some(ToolConfirmationDecision::Approve),
+                });
             }
+            Ok(authorization)
         }
         ToolConfirmationDecision::Deny => {
             // The approver's message is free text, so it stays out of the record.

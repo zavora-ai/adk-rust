@@ -75,7 +75,7 @@ workflow = ["dep:adk-graph", "adk-graph/time-travel", "adk-harness/web"]
 # Agent-drawn UI (spec 3.3 §6.1, §7.4 rule 5): the A2UI v0.9.1 model, the embedded `forms` 1.0
 # catalog, the validator that keeps approval controls and secrets out of drawings, and the
 # render tools agents draw with (`genui::DrawToolset`).
-genui = ["dep:jsonschema", "dep:sha2", "dep:regex"]
+genui = ["dep:jsonschema", "dep:sha2", "dep:regex", "dep:hmac"]
 # Apps from MCP servers in a thread (spec 3.3 §6.1 `genui-apps`, wave 4 decision 16): an MCP
 # server's `_meta.ui` app shown sandboxed on a second origin, whose tool calls a person decides
 # and which can never approve anything. Pulls in rmcp through `adk-tool/mcp-apps`.

@@ -284,6 +284,29 @@ the tool unasked, which is not what the person decided on a form. A high-risk ca
 |---|---|
 | ![The sent form and its card](../images/surfaces/genui-card-light.png) | ![The sent form and its card, dark](../images/surfaces/genui-card-dark.png) |
 
+### Sealed to the drawing
+
+With `ApprovalSeals`, a person's yes to a form's call is sealed to the drawing they pressed
+Send on: an HMAC, under a key only the home holds, over the tool, a hash of the arguments as
+approved (after any edit), a hash of what the card showed, the drawing's digest and version,
+its surface, the approver and an expiry (`SEAL_LIFETIME`). It is recorded as
+`surface.drawn.sealed`, and the form's send record carries the same `drawingDigest`. Right
+before the call runs, the run checks it (`adk_core::RequestedCallSeal`, checked where the
+approved arguments are final): a call whose tool or arguments changed since, or whose seal
+was forged, spent or expired, is refused, and each seal runs one call.
+
+```rust,ignore
+let seals = ApprovalSeals::new();
+let agent = HarnessAgent::builder("finance").requested_call_seal(Arc::new(seals.clone()))/* … */;
+let engine = SurfaceEngine::builder(source).approval_seals(seals).build();
+```
+
+A decision made elsewhere (the terminal over the control plane) makes no seal, and the call
+runs as the approval alone allows; `ApprovalSeals::strict` refuses it instead. Every line of a
+decision card fits: agent names, headings, summaries, steps and details are cut with an
+ellipsis (`CARD_NAME_LIMIT`, `CARD_HEADING_LIMIT`, `CARD_LINE_LIMIT`), and nothing on the card
+renders markdown.
+
 ### The form after it is sent
 
 The form turns read-only, its decision is drawn under it, and it says where the call is.

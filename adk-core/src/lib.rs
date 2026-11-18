@@ -300,11 +300,11 @@ pub use governance::{
     DRAW_TOOL_NAMES, GOVERNANCE_FROZEN_CODE, GOVERNANCE_STALE_CODE, GovernanceControl,
     GovernanceMirrorConfig, GovernanceWatch, GovernedCall, HeldToolCall, InMemoryApprovalStore,
     PendingApproval, REQUESTED_CALL_ID_PREFIX, REQUESTED_CALL_METADATA_KEY, RequestedCall,
-    RequestedVia, RequestedViaKind, ToolApproval, ToolAuthorization, ToolCallScreen, ToolGate,
-    WithheldBuiltinTool, authorize_tool_call, builtin_tool_configuration, confirm_tool_call,
-    confirmation_decision_available, confirmation_pending_response, held_call_compaction_limit,
-    held_tool_calls, is_confirmation_pending, supersede_pending_responses, untrusted_block,
-    withdraw_held_call, workflow_resume_positions,
+    RequestedCallSeal, RequestedVia, RequestedViaKind, SealedCall, ToolApproval, ToolAuthorization,
+    ToolCallScreen, ToolGate, WithheldBuiltinTool, authorize_tool_call, builtin_tool_configuration,
+    confirm_tool_call, confirmation_decision_available, confirmation_pending_response,
+    held_call_compaction_limit, held_tool_calls, is_confirmation_pending,
+    supersede_pending_responses, untrusted_block, withdraw_held_call, workflow_resume_positions,
 };
 pub use governance_state::{
     GovernanceScope, GovernanceState, GovernanceStateStore, InMemoryGovernanceStateStore,

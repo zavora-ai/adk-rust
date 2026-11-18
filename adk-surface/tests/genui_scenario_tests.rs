@@ -171,6 +171,8 @@ struct Home {
     engine: SurfaceEngine,
     api: axum::Router,
     harness: Arc<Harness>,
+    /// The approval seals the engine makes and the harness checks.
+    seals: adk_surface::genui::ApprovalSeals,
 }
 
 async fn home(lasting: &Lasting, model: Arc<dyn Llm>, forced: bool) -> Home {
@@ -230,8 +232,10 @@ async fn home_with(
     );
     let workspace = lasting.dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
+    let seals = adk_surface::genui::ApprovalSeals::new();
     let mut agent = HarnessAgent::builder("finance")
         .model(model)
+        .requested_call_seal(Arc::new(seals.clone()))
         .workspace(adk_devtools::Workspace::new(&workspace))
         .project_instructions(InstructionsConfig {
             user_file: None,
@@ -294,6 +298,7 @@ async fn home_with(
         .build()
         .unwrap();
     let engine = SurfaceEngine::builder(Arc::new(source))
+        .approval_seals(seals.clone())
         .audit(AuditTrail::new(Arc::new(lasting.audit.clone())))
         .places([Place::web(), Place::phone(), Place::chat("Telegram")])
         .agent_name(APP, "Finance")
@@ -308,7 +313,7 @@ async fn home_with(
             scopes: vec!["owner".into(), "operator".into()],
             metadata: Default::default(),
         })));
-    Home { kernel, engine, api, harness }
+    Home { kernel, engine, api, harness, seals }
 }
 
 /// `wipe_invoices`: the operator's policy never lets it run.
@@ -488,6 +493,71 @@ async fn a_drawn_form_is_sent_held_and_runs_once_on_postgres() {
     let url =
         std::env::var("DATABASE_URL").expect("DATABASE_URL names an empty PostgreSQL database");
     governed_form(Lasting::on_postgres(&url)).await;
+}
+
+/// A person's yes to a form's call is sealed to the drawing they pressed Send on, and the
+/// call runs once, as approved, spending the seal (spec 3.3 §7.4 rule 5).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_approval_of_a_drawn_form_is_sealed_to_its_drawing_and_spent_when_it_runs() {
+    let lasting = Lasting::new();
+    let model = Arc::new(ScriptedLlm::new(
+        "scripted",
+        vec![
+            ScriptedResponse::function_call("render_form", invoice_form("invoice-10", "INV-10")),
+            ScriptedResponse::text("Here is the invoice."),
+            ScriptedResponse::text("Sent."),
+        ],
+    ));
+    let home = home(&lasting, model, false).await;
+    home.engine
+        .execute(&web(), Command::Send { session_id: "s1".into(), text: "Invoice ACME".into() })
+        .await
+        .unwrap();
+    eventually("the form", || async {
+        items(&home.engine, &web())
+            .await
+            .iter()
+            .any(|item| matches!(item, ThreadItem::Drawn { .. }))
+            .then_some(())
+    })
+    .await;
+    settled(&home).await;
+    let outcome = home
+        .engine
+        .execute(
+            &web(),
+            submit("invoice-10", 1, "send", json!({ "/to": "ana@example.com", "/amount": 4200 })),
+        )
+        .await
+        .unwrap();
+    let CommandOutcome::FormSent { call_id, .. } = outcome else { panic!("{outcome:?}") };
+    let card = waiting(&home.engine, 1).await.remove(0);
+    home.engine
+        .execute(
+            &web(),
+            Command::Decide {
+                decision_id: card.id.clone(),
+                version: card.version,
+                answer: Answer::AllowOnce,
+                edited_args: None,
+                reason: None,
+                expanded: true,
+            },
+        )
+        .await
+        .unwrap();
+    eventually("the call to run", || async { (!lasting.ran().is_empty()).then_some(()) }).await;
+    settled(&home).await;
+    assert_eq!(lasting.ran().len(), 1, "ran once: {:?}", lasting.ran());
+    assert!(!home.seals.is_sealed(&call_id), "the seal was checked and spent");
+    let records = lasting.audit.records();
+    let submitted = records.iter().find(|r| r.action == "surface.drawn.submitted").unwrap();
+    let sealed = records.iter().find(|r| r.action == "surface.drawn.sealed").expect("sealed");
+    assert_eq!(sealed.ext.get("callId"), Some(&json!(call_id)));
+    assert_eq!(sealed.ext.get("surfaceId"), Some(&json!("invoice-10")));
+    assert!(sealed.ext.get("drawingDigest").is_some_and(|digest| digest.is_string()));
+    assert_eq!(sealed.ext.get("drawingDigest"), submitted.ext.get("drawingDigest"));
+    assert_eq!(sealed.ext.get("seal").and_then(Value::as_str).map(str::len), Some(64));
 }
 
 /// Steps 1 to 6 of the scenario over `lasting`'s stores.

@@ -101,12 +101,12 @@ pub use answers::{
 };
 pub use control::ControlSource;
 pub use engine::SURFACE_AUDIT_ANSWER;
-pub use engine::SURFACE_AUDIT_DRAWN_SUBMITTED;
 pub use engine::{
     Command, CommandOutcome, DEFAULT_POLL_INTERVAL, FeedFrame, SURFACE_AUDIT_RESUME_ALL,
     SURFACE_AUDIT_SEND, SURFACE_AUDIT_SET_MODE, SURFACE_AUDIT_STEER, SURFACE_AUDIT_STOP_ALL,
     SurfaceEngine, SurfaceEngineBuilder,
 };
+pub use engine::{SURFACE_AUDIT_DRAWN_SEALED, SURFACE_AUDIT_DRAWN_SUBMITTED};
 pub use error::{Result, SurfaceError};
 pub use hints::{CardHint, CardHints};
 pub use local::{LocalSource, LocalSourceBuilder};

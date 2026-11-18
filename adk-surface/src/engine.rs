@@ -46,6 +46,9 @@ pub const SURFACE_AUDIT_RESUME_ALL: &str = "surface.resume_all";
 pub const SURFACE_AUDIT_SET_MODE: &str = "surface.set_mode";
 /// The audit action of a drawn form's Send (spec 3.3 §7.4 rule 5, §11).
 pub const SURFACE_AUDIT_DRAWN_SUBMITTED: &str = "surface.drawn.submitted";
+/// The audit action of a person's approval of a form's call, sealed to the drawing they saw
+/// (spec 3.3 §7.4 rule 5).
+pub const SURFACE_AUDIT_DRAWN_SEALED: &str = "surface.drawn.sealed";
 /// The audit action of an answer as it is given, written before it takes effect; its
 /// `surface.decide` record says how it ended (spec 3.3 §11).
 pub const SURFACE_AUDIT_ANSWER: &str = "surface.answer";
@@ -445,6 +448,8 @@ pub struct SurfaceEngineBuilder {
     stops_need: Option<String>,
     card_hints: Vec<Arc<dyn CardHints>>,
     granted: Vec<GrantedUse>,
+    #[cfg(feature = "genui")]
+    seals: Option<crate::genui::ApprovalSeals>,
 }
 
 impl fmt::Debug for SurfaceEngineBuilder {
@@ -594,6 +599,17 @@ impl SurfaceEngineBuilder {
         self
     }
 
+    /// Seals each approval of a drawn form's call to the drawing the person saw, with
+    /// `seals` (spec 3.3 §7.4 rule 5); give the same seals to the harness that runs the
+    /// drawing agent (`HarnessAgentBuilder::requested_call_seal`), which checks them right
+    /// before the call runs.
+    #[cfg(feature = "genui")]
+    #[must_use]
+    pub fn approval_seals(mut self, seals: crate::genui::ApprovalSeals) -> Self {
+        self.seals = Some(seals);
+        self
+    }
+
     /// Shows drawings in the extension catalog `catalog` too (spec 3.3 §6.1 `genui`,
     /// extension catalogs): register every catalog the agents' render tools draw in
     /// (`DrawToolset::catalog`). A drawing in a catalog not registered here is refused
@@ -700,6 +716,8 @@ impl SurfaceEngineBuilder {
                 granted: self.granted,
                 #[cfg(feature = "genui")]
                 drawn,
+                #[cfg(feature = "genui")]
+                seals: self.seals,
                 queues: Mutex::new(HashMap::new()),
                 next_input: AtomicU64::new(1),
                 draining: Mutex::new(HashSet::new()),
@@ -759,6 +777,9 @@ struct Inner {
     /// The cards of drawn forms this engine sent (spec 3.3 §7.4 rule 5).
     #[cfg(feature = "genui")]
     drawn: Arc<crate::genui::DrawnHints>,
+    /// The seals of approvals of drawn forms' calls, when set.
+    #[cfg(feature = "genui")]
+    seals: Option<crate::genui::ApprovalSeals>,
     /// Input queued behind an open decision or a running turn, per (user, session), oldest
     /// first.
     queues: Mutex<HashMap<(String, String), VecDeque<QueuedInput>>>,
@@ -822,6 +843,8 @@ impl SurfaceEngine {
             stops_need: None,
             card_hints: Vec::new(),
             granted: Vec::new(),
+            #[cfg(feature = "genui")]
+            seals: None,
         }
     }
 
@@ -1489,7 +1512,8 @@ impl SurfaceEngine {
             sent.tool.clone(),
             sent.args.clone(),
             caller.subject.clone(),
-            adk_core::RequestedVia::form(surface.clone(), version, action),
+            adk_core::RequestedVia::form(surface.clone(), version, action)
+                .with_digest(sent.digest.clone()),
         );
         let call_id = call.function_call_id.clone();
         if !self.inner.drawn.begin_send(
@@ -1519,6 +1543,7 @@ impl SurfaceEngine {
                     "valuesDigest": sent.values_digest,
                     "callId": call_id,
                     "drawnBy": sent.drawn_by,
+                    "drawingDigest": sent.digest,
                 }),
             )
             .await?;
@@ -1719,6 +1744,43 @@ impl SurfaceEngine {
             given["transcriptDigest"] = json!(digest);
         }
         self.record(caller, SURFACE_AUDIT_ANSWER, given).await?;
+        // A yes to a form's call is sealed to the drawing the person saw before it takes
+        // effect, so the call that runs is the one they approved (spec 3.3 §7.4 rule 5).
+        #[cfg(feature = "genui")]
+        if matches!(answer, Answer::AllowOnce | Answer::Edit)
+            && let Some(seals) = &self.inner.seals
+            && let Some(sent) = self.inner.drawn.sent_call(request)
+        {
+            let args = decision.edited_args.clone().unwrap_or_else(|| sent.args.clone());
+            let card_text = format!(
+                "{} {}",
+                request.tool_name,
+                serde_json::to_string(&args).unwrap_or_default()
+            );
+            let seal = seals.seal(crate::genui::SealInput {
+                function_call_id: sent.call_id.clone(),
+                tool_name: request.tool_name.clone(),
+                args,
+                card_text,
+                drawing_digest: sent.digest.clone(),
+                surface_id: sent.form.0.clone(),
+                version: sent.form.1,
+                approver: caller.user_id().to_string(),
+            });
+            self.record(
+                caller,
+                SURFACE_AUDIT_DRAWN_SEALED,
+                json!({
+                    "approvalId": request.id,
+                    "callId": sent.call_id,
+                    "surfaceId": sent.form.0,
+                    "version": sent.form.1,
+                    "drawingDigest": sent.digest,
+                    "seal": seal,
+                }),
+            )
+            .await?;
+        }
         match self.inner.source.decide(&request.id, version, decision).await {
             Ok(updated) => {
                 // The decision is recorded and cannot be taken back: nothing after this point

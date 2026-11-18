@@ -31,6 +31,23 @@ use crate::words::{self, SaidWhat};
 /// How long a call's text may be before it is shown truncated (spec 3.3 §7.1).
 pub const CALL_TEXT_LIMIT: usize = 2_000;
 
+/// The longest agent name a decision card shows, in characters.
+pub const CARD_NAME_LIMIT: usize = 64;
+/// The longest heading a decision card shows, in characters.
+pub const CARD_HEADING_LIMIT: usize = 160;
+/// The longest summary, step, detail or "also shown" line a decision card shows.
+pub const CARD_LINE_LIMIT: usize = 280;
+
+/// `text` cut to `limit` characters, with an ellipsis when cut.
+fn capped(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let mut cut: String = text.chars().take(limit.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
+}
+
 /// Somewhere a decision is also shown, for "Also on your phone and in Telegram"
 /// (spec 3.3 §7.1).
 ///
@@ -362,7 +379,7 @@ impl Projector {
             Some(_) => (CardStatus::Decided, words::DECIDED),
             None => (CardStatus::Waiting, words::WAITING_FOR_YOU),
         };
-        DecisionCard {
+        let mut card = DecisionCard {
             id: request.id.clone(),
             version: request.version,
             session_id: request.scope.session_id.clone(),
@@ -392,7 +409,20 @@ impl Projector {
             adds_agent,
             // Like the summary, never on a chat card (S-I5).
             detail: hint.detail.clone().filter(|_| !chat),
+        };
+        // Every line of the card fits: nothing a name or a hint carries can push the call and
+        // its answers out of sight, or pass a long text off as the home's own words.
+        card.agent.display_name = capped(&card.agent.display_name, CARD_NAME_LIMIT);
+        card.heading = capped(&card.heading, CARD_HEADING_LIMIT);
+        card.summary = card.summary.map(|summary| capped(&summary, CARD_LINE_LIMIT));
+        for step in &mut card.timeline {
+            step.text = capped(&step.text, CARD_LINE_LIMIT);
         }
+        card.also_shown = card.also_shown.map(|also| capped(&also, CARD_LINE_LIMIT));
+        if let Some(detail) = &mut card.detail {
+            detail.text = capped(&detail.text, CARD_LINE_LIMIT);
+        }
+        card
     }
 
     /// What a decision the kernel itself asks means for the person, beyond its heading: who
@@ -1286,6 +1316,15 @@ fn avatar(display_name: &str) -> Avatar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_line_is_cut_with_an_ellipsis_and_a_short_one_kept() {
+        assert_eq!(capped("Finance", CARD_NAME_LIMIT), "Finance");
+        let long = "x".repeat(CARD_NAME_LIMIT + 50);
+        let cut = capped(&long, CARD_NAME_LIMIT);
+        assert_eq!(cut.chars().count(), CARD_NAME_LIMIT);
+        assert!(cut.ends_with('…'));
+    }
     use adk_core::{ApprovalPolicy, ApprovalScope, ToolConfirmationRequest};
     use chrono::{Duration, NaiveTime};
     use serde_json::json;

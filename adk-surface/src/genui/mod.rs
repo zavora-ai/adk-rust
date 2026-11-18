@@ -44,6 +44,8 @@ mod mcp_apps;
 #[cfg(feature = "genui")]
 mod patterns;
 mod scene;
+#[cfg(feature = "genui")]
+mod seal;
 mod status;
 #[cfg(feature = "genui")]
 mod submit;
@@ -98,6 +100,8 @@ pub use scene::{
     SceneLighting, SceneLook, SceneMotion, SceneObject, ScenePanel, SceneSelect, SceneShape,
     SceneState, SceneTick, SceneValues, Xyz,
 };
+#[cfg(feature = "genui")]
+pub use seal::{ApprovalSeals, SEAL_LIFETIME, SealInput};
 pub use status::form_states;
 #[cfg(feature = "genui")]
 pub use submit::DRAWN_CHANGED_CODE;

@@ -806,6 +806,7 @@ impl McpAppsHost {
                         surface_id: call_id.to_string(),
                         version: 1,
                         action_id: tool.to_string(),
+                        digest: None,
                     },
                 );
                 let requested = call.function_call_id.clone();
