@@ -27,6 +27,8 @@ its request past the model's window.
 | `overlap_event_count` | 10 | The most recent history entries kept as they are; they also stay within half the threshold, so the compacted request has room to grow |
 | `chars_per_token` | 4 | The character-per-token ratio of the estimate |
 | `native` | `true` | A model whose provider compacts conversations itself writes the summary ([Provider-Native Compaction](#provider-native-compaction)); `with_native(false)` keeps the runner's summarizer |
+| `background` | `false` | The summary is written off the critical path ([Background Compaction](#background-compaction)); `in_background(fraction)` turns it on |
+| `background_fraction` | `0.7` | The share of the threshold at which a background compaction starts |
 
 The estimate covers the agent's instructions and history, and the agent also passes the prompt
 size the provider reported for its previous call, so a history the character estimate
@@ -118,6 +120,48 @@ fn build(agent: Arc<dyn adk_core::Agent>, api_key: &str) -> adk_core::Result<Run
         .build()
 }
 ```
+
+### Background Compaction
+
+With `IntraCompactionConfig::in_background(fraction)`, the summary is written while the agent goes
+on, so no model call waits for it:
+
+| When a model call finds | The compactor |
+|-------------------------|---------------|
+| A finished background summary whose entries still open the history | Swaps it in: the summary, then every entry after the ones it covers, including those added while it was written |
+| A request past the threshold, or rejected as too long, with a summary still being written | Waits for that summary and swaps it in, instead of starting another |
+| A request past `background_fraction` of the threshold and no summary pending | Starts one in the background and lets the call go ahead |
+| A history that no longer starts with the entries a finished summary covers | Discards the summary |
+
+The runner keeps a pending summary across runs, per session, agent and branch, so a summary started
+during one turn opens the next turn without that turn paying for it; a summary no run takes within
+an hour is dropped. A swap is recorded in the session like any compaction.
+
+No background compaction starts while a call is held for confirmation, as OpenAI's Agents SDK
+defers auto-compaction while approvals are pending, or while a kill switch is frozen. The summary
+call runs in the run's `ModelCallScope`, so it counts against that run's budget and spend ledger
+and a freeze refuses it. A provider-native summary written in the background keeps the kept
+entries' thinking under the same conditions as one written in place.
+
+```rust
+use adk_core::IntraCompactionConfig;
+use adk_runner::Runner;
+use adk_session::InMemorySessionService;
+use std::sync::Arc;
+
+fn build(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<Runner> {
+    Runner::builder()
+        .app_name("my_app")
+        .agent(agent)
+        .session_service(Arc::new(InMemorySessionService::new()))
+        // Start summarizing at 60% of the threshold, while the agent works.
+        .intra_compaction_config(IntraCompactionConfig::default().in_background(0.6))
+        .build()
+}
+```
+
+Background compaction trades spend for latency: a summary starts before the threshold requires
+one, and a session that never continues pays for a summary it does not use.
 
 ### A Request the Model Rejects as Too Long
 

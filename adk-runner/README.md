@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `identity_source`, `agent_principal` | The principal the root agent acts as |
 | `subject_delegation` | Which runs may act for a subject other than the session's user |
 | `compaction_config` | Post-invocation `EventsCompactionConfig` |
-| `intra_compaction_config`, `intra_compaction_summarizer`, `without_intra_compaction` | Auto-compaction before each model call; on by default at 80% of the model's context window |
+| `intra_compaction_config`, `intra_compaction_summarizer`, `without_intra_compaction` | Auto-compaction before each model call; on by default at 80% of the model's context window; `IntraCompactionConfig::in_background` writes the summary off the critical path |
 | `context_compaction` | A compaction strategy in place of the summary (`context-compaction`) |
 | `context_cache_config`, `cache_capable` | Provider prompt-cache lifecycle |
 | `request_context` | Auth middleware context |

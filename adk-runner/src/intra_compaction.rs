@@ -18,8 +18,9 @@ use adk_core::intra_compaction::{
     estimate_tokens, is_native_compaction,
 };
 use adk_core::{
-    BaseEventsSummarizer, Content, Event, EventCompaction, InvocationContext, Llm,
-    LlmEventSummarizer, LlmRequest, Part, Result,
+    BaseEventsSummarizer, Content, Event, EventCompaction, GenerateContentConfig,
+    InvocationContext, Llm, LlmEventSummarizer, LlmRequest, NativeCompaction, Part, Result,
+    ToolDeclarations,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -258,6 +259,103 @@ impl IntraInvocationCompactor {
         scope.within(self.summarize(ctx.as_ref(), model, &request, threshold, session)).await
     }
 
+    /// Compaction off the critical path: swaps in a summary written in the background once it
+    /// is ready, waits for it once the request is due, and otherwise starts one when the
+    /// request passes the background threshold.
+    ///
+    /// No summary starts while a call is held for confirmation, while a kill switch is frozen,
+    /// or when `may_start` is false; the summary call runs in the run's scope, so it counts
+    /// against its budget and spend ledger and a freeze refuses it. A summary is swapped in only
+    /// when the history still starts with the entries it covers.
+    async fn compact_in_background(
+        self: &Arc<Self>,
+        ctx: Arc<dyn InvocationContext>,
+        model: Arc<dyn Llm>,
+        request: HistoryCompactionRequest<'_>,
+        session: Option<&MutableSession>,
+        background: &BackgroundCompactions,
+        may_start: bool,
+    ) -> Outcome {
+        let key = BackgroundKey::of(ctx.as_ref());
+        let history = request.history;
+        let chars_per_token = self.config.chars_per_token;
+        let window = model.context_window();
+        let threshold = self.config.threshold_for(window);
+        let size = (estimate_content_tokens(request.preamble, chars_per_token)
+            + estimate_content_tokens(history, chars_per_token))
+        .max(request.reported_prompt_tokens.unwrap_or(0));
+        let due = request.trigger == CompactionTrigger::ContextLimitExceeded || size > threshold;
+        if let Some(pending) = background.take(&key, |pending| due || pending.task.is_finished()) {
+            let waited = !pending.task.is_finished();
+            let cut = pending.summarized.len();
+            let covers = pending.covers(history);
+            let elapsed = pending.started.elapsed();
+            match pending.task.await {
+                Ok(Some(summary)) if covers => {
+                    tracing::info!(
+                        agent.name = %ctx.agent_name(),
+                        summarized.entries = cut,
+                        compaction.waited = waited,
+                        compaction.elapsed_ms = elapsed.as_millis() as u64,
+                        "swapping in a summary written in the background"
+                    );
+                    let compacted = self.swap_in(ctx.as_ref(), summary, history, cut, session);
+                    return Outcome::Compacted(Box::new(compacted));
+                }
+                Ok(Some(_)) => tracing::info!(
+                    agent.name = %ctx.agent_name(),
+                    "the history changed while the summary was written; discarding it"
+                ),
+                Ok(None) => {}
+                Err(error) => tracing::warn!(error = %error, "background compaction stopped"),
+            }
+        }
+        if due {
+            return self.compact_history(ctx, model, request, session).await;
+        }
+        if !may_start
+            || size <= self.config.background_threshold_for(window)
+            || background.contains(&key)
+        {
+            return Outcome::BelowThreshold;
+        }
+        // Nothing starts while a call waits for approval: the summary would be stale once the
+        // decision lands, and the held call must stay as it is to resume.
+        if held_call_content_limit(history, history.len()) < history.len() {
+            tracing::debug!(agent.name = %ctx.agent_name(), "a held call defers background compaction");
+            return Outcome::BelowThreshold;
+        }
+        let scope =
+            adk_core::ModelCallScope::for_run(ctx.run_config(), ctx.app_name(), ctx.agent_name());
+        if scope.check_governance().is_err() {
+            return Outcome::BelowThreshold;
+        }
+        let Some(cut) = self.cut(ctx.as_ref(), history, threshold, session) else {
+            return Outcome::NothingToCompact;
+        };
+        let summarized = history[..cut].to_vec();
+        let events = as_events(ctx.as_ref(), &summarized);
+        let template = Template::of(&request);
+        let native = self.native(model.as_ref());
+        let compactor = Arc::clone(self);
+        let entries = summarized.clone();
+        let task = tokio::spawn(scope.within(async move {
+            compactor.write_summary(model, native, &template, &entries, events).await
+        }));
+        tracing::info!(
+            agent.name = %ctx.agent_name(),
+            summarized.entries = cut,
+            history.tokens = size,
+            threshold,
+            "started a compaction in the background"
+        );
+        background.insert(
+            key,
+            PendingCompaction { summarized, started: std::time::Instant::now(), task },
+        );
+        Outcome::BelowThreshold
+    }
+
     /// Summarizes all but the most recent entries of `history`: at most `overlap_event_count`
     /// of them, and no more than half of `threshold`, so the compacted history has room to
     /// grow.
@@ -270,6 +368,31 @@ impl IntraInvocationCompactor {
         session: Option<&MutableSession>,
     ) -> Outcome {
         let history = request.history;
+        let Some(cut) = self.cut(ctx, history, threshold, session) else {
+            return Outcome::NothingToCompact;
+        };
+        let native = self.native(model.as_ref());
+        let events = as_events(ctx, &history[..cut]);
+        let template = Template::of(request);
+        match self.write_summary(model, native, &template, &history[..cut], events).await {
+            Some(summary) => {
+                Outcome::Compacted(Box::new(self.swap_in(ctx, summary, history, cut, session)))
+            }
+            None => Outcome::Kept,
+        }
+    }
+
+    /// Where a compaction of `history` cuts: all but the most recent entries, at most
+    /// `overlap_event_count` of them and within half of `threshold`, never separating a function
+    /// response from its call or covering a held call, and moved back to an entry the session
+    /// can place when it records the compaction. `None` when nothing is left to summarize.
+    fn cut(
+        &self,
+        ctx: &dyn InvocationContext,
+        history: &[Content],
+        threshold: u64,
+        session: Option<&MutableSession>,
+    ) -> Option<usize> {
         let chars_per_token = self.config.chars_per_token;
         let overlap = self.config.overlap_event_count.min(history.len());
         let mut within_budget = history.len();
@@ -289,145 +412,148 @@ impl IntraInvocationCompactor {
                 history.len().saturating_sub(overlap).max(within_budget),
             ),
         );
-        // A cut whose first kept entry the session can place is recorded there too; one in
-        // a parallel branch is not, since a session's compaction applies to every branch.
-        let recorded = session
-            .filter(|_| ctx.branch().is_empty())
-            .and_then(|session| session.read_events(|events| session_cut(events, history, cut)));
-        let cut = recorded.as_ref().map_or(cut, |recorded| recorded.cut);
-        if cut == 0 {
-            return Outcome::NothingToCompact;
+        let cut = recorded_cut(ctx, history, cut, session).map_or(cut, |recorded| recorded.cut);
+        (cut > 0).then_some(cut)
+    }
+
+    /// The model's own compaction, when its provider has one and the runner was given no
+    /// summarizer of its own.
+    fn native(&self, model: &dyn Llm) -> Option<NativeCompaction> {
+        if self.summarizer.is_some() || !self.config.native {
+            return None;
         }
-        let summarized = &history[..cut];
-        // A model whose provider compacts natively writes the summary, unless the runner was
-        // given its own summarizer; a native summary that fails falls back to the summarizer.
-        let native = self
-            .summarizer
-            .is_none()
-            .then(|| self.config.native.then(|| model.native_compaction()).flatten())
-            .flatten();
+        model.native_compaction()
+    }
+
+    /// Writes the summary of `summarized` (`events` is the same entries as events): the
+    /// provider's own when `native` is set, falling back to the runner's summarizer.
+    ///
+    /// `None` when the summary fails or is not smaller than what it replaces. Any model call
+    /// is metered against the current scope.
+    async fn write_summary(
+        &self,
+        model: Arc<dyn Llm>,
+        native: Option<NativeCompaction>,
+        template: &Template,
+        summarized: &[Content],
+        events: Vec<Event>,
+    ) -> Option<Summary> {
+        let chars_per_token = self.config.chars_per_token;
+        let replaced_tokens = estimate_content_tokens(summarized, chars_per_token);
         if let Some(native) = native
-            && let Some(compaction) = native_summary(model.as_ref(), request, summarized).await
+            && let Some(compaction) = native_summary(model.as_ref(), template, summarized).await
         {
-            let summary_tokens = estimate_content_tokens(
-                std::slice::from_ref(&Content {
-                    role: compaction.content.role.clone(),
-                    parts: compaction
-                        .content
-                        .parts
-                        .iter()
-                        .filter(|part| matches!(part, Part::Text { .. }))
-                        .cloned()
-                        .collect(),
-                }),
-                chars_per_token,
-            );
-            let replaced_tokens = estimate_content_tokens(summarized, chars_per_token);
-            if summary_tokens < replaced_tokens {
-                // The provider accepts the kept turns' thinking after its own summary when the
-                // turns follow the summarized ones unchanged and the cut changes speaker.
-                let keep_thinking = native.keeps_thinking
-                    && history
-                        .get(cut)
-                        .is_some_and(|first| speaks(&history[cut - 1]) != speaks(first))
-                    && !history.iter().any(has_requested_call);
-                let kept: Vec<Content> = if keep_thinking {
-                    history[cut..].to_vec()
-                } else {
-                    without_thinking(&history[cut..]).collect()
-                };
-                let event = recorded.map(|recorded| {
-                    let mut event = Event::new(ctx.invocation_id());
-                    event.author = ctx.agent_name().to_string();
-                    event.branch = ctx.branch().to_string();
-                    // The origin is recorded where only the runner writes, so later runs
-                    // replay the signed copy to the provider that wrote it.
-                    if let Some(origin) = &compaction.origin {
-                        origin.record(&mut event.llm_response.provider_metadata);
-                        if keep_thinking
-                            && let Some(metadata) = event.llm_response.provider_metadata.as_mut()
-                        {
-                            metadata[KEEPS_THINKING_KEY] = serde_json::Value::Bool(true);
-                        }
-                    }
-                    event.actions.compaction = Some(EventCompaction {
-                        compacted_content: compaction.content.clone(),
-                        ..recorded.span
-                    });
-                    event
-                });
+            let summary_tokens = text_tokens(&compaction.content, chars_per_token);
+            if summary_tokens >= replaced_tokens {
                 tracing::info!(
-                    agent.name = %ctx.agent_name(),
-                    compaction.provider = native.provider,
-                    summarized.entries = cut,
-                    kept.entries = history.len() - cut,
-                    kept.thinking = keep_thinking,
                     summary.tokens = summary_tokens,
                     replaced.tokens = replaced_tokens,
-                    recorded = event.is_some(),
-                    "history compacted by the provider"
+                    "provider summary is not smaller than the history it replaces; keeping the history"
                 );
-                let history = std::iter::once(compaction.content).chain(kept).collect();
-                return Outcome::Compacted(Box::new(CompactedHistory { history, event }));
+                return None;
             }
-            tracing::info!(
-                summary.tokens = summary_tokens,
-                replaced.tokens = replaced_tokens,
-                "provider summary is not smaller than the history it replaces; keeping the history"
-            );
-            return Outcome::Kept;
+            return Some(Summary {
+                content: compaction.content,
+                origin: compaction.origin,
+                native: Some(native),
+                tokens: summary_tokens,
+                replaced_tokens,
+            });
         }
-        let events = as_events(ctx, summarized);
         let summarizer = self
             .summarizer
             .clone()
             .unwrap_or_else(|| Arc::new(LlmEventSummarizer::new(model)) as _);
         let text = match summarizer.summarize_events(&events).await {
             Ok(Some(event)) => summary_text(&event),
-            Ok(None) => return Outcome::Kept,
+            Ok(None) => return None,
             Err(error) => {
                 // A summarizer's model error can echo the history it was given.
                 tracing::warn!(
                     error = %error.diagnostics(),
                     "history compaction failed; continuing with the history as it is"
                 );
-                return Outcome::Kept;
+                return None;
             }
         };
         if text.trim().is_empty() {
-            return Outcome::Kept;
+            return None;
         }
-        let summary = compaction_summary(&text);
+        let content = compaction_summary(&text);
         let summary_tokens =
-            estimate_content_tokens(std::slice::from_ref(&summary), chars_per_token);
-        let replaced_tokens = estimate_content_tokens(summarized, chars_per_token);
+            estimate_content_tokens(std::slice::from_ref(&content), chars_per_token);
         if summary_tokens >= replaced_tokens {
             tracing::info!(
                 summary.tokens = summary_tokens,
                 replaced.tokens = replaced_tokens,
                 "history summary is not smaller than the history it replaces; keeping the history"
             );
-            return Outcome::Kept;
+            return None;
         }
+        Some(Summary {
+            content,
+            origin: None,
+            native: None,
+            tokens: summary_tokens,
+            replaced_tokens,
+        })
+    }
+
+    /// `history` with `summary` in place of its first `cut` entries, and the event that
+    /// records it in the session when the session can place the cut.
+    fn swap_in(
+        &self,
+        ctx: &dyn InvocationContext,
+        summary: Summary,
+        history: &[Content],
+        cut: usize,
+        session: Option<&MutableSession>,
+    ) -> CompactedHistory {
+        // A provider that wrote the summary itself accepts the kept turns' thinking when the
+        // turns follow the summarized ones unchanged and the cut changes speaker.
+        let keep_thinking = summary.native.is_some_and(|native| native.keeps_thinking)
+            && history.get(cut).is_some_and(|first| speaks(&history[cut - 1]) != speaks(first))
+            && !history.iter().any(has_requested_call);
+        let kept: Vec<Content> = if keep_thinking {
+            history[cut..].to_vec()
+        } else {
+            without_thinking(&history[cut..]).collect()
+        };
+        let recorded =
+            recorded_cut(ctx, history, cut, session).filter(|recorded| recorded.cut == cut);
         let event = recorded.map(|recorded| {
             let mut event = Event::new(ctx.invocation_id());
             event.author = ctx.agent_name().to_string();
             event.branch = ctx.branch().to_string();
-            event.actions.compaction =
-                Some(EventCompaction { compacted_content: summary.clone(), ..recorded.span });
+            // The origin is recorded where only the runner writes, so later runs replay the
+            // signed copy to the provider that wrote it.
+            if let Some(origin) = &summary.origin {
+                origin.record(&mut event.llm_response.provider_metadata);
+                if keep_thinking
+                    && let Some(metadata) = event.llm_response.provider_metadata.as_mut()
+                {
+                    metadata[KEEPS_THINKING_KEY] = serde_json::Value::Bool(true);
+                }
+            }
+            event.actions.compaction = Some(EventCompaction {
+                compacted_content: summary.content.clone(),
+                ..recorded.span
+            });
             event
         });
         tracing::info!(
             agent.name = %ctx.agent_name(),
+            compaction.provider = summary.native.map(|native| native.provider).unwrap_or("runner"),
             summarized.entries = cut,
             kept.entries = history.len() - cut,
-            summary.tokens = summary_tokens,
-            replaced.tokens = replaced_tokens,
+            kept.thinking = keep_thinking,
+            summary.tokens = summary.tokens,
+            replaced.tokens = summary.replaced_tokens,
             recorded = event.is_some(),
             "history compacted"
         );
-        let history = std::iter::once(summary).chain(without_thinking(&history[cut..])).collect();
-        Outcome::Compacted(Box::new(CompactedHistory { history, event }))
+        let history = std::iter::once(summary.content).chain(kept).collect();
+        CompactedHistory { history, event }
     }
 
     /// Shortens `history` with a compaction strategy, keeping a held call and everything
@@ -534,6 +660,9 @@ pub(crate) struct RunCompactor {
     /// Per agent, the history length below which no compaction is tried again, set when one
     /// failed or did not shrink the history, so a run does not pay for a summary every call.
     retry_from: Mutex<HashMap<String, usize>>,
+    /// Where summaries written off the critical path wait, when compaction runs in the
+    /// background.
+    background: Option<Arc<BackgroundCompactions>>,
 }
 
 impl RunCompactor {
@@ -541,7 +670,107 @@ impl RunCompactor {
         compactor: Arc<IntraInvocationCompactor>,
         session: Arc<MutableSession>,
     ) -> Self {
-        Self { compactor, session, retry_from: Mutex::new(HashMap::new()) }
+        Self { compactor, session, retry_from: Mutex::new(HashMap::new()), background: None }
+    }
+
+    /// Writes summaries off the critical path, keeping them in `background` until they are
+    /// swapped in.
+    pub(crate) fn with_background(
+        mut self,
+        background: Option<Arc<BackgroundCompactions>>,
+    ) -> Self {
+        self.background = background;
+        self
+    }
+}
+
+/// How long a background summary waits to be swapped in before it is dropped: past the
+/// lifetime of a prompt cache entry, a session that has not continued is unlikely to.
+const BACKGROUND_SUMMARY_TTL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Summaries written off the critical path, one per session, agent and branch, kept across
+/// runs so a session's next turn swaps in the summary its last turn started.
+#[derive(Default)]
+pub(crate) struct BackgroundCompactions {
+    pending: Mutex<HashMap<BackgroundKey, PendingCompaction>>,
+}
+
+/// Whose history a background summary covers.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct BackgroundKey {
+    app: String,
+    user: String,
+    session: String,
+    agent: String,
+    branch: String,
+}
+
+impl BackgroundKey {
+    fn of(ctx: &dyn InvocationContext) -> Self {
+        Self {
+            app: ctx.app_name().to_string(),
+            user: ctx.user_id().to_string(),
+            session: ctx.session_id().to_string(),
+            agent: ctx.agent_name().to_string(),
+            branch: ctx.branch().to_string(),
+        }
+    }
+}
+
+/// A summary being written of a history's first `cut` entries.
+struct PendingCompaction {
+    /// The entries the summary covers, as they were when it started.
+    summarized: Vec<Content>,
+    started: std::time::Instant,
+    task: tokio::task::JoinHandle<Option<Summary>>,
+}
+
+impl PendingCompaction {
+    /// Whether `history` still starts with the entries the summary covers. Provider-native
+    /// items are left out of the comparison: a later run reads the same turns without them.
+    fn covers(&self, history: &[Content]) -> bool {
+        let visible = |content: &Content| {
+            let mut content = content.clone();
+            adk_core::history::strip_native(&mut content);
+            content
+        };
+        history.len() > self.summarized.len()
+            && history
+                .iter()
+                .zip(&self.summarized)
+                .all(|(current, summarized)| visible(current) == visible(summarized))
+    }
+}
+
+impl BackgroundCompactions {
+    /// Takes the summary pending for `key` when `ready` says so.
+    fn take(
+        &self,
+        key: &BackgroundKey,
+        ready: impl FnOnce(&PendingCompaction) -> bool,
+    ) -> Option<PendingCompaction> {
+        let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
+        if !pending.get(key).is_some_and(ready) {
+            return None;
+        }
+        pending.remove(key)
+    }
+
+    fn contains(&self, key: &BackgroundKey) -> bool {
+        self.pending.lock().unwrap_or_else(PoisonError::into_inner).contains_key(key)
+    }
+
+    /// Keeps `compaction` for `key`, dropping summaries no session took in time.
+    fn insert(&self, key: BackgroundKey, compaction: PendingCompaction) {
+        let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
+        pending.retain(|_, waiting| {
+            let fresh = waiting.started.elapsed() < BACKGROUND_SUMMARY_TTL;
+            if !fresh {
+                waiting.task.abort();
+            }
+            fresh
+        });
+        pending.insert(key, compaction);
     }
 }
 
@@ -562,9 +791,9 @@ impl HistoryCompactor for RunCompactor {
         let agent = ctx.agent_name().to_string();
         let retry_from =
             || self.retry_from.lock().unwrap_or_else(PoisonError::into_inner).get(&agent).copied();
-        if request.trigger == CompactionTrigger::BeforeModelCall
-            && retry_from().is_some_and(|from| request.history.len() < from)
-        {
+        let paused = request.trigger == CompactionTrigger::BeforeModelCall
+            && retry_from().is_some_and(|from| request.history.len() < from);
+        if paused && self.background.is_none() {
             return Ok(None);
         }
         let history_len = request.history.len();
@@ -575,7 +804,15 @@ impl HistoryCompactor for RunCompactor {
             Arc::as_ptr(&self.session),
         );
         let session = reads_run_session.then_some(self.session.as_ref());
-        let outcome = self.compactor.compact_history(ctx, model, request, session).await;
+        let outcome = match &self.background {
+            // A finished background summary is still swapped in while new ones are paused.
+            Some(background) => {
+                self.compactor
+                    .compact_in_background(ctx, model, request, session, background, !paused)
+                    .await
+            }
+            None => self.compactor.compact_history(ctx, model, request, session).await,
+        };
         let mut retry_from = self.retry_from.lock().unwrap_or_else(PoisonError::into_inner);
         match &outcome {
             Outcome::BelowThreshold | Outcome::NothingToCompact => {}
@@ -615,18 +852,77 @@ struct NativeSummary {
     origin: Option<ProviderOrigin>,
 }
 
+/// A summary ready to take the place of the entries it covers.
+struct Summary {
+    /// The history entry that replaces them.
+    content: Content,
+    /// The provider and model that read its signed copy back, for a native summary.
+    origin: Option<ProviderOrigin>,
+    /// The provider's own compaction that wrote it, if any.
+    native: Option<NativeCompaction>,
+    tokens: u64,
+    replaced_tokens: u64,
+}
+
+/// What a compaction request carries besides the entries it summarizes: the agent's
+/// instructions, tools and generation config, owned so a summary can be written after the
+/// agent's request is gone.
+#[derive(Clone, Default)]
+struct Template {
+    preamble: Vec<Content>,
+    tools: Option<ToolDeclarations>,
+    config: Option<GenerateContentConfig>,
+}
+
+impl Template {
+    fn of(request: &HistoryCompactionRequest<'_>) -> Self {
+        Self {
+            preamble: request.preamble.to_vec(),
+            tools: request.tools.cloned(),
+            config: request.config.cloned(),
+        }
+    }
+}
+
+/// The estimated tokens of `content`'s text parts: what every provider reads of a summary.
+fn text_tokens(content: &Content, chars_per_token: u32) -> u64 {
+    let text = Content {
+        role: content.role.clone(),
+        parts: content
+            .parts
+            .iter()
+            .filter(|part| matches!(part, Part::Text { .. }))
+            .cloned()
+            .collect(),
+    };
+    estimate_content_tokens(std::slice::from_ref(&text), chars_per_token)
+}
+
+/// Where the session records a compaction that cuts `history` at `cut`, unless the agent runs in
+/// a parallel branch (a session's compaction applies to every branch) or reads another session.
+fn recorded_cut(
+    ctx: &dyn InvocationContext,
+    history: &[Content],
+    cut: usize,
+    session: Option<&MutableSession>,
+) -> Option<SessionCut> {
+    session
+        .filter(|_| ctx.branch().is_empty())
+        .and_then(|session| session.read_events(|events| session_cut(events, history, cut)))
+}
+
 /// Asks `model` for its provider's own compaction of `summarized`, with the agent's
 /// instructions, tools and config, so the provider reads the conversation as the agent sends
 /// it. `None` when the call fails or returns no compaction; the call is metered against the
 /// current scope.
 async fn native_summary(
     model: &dyn Llm,
-    request: &HistoryCompactionRequest<'_>,
+    template: &Template,
     summarized: &[Content],
 ) -> Option<NativeSummary> {
     // The turns go as the agent sends them: generated call IDs and native items outside the
     // agent's own turns never reach the provider.
-    let contents = request
+    let contents = template
         .preamble
         .iter()
         .chain(summarized)
@@ -640,10 +936,10 @@ async fn native_summary(
         })
         .collect();
     let mut llm_request = LlmRequest::new(model.name(), contents);
-    if let Some(tools) = request.tools {
+    if let Some(tools) = &template.tools {
         llm_request.tools = tools.clone();
     }
-    let config = llm_request.config.insert(request.config.cloned().unwrap_or_default());
+    let config = llm_request.config.insert(template.config.clone().unwrap_or_default());
     config.max_output_tokens =
         Some(config.max_output_tokens.unwrap_or(0).max(NATIVE_SUMMARY_MAX_TOKENS));
     config.response_schema = None;

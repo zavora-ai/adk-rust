@@ -594,6 +594,9 @@ pub struct Runner {
     intra_compaction: adk_core::IntraCompactionConfig,
     /// The summarizer auto-compaction uses; `None` uses the agent's model.
     intra_summarizer: Option<Arc<dyn adk_core::BaseEventsSummarizer>>,
+    /// Summaries written off the critical path, kept across runs so a session's next turn
+    /// swaps in what the last one started.
+    background_compactions: Arc<crate::intra_compaction::BackgroundCompactions>,
     /// A compaction strategy auto-compaction applies in place of a summary.
     #[cfg(feature = "context-compaction")]
     context_compaction: Option<Arc<crate::compaction::CompactionConfig>>,
@@ -696,6 +699,7 @@ impl Runner {
             cancellation_token: config.cancellation_token,
             intra_compaction,
             intra_summarizer,
+            background_compactions: Arc::default(),
             #[cfg(feature = "context-compaction")]
             context_compaction: config.context_compaction.map(Arc::new),
             llm_spend_estimate: crate::spend::LlmSpendEstimate::default(),
@@ -1044,6 +1048,7 @@ impl Runner {
         } else {
             self.intra_compactor(run_config.intra_compaction.as_ref())
         };
+        let background_compactions = self.background_compactions.clone();
 
         // Built once and used for every persistence write, so a backend with a
         // composite natural key can bind each event to its tenant.
@@ -1261,11 +1266,14 @@ impl Runner {
             // Agents compact their history through the run config, and each compaction is
             // recorded in this run's session.
             if let Some(compactor) = intra_compactor.take() {
+                let background =
+                    compactor.config().background.then(|| background_compactions.clone());
                 run_config.history_compactor = Some(Arc::new(
                     crate::intra_compaction::RunCompactor::new(
                         compactor,
                         invocation_ctx.mutable_session().clone(),
-                    ),
+                    )
+                    .with_background(background),
                 ));
             }
 
