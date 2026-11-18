@@ -106,7 +106,9 @@ pub use engine::{
     SURFACE_AUDIT_SEND, SURFACE_AUDIT_SET_MODE, SURFACE_AUDIT_STEER, SURFACE_AUDIT_STOP_ALL,
     SurfaceEngine, SurfaceEngineBuilder,
 };
-pub use engine::{SURFACE_AUDIT_DRAWN_SEALED, SURFACE_AUDIT_DRAWN_SUBMITTED};
+pub use engine::{
+    SURFACE_AUDIT_APP_CALL_AUTO_APPROVED, SURFACE_AUDIT_DRAWN_SEALED, SURFACE_AUDIT_DRAWN_SUBMITTED,
+};
 pub use error::{Result, SurfaceError};
 pub use hints::{CardHint, CardHints};
 pub use local::{LocalSource, LocalSourceBuilder};

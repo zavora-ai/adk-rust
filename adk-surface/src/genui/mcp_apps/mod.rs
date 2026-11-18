@@ -69,6 +69,8 @@ const MAX_HEIGHT: u32 = 640;
 const FRAME_LIFETIME: Duration = Duration::from_secs(15 * 60);
 /// The longest message an app may suggest, in characters.
 const MAX_MESSAGE_CHARS: usize = 4_000;
+/// The largest view state an app may ask the host to keep.
+const MAX_VIEW_STATE_BYTES: usize = 64 * 1024;
 /// How many apps' grants are kept before the oldest are forgotten.
 const MAX_GRANTS_KEPT: usize = 1_024;
 /// JSON-RPC: the method is not offered here.
@@ -112,6 +114,17 @@ pub trait AppServers: Send + Sync {
         Some(bindings.map(|bindings| {
             bindings.into_iter().map(|binding| (binding.tool, binding.visibility)).collect()
         }))
+    }
+
+    /// The MCP definition of `server`'s tool `tool` (name, description, input schema,
+    /// annotations), when this set can read it: what the opt-in consent policy decides on
+    /// ([`AppConsent`]). `None` decides nothing: the call is held for the person.
+    ///
+    /// # Errors
+    ///
+    /// The set's error when it cannot list the server's tools.
+    async fn tool_definition(&self, _server: &str, _tool: &str) -> adk_core::Result<Option<Value>> {
+        Ok(None)
     }
 
     /// The name the agent's tools give `server`'s tool `tool`: prefixed with the server when
@@ -197,6 +210,25 @@ where
         let tools = adk_core::Toolset::tools(self, listing).await?;
         Ok(tools.iter().any(|known| known.name() == tool).then(|| tool.to_string()))
     }
+
+    async fn tool_definition(&self, server: &str, tool: &str) -> adk_core::Result<Option<Value>> {
+        if adk_core::Toolset::name(self) != server {
+            return Ok(None);
+        }
+        let listing: Arc<dyn adk_core::ReadonlyContext> =
+            Arc::new(adk_tool::SimpleToolContext::new("mcp-apps"));
+        let tools = adk_core::Toolset::tools(self, listing).await?;
+        Ok(tools.iter().find(|known| known.name() == tool).map(|known| {
+            // The annotations the server declared, as the tool's effect carries them.
+            let read_only = matches!(known.effect(), adk_core::ToolEffect::ReadOnly);
+            json!({
+                "name": known.name(),
+                "description": known.description(),
+                "inputSchema": known.parameters_schema(),
+                "annotations": { "readOnlyHint": read_only },
+            })
+        }))
+    }
 }
 
 /// An app's page on the apps origin.
@@ -206,6 +238,78 @@ struct Frame {
     /// The origin it is served on: the apps origin, or its server's own under it.
     origin: String,
     until: Instant,
+}
+
+/// When the home approves a call an app asks for without asking the person (spec 3.3 §6.1
+/// `genui-apps`): never, unless a deployment opts in. A drawn form's Send is always held;
+/// this is for apps only, and every approval it gives is recorded as
+/// `surface.app.call_auto_approved` with `initiator: "app"`.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::genui::{AppConsent, McpAppsHost};
+/// use serde_json::json;
+///
+/// let consent = AppConsent { read_only: true, ..AppConsent::default() };
+/// let definition = json!({ "name": "forecast", "annotations": { "readOnlyHint": true } });
+/// assert!(consent.allows("weather", "forecast", &definition));
+/// assert!(!AppConsent::default().allows("weather", "forecast", &definition), "off by default");
+/// // A standing grant holds only while the tool's definition is the one granted.
+/// let standing = AppConsent::default().standing("weather", "book", &json!({ "name": "book" }));
+/// assert!(standing.allows("weather", "book", &json!({ "name": "book" })));
+/// assert!(!standing.allows("weather", "book", &json!({ "name": "book", "description": "now pays too" })));
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppConsent {
+    /// Approve a call to a tool whose definition says `readOnlyHint: true` and not
+    /// `destructiveHint: true`.
+    pub read_only: bool,
+    /// Standing approvals: (server, tool, hash of the tool's definition) granted by the
+    /// person; a changed definition asks again.
+    pub standing: Vec<(String, String, String)>,
+}
+
+impl AppConsent {
+    /// The SHA-256 of a tool's definition, as standing grants key it.
+    pub fn definition_hash(definition: &Value) -> String {
+        use sha2::Digest;
+        let canonical = adk_core::tool_call_fingerprint("", definition);
+        sha2::Sha256::digest(canonical.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    /// The same, with a standing approval of `server`'s tool `tool` as `definition` defines it.
+    #[must_use]
+    pub fn standing(mut self, server: &str, tool: &str, definition: &Value) -> Self {
+        self.standing.push((
+            server.to_string(),
+            tool.to_string(),
+            Self::definition_hash(definition),
+        ));
+        self
+    }
+
+    /// Whether a call to `server`'s tool `tool`, defined as `definition`, is approved without
+    /// the person, and by which rule.
+    pub fn allows(&self, server: &str, tool: &str, definition: &Value) -> bool {
+        self.rule(server, tool, definition).is_some()
+    }
+
+    fn rule(&self, server: &str, tool: &str, definition: &Value) -> Option<&'static str> {
+        let hash = Self::definition_hash(definition);
+        if self.standing.iter().any(|(s, t, h)| s == server && t == tool && *h == hash) {
+            return Some("app-consent:standing");
+        }
+        let annotations = definition.get("annotations");
+        let flag = |name: &str| annotations.and_then(|a| a.get(name)).and_then(Value::as_bool);
+        (self.read_only
+            && flag("readOnlyHint") == Some(true)
+            && flag("destructiveHint") != Some(true))
+        .then_some("app-consent:read-only")
+    }
 }
 
 /// The MCP Apps host (spec 3.3 §6.1 `genui-apps`). Mount its routes with
@@ -242,6 +346,10 @@ struct Inner {
     frames: Mutex<HashMap<String, Frame>>,
     /// What each open app's frame was granted (`hostCapabilities.sandbox`), by session and call.
     granted: Mutex<HashMap<String, Value>>,
+    /// What each app asked the host to keep for it (`ui/set-view-state`), by session and call.
+    view_states: Mutex<HashMap<String, Value>>,
+    /// When an app's call is approved without the person: never unless opted in.
+    consent: AppConsent,
 }
 
 impl std::fmt::Debug for McpAppsHost {
@@ -261,6 +369,7 @@ pub struct McpAppsHostBuilder {
     apps_origin: Option<String>,
     per_server: Option<bool>,
     home_origins: Vec<String>,
+    consent: AppConsent,
 }
 
 impl McpAppsHostBuilder {
@@ -293,6 +402,15 @@ impl McpAppsHostBuilder {
         self
     }
 
+    /// Approves some calls apps ask for without asking the person, by `consent` (off by
+    /// default): calls to read-only tools, or tools the person gave a standing approval whose
+    /// definition has not changed. A drawn form's Send is never affected.
+    #[must_use]
+    pub fn app_consent(mut self, consent: AppConsent) -> Self {
+        self.consent = consent;
+        self
+    }
+
     /// An origin the home is served on: the only one that may frame apps, and one no app may
     /// declare.
     #[must_use]
@@ -317,6 +435,8 @@ impl McpAppsHostBuilder {
                 home_origins: self.home_origins,
                 frames: Mutex::new(HashMap::new()),
                 granted: Mutex::new(HashMap::new()),
+                view_states: Mutex::new(HashMap::new()),
+                consent: self.consent,
             }),
         }
     }
@@ -473,6 +593,22 @@ impl McpAppsHost {
             return Ok(Some((visibility, name)));
         }
         Err(adk_core::AdkError::tool(format!("no MCP server named '{server}' runs on this home")))
+    }
+
+    /// The consent rule that approves a call to `server`'s tool `tool` without the person, if
+    /// any: read from the tool's definition, which the first set that runs `server` gives.
+    async fn consent_rule(&self, server: &str, tool: &str) -> Option<&'static str> {
+        let consent = &self.inner.consent;
+        if !consent.read_only && consent.standing.is_empty() {
+            return None;
+        }
+        for servers in &self.inner.servers {
+            if servers.ui_bindings(server).await.is_some() {
+                let definition = servers.tool_definition(server, tool).await.ok().flatten()?;
+                return consent.rule(server, tool, &definition);
+            }
+        }
+        None
     }
 
     /// The open decisions of the calls the app `call_id` asked for in `session`.
@@ -712,9 +848,44 @@ impl McpAppsHost {
                     "displayMode": "inline",
                     "availableDisplayModes": ["inline"],
                     "platform": "web",
+                    "containerDimensions": { "maxHeight": MAX_HEIGHT },
+                    // What the app asked the host to keep, for an app opened again.
+                    "viewState": self
+                        .inner
+                        .view_states
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .get(&format!("{session}/{call_id}"))
+                        .cloned()
+                        .unwrap_or(Value::Null),
                 },
             }))),
             "ping" => Ok(ok(json!({}))),
+            // The home frames apps inline only: a request for another mode gets inline back,
+            // and never without the person's gesture.
+            "ui/request-display-mode" => Ok(ok(json!({ "mode": "inline" }))),
+            // The host keeps an app's view state for the next time it opens (MCP Apps draft
+            // `ui/set-view-state`), at most `MAX_VIEW_STATE_BYTES`.
+            "ui/set-view-state" => {
+                let state = request.params.get("state").cloned().unwrap_or(Value::Null);
+                if state.to_string().len() > MAX_VIEW_STATE_BYTES {
+                    return Ok(error(
+                        INVALID_PARAMS,
+                        format!("a view state is at most {MAX_VIEW_STATE_BYTES} bytes"),
+                        None,
+                    ));
+                }
+                let mut states = self
+                    .inner
+                    .view_states
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if states.len() > MAX_GRANTS_KEPT {
+                    states.clear();
+                }
+                states.insert(format!("{session}/{call_id}"), state);
+                Ok(ok(json!({})))
+            }
             "tools/call" => {
                 // Only a tool's name, so nothing else the app sends reaches the home's words
                 // or the audit trail in its place.
@@ -797,6 +968,7 @@ impl McpAppsHost {
                         .await?;
                     return Ok(refused(words::app_asked_enough(MAX_WAITING)));
                 }
+                let (called_tool, called_args) = (tool_name.clone(), args.clone());
                 let call = RequestedCall::new(
                     tool_name,
                     args,
@@ -833,6 +1005,28 @@ impl McpAppsHost {
                         engine
                             .record(caller, SURFACE_AUDIT_APP_CALL_HELD, record("held", asked))
                             .await?;
+                        // Opt-in consent: a call the policy allows is approved now, recorded
+                        // with the rule and `initiator: "app"`; the rest waits for the person.
+                        if let Some(rule) = self.consent_rule(server, tool).await {
+                            let card = Self::waiting_calls(engine, caller, session, call_id)
+                                .await?
+                                .into_iter()
+                                .find(|card| {
+                                    card.call.tool == called_tool && card.call.args == called_args
+                                });
+                            if let Some(card) = card {
+                                engine
+                                    .approve_by_policy(
+                                        caller,
+                                        &card.id,
+                                        card.version,
+                                        rule,
+                                        json!({ "server": server, "tool": tool, "callId": call_id }),
+                                    )
+                                    .await?;
+                                return Ok(ok(sent_text(words::APP_CALL_SENT)));
+                            }
+                        }
                         Ok(ok(sent_text(words::APP_CALL_WAITS_FOR_YOU)))
                     }
                     Some((false, text)) => {

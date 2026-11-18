@@ -4,7 +4,7 @@ import type { AppOpen, AppPrompt, AppView } from "../generated/api";
 import { OPENING_THE_APP } from "../generated/words";
 import { visible } from "../safe";
 import type { AppsSeam } from "./apps";
-import { AppBridge, frameable, openable, pageTheme } from "./apps";
+import { AppBridge, frameable, hostStyles, openable, pageTheme } from "./apps";
 import "./genui.css";
 
 /** The frame's height before the app says how tall it is, in CSS pixels. */
@@ -135,6 +135,8 @@ function Framed({
       resize: (next) => setHeight(Math.min(Math.ceil(next), shown.maxHeight)),
       prompt: (next) => prompted.current(next),
       theme: pageTheme,
+      styles: hostStyles,
+      width: () => frame.current?.clientWidth ?? 0,
       toolInput: shown.toolInput,
       toolResult: shown.toolResult,
     });
@@ -144,7 +146,15 @@ function Framed({
       void bridge.receive(event.data);
     };
     window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
+    // The app redraws in the page's scheme when the person switches it.
+    const scheme = window.matchMedia?.("(prefers-color-scheme: dark)");
+    const onScheme = () => bridge.contextChanged();
+    scheme?.addEventListener?.("change", onScheme);
+    return () => {
+      bridge.teardown();
+      window.removeEventListener("message", onMessage);
+      scheme?.removeEventListener?.("change", onScheme);
+    };
   }, [seam, session, app.callId, shown]);
   return (
     <iframe

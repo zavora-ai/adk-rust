@@ -44,6 +44,9 @@ pub const SURFACE_AUDIT_STOP_ALL: &str = "surface.stop_all";
 pub const SURFACE_AUDIT_RESUME_ALL: &str = "surface.resume_all";
 /// The audit action of a mode change (spec 3.3 §11).
 pub const SURFACE_AUDIT_SET_MODE: &str = "surface.set_mode";
+/// The audit action of an app's call approved by the home's opt-in consent policy instead of
+/// a person (spec 3.3 §6.1 `genui-apps`).
+pub const SURFACE_AUDIT_APP_CALL_AUTO_APPROVED: &str = "surface.app.call_auto_approved";
 /// The audit action of a drawn form's Send (spec 3.3 §7.4 rule 5, §11).
 pub const SURFACE_AUDIT_DRAWN_SUBMITTED: &str = "surface.drawn.submitted";
 /// The audit action of a person's approval of a form's call, sealed to the drawing they saw
@@ -1570,6 +1573,38 @@ impl SurfaceEngine {
     /// `genui-apps`): held as the agent whose call showed the app, for the person's decision,
     /// whose card says "The app from Weather asked" and never offers **Always allow**.
     #[cfg(feature = "genui-apps")]
+    /// Approves the waiting decision `decision_id` by the home's policy `policy` (spec 3.3
+    /// §6.1 `genui-apps`, opt-in tiered consent the person set): decided as the person, the
+    /// rule recorded as `surface.app.call_auto_approved` and on the decision, then resumed like
+    /// their answer.
+    #[cfg(feature = "genui-apps")]
+    pub(crate) async fn approve_by_policy(
+        &self,
+        caller: &Caller,
+        decision_id: &str,
+        version: u64,
+        policy: &str,
+        ext: Value,
+    ) -> Result<()> {
+        let mut fields = json!({ "approvalId": decision_id, "policy": policy, "initiator": "app" });
+        if let (Some(fields), Value::Object(ext)) = (fields.as_object_mut(), ext) {
+            fields.extend(ext);
+        }
+        self.record(caller, SURFACE_AUDIT_APP_CALL_AUTO_APPROVED, fields).await?;
+        // The person's own standing consent: decided as them, the rule on the record.
+        let mut decision =
+            ApprovalDecision::approve(caller.subject.clone()).with_groups(caller.groups.clone());
+        decision.reason = Some(format!("approved by the home's {policy} consent"));
+        let updated = self.inner.source.decide(decision_id, version, decision).await?;
+        if updated.state != ApprovalState::Pending {
+            if let Err(error) = self.inner.source.resolved_by(caller, &updated).await {
+                tracing::warn!(error = %error, decision.id = %updated.id, "the approved call could not be resumed");
+            }
+            self.spawn_drain(caller.clone(), updated.scope.session_id.clone());
+        }
+        Ok(())
+    }
+
     pub(crate) async fn ask_for_app_call(
         &self,
         caller: &Caller,

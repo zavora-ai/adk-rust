@@ -88,7 +88,7 @@ pub use drawn::{
 };
 #[cfg(feature = "genui-apps")]
 pub use mcp_apps::{
-    AppServers, McpAppsHost, McpAppsHostBuilder, SURFACE_AUDIT_APP_BLOCKED,
+    AppConsent, AppServers, McpAppsHost, McpAppsHostBuilder, SURFACE_AUDIT_APP_BLOCKED,
     SURFACE_AUDIT_APP_CALL_ASKED, SURFACE_AUDIT_APP_CALL_HELD, SURFACE_AUDIT_APP_CALL_REFUSED,
     SURFACE_AUDIT_APP_MESSAGE_SENT, SURFACE_AUDIT_APP_ORIGIN_REFUSED,
 };

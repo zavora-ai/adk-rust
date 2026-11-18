@@ -350,6 +350,33 @@ function bridge(answer: (request: AppRequest) => Promise<AppAnswer>) {
   return { bridge: new AppBridge(host), posted, prompts, heights };
 }
 
+describe("an app's bridge", () => {
+  it("tells the app the page's scheme, styles and width, and when they change or the frame goes", async () => {
+    const posted: JsonRpc[] = [];
+    const host: BridgeHost = {
+      post: (message) => posted.push(message),
+      ask: async () => ({ result: { hostContext: { displayMode: "inline", containerDimensions: { maxHeight: 640 } } } }),
+      resize: () => undefined,
+      prompt: () => undefined,
+      theme: () => "dark",
+      styles: () => ({ "--color-text-primary": "#111" }),
+      width: () => 480,
+      toolInput: {},
+      toolResult: {},
+    };
+    const bridge = new AppBridge(host);
+    await bridge.receive({ jsonrpc: "2.0", id: 1, method: "ui/initialize", params: {} });
+    const context = (posted[0] as { result: { hostContext: Record<string, unknown> } }).result.hostContext;
+    expect(context.theme).toBe("dark");
+    expect(context.styles).toEqual({ variables: { "--color-text-primary": "#111" } });
+    expect(context.containerDimensions).toEqual({ maxHeight: 640, width: 480 });
+    bridge.contextChanged();
+    expect((posted[1] as { method: string }).method).toBe("ui/notifications/host-context-changed");
+    bridge.teardown();
+    expect((posted[2] as { method: string }).method).toBe("ui/resource-teardown");
+  });
+});
+
 /** The app's frame in `container`, once opened. */
 function framed(container: HTMLElement): Promise<HTMLIFrameElement> {
   return waitFor(() => {

@@ -492,7 +492,7 @@ with the number refused since, so a page that keeps trying cannot fill the trail
 
 | Request | Answer |
 |---|---|
-| `ui/initialize`, `ping` | Answered; display mode inline. `hostCapabilities.sandbox` reports what the frame was granted: the sites that passed (`connectDomains`, `resourceDomains`, `frameDomains`, `baseUriDomains`) and no permission at all |
+| `ui/initialize`, `ping` | Answered; display mode inline, with the page's scheme, its style variables (`hostContext.styles.variables`: surface, text, border, accent, fonts, radius, never a decision's colours), the frame's width and maximum height, and the view state the app last asked the host to keep. `hostCapabilities.sandbox` reports what the frame was granted: the sites that passed (`connectDomains`, `resourceDomains`, `frameDomains`, `baseUriDomains`) and no permission at all |
 | `tools/call` for a tool its own server publishes for both the model and the app, a tool that declares no `_meta.ui` included | Asked of the agent whose call showed the app as a requested call, by the name the agent knows that server's tool by (`surface.app.call_asked`), and answered once the agent holds it — the ordinary card follows the app, its first step "The app from Weather asked · 10:06", its detail "From the Weather app in this thread", never **Always allow**; `surface.app.call_held` — or refuses it (`surface.app.call_refused`, by the agent). The same call again is the decision already waiting; an app with three calls waiting is told "The app already asked for 3 things. Answer those first." |
 | `tools/call` for a model-only tool, another server's tool, or one the agent is not given | Refused: "The app tried to use transfer_funds. Apps can't use it."; `surface.app.call_refused` |
 | `tools/call` whose name is not a tool's name | A malformed request: nothing it sent is shown or recorded |
@@ -501,8 +501,25 @@ with the number refused since, so a page that keeps trying cannot fill the trail
 | `ui/message` | "The app wants to send: “…”" with **Send it** and **Not now**; **Send it** sends it as the person's message inside an untrusted-content block labelled "Suggested by the Weather app", which the model reads and every surface shows as the message with "Suggested by the Weather app" under it; `surface.app.message_sent` |
 | `ui/open-link` | "Open example.com?" with **Open** and **Cancel**; only **Open** opens it. A link to this computer or its network (loopback, `0.0.0.0`, private and link-local addresses, IPv4 inside IPv6, `.local` and single-label names) is refused, on the server and again on the page |
 | `ui/download-file` | "The Weather app wants to save forecast.csv (2 KB)" with **Save** and **Cancel**; only **Save** saves it. Only an embedded resource (the home fetches no link), up to 5 MB, its name cut to its last part; a file that runs or that a browser opens as a page (`.exe`, `.sh`, `.html`, `.svg`, …) is refused |
+| `ui/request-display-mode` | `{ "mode": "inline" }`: the home frames apps inline only |
+| `ui/set-view-state` | Kept by the host, up to 64 KB, and given back at the next `ui/initialize` of the same app |
 | `ui/update-model-context` | Logged, never forwarded to the model |
 | Anything else | "not supported here" |
+
+The page tells an open app when the person switches between light and dark
+(`ui/notifications/host-context-changed`) and before its frame goes (`ui/resource-teardown`).
+An app is framed only after its tool call returned, so `tool-input-partial` and
+`tool-cancelled` never arise.
+
+**Tiered consent, off by default.** Every call an app asks for waits for the person unless a
+deployment opts in with `McpAppsHostBuilder::app_consent`: `AppConsent { read_only: true }`
+approves calls to tools whose definition says `readOnlyHint` (and not `destructiveHint`), and
+`AppConsent::standing` approves a tool the person allowed while its definition — name,
+description, input schema, annotations — hashes the same (a changed definition asks again).
+Such a call is decided as the person, recorded as `surface.app.call_auto_approved` with the
+rule and `initiator: "app"`. A drawn form's Send is never approved this way. A set of servers
+gives each tool's definition with `AppServers::tool_definition` (an MCP toolset from its
+annotations).
 
 **3D in an app.** An app may draw with WebGL: three.js from a site it declares, through an
 import map, in the same sandbox. Its policy has `worker-src 'none'` and no
