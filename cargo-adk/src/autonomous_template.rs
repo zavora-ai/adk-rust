@@ -29,7 +29,7 @@ pub fn template() -> AgentTemplate {
                 "    SqliteModeStore, SqliteStandingRuleStore, Workspace,",
                 "};",
                 "use adk_rust::kernel::stores::KernelStores;",
-                "use adk_rust::kernel::{KernelConfig, Quotas, Trigger, Wake};",
+                "use adk_rust::kernel::{KernelConfig, Quotas, Trigger, Wake, WakeOverlap};",
                 "use adk_rust::session::SqliteSessionService;",
                 "use adk_rust::{MissedFirePolicy, NewRun, RunBudget, StoreApprovalService};",
             ],
@@ -103,7 +103,7 @@ const AGENT_CONSTRUCTION: &str = r#"// Sessions belong to you, so `adk-rust atta
         .build()?;
 
     // Each weekday at 09:00 UTC the kernel starts a run with this message. Six fields,
-    // seconds first; a 09:00 missed while the kernel was down fires once when it is back.
+    // seconds first; the 09:00s missed while the kernel was down or frozen fire once.
     let weekdays = Trigger::new(
         "weekday-status",
         Wake::Cron { expr: "0 0 9 * * Mon-Fri".into(), missed: MissedFirePolicy::FireOnce },
@@ -114,7 +114,9 @@ const AGENT_CONSTRUCTION: &str = r#"// Sessions belong to you, so `adk-rust atta
             "{name}",
             adk_rust::serde_json::json!({ "text": "Refresh STATUS.md from notes/ and publish it if it changed." }),
         ),
-    );
+    )
+    // While a run waits for approval, later weekdays start nothing rather than queue behind it.
+    .with_overlap(WakeOverlap::Skip);
 
     // `cargo run` is the REPL; `cargo run -- up` runs the agent kernel with its home in .adk;
     // `cargo run -- goal "…" --until "…"` works toward a goal, on that kernel when it runs,

@@ -9,15 +9,18 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use adk_core::{DurableRunStore, Enqueued, NewRun, RunFilter, RunState, SubjectRef};
+use adk_core::{
+    DurableRunStore, Enqueued, ManualClock, MissedFirePolicy, NewRun, RunFilter, RunState,
+    SubjectRef,
+};
 use adk_kernel::{
     EventBus, EventSubscriber, ExpiryAction, InMemoryProcessStore, KERNEL_WAKE_TARGET, KernelEvent,
     KernelWakeExecutor, PartitionId, ProcessKind, ProcessMeta, ProcessStore, QueueClass,
-    RunFinishedWakeSource, Suspension, Trigger, Wake, WakeEvent, WakeOutcome, WakeReason,
-    WakeRouter, WakeSet, kernel_wake_run, keys,
+    RunFinishedWakeSource, SKIPPED_LABEL, Suspension, Trigger, Wake, WakeEvent, WakeOutcome,
+    WakeOverlap, WakeReason, WakeRouter, WakeSet, kernel_wake_run, keys,
 };
 use adk_server::background::{DurableWorker, DurableWorkerConfig, WorkflowExecutor, WorkflowState};
-use chrono::Utc;
+use chrono::{DateTime, TimeZone, Utc};
 use proptest::prelude::*;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -217,7 +220,7 @@ async fn a_verified_principal_runs_as_an_authenticated_user_on_its_session() {
     );
     let router = fx.router().with_trigger(trigger);
     let outcomes = router.route(webhook("github", "8").with_principal("github-app")).await.unwrap();
-    let run = fx.runs.get(outcomes[0].pid()).await.unwrap().unwrap();
+    let run = fx.runs.get(outcomes[0].pid().unwrap()).await.unwrap().unwrap();
     assert!(run.authenticated);
     assert_eq!(run.user_id, "github-app");
     assert_eq!(run.concurrency_key.as_deref(), Some("issues"));
@@ -313,7 +316,7 @@ async fn a_run_finished_trigger_records_the_finished_run_as_parent() {
         json!({"pid": "run-1", "state": "completed"}),
     );
     let outcomes = router.route(finished).await.unwrap();
-    let meta = fx.processes.get(outcomes[0].pid()).await.unwrap().unwrap();
+    let meta = fx.processes.get(outcomes[0].pid().unwrap()).await.unwrap().unwrap();
     assert_eq!(meta.parent.as_deref(), Some("run-1"));
     assert_eq!(meta.partition, PartitionId::default());
 }
@@ -345,13 +348,13 @@ async fn expired_wake_sets_cancel_or_run_and_passed_times_wake() {
         "an expired set is not woken by a matching event"
     );
     let mut outcomes = router.sweep_expired(now).await.unwrap();
-    outcomes.sort_by(|a, b| a.pid().cmp(b.pid()));
+    outcomes.sort_by(|a, b| a.pid().cmp(&b.pid()));
     let mut expected = vec![
         WakeOutcome::Expired { pid: cancel.clone(), action: ExpiryAction::Cancel },
         WakeOutcome::Expired { pid: run.clone(), action: ExpiryAction::Run },
         WakeOutcome::Woke { pid: due.clone() },
     ];
-    expected.sort_by(|a, b| a.pid().cmp(b.pid()));
+    expected.sort_by(|a, b| a.pid().cmp(&b.pid()));
     assert_eq!(outcomes, expected);
     assert_eq!(state(&fx.runs, &cancel).await, RunState::Cancelled);
     assert!(woken(&fx.runs, &run).await && woken(&fx.runs, &due).await);
@@ -460,6 +463,133 @@ fn scenario() -> impl Strategy<Value = Scenario> {
 
 const HOOKS: [&str; 3] = ["a", "b", "c"];
 
+/// Hourly at the top of the hour.
+const HOURLY: &str = "0 0 * * * *";
+
+/// The hourly tick at `hour` on 2027-03-01, as the kernel's cron source for [`HOURLY`] hands
+/// it over: live, keyed by its scheduled time.
+fn hourly(hour: u32) -> WakeEvent {
+    let at = Utc.with_ymd_and_hms(2027, 3, 1, hour, 0, 0).unwrap();
+    let source = "trigger-cron:0_0_*_*_*_*";
+    WakeEvent::new(
+        source,
+        keys::cron(source, at),
+        json!({ "expression": HOURLY, "scheduled_for": at, "catch_up": false }),
+    )
+}
+
+fn at(hour: u32, minute: u32, second: u32) -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2027, 3, 1, hour, minute, second).unwrap()
+}
+
+/// A router on a manual clock with one hourly trigger that queues every occurrence, so only
+/// its missed-fire policy decides which tick starts a run.
+fn hourly_router(fx: &Fixture, clock: &ManualClock, missed: MissedFirePolicy) -> WakeRouter {
+    let wake = Wake::Cron { expr: HOURLY.into(), missed };
+    fx.router()
+        .with_clock(Arc::new(clock.clone()))
+        .with_trigger(Trigger::new("hourly", wake, template()).with_overlap(WakeOverlap::Queue))
+}
+
+/// Spec 3.2 §7.4: the ticks a freeze held reach the router together after `unfreeze`, and each
+/// is ranked behind the occurrences already due after it, as a restart ranks the ticks it
+/// missed. Fails on `origin/main`, where every held tick starts a run.
+#[tokio::test]
+async fn ticks_routed_late_fire_as_their_missed_policy_picks() {
+    let routed_at = at(12, 0, 30);
+    let cases = [
+        (MissedFirePolicy::FireOnce, routed_at, vec![12]),
+        (MissedFirePolicy::CatchUp(2), routed_at, vec![11, 12]),
+        (MissedFirePolicy::Skip, routed_at, vec![12]),
+        // Over a minute late: `skip` fires nothing, `fireOnce` the latest.
+        (MissedFirePolicy::Skip, at(12, 1, 30), vec![]),
+        (MissedFirePolicy::FireOnce, at(12, 59, 0), vec![12]),
+    ];
+    for (missed, now, fires) in cases {
+        let fx = Fixture::new();
+        let clock = ManualClock::new(now);
+        let router = hourly_router(&fx, &clock, missed);
+        let mut fired = Vec::new();
+        for hour in 10..=12 {
+            let outcomes = router.route(hourly(hour)).await.unwrap();
+            match outcomes.as_slice() {
+                [WakeOutcome::Spawned { .. }] => fired.push(hour),
+                [WakeOutcome::Missed { trigger }] => assert_eq!(trigger, "hourly"),
+                other => panic!("{missed:?} at {hour}: {other:?}"),
+            }
+        }
+        assert_eq!(fired, fires, "{missed:?} routed at {now}");
+    }
+}
+
+/// A jittered tick is routed at its `not_before`; under `skip` its lateness counts from there,
+/// so the jitter never makes it miss.
+#[tokio::test]
+async fn a_jittered_tick_is_on_time_at_its_release() {
+    let fx = Fixture::new();
+    let clock = ManualClock::new(at(12, 7, 10));
+    let router = hourly_router(&fx, &clock, MissedFirePolicy::Skip);
+    let jittered = hourly(12).with_not_before(at(12, 7, 0));
+    let outcomes = router.route(jittered).await.unwrap();
+    assert!(matches!(outcomes.as_slice(), [WakeOutcome::Spawned { .. }]), "{outcomes:?}");
+}
+
+/// A cron occurrence that comes due while admission holds the trigger's run cannot start
+/// either: under `queue` the trigger keeps no more runs waiting than its missed-fire policy
+/// fires, and the rest join the newest.
+#[tokio::test]
+async fn occurrences_while_admission_holds_the_trigger_keep_what_the_policy_fires() {
+    for (missed, waiting) in [(MissedFirePolicy::FireOnce, 1), (MissedFirePolicy::CatchUp(2), 2)] {
+        let fx = Fixture::new();
+        let clock = ManualClock::new(at(10, 0, 1));
+        let router = hourly_router(&fx, &clock, missed);
+        let first = router.route(hourly(10)).await.unwrap();
+        let [WakeOutcome::Spawned { pid: held, .. }] = first.as_slice() else {
+            panic!("the first tick starts a run: {first:?}");
+        };
+        // Admission defers it: a wake set saying why, and its label.
+        let claimed =
+            fx.runs.claim("background", "w", Duration::from_secs(30)).await.unwrap().unwrap();
+        fx.runs.wait(held, claimed.epoch, None).await.unwrap();
+        let mut row = fx.processes.get(held).await.unwrap().unwrap();
+        row.wake = Some(WakeSet::any_of([Wake::BudgetReplenished { partition: "default".into() }]));
+        row.labels.insert("kernel.admission".into(), "budget".into());
+        fx.processes.put(row).await.unwrap();
+
+        for hour in 11..=13 {
+            clock.set(at(hour, 0, 1));
+            router.route(hourly(hour)).await.unwrap();
+        }
+        assert_eq!(fx.trigger_runs().await.len(), waiting, "{missed:?}");
+    }
+}
+
+/// The default overlap, `skip`, applies to every wake: a webhook delivery while the trigger's
+/// run is unfinished starts nothing and is counted on that run's row; `queue` queues it.
+#[tokio::test]
+async fn a_firing_while_the_triggers_run_is_unfinished_follows_its_overlap() {
+    let fx = Fixture::new();
+    let wake = || Wake::Webhook { hook: "github".into() };
+    let router = fx.router().with_trigger(Trigger::new("triage", wake(), template()));
+    let first = router.route(webhook("github", "1")).await.unwrap();
+    let [WakeOutcome::Spawned { pid, .. }] = first.as_slice() else {
+        panic!("the first delivery starts a run: {first:?}");
+    };
+    let second = router.route(webhook("github", "2")).await.unwrap();
+    assert_eq!(second, [WakeOutcome::Skipped { pid: pid.clone(), trigger: "triage".into() }]);
+    let row = fx.processes.get(pid).await.unwrap().unwrap();
+    assert_eq!(row.labels.get(SKIPPED_LABEL).map(String::as_str), Some("1"));
+    assert_eq!(fx.trigger_runs().await.len(), 1);
+
+    let fx = Fixture::new();
+    let router = fx
+        .router()
+        .with_trigger(Trigger::new("triage", wake(), template()).with_overlap(WakeOverlap::Queue));
+    router.route(webhook("github", "1")).await.unwrap();
+    let second = router.route(webhook("github", "2")).await.unwrap();
+    assert!(matches!(second.as_slice(), [WakeOutcome::Spawned { .. }]), "{second:?}");
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(128))]
 
@@ -482,11 +612,15 @@ proptest! {
                 sleeping.push((fx.sleep_on(&format!("sleep-{index}"), wake).await, *hook));
             }
             let router = triggers.iter().enumerate().fold(fx.router(), |router, (index, hook)| {
-                router.with_trigger(Trigger::new(
-                    format!("t{index}"),
-                    Wake::Webhook { hook: HOOKS[*hook].into() },
-                    template(),
-                ))
+                // Every delivery queues its own run, so the property counts runs per key.
+                router.with_trigger(
+                    Trigger::new(
+                        format!("t{index}"),
+                        Wake::Webhook { hook: HOOKS[*hook].into() },
+                        template(),
+                    )
+                    .with_overlap(WakeOverlap::Queue),
+                )
             });
             let mut events = fx.bus.subscribe();
             let deliveries_as_events: Vec<WakeEvent> = deliveries

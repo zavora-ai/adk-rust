@@ -27,7 +27,7 @@
 //! | [`inventory`]: [`KernelInventory`](inventory::KernelInventory), [`InventoryWarning`](inventory::InventoryWarning), [`Kernel::inventory`], `GET /api/kernel/inventory`; `KernelBuilder::signals` and `Kernel::signal_sink` (feature `charter`) | §7.1, §7.4 |
 //! | [`stores::KernelStores`], [`stores::StoreUse`], [`stores::StoreOrigin`]: every stateful store on one backend, [`KernelBuilder::stores`], [`KernelBuilder::require_durable`], [`Kernel::store_uses`] | §7.1, §13 Q8 |
 //! | [`ProcessStore`], [`ProcessFilter`], [`SpendScope`], [`InMemoryProcessStore`], `SqliteProcessStore`, `PostgresProcessStore`, `RedisProcessStore`, `MongoProcessStore`, `FirestoreProcessStore`, `Neo4jProcessStore` | §7.3, §13 Q8 |
-//! | [`Wake`], [`WakeSet`], [`ExpiryAction`], [`WakeSource`], [`WakeEvent`], [`keys`], [`Trigger`], [`WakeRouter`], [`WakeOutcome`], [`KernelWakeExecutor`], the wake source adapters | §7.4 |
+//! | [`Wake`], [`WakeSet`], [`ExpiryAction`], [`WakeSource`], [`WakeEvent`], [`keys`], [`Trigger`], [`WakeOverlap`], [`WakeRouter`], [`WakeOutcome`], [`KernelWakeExecutor`], the wake source adapters | §7.4 |
 //! | [`CronWatermarkStore`], [`SourceWatermark`], [`InMemoryCronWatermarkStore`], `SqliteCronWatermarkStore`, `PostgresCronWatermarkStore`, `RedisCronWatermarkStore`, `MongoCronWatermarkStore`, `FirestoreCronWatermarkStore`, `Neo4jCronWatermarkStore` | §7.4, §7.13, §13 Q8 |
 //! | [`KernelEvent`], [`EventKind`], [`EventFilter`], [`EventRecord`], [`EventBus`], [`EventSubscriber`], [`EventSink`], [`AuditSink`], [`SpendDelta`]; `WebhookSink` (feature `webhooks`) | §7.6 |
 //! | [`Agenda`], [`AgendaHandle`], [`ProposalOutcome`], [`AgendaItem`], [`AgendaState`], [`AgendaStateKind`], [`AgendaOrigin`], [`AgendaAnswer`], [`ObservationAudience`], [`PlanRef`], [`AgendaStore`], [`AgendaFilter`], [`InMemoryAgendaStore`], [`ProactivityPolicy`], [`ProactiveApproval`] | §7.5 |
@@ -217,10 +217,10 @@ pub use subagents::{SUBAGENT_LABEL, SUBAGENT_NAME_LABEL, SUBAGENT_NOTICE_SOURCE,
 #[cfg(feature = "webhooks")]
 pub use wake::webhook_wake_hook;
 pub use wake::{
-    ApprovalWakeSource, CronWakeSource, ExpiryAction, FileWakeSource, KERNEL_WAKE_TARGET,
-    KernelWakeExecutor, RUN_NOW_SOURCE, RunFinishedWakeSource, Trigger, WAKE_PAYLOAD_LIMIT, Wake,
-    WakeEvent, WakeOutcome, WakeReason, WakeReasonHooks, WakeRouter, WakeSet, WakeSource,
-    kernel_wake_run, keys, queue_wake_ingress,
+    ApprovalWakeSource, COALESCED_LABEL, CronWakeSource, ExpiryAction, FileWakeSource,
+    KERNEL_WAKE_TARGET, KernelWakeExecutor, RUN_NOW_SOURCE, RunFinishedWakeSource, SKIPPED_LABEL,
+    Trigger, WAKE_PAYLOAD_LIMIT, Wake, WakeEvent, WakeOutcome, WakeOverlap, WakeReason,
+    WakeReasonHooks, WakeRouter, WakeSet, WakeSource, kernel_wake_run, keys, queue_wake_ingress,
 };
 pub use watermark::{CronWatermarkStore, SourceWatermark};
 

@@ -661,6 +661,7 @@ impl Kernel {
                     target: trigger.run.target.clone(),
                     queue: trigger.run.queue.clone(),
                     partition: trigger.partition.clone(),
+                    overlap: trigger.overlap,
                     served,
                 }
             })
@@ -1260,6 +1261,11 @@ impl Kernel {
     /// is told it was run now: its wake reason's payload carries `run_now`, the expression
     /// and who asked. The call is recorded as `kernel.run_now`.
     ///
+    /// A run now of a trigger follows the trigger's [`WakeOverlap`](crate::WakeOverlap) as a
+    /// tick does: while a process the trigger started is unfinished, `skip` refuses it here,
+    /// `queueOne` queues one behind it or joins the one already waiting, and `queue` queues
+    /// behind it.
+    ///
     /// | Target | Must be |
     /// |---|---|
     /// | [`RunNowTarget::Process`] | `Waiting`, not suspended, its wake set holding a cron wake |
@@ -1285,7 +1291,8 @@ impl Kernel {
     /// Returns [`KernelError::Frozen`] while the kill switch refuses work, so nothing is
     /// queued; [`KernelError::NotFound`] or [`KernelError::InvalidState`] for a process that
     /// is missing or not asleep on a cron wake; [`KernelError::Config`] for a name no cron
-    /// trigger has; or a store error.
+    /// trigger has; [`KernelError::InvalidState`], naming the unfinished process, for a
+    /// trigger whose overlap is `skip`; or a store error.
     pub async fn run_now(
         &self,
         target: RunNowTarget,
@@ -1342,6 +1349,16 @@ impl Kernel {
                         ),
                     });
                 };
+                // Under `skip`, a run now while the trigger's process is unfinished would start
+                // nothing; say so now rather than queue a wake that does nothing.
+                if let Some(blocking) = self.inner.router.skips_run_now(name).await? {
+                    return Err(KernelError::InvalidState {
+                        pid: blocking.run_id,
+                        state: blocking.state,
+                        action: "joined by a run now of its trigger, whose overlap is `skip` \
+                                 (let it finish, or `adk-rust kill` it)",
+                    });
+                }
                 (format!("trigger:{name}"), expression, json!({ "trigger": name }))
             }
         };
@@ -3753,14 +3770,17 @@ mod tests {
         .await;
         assert_eq!(model.requests().len(), 0, "asleep until the hour");
 
-        clock.advance(Duration::from_secs(3_601));
+        // Each hour is routed a second after it is due: a `skip` wake fires on time only.
+        let spec = adk_core::ScheduleSpec::Cron { expr: hourly.into(), timezone: "UTC".into() };
+        let first_hour = spec.next_after(clock.now()).unwrap().unwrap();
+        clock.set(first_hour + chrono::Duration::seconds(1));
         wait_for("the first occurrence's run", first.clone(), RunState::Completed).await;
         let second = successor(first.clone()).await;
         wait_for("the successor asleep", second.clone(), RunState::Waiting).await;
         let meta = kernel.processes().get(&second).await.unwrap().unwrap().meta;
         assert_eq!(meta.wake, Some(wake.clone()), "the successor sleeps on the same cron wake");
 
-        clock.advance(Duration::from_secs(3_601));
+        clock.set(spec.next_after(first_hour).unwrap().unwrap() + chrono::Duration::seconds(1));
         wait_for("the second occurrence's run", second.clone(), RunState::Completed).await;
         assert_eq!(model.requests().len(), 2, "one run per occurrence");
         let third = successor(second).await;

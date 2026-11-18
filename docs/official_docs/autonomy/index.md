@@ -280,14 +280,21 @@ let weekdays = Trigger::new(
         "ops-agent",
         adk_rust::serde_json::json!({ "text": "Refresh STATUS.md from notes/ and publish it if it changed." }),
     ),
-);
+)
+// While a run waits for approval, later weekdays start nothing rather than queue behind it.
+.with_overlap(WakeOverlap::Skip);
 ```
 
 A trigger lives in code, so a restart neither loses nor duplicates it. The expression has six
-fields, seconds first, in UTC. `MissedFirePolicy::FireOnce` fires one run for the 09:00 a
-stopped kernel missed; `Skip` fires only an occurrence that is on time, and `CatchUp(n)` up to
-the last `n` ([missed occurrences](../kernel/scheduling.md#cron-wakes-and-missed-occurrences)).
-A scheduled run that publishes holds `publish_status` in the inbox as the goal did.
+fields, seconds first, in UTC. `MissedFirePolicy::FireOnce` fires one run for the 09:00s the
+kernel missed — stopped, or frozen; `Skip` fires only an occurrence that is on time, and
+`CatchUp(n)` up to the last `n`
+([missed occurrences](../kernel/scheduling.md#cron-wakes-and-missed-occurrences)).
+A scheduled run that publishes holds `publish_status` in the inbox as the goal did. While it
+waits, `WakeOverlap::Skip` — also the default — starts nothing at the following 09:00s, so a
+call left for a week does not leave five stale runs queued behind it; `QueueOne` keeps one run
+waiting and `Queue` one per occurrence
+([overlapping firings](../kernel/scheduling.md#overlapping-firings)).
 
 To try the trigger without waiting for 09:00, `adk-rust run-now --trigger <name>` fires it now,
 through quiet hours, budgets and the kill switch like a tick, without moving the schedule. A

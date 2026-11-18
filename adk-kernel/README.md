@@ -220,7 +220,12 @@ from the kernel's own per-process daily totals, fed by a `ProgressSource` or, fo
 | The tick, on `KernelConfig::clock` | `Wake::At`, wake-set expiry | — |
 
 A `Trigger` spawns a new process for an event no sleeper takes, keyed
-`<event key>#<trigger name>`. Changes to watched files while the kernel was down are
+`<event key>#<trigger name>`. Its `WakeOverlap` decides a firing while a process it started is
+unfinished: `skip` (the default) starts nothing, `queueOne` keeps one process waiting and joins
+later firings to it, `queue` queues every one; the router publishes `skipped` and `coalesced`
+wakes and `adk-rust ps` counts them. The router ranks a cron tick when it routes it, behind the
+later occurrences already due, so the ticks a freeze held fire as the `MissedFirePolicy` picks
+them, as after a restart. Changes to watched files while the kernel was down are
 reconciled on start. `CronWakeSource::watermarked` keeps where a cron source left off in a
 `CronWatermarkStore` (in-memory, SQLite, PostgreSQL, Redis, MongoDB, Firestore and
 Neo4j; `cron_watermark_store_conformance_tests!`), so the ticks missed while no kernel watched fire
@@ -233,8 +238,8 @@ none from before a series began. `KernelConfig::with_cron_jitter(Jitter)` spread
 share a cadence: each is still keyed and watermarked at its scheduled time, and its `kernel.wake`
 run waits out a fixed per-source share of the gap to the next tick. `Kernel::run_now` (control
 plane `POST /api/kernel/{processes/{pid},triggers/{name}}/run-now`, `adk-rust run-now`) runs a
-cron sleeper or trigger now, refused while frozen, through admission like a tick, without
-moving the schedule. A local event reaches `Running` in under 2 s: in-process sources
+cron sleeper or trigger now, refused while frozen, through admission and the trigger's overlap
+like a tick, without moving the schedule. A local event reaches `Running` in under 2 s: in-process sources
 enqueue and claim at once, and the tick claims wake runs an external ingress or another
 replica enqueued.
 

@@ -1215,6 +1215,17 @@ fn note(process: &Process) -> String {
     {
         notes.push(format!("asleep on {} wake(s)", wake.any_of.len()));
     }
+    let count = |label: &str| {
+        process.meta.labels.get(label).and_then(|count| count.parse::<u64>().ok()).unwrap_or(0)
+    };
+    match count(adk_kernel::SKIPPED_LABEL) {
+        0 => {}
+        skipped => notes.push(format!("{skipped} later firing(s) skipped")),
+    }
+    match count(adk_kernel::COALESCED_LABEL) {
+        0 => {}
+        coalesced => notes.push(format!("{coalesced} later firing(s) coalesced into it")),
+    }
     if let Some(goal) = &process.view.goal {
         let mut text = format!("goal {}/{}", goal.iteration, goal.max_iterations);
         if let Some(exit) = goal.last_check_exit {
@@ -1247,6 +1258,9 @@ fn event_line(record: &EventRecord) -> String {
                 Some(adk_kernel::WakeOutcome::Spawned { .. }) => " (spawned)",
                 Some(adk_kernel::WakeOutcome::Deduplicated { .. }) => " (already used)",
                 Some(adk_kernel::WakeOutcome::Expired { .. }) => " (expired)",
+                Some(adk_kernel::WakeOutcome::Skipped { .. }) => " (skipped: still unfinished)",
+                Some(adk_kernel::WakeOutcome::Coalesced { .. }) => " (coalesced into it)",
+                Some(adk_kernel::WakeOutcome::Missed { .. }) => " (missed: too late)",
                 _ => "",
             };
             format!("{source} {key} → {}{what}", pid.as_deref().unwrap_or("nothing"))

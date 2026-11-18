@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::partition::PartitionId;
 use crate::process::{ProcessKind, ProcessMeta, ProcessSpec};
 use crate::sched::QueueClass;
-use crate::wake::{Trigger, Wake};
+use crate::wake::{Trigger, Wake, WakeOverlap};
 
 /// The label every site process carries, with its kind's name as the value (spec 3.5 §7.11).
 pub const SITE_PROCESS_LABEL: &str = "site.process";
@@ -147,7 +147,10 @@ impl SiteProcessKind {
 
     /// The standing trigger that starts a kind's process in `partition` when `wake` fires,
     /// running `run` on the kind's [`queue`](Self::queue); the trigger is named after the
-    /// kind, so its processes are [`ProcessKind::Triggered`] with that source.
+    /// kind, so its processes are [`ProcessKind::Triggered`] with that source. On a cron wake
+    /// a firing while the kind's process is unfinished starts nothing
+    /// ([`WakeOverlap::Skip`]); on any other wake each firing queues a process
+    /// ([`WakeOverlap::Queue`]), since each signal carries its own news.
     ///
     /// # Example
     ///
@@ -160,6 +163,7 @@ impl SiteProcessKind {
     /// let trigger = SiteProcessKind::Probe.trigger(SiteProcessKind::Probe.default_wake(&partition), run, partition);
     /// assert_eq!(trigger.name, "site.probe");
     /// assert_eq!(trigger.run.queue, "maintenance");
+    /// assert_eq!(trigger.overlap, adk_kernel::WakeOverlap::Skip);
     /// ```
     pub fn trigger(
         self,
@@ -168,7 +172,11 @@ impl SiteProcessKind {
         partition: impl Into<PartitionId>,
     ) -> Trigger {
         run.queue = self.queue().as_str().to_string();
-        Trigger::new(self.as_str(), wake, run).with_partition(partition)
+        let overlap = match wake {
+            Wake::Cron { .. } => WakeOverlap::Skip,
+            _ => WakeOverlap::Queue,
+        };
+        Trigger::new(self.as_str(), wake, run).with_partition(partition).with_overlap(overlap)
     }
 }
 

@@ -72,6 +72,9 @@ pub struct InventoryTrigger {
     pub queue: String,
     /// The partition its processes run in.
     pub partition: PartitionId,
+    /// What a firing does while a process it started is unfinished.
+    #[serde(default)]
+    pub overlap: crate::wake::WakeOverlap,
     /// Whether an agent or workflow of the kernel serves the target.
     pub served: bool,
 }

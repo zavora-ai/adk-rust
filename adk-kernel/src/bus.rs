@@ -900,6 +900,17 @@ impl EventSink for AuditSink {
             WakeOutcome::Woke { pid } | WakeOutcome::Deduplicated { pid } => {
                 draft.ext("matchedPid", json!(pid))
             }
+            WakeOutcome::Skipped { pid, trigger } => draft
+                .ext("matchedPid", json!(pid))
+                .ext("trigger", json!(trigger))
+                .ext("overlap", json!("skipped")),
+            WakeOutcome::Coalesced { pid, trigger } => draft
+                .ext("matchedPid", json!(pid))
+                .ext("trigger", json!(trigger))
+                .ext("overlap", json!("coalesced")),
+            WakeOutcome::Missed { trigger } => {
+                draft.ext("trigger", json!(trigger)).ext("missed", json!(true))
+            }
         };
         self.trail.record(draft).await?;
         Ok(())
@@ -982,7 +993,7 @@ mod tests {
 
     fn wake(outcome: Option<WakeOutcome>) -> KernelEvent {
         KernelEvent::Wake {
-            pid: outcome.as_ref().map(|outcome| outcome.pid().to_string()),
+            pid: outcome.as_ref().and_then(WakeOutcome::pid).map(str::to_string),
             source: "hook:github".into(),
             key: "hook:github:msg_1".into(),
             outcome,

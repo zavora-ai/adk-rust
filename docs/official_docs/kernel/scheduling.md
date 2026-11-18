@@ -108,17 +108,32 @@ when its partition already queues `max_queued` processes, with `kernel.quota`
 ## Cron wakes and missed occurrences
 
 A cron wake, `Wake::Cron { expr, missed }`, fires on a six-field cron expression, seconds
-first, in UTC (spec 3.2 §7.4). A standing trigger on one starts a process at each occurrence;
-a process asleep on one wakes at each occurrence, and its successor sleeps on the same wake.
-An occurrence that comes due while a kernel watches the expression fires. `missed`, an
-`adk_core::MissedFirePolicy`, decides the occurrences that came due while no kernel watched
-the expression — a restart or an outage. It has no default, so every cron wake names one:
+first, in UTC (spec 3.2 §7.4). A standing trigger on one starts a process at each occurrence,
+as its [overlap](#overlapping-firings) allows; a process asleep on one wakes at each
+occurrence, and its successor sleeps on the same wake. An occurrence that comes due while a
+kernel watches the expression, and reaches the router on time, fires. `missed`, an
+`adk_core::MissedFirePolicy`, decides the occurrences that came due while the kernel could not
+act on them. It has no default, so every cron wake names one:
 
 | `missed` | JSON | Missed occurrences that fire |
 |---|---|---|
 | `MissedFirePolicy::Skip` | `"skip"` | The latest, only when it is no more than a minute late (`DEFAULT_MISFIRE_GRACE`) |
 | `MissedFirePolicy::FireOnce` | `"fireOnce"` | The latest, however late |
 | `MissedFirePolicy::CatchUp(n)` | `{"catchUp": n}` | The latest `n`, oldest first; a trigger or a managed wake set with `CatchUp(0)` is refused |
+
+The policy holds however the occurrences were missed:
+
+| Missed because | What the kernel does |
+|---|---|
+| No kernel watched the expression: a restart or an outage | The expression's cursor replays the occurrences the policy picks, ranked from the latest |
+| The kernel was frozen | Each occurrence still goes to the maintenance queue as its `kernel.wake` run, which the freeze holds. After `unfreeze` the router ranks each one behind the later occurrences already due, and fires what the policy picks: under `fireOnce`, one run for the whole freeze |
+| Admission holds the trigger's run (a daily cap or the agent's daily limit, a quota) | The held run stands for the occurrences after it: the trigger keeps at most as many runs waiting to start as the policy fires (one for `skip` and `fireOnce`, `n` for `catchUp(n)`), and a later occurrence joins the newest ([`Coalesced`](#overlapping-firings)) |
+
+The router measures how late an occurrence is when it routes it, on the kernel's clock, from its
+scheduled time or, with [jitter](#jitter), from its release. An occurrence it passes over
+starts nothing and is published as a `missed` wake. Quiet hours hold proactive work only, so
+they never hold a trigger's run; a sleeper that admission holds is not asleep on its cron wake,
+so the occurrences while it is held wake nothing and it runs once when released.
 
 ```rust
 use std::sync::Arc;
@@ -164,6 +179,66 @@ occurrences its own policy picks ([cron sleepers](backends.md#cron-sleepers),
 [cron triggers](backends.md#cron-triggers)).
 A durable `Schedule` takes the same `MissedFirePolicy`
 ([schedules and the firing rule](../core/durable-runtime.md#schedules-and-the-firing-rule)).
+
+## Overlapping firings
+
+A standing trigger's firing can come while a process it started is unfinished: queued,
+running, waiting for a person's approval, asleep, held by admission or parked by a freeze. Its
+`overlap`, a `WakeOverlap`, decides what the firing does. Every firing follows it — a cron
+occurrence, a webhook or queue delivery, a file change, a signal, and a
+[run now](#running-a-schedule-now):
+
+| `overlap` | JSON | A firing while one of the trigger's processes is unfinished | Wake outcome |
+|---|---|---|---|
+| `WakeOverlap::Skip` (default) | `"skip"` | Starts nothing | `skipped`, naming the unfinished process |
+| `WakeOverlap::QueueOne` | `"queueOne"` | Queues one process behind it; while one already waits to start — queued, or held by admission — joins that one | `spawned`, then `coalesced` naming the waiting process |
+| `WakeOverlap::Queue` | `"queue"` | Queues a process behind it, every time | `spawned` |
+
+`skip` is the default because a scheduled run that waits behind an unfinished one repeats its
+work when it finally runs: a weekday status run whose `publish_status` waits a week for a person
+would otherwise leave five stale runs to run back to back. The next occurrence after the
+unfinished process ends fires as usual. `skip` is also the default of a managed wake set and of
+an `adk-server` cron job's `concurrencyPolicy`. A trigger whose every delivery carries work that
+must not be dropped — one run per webhook delivery or queue message — sets `queue`.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::{InMemoryRunStore, MissedFirePolicy, NewRun};
+use adk_kernel::{Kernel, Trigger, Wake, WakeOverlap};
+use serde_json::json;
+
+fn main() -> anyhow::Result<()> {
+    let refresh =
+        NewRun::new("background", "ops", "ana", "ops", json!({ "text": "Refresh the dashboard" }));
+    let kernel = Kernel::builder()
+        .run_store(Arc::new(InMemoryRunStore::new()))
+        .trigger(
+            Trigger::new(
+                "hourly-refresh",
+                Wake::Cron { expr: "0 0 * * * *".into(), missed: MissedFirePolicy::FireOnce },
+                refresh,
+            )
+            // A refresh that overruns the hour runs once more right after, never twice.
+            .with_overlap(WakeOverlap::QueueOne),
+        )
+        .build()?;
+    println!("{:?}", kernel.inventory().triggers);
+    Ok(())
+}
+```
+
+A skipped or coalesced firing is visible where wakes are:
+
+| Where | What it shows |
+|---|---|
+| `adk-rust events` | `trigger-cron:… cron:…:09:00:00Z → <pid> (skipped: still unfinished)`, `(coalesced into it)`, or `→ nothing (missed: too late)` |
+| `adk-rust ps` | The process's note counts them: `waiting for a human · 3 later firing(s) skipped`, `2 later firing(s) coalesced into it`, from its `kernel.skipped` and `kernel.coalesced` labels |
+| The audit trail | The `kernel.wake` record carries `overlap: skipped` or `coalesced`, or `missed: true`, with the trigger and the process |
+| `kernel.inventory()` | Each trigger's `overlap` |
+
+A cron occurrence keeps its cursor and key whatever the overlap does with it: a skipped or
+coalesced occurrence is accounted for, so a restart never replays it.
 
 ## Jitter
 
@@ -239,6 +314,10 @@ router wakes the sleeper, or fires the trigger, as a tick would. The request bod
 `{"requestId": "…"}`, is optional; a retry with the same id queues nothing new. The run now:
 
 - **is refused while frozen** with `kernel.frozen`, and queues nothing;
+- **follows the trigger's [overlap](#overlapping-firings)** as an occurrence does: while a
+  process the trigger started is unfinished, `skip` refuses the run now with
+  `kernel.invalid_state` naming that process, `queueOne` queues one run behind it or joins the
+  one already waiting, and `queue` queues one behind it;
 - **passes admission** like a tick's run: quiet hours defer it, a spent daily budget parks it,
   a quota holds it;
 - **leaves the schedule alone**: no watermark moves, the next tick fires on time, and a

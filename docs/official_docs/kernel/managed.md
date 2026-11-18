@@ -59,7 +59,7 @@ camelCase wire shape: its wakes are `Wake`s, its drivers `DriverManifest`s and i
 | Field | In the tenant's kernel |
 |---|---|
 | `wakeSets` | Standing triggers named `<definition>/<set>`: each wake starts a process of the definition's agent with `input`, on `queue` (default `background`) for `user` (default `kernel`) as a `Service` subject, keyed by the wake's own key so a repeated delivery starts nothing |
-| `wakeSets[].overlap` | `skip` (default): a firing while the set's previous process is unfinished starts nothing; `queue`: it queues behind it |
+| `wakeSets[].overlap` | `skip` (default): a firing while the set's previous process is unfinished starts nothing; `queueOne`: it queues one process behind it, and later firings join that one while it waits; `queue`: it queues behind it, every time ([overlapping firings](scheduling.md#overlapping-firings)) |
 | `wakeSets[].anyOf` | `cron`, `webhook`, `queue` and `signal` wakes ([which wakes a wake set takes](#which-wakes-a-wake-set-takes)) |
 | `proactivity` | The tenant kernel's `ProactivityPolicy`: open proposals, the daily proactive budget, quiet hours and how proposals are approved. One kernel has one policy, so a second definition may repeat it or leave it out |
 | `proactivity.consolidation` | The only switch for the consolidation tick: it is off in the managed form unless a definition sets it (§13 Q1), and runs where the operator registered a consolidator |
@@ -305,8 +305,8 @@ ticks no replica watched fire once each, as the wake set's `missed` policy, a
 The cursor is written before each tick goes out, so a restart replays nothing a second time, and
 each tick keeps its key (`cron:<source>:<time>`), so replicas that start together fire each tick
 once (K-I3). A catch-up's processes follow the wake set's `overlap`: they queue behind each other
-(`queue`), or the later ones start nothing while one is unfinished (`skip`), so a long outage is
-never a burst. A source with no cursor yet starts at its first watch and replays nothing from
+(`queue`), at most one waits behind the unfinished one (`queueOne`), or the later ones start
+nothing while one is unfinished (`skip`), so a long outage is never a burst. A source with no cursor yet starts at its first watch and replays nothing from
 before it existed. When a definition hosted again leaves no wake set on an expression, the tenant
 deletes that expression's cursor: the time it is idle is not missed, so a wake set that uses it
 later starts at its first watch. The tenant kernel's sleepers keep their cron cursors in the same

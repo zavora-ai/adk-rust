@@ -69,7 +69,9 @@ use adk_core::queue_source::{QueueIngress, QueueSource};
 use adk_core::schedule::{
     DEFAULT_MISFIRE_GRACE, Jitter, MissedFirePolicy, ScheduleSpec, plan_fires,
 };
-use adk_core::{Clock, DurableRunStore, Enqueued, NewRun, RunRecord, RunState, SystemClock};
+use adk_core::{
+    Clock, DurableRunStore, Enqueued, NewRun, RunFilter, RunRecord, RunState, SystemClock,
+};
 use adk_server::background::{WorkerHooks, WorkflowExecutor, WorkflowState};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -519,6 +521,14 @@ pub const WAKE_PAYLOAD_LIMIT: usize = 4096;
 /// replaces it; the session keeps a told reason from being told again.
 pub(crate) const WOKE_LABEL: &str = "kernel.woke";
 
+/// The label on the row of a trigger's unfinished process that counts the firings its
+/// [`WakeOverlap::Skip`] skipped while it ran, as a decimal number; `adk-rust ps` shows it.
+pub const SKIPPED_LABEL: &str = "kernel.skipped";
+
+/// The label on the row of a trigger's process waiting to start that counts the firings
+/// that joined it ([`WakeOutcome::Coalesced`]), as a decimal number; `adk-rust ps` shows it.
+pub const COALESCED_LABEL: &str = "kernel.coalesced";
+
 /// How often, and how many times, a trigger's run waits for the row its router is writing.
 const TRIGGER_ROW_POLL: Duration = Duration::from_millis(20);
 const TRIGGER_ROW_POLLS: usize = 25;
@@ -734,12 +744,81 @@ pub(crate) fn widest_policy(a: MissedFirePolicy, b: MissedFirePolicy) -> MissedF
     }
 }
 
-/// Whether `wake` of the sleeping process `run` fires for `event` (spec 3.2 §7.4 step 2): it
-/// matches, and the event is not a missed cron tick scheduled before the sleeper's series
-/// began ([`series_start`](crate::supervise::series_start)), so a sleeper replays nothing
-/// from before it existed.
-pub(crate) fn wakes_sleeper(wake: &Wake, event: &WakeEvent, run: &RunRecord) -> bool {
-    wake_matches(wake, event) && !predates_series(event, run)
+/// How many of the latest missed occurrences `missed` fires: one for `skip` and `fireOnce`,
+/// `n` for `catchUp(n)`.
+fn missed_fires(missed: MissedFirePolicy) -> u32 {
+    match missed {
+        MissedFirePolicy::CatchUp(count) => count,
+        // `skip`, `fireOnce`, and a policy this release does not know: the latest.
+        _ => 1,
+    }
+}
+
+/// Whether the cron tick `event` reaches the router too late for `missed` (spec 3.2 §7.4): a
+/// tick ranks behind every later occurrence of its expression already due at `now`, and is
+/// missed when its rank is past what `missed` fires, or under `skip` when `now` is more than
+/// [`DEFAULT_MISFIRE_GRACE`] past its release (its scheduled time, or its jittered
+/// [`WakeEvent::not_before`]).
+///
+/// A tick submitted on time and routed late — its `kernel.wake` run held by a freeze — is
+/// ranked here as a watermarked source ranks the ticks a stopped kernel missed, so every way a
+/// tick comes late fires what its policy picks, once.
+fn missed_at(missed: MissedFirePolicy, event: &WakeEvent, now: DateTime<Utc>) -> bool {
+    if !event.key.starts_with("cron:") {
+        return false;
+    }
+    let text = |field: &str| event.payload.get(field).and_then(Value::as_str);
+    let scheduled_for = text("scheduled_for")
+        .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+        .map(|at| at.with_timezone(&Utc));
+    let (Some(scheduled_for), Some(expression)) = (scheduled_for, text("expression")) else {
+        return false;
+    };
+    let fires = missed_fires(missed);
+    let spec = ScheduleSpec::Cron { expr: expression.to_string(), timezone: "UTC".to_string() };
+    let mut later = 0;
+    let mut cursor = scheduled_for;
+    while later < fires {
+        match spec.next_after(cursor) {
+            Ok(Some(next)) if next <= now => {
+                later += 1;
+                cursor = next;
+            }
+            _ => break,
+        }
+    }
+    if later >= fires {
+        return true;
+    }
+    let release = event.not_before.unwrap_or(scheduled_for).max(scheduled_for);
+    let late = (now - release).to_std().unwrap_or_default() > DEFAULT_MISFIRE_GRACE;
+    missed == MissedFirePolicy::Skip && late
+}
+
+/// Whether the cron `wake` passes over the tick `event` routed at `now`: the event is a tick
+/// of its expression, and too late for its policy ([`missed_at`]).
+fn passes_over(wake: &Wake, event: &WakeEvent, now: DateTime<Utc>) -> bool {
+    match wake {
+        Wake::Cron { expr, missed } => {
+            event.payload.get("expression").and_then(Value::as_str) == Some(expr.as_str())
+                && missed_at(*missed, event, now)
+        }
+        _ => false,
+    }
+}
+
+/// Whether `wake` of the sleeping process `run` fires for `event`, routed at `now` (spec 3.2
+/// §7.4 step 2): it matches, a cron tick is not too late for its policy ([`missed_at`]), and
+/// the event is not a missed cron tick scheduled before the sleeper's series began
+/// ([`series_start`](crate::supervise::series_start)), so a sleeper replays nothing from
+/// before it existed.
+pub(crate) fn wakes_sleeper(
+    wake: &Wake,
+    event: &WakeEvent,
+    run: &RunRecord,
+    now: DateTime<Utc>,
+) -> bool {
+    wake_matches(wake, event) && !passes_over(wake, event, now) && !predates_series(event, run)
 }
 
 /// Whether `event` is a missed cron tick scheduled before the cron series of `run` began.
@@ -853,26 +932,64 @@ fn canonical(path: &Path) -> PathBuf {
     })
 }
 
+/// What a standing wake's firing does while a process it started is unfinished — queued,
+/// running, or waiting (on a person, a sleep, a freeze or admission) — (spec 3.2 §7.4,
+/// §7.9). A [`Trigger`] and a managed wake set take one; `skip` is the default.
+///
+/// | Overlap | JSON | A firing while one of its processes is unfinished |
+/// |---|---|---|
+/// | `Skip` | `"skip"` | Starts nothing ([`WakeOutcome::Skipped`]) |
+/// | `QueueOne` | `"queueOne"` | Queues one process behind it; while one already waits to start (queued, or held by admission), joins that one ([`WakeOutcome::Coalesced`]) |
+/// | `Queue` | `"queue"` | Queues a process behind it, every time |
+///
+/// A run now ([`Kernel::run_now`](crate::Kernel::run_now)) follows the trigger's overlap as a
+/// firing does.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::WakeOverlap;
+///
+/// assert_eq!(WakeOverlap::default(), WakeOverlap::Skip);
+/// assert_eq!(serde_json::to_value(WakeOverlap::QueueOne).unwrap(), "queueOne");
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum WakeOverlap {
+    /// The firing starts nothing.
+    #[default]
+    Skip,
+    /// The firing's process queues behind the unfinished one.
+    Queue,
+    /// At most one process waits to start: a firing while one waits joins it.
+    QueueOne,
+}
+
 /// A standing wake that starts a new process each time it fires, when no sleeping process
 /// matched (spec 3.2 §7.4 step 3): a sleeper consumes the event, a trigger is the fallback.
 ///
 /// `run` is the template: the router sets its idempotency key ([`keys::trigger`]),
-/// concurrency key, service subject and `authenticated` from the event.
+/// concurrency key, service subject and `authenticated` from the event. `overlap` decides
+/// what a firing does while a process the trigger started is unfinished: by default it starts
+/// nothing ([`WakeOverlap`]).
 ///
 /// # Example
 ///
 /// ```rust
 /// use std::time::Duration;
 /// use adk_core::NewRun;
-/// use adk_kernel::{Trigger, Wake};
+/// use adk_kernel::{Trigger, Wake, WakeOverlap};
 ///
 /// let trigger = Trigger::new(
 ///     "cargo-lock",
 ///     Wake::FileChange { root: ".".into(), glob: "Cargo.lock".into(), debounce: Duration::from_millis(500) },
 ///     NewRun::new("background", "adk-rust", "alice", "adk-rust", serde_json::json!({"text": "audit the dependency change"})),
 /// )
-/// .with_partition("work");
+/// .with_partition("work")
+/// .with_overlap(WakeOverlap::QueueOne);
 /// assert_eq!(trigger.partition.as_str(), "work");
+/// assert_eq!(trigger.overlap, WakeOverlap::QueueOne);
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -887,19 +1004,35 @@ pub struct Trigger {
     /// The partition its processes run in.
     #[serde(default)]
     pub partition: PartitionId,
+    /// What a firing does while a process the trigger started is unfinished.
+    #[serde(default)]
+    pub overlap: WakeOverlap,
 }
 
 impl Trigger {
     /// A trigger named `name` that enqueues `run` when `wake` fires, in the default
-    /// partition.
+    /// partition, skipping a firing while a process it started is unfinished.
     pub fn new(name: impl Into<String>, wake: Wake, run: NewRun) -> Self {
-        Self { name: name.into(), wake, run, partition: PartitionId::default() }
+        Self {
+            name: name.into(),
+            wake,
+            run,
+            partition: PartitionId::default(),
+            overlap: WakeOverlap::default(),
+        }
     }
 
     /// Sets the partition its processes run in.
     #[must_use]
     pub fn with_partition(mut self, partition: impl Into<PartitionId>) -> Self {
         self.partition = partition.into();
+        self
+    }
+
+    /// Sets what a firing does while a process the trigger started is unfinished.
+    #[must_use]
+    pub fn with_overlap(mut self, overlap: WakeOverlap) -> Self {
+        self.overlap = overlap;
         self
     }
 }
@@ -912,7 +1045,8 @@ impl Trigger {
 /// use adk_kernel::WakeOutcome;
 ///
 /// let outcome = WakeOutcome::Deduplicated { pid: "run-3".into() };
-/// assert_eq!(outcome.pid(), "run-3");
+/// assert_eq!(outcome.pid(), Some("run-3"));
+/// assert_eq!(WakeOutcome::Missed { trigger: "nightly".into() }.pid(), None);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -942,16 +1076,44 @@ pub enum WakeOutcome {
         /// What expiry did.
         action: ExpiryAction,
     },
+    /// A trigger fired while a process it started was unfinished, and its overlap is
+    /// [`WakeOverlap::Skip`]: nothing started.
+    Skipped {
+        /// The trigger's unfinished process.
+        pid: String,
+        /// The trigger's name.
+        trigger: String,
+    },
+    /// A trigger fired while a process it started waited to start — queued, or held by
+    /// admission — and the firing joined it: its overlap is [`WakeOverlap::QueueOne`], or the
+    /// firing is a cron occurrence its missed-fire policy does not fire while admission holds
+    /// the trigger's work.
+    Coalesced {
+        /// The waiting process.
+        pid: String,
+        /// The trigger's name.
+        trigger: String,
+    },
+    /// A cron tick reached the router too late for the trigger's `MissedFirePolicy` — a later
+    /// occurrence was already due, or under `skip` it was more than a minute late — so it
+    /// started nothing.
+    Missed {
+        /// The trigger's name.
+        trigger: String,
+    },
 }
 
 impl WakeOutcome {
-    /// The process the outcome concerns.
-    pub fn pid(&self) -> &str {
+    /// The process the outcome concerns; `None` for a missed tick, which concerns none.
+    pub fn pid(&self) -> Option<&str> {
         match self {
             Self::Woke { pid }
             | Self::Spawned { pid, .. }
             | Self::Deduplicated { pid }
-            | Self::Expired { pid, .. } => pid,
+            | Self::Expired { pid, .. }
+            | Self::Skipped { pid, .. }
+            | Self::Coalesced { pid, .. } => Some(pid),
+            Self::Missed { .. } => None,
         }
     }
 }
@@ -972,6 +1134,8 @@ const RECONCILE_SCAN_LIMIT: usize = 100_000;
 /// |---|---|---|
 /// | A `Waiting` process whose wake set holds a matching [`Wake`] | Records the [`WakeReason`] on its row, clears the wake set, then `DurableRunStore::wake` | [`WakeOutcome::Woke`] |
 /// | No sleeper matched; a [`Trigger`] whose wake matches | Enqueues the trigger's run keyed [`keys::trigger`] and records its process, with the [`WakeReason`] | [`WakeOutcome::Spawned`], or [`WakeOutcome::Deduplicated`] when the key already holds a run |
+/// | A process the trigger started is unfinished | Applies the trigger's [`WakeOverlap`], and counts the firing on that process's row ([`SKIPPED_LABEL`], [`COALESCED_LABEL`]) | [`WakeOutcome::Skipped`] or [`WakeOutcome::Coalesced`], or `Spawned` |
+/// | A cron tick routed too late for the wake's `MissedFirePolicy` | Passes it over: a later occurrence was due, or under `skip` it is over a minute late | [`WakeOutcome::Missed`] for a trigger; nothing for a sleeper |
 ///
 /// Events reach [`route`](Self::route) through their keyed `kernel.wake` run
 /// ([`submit`](Self::submit), the webhook and queue ingresses), so a duplicate delivery
@@ -1028,8 +1192,10 @@ impl WakeRouter {
         }
     }
 
-    /// Reads wake-set expiry against `clock`: the kernel's [`KernelConfig::clock`](crate::KernelConfig::clock).
-    pub(crate) fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+    /// Reads time against `clock` — wake-set expiry, and how late a cron tick is routed —
+    /// as a kernel's router reads its [`KernelConfig::clock`](crate::KernelConfig::clock).
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
         self
     }
@@ -1092,7 +1258,7 @@ impl WakeRouter {
         let mut outcomes = Vec::new();
         for (meta, wake, run) in self.sleepers().await? {
             let expired = wake.expires_at.is_some_and(|at| at <= now);
-            if expired || !wake.any_of.iter().any(|wake| wakes_sleeper(wake, &event, &run)) {
+            if expired || !wake.any_of.iter().any(|wake| wakes_sleeper(wake, &event, &run, now)) {
                 continue;
             }
             self.wake_sleeper(&meta, &run, &event).await?;
@@ -1100,6 +1266,15 @@ impl WakeRouter {
         }
         if outcomes.is_empty() {
             for trigger in self.triggers.iter().filter(|t| wake_matches(&t.wake, &event)) {
+                if passes_over(&trigger.wake, &event, now) {
+                    tracing::info!(
+                        wake.trigger = %trigger.name,
+                        wake.key = %event.key,
+                        "cron tick too late for the trigger's missed-fire policy; it starts nothing"
+                    );
+                    outcomes.push(WakeOutcome::Missed { trigger: trigger.name.clone() });
+                    continue;
+                }
                 if let Some(outcome) = self.fire(trigger, &event).await? {
                     outcomes.push(outcome);
                 }
@@ -1342,23 +1517,10 @@ impl WakeRouter {
 
     /// Enqueues `trigger`'s run for `event` and records its process.
     async fn fire(&self, trigger: &Trigger, event: &WakeEvent) -> Result<Option<WakeOutcome>> {
-        let mut run = trigger.run.clone();
-        run.idempotency_key = Some(keys::trigger(&event.key, &trigger.name));
-        if run.concurrency_key.is_none() {
-            run.concurrency_key = Some(
-                run.session_id
-                    .clone()
-                    .unwrap_or_else(|| format!("partition:{}", trigger.partition)),
-            );
+        let run = trigger_run(trigger, event);
+        if let Some(outcome) = self.overlap(trigger, &run, event).await? {
+            return Ok(Some(outcome));
         }
-        match &event.principal {
-            Some(principal) => {
-                run.user_id = principal.clone();
-                run.authenticated = true;
-            }
-            None => run.authenticated = false,
-        }
-        let run = run.with_service_subject();
         let (record, created) = match self.runs.enqueue(run).await? {
             Enqueued::Created(record) => (record, true),
             Enqueued::Existing(record) => (record, false),
@@ -1369,7 +1531,11 @@ impl WakeRouter {
                     run.blocking_id = %blocking_run_id,
                     "trigger run refused by its concurrency key"
                 );
-                return Ok(None);
+                self.count(&blocking_run_id, SKIPPED_LABEL).await?;
+                return Ok(Some(WakeOutcome::Skipped {
+                    pid: blocking_run_id,
+                    trigger: trigger.name.clone(),
+                }));
             }
         };
         if created || self.processes.get(&record.run_id).await?.is_none() {
@@ -1398,6 +1564,126 @@ impl WakeRouter {
         }))
     }
 
+    /// What `trigger`'s firing for `event` does instead of enqueueing `run`, when a process
+    /// the trigger started is unfinished ([`WakeOverlap`]); `None` when it enqueues.
+    ///
+    /// A cron occurrence that comes due while admission holds one of the trigger's processes
+    /// cannot start either, so it is missed: under every overlap the trigger keeps at most as
+    /// many processes waiting to start as its `MissedFirePolicy` fires, and a firing past
+    /// that joins the newest one.
+    async fn overlap(
+        &self,
+        trigger: &Trigger,
+        run: &NewRun,
+        event: &WakeEvent,
+    ) -> Result<Option<WakeOutcome>> {
+        let mut started = None;
+        let mut waiting = Vec::new();
+        let mut held = false;
+        for (record, meta) in self.unfinished(trigger, run).await? {
+            // A repeat of this firing: the enqueue finds its run.
+            if record.idempotency_key == run.idempotency_key {
+                return Ok(None);
+            }
+            let held_now = crate::supervise::held_by_admission(&meta);
+            held |= held_now;
+            if record.state == RunState::Queued || held_now {
+                waiting.push(record.run_id);
+            } else if started.is_none() {
+                started = Some(record.run_id);
+            }
+        }
+        let skipped = |pid: String| WakeOutcome::Skipped { pid, trigger: trigger.name.clone() };
+        let coalesced = |pid: String| WakeOutcome::Coalesced { pid, trigger: trigger.name.clone() };
+        let newest_waiting = waiting.last().cloned();
+        let outcome = match (trigger.overlap, started, newest_waiting) {
+            (WakeOverlap::Skip, Some(pid), _) | (WakeOverlap::Skip, None, Some(pid)) => {
+                Some(skipped(pid))
+            }
+            (WakeOverlap::QueueOne, _, Some(pid)) => Some(coalesced(pid)),
+            (_, _, Some(pid)) => match &trigger.wake {
+                Wake::Cron { missed, .. }
+                    if held
+                        && event.key.starts_with("cron:")
+                        && waiting.len()
+                            >= usize::try_from(missed_fires(*missed)).unwrap_or(usize::MAX) =>
+                {
+                    Some(coalesced(pid))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(outcome) = outcome else { return Ok(None) };
+        let (pid, label) = match &outcome {
+            WakeOutcome::Skipped { pid, .. } => (pid.as_str(), SKIPPED_LABEL),
+            _ => (outcome.pid().unwrap_or_default(), COALESCED_LABEL),
+        };
+        self.count(pid, label).await?;
+        tracing::info!(
+            wake.trigger = %trigger.name,
+            wake.key = %event.key,
+            wake.overlap = ?trigger.overlap,
+            process.pid = %pid,
+            "a process the trigger started is unfinished; the firing {}",
+            if label == SKIPPED_LABEL { "starts nothing" } else { "joins it" }
+        );
+        Ok(Some(outcome))
+    }
+
+    /// The unfinished process that keeps a run now of the trigger `name` from starting
+    /// anything: one the trigger started, when its overlap is [`WakeOverlap::Skip`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a store error.
+    pub(crate) async fn skips_run_now(&self, name: &str) -> Result<Option<RunRecord>> {
+        let Some(trigger) = self.triggers.iter().find(|trigger| trigger.name == name) else {
+            return Ok(None);
+        };
+        if trigger.overlap != WakeOverlap::Skip {
+            return Ok(None);
+        }
+        let probe = WakeEvent::new(RUN_NOW_SOURCE, keys::run_now(name, "probe"), Value::Null);
+        let run = trigger_run(trigger, &probe);
+        Ok(self.unfinished(trigger, &run).await?.into_iter().next().map(|(record, _)| record))
+    }
+
+    /// The unfinished runs `trigger` started — queued, running or waiting — with their rows,
+    /// oldest first; `run` is the trigger's run as the router enqueues it, whose concurrency
+    /// key every run of the trigger holds.
+    pub(crate) async fn unfinished(
+        &self,
+        trigger: &Trigger,
+        run: &NewRun,
+    ) -> Result<Vec<(RunRecord, ProcessMeta)>> {
+        let Some(key) = run.concurrency_key.as_deref() else { return Ok(Vec::new()) };
+        let filter = RunFilter::default().concurrency_key(key).states([
+            RunState::Queued,
+            RunState::Running,
+            RunState::Waiting,
+        ]);
+        let mut unfinished = Vec::new();
+        for record in self.runs.list(filter).await? {
+            let Some(meta) = self.processes.get(&record.run_id).await? else { continue };
+            let ours =
+                matches!(&meta.kind, ProcessKind::Triggered { source } if *source == trigger.name);
+            if ours && meta.partition == trigger.partition {
+                unfinished.push((record, meta));
+            }
+        }
+        unfinished.sort_by_key(|(record, _)| record.created_at);
+        Ok(unfinished)
+    }
+
+    /// Adds one to the count `label` keeps on `pid`'s row.
+    async fn count(&self, pid: &str, label: &str) -> Result<()> {
+        let Some(mut meta) = self.processes.get(pid).await? else { return Ok(()) };
+        let count = meta.labels.get(label).and_then(|count| count.parse::<u64>().ok()).unwrap_or(0);
+        meta.labels.insert(label.to_string(), (count + 1).to_string());
+        self.processes.put(meta).await
+    }
+
     fn publish(&self, source: &str, key: &str, outcomes: &[WakeOutcome]) {
         let Some(bus) = &self.bus else { return };
         if outcomes.is_empty() {
@@ -1410,13 +1696,34 @@ impl WakeRouter {
         }
         for outcome in outcomes {
             bus.publish(KernelEvent::Wake {
-                pid: Some(outcome.pid().to_string()),
+                pid: outcome.pid().map(str::to_string),
                 source: source.to_string(),
                 key: key.to_string(),
                 outcome: Some(outcome.clone()),
             });
         }
     }
+}
+
+/// The run `trigger` enqueues for `event`: its template keyed [`keys::trigger`], on the
+/// template's concurrency key or else the session's or `partition:<partition>`, acting as a
+/// `Service` subject, for the event's principal when it carries one.
+fn trigger_run(trigger: &Trigger, event: &WakeEvent) -> NewRun {
+    let mut run = trigger.run.clone();
+    run.idempotency_key = Some(keys::trigger(&event.key, &trigger.name));
+    if run.concurrency_key.is_none() {
+        run.concurrency_key = Some(
+            run.session_id.clone().unwrap_or_else(|| format!("partition:{}", trigger.partition)),
+        );
+    }
+    match &event.principal {
+        Some(principal) => {
+            run.user_id = principal.clone();
+            run.authenticated = true;
+        }
+        None => run.authenticated = false,
+    }
+    run.with_service_subject()
 }
 
 /// The newest file under `root` whose name matches `glob` and that was modified after
