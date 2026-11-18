@@ -90,6 +90,12 @@ pub(crate) fn neo4j_code(error: &neo4rs::Error) -> Option<&str> {
     }
 }
 
+/// Whether an `IF NOT EXISTS` schema statement failed because a concurrent one created
+/// the same rule first; the rule then exists.
+pub(crate) fn lost_schema_race(error: &neo4rs::Error) -> bool {
+    neo4j_code(error).is_some_and(|code| SCHEMA_ALREADY_EXISTS.contains(&code))
+}
+
 /// Retries `$attempt` while it fails with a transient error, then maps the failure with
 /// `$storage_error`.
 macro_rules! retry_transient {
@@ -187,12 +193,7 @@ pub(crate) async fn run_schema(
         loop {
             match graph.run(query(statement)).await {
                 Ok(()) => break,
-                Err(error)
-                    if neo4j_code(&error)
-                        .is_some_and(|code| SCHEMA_ALREADY_EXISTS.contains(&code)) =>
-                {
-                    break;
-                }
+                Err(error) if lost_schema_race(&error) => break,
                 Err(error) if tries < TRANSIENT_ATTEMPTS => {
                     tracing::debug!(error = %error, "retrying neo4j schema statement");
                     tries += 1;

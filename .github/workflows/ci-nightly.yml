@@ -360,6 +360,16 @@ jobs:
         --test store_conformance_firestore
         --test spend_ledger_postgres
 
+    # Replicas starting together migrate at once. The session and memory services' MongoDB
+    # and Neo4j schemas are still new here; the suites below migrate them.
+    - name: Run concurrent migrate on MongoDB and Neo4j
+      if: ${{ !cancelled() }}
+      run: >-
+        cargo nextest run -p adk-session -p adk-memory
+        --features adk-session/mongodb,adk-session/neo4j,adk-memory/mongodb-memory,adk-memory/neo4j-memory
+        --run-ignored all --no-fail-fast
+        --test concurrent_migrate_tests
+
     # The memory services' subject data suite on the backends the PR tier does not reach
     # (PostgreSQL's runs in the PR tier's postgres job).
     - name: Run the memory subject data suite on every backend

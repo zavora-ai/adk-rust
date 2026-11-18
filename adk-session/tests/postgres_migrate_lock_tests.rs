@@ -6,8 +6,10 @@
 //! instance blocks forever in `migrate`.
 //!
 //! Run against a scratch database at `DATABASE_URL` (default
-//! `postgres://postgres@localhost:5432/postgres`); the test creates the session tables
-//! and briefly inserts a registry row:
+//! `postgres://postgres@localhost:5432/postgres`). The test creates the session tables in
+//! a schema of its own and drops it at the end: its failed-migration step records a
+//! version newer than the code, which another suite migrating the shared schema at the
+//! same moment would read as a schema it cannot run against.
 //!
 //! ```bash
 //! DATABASE_URL=postgres://user@localhost/scratch \
@@ -20,6 +22,7 @@ use adk_session::PostgresSessionService;
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use sqlx::{Connection, PgConnection};
 use std::str::FromStr;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -33,10 +36,21 @@ fn database_url() -> String {
         .unwrap_or_else(|_| "postgres://postgres@localhost:5432/postgres".to_string())
 }
 
+/// The schema every connection of this test works in.
+static SCHEMA: LazyLock<String> =
+    LazyLock::new(|| format!("adk_migrate_lock_{}", uuid::Uuid::new_v4().simple()));
+
 fn connect_options() -> PgConnectOptions {
     PgConnectOptions::from_str(&database_url())
         .expect("parse DATABASE_URL")
         .application_name(APPLICATION_NAME)
+        .options([("search_path", SCHEMA.as_str())])
+}
+
+/// Runs `sql` on a connection outside the test's schema.
+async fn admin(sql: String) {
+    let mut admin = PgConnection::connect(&database_url()).await.expect("connect admin");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(sql)).execute(&mut admin).await.expect("admin statement");
 }
 
 async fn pool(max_connections: u32) -> PgPool {
@@ -77,6 +91,7 @@ async fn migrate(service: &PostgresSessionService, label: &str) -> adk_core::Res
 #[tokio::test]
 #[ignore = "requires a PostgreSQL server at DATABASE_URL"]
 async fn postgres_migrate_releases_advisory_lock_across_instances() {
+    admin(format!("CREATE SCHEMA {}", *SCHEMA)).await;
     let mut observer =
         PgConnection::connect_with(&connect_options()).await.expect("connect observer");
 
@@ -145,4 +160,6 @@ async fn postgres_migrate_releases_advisory_lock_across_instances() {
 
     migrate(&second, "after a failed migrate").await.expect("migrate after failure");
     assert_eq!(advisory_locks_held(&mut observer).await, 0);
+
+    admin(format!("DROP SCHEMA {} CASCADE", *SCHEMA)).await;
 }

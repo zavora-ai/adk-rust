@@ -327,9 +327,22 @@ fn session_already_exists(app_name: &str, session_id: &str) -> AdkError {
     )
 }
 
+/// Maps a Firestore failure, keeping whether Firestore reported it as retryable, such as a
+/// transaction aborted by contention.
 fn firestore_error(context: &str, error: FirestoreError) -> AdkError {
+    if crate::firestore_stores::is_retryable(&error) {
+        return AdkError::new(
+            ErrorComponent::Session,
+            ErrorCategory::Unavailable,
+            RETRYABLE_CODE,
+            format!("{context}: {error}"),
+        );
+    }
     AdkError::session(format!("{context}: {error}"))
 }
+
+/// Code of a Firestore failure that Firestore reported as retryable.
+const RETRYABLE_CODE: &str = "session.firestore.retryable";
 
 // ---------------------------------------------------------------------------
 // Storage abstraction
@@ -634,6 +647,19 @@ impl SessionStore for FirestoreStore {
     }
 
     async fn commit(&self, commit: SessionCommit) -> Result<CommitOutcome> {
+        // A transaction Firestore aborts, such as one that contended with another for a
+        // document, applied nothing; it runs again from its reads.
+        crate::firestore_stores::retry_while(
+            |error: &AdkError| error.code == RETRYABLE_CODE,
+            || self.commit_once(&commit),
+        )
+        .await
+    }
+}
+
+impl FirestoreStore {
+    /// Runs `commit` in one transaction.
+    async fn commit_once(&self, commit: &SessionCommit) -> Result<CommitOutcome> {
         let app_parent = self.app_parent(&commit.app_name)?;
         let events_parent = self.events_parent(&commit.app_name, &commit.session_id)?;
         let user_parent = self.user_parent(&commit.app_name, &commit.user_id)?;
@@ -659,7 +685,7 @@ impl SessionStore for FirestoreStore {
                 .one(&commit.session_id)
                 .await
                 .map_err(|e| firestore_error("query failed", e))?;
-            if !commit.guard.holds(current.as_ref(), &commit) {
+            if !commit.guard.holds(current.as_ref(), commit) {
                 return Ok(false);
             }
 
@@ -1618,6 +1644,27 @@ mod tests {
 
     fn assert_error(error: &AdkError, category: ErrorCategory, code: &str) {
         assert_eq!((error.category, error.code), (category, code), "{error}");
+    }
+
+    #[test]
+    fn a_failure_firestore_reports_as_retryable_stays_retryable() {
+        let failure = |retry_possible| {
+            FirestoreError::DatabaseError(firestore::errors::FirestoreDatabaseError {
+                public: firestore::errors::FirestoreErrorPublicGenericDetails {
+                    code: "Aborted".to_string(),
+                },
+                details: "Transaction lock timeout.".to_string(),
+                retry_possible,
+            })
+        };
+        let retryable = firestore_error("commit failed", failure(true));
+        assert_error(&retryable, ErrorCategory::Unavailable, RETRYABLE_CODE);
+        assert!(retryable.is_retryable(), "{retryable:?}");
+        assert_error(
+            &firestore_error("commit failed", failure(false)),
+            ErrorCategory::Internal,
+            "session.legacy",
+        );
     }
 
     #[tokio::test]

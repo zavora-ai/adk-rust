@@ -2,11 +2,11 @@
 //!
 //! Run with a server at `NEO4J_URI` (default `bolt://localhost:7687`), authenticating as
 //! `NEO4J_USER` (default `neo4j`) with `NEO4J_PASSWORD`; each test uses a fresh app name
-//! per run. The first run migrates the schema, so run the tests one at a time:
+//! per run:
 //!
 //! ```bash
 //! NEO4J_PASSWORD=secret \
-//!   cargo nextest run -p adk-session --features neo4j --run-ignored only -j 1 neo4j_state
+//!   cargo nextest run -p adk-session --features neo4j --run-ignored only neo4j_state
 //! ```
 
 #![cfg(feature = "neo4j")]
