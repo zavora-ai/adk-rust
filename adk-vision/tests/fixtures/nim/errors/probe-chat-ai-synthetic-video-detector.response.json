@@ -1,0 +1,19 @@
+{
+  "status": 500,
+  "latencyMs": 807,
+  "headers": {
+    "Date": "Wed, 18 Nov 2026 20:49:48 GMT",
+    "Content-Type": "application/problem+json",
+    "Content-Length": "177",
+    "Nvcf-Error-Source": "upstream_status",
+    "Nvcf-Reqid": "50c47d01-d24d-4b49-8338-fde30039ed5d",
+    "Nvcf-Status": "errored",
+    "X-Request-Id": "c3519105-e723-4801-a47e-5afd029ad6d4"
+  },
+  "body": {
+    "type": "urn:nvcf-worker-service:problem-details:internal-server-error",
+    "title": "Internal Server Error",
+    "status": 500,
+    "detail": "Internal error while making inference request"
+  }
+}

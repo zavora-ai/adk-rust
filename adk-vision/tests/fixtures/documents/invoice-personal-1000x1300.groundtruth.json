@@ -1,0 +1,262 @@
+{
+ "image": "invoice-personal-1000x1300.png",
+ "width": 1000,
+ "height": 1300,
+ "frame": "source pixels, origin top-left, x1/y1 exclusive",
+ "note": "Every personal field is invented.",
+ "objects": [
+  {
+   "label": "title",
+   "text": "INVOICE INV-4721",
+   "bbox": [
+    80,
+    78,
+    456,
+    110
+   ],
+   "personal": false
+  },
+  {
+   "label": "bill-to-heading",
+   "text": "Bill to",
+   "bbox": [
+    80,
+    175,
+    152,
+    194
+   ],
+   "personal": false
+  },
+  {
+   "label": "name",
+   "text": "Amara Okafor",
+   "bbox": [
+    79,
+    215,
+    241,
+    234
+   ],
+   "personal": true
+  },
+  {
+   "label": "address",
+   "text": "14 Larch Street, Springfield 62704",
+   "bbox": [
+    80,
+    255,
+    466,
+    279
+   ],
+   "personal": true
+  },
+  {
+   "label": "email",
+   "text": "amara.okafor@example.com",
+   "bbox": [
+    80,
+    295,
+    410,
+    319
+   ],
+   "personal": true
+  },
+  {
+   "label": "phone",
+   "text": "+1 415 555 0142",
+   "bbox": [
+    80,
+    335,
+    270,
+    354
+   ],
+   "personal": true
+  },
+  {
+   "label": "date",
+   "text": "Date: 2026-11-19",
+   "bbox": [
+    620,
+    215,
+    818,
+    234
+   ],
+   "personal": false
+  },
+  {
+   "label": "due",
+   "text": "Due: 2026-12-19",
+   "bbox": [
+    620,
+    255,
+    811,
+    274
+   ],
+   "personal": false
+  },
+  {
+   "label": "cell r0c0",
+   "text": "Item",
+   "bbox": [
+    96,
+    443,
+    149,
+    462
+   ],
+   "personal": false
+  },
+  {
+   "label": "cell r0c1",
+   "text": "Qty",
+   "bbox": [
+    496,
+    443,
+    540,
+    467
+   ],
+   "personal": false
+  },
+  {
+   "label": "cell r0c2",
+   "text": "Amount",
+   "bbox": [
+    676,
+    443,
+    775,
+    462
+   ],
+   "personal": false
+  },
+  {
+   "label": "cell r1c0",
+   "text": "Torque sensor",
+   "bbox": [
+    96,
+    507,
+    262,
+    531
+   ],
+   "personal": false
+  },
+  {
+   "label": "cell r1c1",
+   "text": "2",
+   "bbox": [
+    496,
+    507,
+    510,
+    526
+   ],
+   "personal": false
+  },
+  {
+   "label": "cell r1c2",
+   "text": "24.00",
+   "bbox": [
+    676,
+    507,
+    739,
+    526
+   ],
+   "personal": false
+  },
+  {
+   "label": "cell r2c0",
+   "text": "Fiducial card",
+   "bbox": [
+    96,
+    571,
+    242,
+    590
+   ],
+   "personal": false
+  },
+  {
+   "label": "cell r2c1",
+   "text": "1",
+   "bbox": [
+    496,
+    571,
+    510,
+    590
+   ],
+   "personal": false
+  },
+  {
+   "label": "cell r2c2",
+   "text": "12.70",
+   "bbox": [
+    676,
+    571,
+    739,
+    590
+   ],
+   "personal": false
+  },
+  {
+   "label": "cell r3c0",
+   "text": "Seal kit",
+   "bbox": [
+    96,
+    635,
+    181,
+    654
+   ],
+   "personal": false
+  },
+  {
+   "label": "cell r3c1",
+   "text": "3",
+   "bbox": [
+    496,
+    635,
+    510,
+    654
+   ],
+   "personal": false
+  },
+  {
+   "label": "cell r3c2",
+   "text": "21.50",
+   "bbox": [
+    676,
+    635,
+    739,
+    654
+   ],
+   "personal": false
+  },
+  {
+   "label": "table",
+   "text": null,
+   "bbox": [
+    80,
+    420,
+    921,
+    677
+   ],
+   "personal": false
+  },
+  {
+   "label": "total",
+   "text": "Total: 58.20",
+   "bbox": [
+    660,
+    711,
+    801,
+    730
+   ],
+   "personal": false
+  },
+  {
+   "label": "footer",
+   "text": "Thank you for your order.",
+   "bbox": [
+    80,
+    1235,
+    367,
+    1259
+   ],
+   "personal": false
+  }
+ ]
+}

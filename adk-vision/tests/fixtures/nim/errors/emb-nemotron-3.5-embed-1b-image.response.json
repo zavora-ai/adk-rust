@@ -1,0 +1,18 @@
+{
+  "status": 504,
+  "latencyMs": 120907,
+  "headers": {
+    "Date": "Wed, 18 Nov 2026 20:38:50 GMT",
+    "Content-Type": "application/json",
+    "Nvcf-Error-Source": "upstream_status",
+    "Nvcf-Reqid": "f68a0c21-e393-4bc2-938e-83fd742c245f",
+    "Nvcf-Status": "errored",
+    "Server": "Python/3.12 aiohttp/3.14.5",
+    "X-Request-Id": "b7295a63-5efe-4ab8-a738-bf560088277c"
+  },
+  "body": {
+    "object": "error",
+    "message": "service request timed out after 120s",
+    "type": "server_error"
+  }
+}

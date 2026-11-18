@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zavora-ai/adk-rust/blob/main/adk-vision/schema/document-page.json",
+  "title": "DocumentPage",
+  "description": "One page as a DocumentReader read it: blocks with their regions in source pixels, text, confidence, words and table cells, the reading order, and optionally Markdown. Every backend answers in this one shape (spec 3.7 §7.5, scenario S8); regions are RegionSet regions, each naming the backend, its coordinate frame and the transform chain.",
+  "type": "object",
+  "required": ["blocks", "readingOrder"],
+  "additionalProperties": false,
+  "properties": {
+    "blocks": { "type": "array", "items": { "$ref": "#/$defs/block" } },
+    "readingOrder": {
+      "description": "Indexes into blocks, in reading order.",
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0 }
+    },
+    "markdown": { "type": "string" }
+  },
+  "$defs": {
+    "region": { "$ref": "region-set.json#/$defs/region" },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "block": {
+      "type": "object",
+      "required": ["kind", "region", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": ["text", "title", "table", "formula", "figure", "seal", "checkbox", "handwriting"]
+        },
+        "region": { "$ref": "#/$defs/region" },
+        "text": { "type": "string" },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "words": { "type": "array", "items": { "$ref": "#/$defs/word" } },
+        "cells": { "type": "array", "items": { "$ref": "#/$defs/cell" } }
+      }
+    },
+    "word": {
+      "type": "object",
+      "required": ["region", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "region": { "$ref": "#/$defs/region" },
+        "text": { "type": "string" },
+        "confidence": { "$ref": "#/$defs/confidence" }
+      }
+    },
+    "cell": {
+      "type": "object",
+      "required": ["region", "row", "col", "rowSpan", "colSpan", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "region": { "$ref": "#/$defs/region" },
+        "row": { "type": "integer", "minimum": 0 },
+        "col": { "type": "integer", "minimum": 0 },
+        "rowSpan": { "type": "integer", "minimum": 1 },
+        "colSpan": { "type": "integer", "minimum": 1 },
+        "text": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "status": 200,
+  "latencyMs": 1136,
+  "headers": {
+    "Date": "Wed, 18 Nov 2026 20:45:05 GMT",
+    "Content-Type": "application/json",
+    "Content-Length": "776",
+    "Nvcf-Reqid": "9a6feeba-bb28-4802-b8f6-78bb766588e0",
+    "Nvcf-Status": "fulfilled"
+  },
+  "body": {
+    "model": "nvidia/nemotron-page-elements-v3",
+    "data": [
+      {
+        "index": 0,
+        "bounding_boxes": {
+          "title": [
+            {
+              "x_min": 0.07637268,
+              "y_min": 0.052584358,
+              "x_max": 0.5561614,
+              "y_max": 0.09722643,
+              "confidence": 0.85858583
+            },
+            {
+              "x_min": 0.0768774,
+              "y_min": 0.53113914,
+              "x_max": 0.24963015,
+              "y_max": 0.55409646,
+              "confidence": 0.51736945
+            }
+          ],
+          "paragraph": [
+            {
+              "x_min": 0.07357946,
+              "y_min": 0.1320819,
+              "x_max": 0.6454513,
+              "y_max": 0.2144147,
+              "confidence": 0.90264183
+            },
+            {
+              "x_min": 0.25873265,
+              "y_min": 0.8722626,
+              "x_max": 0.3098091,
+              "y_max": 0.8870375,
+              "confidence": 0.18279803
+            }
+          ],
+          "table": [
+            {
+              "x_min": 0.06875894,
+              "y_min": 0.25553715,
+              "x_max": 0.9306002,
+              "y_max": 0.48109615,
+              "confidence": 0.6884486
+            }
+          ],
+          "chart": [
+            {
+              "x_min": 0.0673502,
+              "y_min": 0.52078295,
+              "x_max": 0.91748863,
+              "y_max": 0.89558357,
+              "confidence": 0.5235398
+            }
+          ]
+        }
+      }
+    ],
+    "usage": {
+      "images_size_mb": 0.04439067840576172
+    }
+  }
+}

@@ -1,0 +1,332 @@
+{
+ "image": "doc-page-1000x1300.png",
+ "width": 1000,
+ "height": 1300,
+ "frame": "source pixels, origin top-left, x1/y1 exclusive",
+ "objects": [
+  {
+   "label": "title",
+   "text": "Quarterly Parts Report",
+   "bbox": [
+    80,
+    78,
+    549,
+    119
+   ]
+  },
+  {
+   "label": "paragraph-line",
+   "text": "The conveyor inspected 200 printed parts this quarter.",
+   "bbox": [
+    80,
+    174,
+    650,
+    197
+   ]
+  },
+  {
+   "label": "paragraph-line",
+   "text": "Twelve parts carried seeded defects of known length,",
+   "bbox": [
+    80,
+    214,
+    642,
+    237
+   ]
+  },
+  {
+   "label": "paragraph-line",
+   "text": "and each defect was measured against the fiducial.",
+   "bbox": [
+    80,
+    254,
+    620,
+    277
+   ]
+  },
+  {
+   "label": "paragraph",
+   "bbox": [
+    80,
+    174,
+    650,
+    277
+   ]
+  },
+  {
+   "label": "cell r0c0",
+   "text": "Part",
+   "bbox": [
+    96,
+    366,
+    140,
+    384
+   ]
+  },
+  {
+   "label": "cell r0c1",
+   "text": "Defect",
+   "bbox": [
+    376,
+    366,
+    445,
+    384
+   ]
+  },
+  {
+   "label": "cell r0c2",
+   "text": "Length (mm)",
+   "bbox": [
+    656,
+    366,
+    791,
+    389
+   ]
+  },
+  {
+   "label": "cell r1c0",
+   "text": "P-017",
+   "bbox": [
+    96,
+    437,
+    159,
+    454
+   ]
+  },
+  {
+   "label": "cell r1c1",
+   "text": "crack",
+   "bbox": [
+    376,
+    437,
+    433,
+    454
+   ]
+  },
+  {
+   "label": "cell r1c2",
+   "text": "4.2",
+   "bbox": [
+    656,
+    437,
+    689,
+    454
+   ]
+  },
+  {
+   "label": "cell r2c0",
+   "text": "P-088",
+   "bbox": [
+    96,
+    507,
+    159,
+    524
+   ]
+  },
+  {
+   "label": "cell r2c1",
+   "text": "void",
+   "bbox": [
+    376,
+    507,
+    419,
+    524
+   ]
+  },
+  {
+   "label": "cell r2c2",
+   "text": "1.9",
+   "bbox": [
+    656,
+    507,
+    689,
+    524
+   ]
+  },
+  {
+   "label": "cell r3c0",
+   "text": "P-143",
+   "bbox": [
+    96,
+    577,
+    159,
+    594
+   ]
+  },
+  {
+   "label": "cell r3c1",
+   "text": "burr",
+   "bbox": [
+    376,
+    577,
+    419,
+    594
+   ]
+  },
+  {
+   "label": "cell r3c2",
+   "text": "0.7",
+   "bbox": [
+    656,
+    577,
+    689,
+    594
+   ]
+  },
+  {
+   "label": "table",
+   "bbox": [
+    80,
+    340,
+    921,
+    621
+   ]
+  },
+  {
+   "label": "chart-title",
+   "text": "Defects by type",
+   "bbox": [
+    80,
+    694,
+    245,
+    717
+   ]
+  },
+  {
+   "label": "bar crack",
+   "bbox": [
+    220,
+    820,
+    361,
+    1120
+   ]
+  },
+  {
+   "label": "x-label crack",
+   "text": "crack",
+   "bbox": [
+    260,
+    1136,
+    308,
+    1151
+   ]
+  },
+  {
+   "label": "bar void",
+   "bbox": [
+    460,
+    880,
+    601,
+    1120
+   ]
+  },
+  {
+   "label": "x-label void",
+   "text": "void",
+   "bbox": [
+    500,
+    1136,
+    536,
+    1151
+   ]
+  },
+  {
+   "label": "bar burr",
+   "bbox": [
+    700,
+    940,
+    841,
+    1120
+   ]
+  },
+  {
+   "label": "x-label burr",
+   "text": "burr",
+   "bbox": [
+    740,
+    1136,
+    776,
+    1151
+   ]
+  },
+  {
+   "label": "y-tick 0",
+   "text": "0",
+   "bbox": [
+    100,
+    1112,
+    111,
+    1127
+   ]
+  },
+  {
+   "label": "y-tick 1",
+   "text": "1",
+   "bbox": [
+    100,
+    1052,
+    111,
+    1067
+   ]
+  },
+  {
+   "label": "y-tick 2",
+   "text": "2",
+   "bbox": [
+    100,
+    992,
+    111,
+    1007
+   ]
+  },
+  {
+   "label": "y-tick 3",
+   "text": "3",
+   "bbox": [
+    100,
+    932,
+    111,
+    947
+   ]
+  },
+  {
+   "label": "y-tick 4",
+   "text": "4",
+   "bbox": [
+    100,
+    872,
+    111,
+    887
+   ]
+  },
+  {
+   "label": "y-tick 5",
+   "text": "5",
+   "bbox": [
+    100,
+    812,
+    111,
+    827
+   ]
+  },
+  {
+   "label": "chart",
+   "bbox": [
+    80,
+    690,
+    920,
+    1160
+   ]
+  },
+  {
+   "label": "footer",
+   "text": "Page 1 of 1",
+   "bbox": [
+    80,
+    1234,
+    183,
+    1253
+   ]
+  }
+ ]
+}

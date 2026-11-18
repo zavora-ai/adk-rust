@@ -1,0 +1,100 @@
+{
+  "status": 200,
+  "latencyMs": 915,
+  "headers": {
+    "Date": "Wed, 18 Nov 2026 20:45:13 GMT",
+    "Content-Type": "application/json",
+    "Content-Length": "1121",
+    "Nvcf-Reqid": "4de30e3a-89e7-410a-9b97-20d84f614285",
+    "Nvcf-Status": "fulfilled",
+    "Server": "uvicorn"
+  },
+  "body": {
+    "data": [
+      {
+        "index": 0,
+        "bounding_boxes": {
+          "y_title": [
+            {
+              "x_min": 0.010465116,
+              "y_min": 0.024489796,
+              "x_max": 0.20348836,
+              "y_max": 0.075510204,
+              "confidence": 0.7612753
+            }
+          ],
+          "xlabel": [
+            {
+              "x_min": 0.21860465,
+              "y_min": 0.9244898,
+              "x_max": 0.2767442,
+              "y_max": 0.9612245,
+              "confidence": 0.92897415
+            },
+            {
+              "x_min": 0.7767442,
+              "y_min": 0.9244898,
+              "x_max": 0.8197674,
+              "y_max": 0.9612245,
+              "confidence": 0.9286089
+            },
+            {
+              "x_min": 0.4976744,
+              "y_min": 0.9244898,
+              "x_max": 0.5406977,
+              "y_max": 0.9612245,
+              "confidence": 0.91619897
+            }
+          ],
+          "ylabel": [
+            {
+              "x_min": 0.03255814,
+              "y_min": 0.3857143,
+              "x_max": 0.047674417,
+              "y_max": 0.422449,
+              "confidence": 0.92393756
+            },
+            {
+              "x_min": 0.03255814,
+              "y_min": 0.26530612,
+              "x_max": 0.047674417,
+              "y_max": 0.3,
+              "confidence": 0.91865015
+            },
+            {
+              "x_min": 0.03255814,
+              "y_min": 0.5102041,
+              "x_max": 0.046511628,
+              "y_max": 0.544898,
+              "confidence": 0.9151614
+            },
+            {
+              "x_min": 0.03255814,
+              "y_min": 0.8755102,
+              "x_max": 0.047674417,
+              "y_max": 0.9122449,
+              "confidence": 0.9053893
+            },
+            {
+              "x_min": 0.03255814,
+              "y_min": 0.63061225,
+              "x_max": 0.046511628,
+              "y_max": 0.66734695,
+              "confidence": 0.9020767
+            },
+            {
+              "x_min": 0.034883723,
+              "y_min": 0.75510204,
+              "x_max": 0.04418605,
+              "y_max": 0.78979594,
+              "confidence": 0.88017225
+            }
+          ]
+        }
+      }
+    ],
+    "usage": {
+      "images_size_mb": 0.008250236511230469
+    }
+  }
+}

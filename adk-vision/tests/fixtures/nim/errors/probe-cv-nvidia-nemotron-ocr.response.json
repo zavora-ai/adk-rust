@@ -1,0 +1,10 @@
+{
+  "status": 404,
+  "latencyMs": 804,
+  "headers": {
+    "Date": "Wed, 18 Nov 2026 20:33:26 GMT",
+    "Content-Type": "text/plain; charset=utf-8",
+    "Content-Length": "19"
+  },
+  "body": "404 page not found\n"
+}
