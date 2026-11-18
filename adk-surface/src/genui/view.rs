@@ -14,6 +14,7 @@ use super::drawn::{
     DrawnActionView, DrawnArg, DrawnCheck, DrawnExtension, DrawnField, DrawnInput, DrawnKind,
     DrawnNode, DrawnOption, DrawnSurface, RefusalKind, RefusedDrawing,
 };
+use super::scene::ScenePanel;
 use super::validate::{
     ActionArg, Child, DrawRefusal, ExtensionView, ValidatedSurface, Validator, children,
 };
@@ -233,6 +234,8 @@ pub(crate) fn tree(catalog: &'static Catalog, validated: &ValidatedSurface) -> D
         show_all_text: None,
         children: Vec::new(),
         chart: None,
+        scene: None,
+        depth: None,
         extension: None,
     })
 }
@@ -276,6 +279,8 @@ impl Builder<'_> {
             show_all_text: None,
             children: Vec::new(),
             chart: None,
+            scene: None,
+            depth: None,
             extension: None,
         };
         // An extension component draws its home view as the validator checked it, and the
@@ -400,6 +405,8 @@ impl Builder<'_> {
             show_all_text: None,
             children: Vec::new(),
             chart: None,
+            scene: None,
+            depth: None,
             extension: None,
         };
         let mut nested = |children: &[HomeNode], parts: &mut usize| -> Vec<DrawnNode> {
@@ -433,6 +440,31 @@ impl Builder<'_> {
             HomeNode::Chart(chart) => {
                 node.component = "Chart".to_string();
                 node.chart = Some(chart.clone());
+            }
+            HomeNode::Scene(home) => {
+                node.component = "Scene".to_string();
+                let mut scene = home.scene.clone();
+                for panel in &home.panels {
+                    if let Some(child) = Self::home(&panel.content, key, parts, held) {
+                        scene.panels.push(ScenePanel {
+                            anchor: panel.anchor.clone(),
+                            key: child.key.clone(),
+                        });
+                        node.children.push(child);
+                    }
+                }
+                if let Some(text) = &home.text
+                    && let Some(child) = Self::home(text, key, parts, held)
+                {
+                    scene.text_view = Some(child.key.clone());
+                    node.children.push(child);
+                }
+                node.scene = Some(scene);
+            }
+            HomeNode::Depth { depth, children } => {
+                node.component = "Depth".to_string();
+                node.depth = Some(depth.clone());
+                node.children = nested(children, parts);
             }
             HomeNode::Child(_) => return None,
         }

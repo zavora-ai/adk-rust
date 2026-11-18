@@ -948,6 +948,74 @@ pub const SEND_FORM_WHEN_FREE: &str =
 /// A drawn form sent again before its first send reached the agent.
 pub const FORM_BEING_SENT: &str = "Couldn't send: this form is being sent already";
 
+/// A 3D scene's toggle: its words instead of the scene.
+pub const SHOW_AS_TEXT: &str = "Show as text";
+/// A 3D scene's toggle back from its words.
+pub const SHOW_IN_3D: &str = "Show in 3D";
+/// Stops a scene's motion until it is played again.
+pub const PAUSE_MOTION: &str = "Pause motion";
+/// Plays a scene's motion again.
+pub const PLAY_MOTION: &str = "Play motion";
+/// Turns a flip card to its back.
+pub const SHOW_BACK: &str = "Show back";
+/// Turns a flip card to its front.
+pub const SHOW_FRONT: &str = "Show front";
+/// A flip card's front, in the terminal.
+pub const FRONT: &str = "Front";
+/// A flip card's back, in the terminal.
+pub const BACK: &str = "Back";
+/// Brings the next item of a carousel to the front.
+pub const NEXT: &str = "Next";
+/// Brings the previous item of a carousel to the front.
+pub const PREVIOUS: &str = "Previous";
+/// A scene object in the `ok` state.
+pub const STATE_OK: &str = "OK";
+/// A scene object in the `warning` state.
+pub const STATE_WARNING: &str = "Warning";
+/// A scene object in the `critical` state.
+pub const STATE_CRITICAL: &str = "Critical";
+/// A scene object in the `info` state.
+pub const STATE_INFO: &str = "Info";
+/// Where WebGL is missing or failed: the scene is shown in words.
+pub const SCENE_SHOWN_AS_TEXT: &str = "3D isn't available here, so this is shown as text";
+
+/// Under a scene whose objects can be picked: "Picking one fills Dock. Nothing is sent."
+pub fn scene_picks(field: &str) -> String {
+    format!("Picking one fills {field}. Nothing is sent.")
+}
+
+/// Said when a scene's object is picked: "Picked: Dock 3".
+pub fn picked(label: &str) -> String {
+    format!("Picked: {label}")
+}
+
+/// What a 3D scene shows, in one sentence for screen readers and the terminal: "3D bar chart
+/// of Revenue, 24 bars, from 3 to 98", "3D scene of Dock 1, Dock 2 and 4 more, 12 objects".
+pub fn scene_summary(
+    kind: &str,
+    names: &[&str],
+    counted: &str,
+    range: Option<(f64, f64)>,
+) -> String {
+    let named: Vec<&str> = names.iter().copied().filter(|name| !name.trim().is_empty()).collect();
+    let of = match named.as_slice() {
+        [] => String::new(),
+        [one] => format!(" of {one}"),
+        [rest @ .., last] => format!(" of {} and {last}", rest.join(", ")),
+    };
+    match range {
+        Some((low, high)) => {
+            format!("{kind}{of}, {counted}, from {} to {}", number(low), number(high))
+        }
+        None => format!("{kind}{of}, {counted}"),
+    }
+}
+
+/// `count` of a thing: "1 bar", "24 bars".
+pub fn counted(count: usize, one: &str, many: &str) -> String {
+    if count == 1 { format!("1 {one}") } else { format!("{count} {many}") }
+}
+
 /// Over a drawing: "Drawn by Finance · 10:02".
 pub fn drawn_by(agent: &str, hh_mm: &str) -> String {
     format!("Drawn by {agent} · {hh_mm}")

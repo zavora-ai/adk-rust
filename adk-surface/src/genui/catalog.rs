@@ -7,7 +7,8 @@
 //! superset of `forms` under its own id, and it can never loosen what `forms` refuses: its
 //! components only show (no actions, no fields), every string in them and every data model
 //! value they bind is checked by rule 5, and each one says what the home and the terminal
-//! show for it ([`ExtensionComponent::home`]) in forms components and charts only.
+//! show for it ([`ExtensionComponent::home`]) in forms components and the home's own
+//! elements only: charts, 3D scenes and depth effects.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
@@ -15,6 +16,7 @@ use std::sync::{Arc, LazyLock};
 use serde_json::{Value, json};
 
 use super::drawn::DrawnChart;
+use super::scene::{DrawnDepth, DrawnScene};
 
 /// The id of the `forms` 1.0 catalog.
 pub const FORMS_CATALOG_ID: &str = "https://adk-rust.com/a2ui/catalogs/forms/1.0/catalog.json";
@@ -112,10 +114,14 @@ impl HomeText {
     }
 }
 
-/// What the home and the terminal show for an extension component: forms components and
-/// charts, never a button or a field, so a projection only shows (spec 3.3 §7.4 rule 5).
-/// Every string in it is checked again, and every child the component's slots hold must
-/// appear exactly once, as [`HomeNode::Child`].
+/// What the home and the terminal show for an extension component: forms components, charts,
+/// 3D scenes and depth effects, never a button or a field, so a projection only shows (spec
+/// 3.3 §7.4 rule 5). Every string in it is checked again, and every child the component's
+/// slots hold must appear exactly once, as [`HomeNode::Child`].
+///
+/// A scene's panels and a wall or stage's children hold only what shows: no button or field
+/// anywhere inside them. A scene's text view holds no child. Scenes and depth effects don't
+/// nest in each other.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum HomeNode {
@@ -140,6 +146,44 @@ pub enum HomeNode {
     Child(usize),
     /// A chart the home draws natively.
     Chart(DrawnChart),
+    /// A 3D scene the home draws natively, with its panels and its text view.
+    Scene(Box<HomeScene>),
+    /// Children the home presents in depth, with CSS 3D.
+    Depth {
+        /// How.
+        depth: DrawnDepth,
+        /// What it presents.
+        children: Vec<HomeNode>,
+    },
+}
+
+/// A 3D scene in a home view.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HomeScene {
+    /// The scene; the server writes its summary, its panels' keys and its text view's key.
+    pub scene: DrawnScene,
+    /// Held components shown beside its objects.
+    pub panels: Vec<HomePanel>,
+    /// What it shows, in words: a table or a list, holding no child. It is shown by "Show as
+    /// text", where WebGL is missing, and in the terminal; without one, they list the
+    /// labelled objects.
+    pub text: Option<HomeNode>,
+}
+
+impl HomeScene {
+    /// `scene`, with no panels and no text view.
+    pub fn new(scene: DrawnScene) -> Self {
+        Self { scene, panels: Vec::new(), text: None }
+    }
+}
+
+/// A held component shown beside a scene's object.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HomePanel {
+    /// The object's id.
+    pub anchor: String,
+    /// What it shows: usually a [`HomeNode::Child`].
+    pub content: HomeNode,
 }
 
 impl HomeNode {
@@ -493,10 +537,50 @@ impl Catalog {
     pub(crate) fn schema_error(&self, component: &str, value: &Value) -> Option<String> {
         let validator = self.components.get(component)?;
         validator.iter_errors(value).next().map(|error| {
+            let error = error.to_owned();
+            let error = specific(&error);
             let at = error.instance_path().as_str();
-            if at.is_empty() { error.to_string() } else { format!("{at}: {error}") }
+            let why = shortened(&error.to_string());
+            if at.is_empty() { why } else { format!("{at}: {why}") }
         })
     }
+}
+
+/// The most specific cause of `error`. A `oneOf` or `anyOf` that no branch matched, such as a
+/// property that is a binding or a literal list, names the deepest failure among its branches,
+/// so the agent reads which value broke which rule rather than the whole value.
+fn specific<'e>(
+    error: &'e jsonschema::ValidationError<'static>,
+) -> &'e jsonschema::ValidationError<'static> {
+    let context = match error.kind() {
+        jsonschema::error::ValidationErrorKind::OneOfNotValid { context }
+        | jsonschema::error::ValidationErrorKind::AnyOf { context } => context,
+        _ => return error,
+    };
+    let deepest = context
+        .iter()
+        .flatten()
+        .map(specific)
+        .max_by_key(|cause| cause.instance_path().as_str().matches('/').count());
+    match deepest {
+        Some(cause)
+            if cause.instance_path().as_str().len() > error.instance_path().as_str().len() =>
+        {
+            cause
+        }
+        _ => error,
+    }
+}
+
+/// The most of a schema error's text a reason carries; a value it quotes can be long.
+const MAX_SCHEMA_ERROR_CHARS: usize = 300;
+
+fn shortened(text: &str) -> String {
+    if text.chars().count() <= MAX_SCHEMA_ERROR_CHARS {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(MAX_SCHEMA_ERROR_CHARS).collect();
+    format!("{kept}…")
 }
 
 /// What an extension component's schema declares that a component that only shows may not.
@@ -643,5 +727,27 @@ mod tests {
             "action": { "functionCall": { "call": "openUrl", "args": { "url": "https://x.test" } } }
         });
         assert!(forms.schema_error("Button", &open).is_some(), "openUrl is not in the catalog");
+    }
+
+    #[test]
+    fn a_value_that_may_be_a_binding_or_a_list_names_what_broke_in_the_list() {
+        let forms = Catalog::forms();
+        let picker = json!({
+            "id": "c", "component": "ChoicePicker", "label": "Dock",
+            "options": [{ "label": "Dock 1", "value": "dock-1" }],
+            "value": ["dock-1", 5]
+        });
+        let error = forms.schema_error("ChoicePicker", &picker).expect("a number among strings");
+        assert!(error.starts_with("/value/1: "), "{error}");
+        assert!(!error.contains("oneOf"), "{error}");
+    }
+
+    #[test]
+    fn a_schema_error_quoting_a_long_value_is_shortened() {
+        let forms = Catalog::forms();
+        let long = json!({ "id": "t", "component": "Text", "text": vec![1; 400] });
+        let error = forms.schema_error("Text", &long).expect("a list is not text");
+        assert!(error.chars().count() <= MAX_SCHEMA_ERROR_CHARS + "/text: …".len(), "{error}");
+        assert!(error.ends_with('…'), "{error}");
     }
 }

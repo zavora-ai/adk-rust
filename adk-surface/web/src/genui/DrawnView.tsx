@@ -8,6 +8,8 @@ import { visible } from "../safe";
 import type { Values } from "./bindings";
 import { firstFailure } from "./bindings";
 import { ChartView } from "./ChartView";
+import { DepthView } from "./DepthView";
+import { SceneFrame } from "./scene/SceneFrame";
 import { fieldsOf, initialValues } from "./store";
 import "./genui.css";
 
@@ -321,6 +323,33 @@ function ExtensionNode({ node, context, root }: { node: DrawnNode; context: Rend
 function render(node: DrawnNode, context: RenderContext, root = false): ReactNode {
   if (node.extension) return <ExtensionNode key={node.key} node={node} context={context} root={root} />;
   if (node.chart) return <ChartView key={node.key} chart={node.chart} />;
+  if (node.scene) {
+    const path = node.scene.select?.path;
+    return (
+      <SceneFrame
+        key={node.key}
+        node={node}
+        scene={node.scene}
+        renderChild={(child) => render(child, context)}
+        memoryKey={`${context.surface.surfaceId}/${node.key}`}
+        version={context.surface.version}
+        values={context.values}
+        change={context.change}
+        disabled={context.locked || context.sending}
+        field={path ? fieldsOf(context.surface.root).find((field) => field.field?.path === path) : undefined}
+      />
+    );
+  }
+  if (node.depth)
+    return (
+      <DepthView
+        key={node.key}
+        node={node}
+        depth={node.depth}
+        errors={context.errors}
+        renderChild={(child) => render(child, context)}
+      />
+    );
   switch (node.component) {
     case "Text":
       return <DrawnText key={node.key} node={node} />;

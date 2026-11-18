@@ -1248,6 +1248,26 @@
         ],
         "type": "object"
       },
+      "Axis": {
+        "description": "An axis.",
+        "oneOf": [
+          {
+            "const": "x",
+            "description": "Across.",
+            "type": "string"
+          },
+          {
+            "const": "y",
+            "description": "Up.",
+            "type": "string"
+          },
+          {
+            "const": "z",
+            "description": "Towards the viewer.",
+            "type": "string"
+          }
+        ]
+      },
       "Briefing": {
         "description": "\"While you were away\" (spec 3.3 §5.1, §8.1).",
         "properties": {
@@ -1384,6 +1404,36 @@
           "truncated"
         ],
         "type": "object"
+      },
+      "CameraPreset": {
+        "description": "A camera view.",
+        "oneOf": [
+          {
+            "const": "fit",
+            "description": "From above and to the side, framing everything.",
+            "type": "string"
+          },
+          {
+            "const": "front",
+            "description": "From the front.",
+            "type": "string"
+          },
+          {
+            "const": "top",
+            "description": "From above.",
+            "type": "string"
+          },
+          {
+            "const": "side",
+            "description": "From the side.",
+            "type": "string"
+          },
+          {
+            "const": "iso",
+            "description": "Isometric.",
+            "type": "string"
+          }
+        ]
       },
       "CardDetail": {
         "description": "A line under a decision's details that a feature adds through a\n`CardHint`: where the call comes from, with an optional link into the\nhome, such as \"From the invoice-run workflow · Open in Runs\" (spec 3.3 §7.1). Never on a\nchat card (S-I5).",
@@ -2977,6 +3027,41 @@
         ],
         "type": "object"
       },
+      "DepthEffect": {
+        "description": "A depth effect.",
+        "oneOf": [
+          {
+            "const": "tilt",
+            "description": "One child that tilts towards the pointer.",
+            "type": "string"
+          },
+          {
+            "const": "flip",
+            "description": "Two children, front and back; the home's own button turns it over.",
+            "type": "string"
+          },
+          {
+            "const": "layers",
+            "description": "Children stacked in depth, the first in front.",
+            "type": "string"
+          },
+          {
+            "const": "carousel",
+            "description": "Children on a turning ring, one in front at a time.",
+            "type": "string"
+          },
+          {
+            "const": "wall",
+            "description": "Children on a curved wall.",
+            "type": "string"
+          },
+          {
+            "const": "stage",
+            "description": "Children on a stage the person can turn.",
+            "type": "string"
+          }
+        ]
+      },
       "DrawnActionView": {
         "description": "A declared action of a drawing, as its button shows it.",
         "properties": {
@@ -3102,6 +3187,26 @@
         "required": [
           "condition",
           "message"
+        ],
+        "type": "object"
+      },
+      "DrawnDepth": {
+        "description": "Components a home view holds, presented with CSS 3D (see the [module](self)).",
+        "properties": {
+          "effect": {
+            "$ref": "#/components/schemas/DepthEffect",
+            "description": "How the children are presented."
+          },
+          "titles": {
+            "description": "A title for each child, for a carousel, wall or stage's controls and the terminal.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "effect"
         ],
         "type": "object"
       },
@@ -3257,7 +3362,7 @@
         ]
       },
       "DrawnNode": {
-        "description": "One component of a drawing, resolved for a renderer: templates expanded, every string a\nperson reads already in place (spec 3.3 §7.4 rule 5).\n\n| Component | `text` | `variant` | Other |\n|---|---|---|---|\n| `Text` | The text | `h1`–`h5`, `caption`, `body` | — |\n| `Row`, `Column`, `List` | — | `justify` (Row, Column) or `direction` (List) | `children`; a long `List` has `showAllText` |\n| `Card` | — | — | `children` |\n| `Tabs` | — | — | `tabs` titles and one child per tab |\n| `Divider` | — | `axis` | — |\n| `Button` | Its label | `primary`, `default`, `borderless` | `action` |\n| `TextField`, `DateTimeInput`, `CheckBox`, `ChoicePicker`, `Slider` | The label | the catalog's variant | `field` |\n| `Chart` | — | — | `chart`: a chart an extension component's home view draws |\n| An extension component, such as `Metric` | — | — | `extension`, and one child: what the home shows for it |",
+        "description": "One component of a drawing, resolved for a renderer: templates expanded, every string a\nperson reads already in place (spec 3.3 §7.4 rule 5).\n\n| Component | `text` | `variant` | Other |\n|---|---|---|---|\n| `Text` | The text | `h1`–`h5`, `caption`, `body` | — |\n| `Row`, `Column`, `List` | — | `justify` (Row, Column) or `direction` (List) | `children`; a long `List` has `showAllText` |\n| `Card` | — | — | `children` |\n| `Tabs` | — | — | `tabs` titles and one child per tab |\n| `Divider` | — | `axis` | — |\n| `Button` | Its label | `primary`, `default`, `borderless` | `action` |\n| `TextField`, `DateTimeInput`, `CheckBox`, `ChoicePicker`, `Slider` | The label | the catalog's variant | `field` |\n| `Chart` | — | — | `chart`: a chart an extension component's home view draws |\n| `Scene` | — | — | `scene`: a 3D scene an extension component's home view draws; its children are its panels, then its text view |\n| `Depth` | — | — | `depth`: the children an extension component's home view holds, presented with CSS 3D |\n| An extension component, such as `Metric` | — | — | `extension`, and one child: what the home shows for it |",
         "properties": {
           "action": {
             "description": "The declared action a button asks for.",
@@ -3288,6 +3393,17 @@
             "description": "The catalog component.",
             "type": "string"
           },
+          "depth": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DrawnDepth"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How the home presents this node's children in depth, from an extension component's\nhome view."
+          },
           "extension": {
             "anyOf": [
               {
@@ -3313,6 +3429,17 @@
           "key": {
             "description": "Unique within the drawing: the component's id, and for a template's copy the list\nitem it was drawn for, `cell-0@/rows/3`.",
             "type": "string"
+          },
+          "scene": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DrawnScene"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A 3D scene the home draws natively, from an extension component's home view."
           },
           "showAllText": {
             "description": "A long list's \"Show all 42\", when a renderer cuts it.",
@@ -3364,6 +3491,118 @@
         "required": [
           "label",
           "value"
+        ],
+        "type": "object"
+      },
+      "DrawnScene": {
+        "description": "A 3D scene a home view draws (see the [module](self)).",
+        "properties": {
+          "axes": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SceneAxes"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Named axes, ticks and a floor grid."
+          },
+          "camera": {
+            "$ref": "#/components/schemas/SceneCamera",
+            "default": {
+              "preset": "fit"
+            },
+            "description": "Where it is seen from."
+          },
+          "height": {
+            "description": "Its height in CSS pixels, 200 to 960; the home picks one when it is not given.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SceneKind",
+            "description": "What the scene is, for its summary and default camera."
+          },
+          "lighting": {
+            "$ref": "#/components/schemas/SceneLighting",
+            "default": "studio",
+            "description": "How it is lit: a preset whose soft light always stays, so nothing goes dark."
+          },
+          "lights": {
+            "description": "Up to three more lights.",
+            "items": {
+              "$ref": "#/components/schemas/SceneLight"
+            },
+            "type": "array"
+          },
+          "motion": {
+            "description": "Objects that move.",
+            "items": {
+              "$ref": "#/components/schemas/SceneMotion"
+            },
+            "type": "array"
+          },
+          "objects": {
+            "description": "Its objects, parents before children.",
+            "items": {
+              "$ref": "#/components/schemas/SceneObject"
+            },
+            "type": "array"
+          },
+          "panels": {
+            "description": "The held components shown beside objects: written by the server, each the key of one\nof the node's children.",
+            "items": {
+              "$ref": "#/components/schemas/ScenePanel"
+            },
+            "type": "array"
+          },
+          "select": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SceneSelect"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Picking an object fills this field."
+          },
+          "summary": {
+            "default": "",
+            "description": "One sentence that says what the scene shows, for screen readers and the terminal,\nwritten by the server: \"3D bar chart of Revenue, 24 bars, from 3 to 98\".",
+            "type": "string"
+          },
+          "textView": {
+            "description": "The key of the node's child that says in words what the scene shows, written by the\nserver: shown by \"Show as text\", where WebGL is missing, and in the terminal.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "values": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SceneValues"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What bar and grid heights stand for in the data's own numbers, for the summary and the\nhome's readouts; heights are the data's numbers when not given."
+          }
+        },
+        "required": [
+          "kind",
+          "objects",
+          "camera",
+          "lighting",
+          "summary"
         ],
         "type": "object"
       },
@@ -3871,6 +4110,66 @@
           }
         ]
       },
+      "LabelSize": {
+        "description": "How large a label is.",
+        "oneOf": [
+          {
+            "const": "small",
+            "description": "A caption.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "Body text.",
+            "type": "string"
+          },
+          {
+            "const": "large",
+            "description": "A heading.",
+            "type": "string"
+          }
+        ]
+      },
+      "LightKind": {
+        "description": "A kind of light.",
+        "oneOf": [
+          {
+            "const": "point",
+            "description": "Shines every way from a point.",
+            "type": "string"
+          },
+          {
+            "const": "spot",
+            "description": "A cone from a point towards the centre.",
+            "type": "string"
+          },
+          {
+            "const": "directional",
+            "description": "Parallel rays, like the sun.",
+            "type": "string"
+          }
+        ]
+      },
+      "LineEnds": {
+        "description": "A line's arrowheads.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "None.",
+            "type": "string"
+          },
+          {
+            "const": "end",
+            "description": "At the last point.",
+            "type": "string"
+          },
+          {
+            "const": "both",
+            "description": "At both ends.",
+            "type": "string"
+          }
+        ]
+      },
       "Mode": {
         "description": "How much agents act on their own (spec 3.3 §8.1).",
         "oneOf": [
@@ -3936,6 +4235,36 @@
           "model"
         ],
         "type": "object"
+      },
+      "MotionKind": {
+        "description": "How an object moves.",
+        "oneOf": [
+          {
+            "const": "spin",
+            "description": "Turns about its axis.",
+            "type": "string"
+          },
+          {
+            "const": "bob",
+            "description": "Swings up and down along its axis.",
+            "type": "string"
+          },
+          {
+            "const": "pulse",
+            "description": "Grows and shrinks.",
+            "type": "string"
+          },
+          {
+            "const": "orbit",
+            "description": "Circles its parent's centre about its axis.",
+            "type": "string"
+          },
+          {
+            "const": "path",
+            "description": "Follows its path.",
+            "type": "string"
+          }
+        ]
       },
       "Origin": {
         "description": "How an input was given (spec 3.3 §6, §11): every command carries one, and it reaches the\naudit record, so \"What your agents did\" can say \"from Telegram\".",
@@ -4488,6 +4817,916 @@
             "type": "string"
           }
         ]
+      },
+      "SceneAxes": {
+        "description": "A scene's axes.",
+        "properties": {
+          "floor": {
+            "description": "A grid on the ground.",
+            "type": "boolean"
+          },
+          "ticks": {
+            "description": "Labelled points along them.",
+            "items": {
+              "$ref": "#/components/schemas/SceneTick"
+            },
+            "type": "array"
+          },
+          "x": {
+            "description": "The x axis's name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "y": {
+            "description": "The y axis's name: up.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "z": {
+            "description": "The z axis's name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SceneCamera": {
+        "description": "Where a scene is seen from.",
+        "properties": {
+          "at": {
+            "description": "Where the camera is, in place of the preset's.",
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "fixed": {
+            "description": "The person can't turn or zoom it.",
+            "type": "boolean"
+          },
+          "fov": {
+            "description": "Its vertical field of view, 15 to 90 degrees.",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "preset": {
+            "$ref": "#/components/schemas/CameraPreset",
+            "default": "fit",
+            "description": "A view the home frames to fit the scene."
+          },
+          "spin": {
+            "description": "It turns slowly about the scene, until the person turns it.",
+            "type": "boolean"
+          },
+          "target": {
+            "description": "What it looks at, in place of the scene's centre.",
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "preset"
+        ],
+        "type": "object"
+      },
+      "SceneColor": {
+        "description": "A colour of the home's palette.",
+        "oneOf": [
+          {
+            "const": "chart1",
+            "description": "The first chart colour.",
+            "type": "string"
+          },
+          {
+            "const": "chart2",
+            "description": "The second chart colour.",
+            "type": "string"
+          },
+          {
+            "const": "chart3",
+            "description": "The third chart colour.",
+            "type": "string"
+          },
+          {
+            "const": "chart4",
+            "description": "The fourth chart colour.",
+            "type": "string"
+          },
+          {
+            "const": "chart5",
+            "description": "The fifth chart colour.",
+            "type": "string"
+          },
+          {
+            "const": "chart6",
+            "description": "The sixth chart colour.",
+            "type": "string"
+          },
+          {
+            "const": "chart7",
+            "description": "The seventh chart colour.",
+            "type": "string"
+          },
+          {
+            "const": "chart8",
+            "description": "The eighth chart colour.",
+            "type": "string"
+          },
+          {
+            "const": "ink",
+            "description": "The text colour.",
+            "type": "string"
+          },
+          {
+            "const": "neutral",
+            "description": "A plain grey.",
+            "type": "string"
+          },
+          {
+            "const": "muted",
+            "description": "A faint grey.",
+            "type": "string"
+          },
+          {
+            "const": "ramp",
+            "description": "By height, low to high (a grid).",
+            "type": "string"
+          }
+        ]
+      },
+      "SceneFinish": {
+        "description": "An object's surface.",
+        "oneOf": [
+          {
+            "const": "matte",
+            "description": "Soft.",
+            "type": "string"
+          },
+          {
+            "const": "glossy",
+            "description": "Shiny.",
+            "type": "string"
+          },
+          {
+            "const": "flat",
+            "description": "Unlit, one flat colour.",
+            "type": "string"
+          }
+        ]
+      },
+      "SceneKind": {
+        "description": "What a scene is.",
+        "oneOf": [
+          {
+            "const": "space",
+            "description": "Objects laid out in space: a floor plan, a rack, a machine.",
+            "type": "string"
+          },
+          {
+            "const": "bars",
+            "description": "Bars over two categories.",
+            "type": "string"
+          },
+          {
+            "const": "points",
+            "description": "Points over three measures.",
+            "type": "string"
+          },
+          {
+            "const": "surface",
+            "description": "A value over a grid.",
+            "type": "string"
+          },
+          {
+            "const": "network",
+            "description": "Nodes and the links between them.",
+            "type": "string"
+          },
+          {
+            "const": "globe",
+            "description": "Places on a globe and the routes between them.",
+            "type": "string"
+          }
+        ]
+      },
+      "SceneLight": {
+        "description": "A light added to the preset.",
+        "properties": {
+          "at": {
+            "description": "Where it is; a directional light shines from there towards the centre.",
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SceneColor"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its colour; white when not given."
+          },
+          "intensity": {
+            "description": "How bright, 0 to 2.",
+            "type": "number"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/LightKind",
+            "description": "What kind."
+          }
+        },
+        "required": [
+          "kind",
+          "at",
+          "intensity"
+        ],
+        "type": "object"
+      },
+      "SceneLighting": {
+        "description": "A lighting preset.",
+        "oneOf": [
+          {
+            "const": "studio",
+            "description": "A key light, a fill and a soft sky.",
+            "type": "string"
+          },
+          {
+            "const": "soft",
+            "description": "Soft from every side.",
+            "type": "string"
+          },
+          {
+            "const": "flat",
+            "description": "Even, no shading.",
+            "type": "string"
+          }
+        ]
+      },
+      "SceneLook": {
+        "description": "How an object looks: the home's colours, never one the agent picks.",
+        "properties": {
+          "color": {
+            "$ref": "#/components/schemas/SceneColor",
+            "default": "chart1",
+            "description": "Its colour."
+          },
+          "finish": {
+            "$ref": "#/components/schemas/SceneFinish",
+            "default": "matte",
+            "description": "Its surface."
+          },
+          "opacity": {
+            "description": "How opaque, 0.15 to 1; 1 when not given.",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "wireframe": {
+            "description": "Drawn as edges only.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "color",
+          "finish"
+        ],
+        "type": "object"
+      },
+      "SceneMotion": {
+        "description": "An object that moves. Under reduced motion nothing moves; the person can pause any motion.",
+        "properties": {
+          "amount": {
+            "description": "How far it swings or how much it grows: 0 to 100 for `bob`, 0 to 1 for `pulse`.",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "axis": {
+            "$ref": "#/components/schemas/Axis",
+            "default": "y",
+            "description": "The axis it turns or moves along."
+          },
+          "delay": {
+            "description": "Seconds before it starts, 0 to 30.",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MotionKind",
+            "description": "How it moves."
+          },
+          "path": {
+            "description": "The points a `path` motion follows, `x, y, z` flat, in its parent's space.",
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "repeat": {
+            "description": "How many times, 1 to 100; it goes on when not given.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "seconds": {
+            "description": "How long one turn, swing or trip takes, 0.2 to 120.",
+            "type": "number"
+          },
+          "target": {
+            "description": "The object.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "kind",
+          "axis",
+          "seconds"
+        ],
+        "type": "object"
+      },
+      "SceneObject": {
+        "description": "One object of a scene.",
+        "properties": {
+          "at": {
+            "default": [
+              0,
+              0,
+              0
+            ],
+            "description": "Where it is, in its parent's space.",
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "id": {
+            "description": "Unique within the scene: what parents, panels, motion and picking name it by.",
+            "type": "string"
+          },
+          "label": {
+            "description": "What it is called, shown beside it as page text.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "look": {
+            "$ref": "#/components/schemas/SceneLook",
+            "default": {
+              "color": "chart1",
+              "finish": "matte"
+            },
+            "description": "How it looks."
+          },
+          "parent": {
+            "description": "The group it belongs to: it moves, turns and scales with it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scale": {
+            "description": "How it is scaled along each axis.",
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "shape": {
+            "$ref": "#/components/schemas/SceneShape",
+            "description": "Its shape."
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SceneState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A state it is in, drawn in the state's colour beside its label's word; an object with\na state has a label, so colour is never the only sign."
+          },
+          "turn": {
+            "description": "How it is turned about each axis, in degrees.",
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "value": {
+            "description": "The option value picking it chooses (see `SceneSelect`); an object with one has a\nlabel, so the person sees what they pick.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "shape",
+          "at",
+          "look"
+        ],
+        "type": "object"
+      },
+      "ScenePanel": {
+        "description": "A held component shown beside an object.",
+        "properties": {
+          "anchor": {
+            "description": "The object it is shown beside.",
+            "type": "string"
+          },
+          "key": {
+            "description": "The key of the node's child it shows.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "anchor",
+          "key"
+        ],
+        "type": "object"
+      },
+      "SceneSelect": {
+        "description": "Picking an object fills a choice field the drawing shows, with the object's `value`\n(spec 3.3 §7.4 rule 5: a scene's pick fills a shown choice field; it never sends). The\nfield stays the way to choose by keyboard and screen reader, and a form's Send still asks.",
+        "properties": {
+          "note": {
+            "default": "",
+            "description": "What picking does, in words, written by the server: \"Picking one fills Dock. Nothing\nis sent.\"",
+            "type": "string"
+          },
+          "path": {
+            "description": "The data model path of the choice field it fills, absolute.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "note"
+        ],
+        "type": "object"
+      },
+      "SceneShape": {
+        "description": "A scene object's shape. Flat number lists hold one point after another.",
+        "oneOf": [
+          {
+            "description": "No shape of its own: it holds the objects whose parent it is.",
+            "properties": {
+              "type": {
+                "const": "group",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A box.",
+            "properties": {
+              "size": {
+                "description": "Width, height and depth.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "type": {
+                "const": "box",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "size"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A sphere.",
+            "properties": {
+              "radius": {
+                "description": "Its radius.",
+                "type": "number"
+              },
+              "type": {
+                "const": "sphere",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "radius"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A cylinder; a cone has a top radius of 0.",
+            "properties": {
+              "height": {
+                "description": "Its height.",
+                "type": "number"
+              },
+              "radiusBottom": {
+                "description": "The bottom's radius.",
+                "type": "number"
+              },
+              "radiusTop": {
+                "description": "The top's radius.",
+                "type": "number"
+              },
+              "type": {
+                "const": "cylinder",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "radiusTop",
+              "radiusBottom",
+              "height"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A ring.",
+            "properties": {
+              "radius": {
+                "description": "From the centre to the middle of the tube.",
+                "type": "number"
+              },
+              "tube": {
+                "description": "The tube's radius.",
+                "type": "number"
+              },
+              "type": {
+                "const": "torus",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "radius",
+              "tube"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A flat rectangle on the ground.",
+            "properties": {
+              "depth": {
+                "description": "Along z.",
+                "type": "number"
+              },
+              "type": {
+                "const": "plane",
+                "type": "string"
+              },
+              "width": {
+                "description": "Along x.",
+                "type": "number"
+              }
+            },
+            "required": [
+              "type",
+              "width",
+              "depth"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A line through points, `x, y, z` after one another.",
+            "properties": {
+              "arrow": {
+                "$ref": "#/components/schemas/LineEnds",
+                "default": "none",
+                "description": "Arrowheads."
+              },
+              "dashed": {
+                "default": false,
+                "description": "Dashed.",
+                "type": "boolean"
+              },
+              "points": {
+                "description": "The points, flat.",
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "segments": {
+                "default": false,
+                "description": "Separate segments, each a pair of points, rather than one line through them all.",
+                "type": "boolean"
+              },
+              "smooth": {
+                "default": false,
+                "description": "A smooth curve through the points.",
+                "type": "boolean"
+              },
+              "type": {
+                "const": "line",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "points",
+              "segments",
+              "smooth",
+              "arrow",
+              "dashed"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Bars standing on the ground, one per `x, z` pair.",
+            "properties": {
+              "at": {
+                "description": "Where each bar stands, `x, z` flat.",
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "heights": {
+                "description": "Each bar's height.",
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "series": {
+                "description": "Each bar's series, 0 to 7, drawn in that chart colour; empty for the object's own.",
+                "items": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "type": {
+                "const": "bars",
+                "type": "string"
+              },
+              "width": {
+                "description": "Each bar's width and depth.",
+                "type": "number"
+              }
+            },
+            "required": [
+              "type",
+              "at",
+              "heights",
+              "width"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Points, `x, y, z` flat.",
+            "properties": {
+              "at": {
+                "description": "Where each point is, flat.",
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "series": {
+                "description": "Each point's series, 0 to 7, drawn in that chart colour; empty for the object's own.",
+                "items": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "size": {
+                "description": "Each point's radius.",
+                "type": "number"
+              },
+              "type": {
+                "const": "points",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "at",
+              "size"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A surface over a grid of heights, row after row, coloured by height.",
+            "properties": {
+              "columns": {
+                "description": "Points along x.",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "depth": {
+                "description": "Along z.",
+                "type": "number"
+              },
+              "heights": {
+                "description": "One height per point, row after row.",
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "rows": {
+                "description": "Points along z.",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": {
+                "const": "grid",
+                "type": "string"
+              },
+              "width": {
+                "description": "Along x.",
+                "type": "number"
+              }
+            },
+            "required": [
+              "type",
+              "columns",
+              "rows",
+              "heights",
+              "width",
+              "depth"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A globe with lines of latitude and longitude.",
+            "properties": {
+              "radius": {
+                "description": "Its radius.",
+                "type": "number"
+              },
+              "type": {
+                "const": "globe",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "radius"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Text facing the viewer, as page text.",
+            "properties": {
+              "size": {
+                "$ref": "#/components/schemas/LabelSize",
+                "default": "medium",
+                "description": "How large."
+              },
+              "text": {
+                "description": "What it reads.",
+                "type": "string"
+              },
+              "type": {
+                "const": "label",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "text",
+              "size"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SceneState": {
+        "description": "A state an object is in.",
+        "oneOf": [
+          {
+            "const": "ok",
+            "description": "Fine.",
+            "type": "string"
+          },
+          {
+            "const": "warning",
+            "description": "Needs a look.",
+            "type": "string"
+          },
+          {
+            "const": "critical",
+            "description": "Broken or at risk.",
+            "type": "string"
+          },
+          {
+            "const": "info",
+            "description": "Worth knowing.",
+            "type": "string"
+          }
+        ]
+      },
+      "SceneTick": {
+        "description": "A labelled point on an axis.",
+        "properties": {
+          "at": {
+            "description": "Where along it.",
+            "type": "number"
+          },
+          "axis": {
+            "$ref": "#/components/schemas/Axis",
+            "description": "Which axis."
+          },
+          "text": {
+            "description": "What it reads.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "axis",
+          "at",
+          "text"
+        ],
+        "type": "object"
+      },
+      "SceneValues": {
+        "description": "How a scene's heights map to the data's numbers: a height `h` stands for\n`h * scale + offset`.",
+        "properties": {
+          "offset": {
+            "default": 0,
+            "description": "What a height of 0 stands for.",
+            "type": "number"
+          },
+          "scale": {
+            "description": "What one unit of height stands for; above 0.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "scale",
+          "offset"
+        ],
+        "type": "object"
       },
       "SentVia": {
         "description": "What asked for a `DrawnSent` call (spec 3.3 §6.1 `genui`, `genui-apps`).",

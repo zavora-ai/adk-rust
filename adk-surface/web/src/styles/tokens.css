@@ -44,6 +44,22 @@
   --chart-8: #a21caf;
   --chart-grid: #eef0f3;
   --chart-axis: #64748b;
+  /* 3D scenes agents draw: states pair a word with a colour; "warning" is amber, never the
+     waiting or decision orange; a picked object is outlined, never in the focus colour. */
+  --scene-ok: #15803d;
+  --scene-warning: #b45309;
+  --scene-critical: #b91c1c;
+  --scene-info: #1d4ed8;
+  --scene-neutral: #94a3b8;
+  --scene-muted: #e2e8f0;
+  --scene-ink: #0f172a;
+  --scene-selected: #7c3aed;
+  --scene-ground: #f6f7f9;
+  --scene-ramp-1: #1e3a8a;
+  --scene-ramp-2: #0e7490;
+  --scene-ramp-3: #0d9488;
+  --scene-ramp-4: #65a30d;
+  --scene-ramp-5: #ca8a04;
 
   --working: #15803d;
   --waiting: #c03a00;
@@ -108,6 +124,20 @@
     --chart-8: #e879f9;
     --chart-grid: #22344f;
     --chart-axis: #a7b4c6;
+    --scene-ok: #4ade80;
+    --scene-warning: #fbbf24;
+    --scene-critical: #f87171;
+    --scene-info: #60a5fa;
+    --scene-neutral: #64748b;
+    --scene-muted: #2a3a52;
+    --scene-ink: #e6edf5;
+    --scene-selected: #c4b5fd;
+    --scene-ground: #111c2c;
+    --scene-ramp-1: #3b82f6;
+    --scene-ramp-2: #22d3ee;
+    --scene-ramp-3: #2dd4bf;
+    --scene-ramp-4: #a3e635;
+    --scene-ramp-5: #facc15;
     --working: #4ade80;
     --waiting: #ff9c78;
     --done: #93c5fd;
@@ -165,6 +195,20 @@
   --chart-8: #e879f9;
   --chart-grid: #22344f;
   --chart-axis: #a7b4c6;
+  --scene-ok: #4ade80;
+  --scene-warning: #fbbf24;
+  --scene-critical: #f87171;
+  --scene-info: #60a5fa;
+  --scene-neutral: #64748b;
+  --scene-muted: #2a3a52;
+  --scene-ink: #e6edf5;
+  --scene-selected: #c4b5fd;
+  --scene-ground: #111c2c;
+  --scene-ramp-1: #3b82f6;
+  --scene-ramp-2: #22d3ee;
+  --scene-ramp-3: #2dd4bf;
+  --scene-ramp-4: #a3e635;
+  --scene-ramp-5: #facc15;
   --working: #4ade80;
   --waiting: #ff9c78;
   --done: #93c5fd;

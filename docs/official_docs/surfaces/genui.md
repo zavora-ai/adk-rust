@@ -32,6 +32,7 @@ adk-surface = { version = "3.0.0", features = ["web", "genui"] }
 | The thread item `app` and the app routes' types | every `web` build | One built without `genui-apps` never projects an app |
 | `Catalog::extend`, `ExtensionComponent`, `Catalogs` | `genui` | Extension catalogs: `forms` plus another crate's components. See [Extension catalogs](#extension-catalogs) |
 | `DrawnChart`, `DrawnExtension` and the `chart` and `extension` fields of a drawn node | every `web` build | What the home draws for a component of an extension catalog |
+| `HomeNode::Scene`, `HomeNode::Depth`, `DrawnScene`, `DrawnDepth` and the `scene` and `depth` fields of a drawn node | `genui`; the drawn types in every `web` build | A 3D scene or a depth effect an extension component shows. See [Scenes and depth](#scenes-and-depth) |
 
 `genui` pulls in no further `adk-*` crate. `genui-apps` adds `genui`, `web`, `adk-harness/mcp`
 and `adk-tool/mcp-apps` (wave 4 decision 16):
@@ -417,6 +418,11 @@ with the number refused since, so a page that keeps trying cannot fill the trail
 | `ui/update-model-context` | Logged, never forwarded to the model |
 | Anything else | "not supported here" |
 
+**3D in an app.** An app may draw with WebGL: three.js from a site it declares, through an
+import map, in the same sandbox. Its policy has `worker-src 'none'` and no
+`'wasm-unsafe-eval'`, so it gets no workers and no WebAssembly. Its frame grows to at most 640
+pixels tall. `adk-ui`'s `show_3d_app` tool shows model-written scenes this way.
+
 **Where it is not framed** — the phone, the terminal, a home without an apps origin, or a page
 opened on another device when the apps origin is this computer — the app is "Open the home on
 this computer to see this app" and the tool's text result.
@@ -451,8 +457,10 @@ which exports `DrawnView`, `RefusedNotice`, `AppFrame` and the A2UI parser.
 
 An agent draws more than forms, cards and tables in an **extension catalog**: `forms` 1.0 plus
 components another crate defines, under the catalog's own id (A2UI gives a surface one
-catalog). `adk-ui` 3 ships two: `insight` (charts, sparklines, metrics, key-value lists,
-progress, badges) and `studio` (insight, plus apps of pages, regions and primitive 3D scenes).
+catalog). `adk-ui` 3 ships three: `insight` (charts, sparklines, metrics, key-value lists,
+progress, badges), `studio` (insight, plus apps of pages, regions and primitive 3D scenes) and
+`spatial` (studio, plus 3D charts, networks, globes, scenes and cards with depth; see
+[Scenes and depth](#scenes-and-depth)).
 
 ```rust,ignore
 use std::sync::LazyLock;
@@ -487,19 +495,23 @@ An extension can never loosen rule 5:
 |---|---|
 | A component only shows | `Catalog::extend` refuses a schema that declares `action`, `event`, `checks`, `$defs`, `functions` or a URI format, and a name of `forms` or of what `forms` leaves out (`Image`, `Icon`, `Modal`, `Video`, `AudioPlayer`); a drawn component that carries an action, an event or a check function is refused. Fields and buttons stay `forms` components, so every send is still a held call |
 | Every string is checked | Every string and every key of a component's properties, and of the data they bind, however it nests, is checked for a decision's words, length and links; so is every `formatString` and `pluralize` result |
-| The home shows what was checked | Each component says what the home and the terminal show for it (`ExtensionComponent::home`) in `forms` components and charts only; that view is checked again, shows every component it holds exactly once, and is capped in size and depth |
+| The home shows what was checked | Each component says what the home and the terminal show for it (`ExtensionComponent::home`) in `forms` components, charts, scenes and depth effects only; that view is checked again, shows every component it holds exactly once, and is capped in size and depth |
 | Charts stay small | At most eight series; a pie has at most eight slices, none negative; the sentence the server writes for a chart is checked too |
+| Scenes only show | Palette colours only, labels checked like any string, no textures, models, fonts, shaders or links; a pick fills a choice field shown in the same drawing and never sends; capped as [Scenes and depth](#scenes-and-depth) lists |
 | Data is bounded | The resolved properties of a drawing's extension components are capped at `MAX_RESOLVED_BYTES` (256 KiB) |
 
 **In the web home** a chart draws natively, an SVG in the home's chart colours (`--chart-1` …
 `--chart-8`), named by the sentence the server wrote for it; the rest of a component's home view
-draws as `forms` components. **In the terminal** a chart is that sentence, then a line of blocks
-per series or a table of its categories.
+draws as `forms` components. A scene draws in WebGL and a depth effect with CSS 3D
+([Scenes and depth](#scenes-and-depth)). **In the terminal** a chart is that sentence, then a
+line of blocks per series or a table of its categories; a scene is its summary and the objects
+it labels.
 
 **In a host of your own**, `DrawnView` takes `renderers`, by catalog id and component type. A
 renderer gets the component's properties as the server resolved and checked them, the nodes it
 holds and `renderChild` to draw one as the home does; it gets no way to send or change a value.
-`adk-ui-react` 3 ships renderers for its catalogs:
+Charts, scenes and depth effects need no renderer: `DrawnView` draws them itself.
+`adk-ui-react` 3 ships renderers for the rest of its catalogs:
 
 ```tsx
 import { DrawnView } from "@zavora-ai/adk-surface-react";
@@ -507,6 +519,58 @@ import { adkUiRenderers } from "@zavora-ai/adk-ui-react";
 
 <DrawnView surface={surface} onSend={send} renderers={adkUiRenderers} />;
 ```
+
+## Scenes and depth
+
+`forms` itself draws no 3D. An [extension catalog](#extension-catalogs) can: a component's home view may be a
+`HomeNode::Scene` or a `HomeNode::Depth`. It reaches every surface as `DrawnNode.scene` (a
+`DrawnScene`) or `DrawnNode.depth` (a `DrawnDepth`). `adk-ui` 3's spatial catalog uses them for
+3D bar, scatter and surface charts, networks, globes, physical layouts, and cards with depth.
+
+**A scene only shows.** What the server checks:
+
+- Shapes, lines, instanced bars and points, a height grid, a globe and labels. They come with
+  groups, a camera, up to three lights, axes with ticks, motion (spin, bob, pulse, orbit, path),
+  panels beside objects, and a text view of what it shows.
+- No textures, models, fonts, shaders or links.
+- Colours are names from the home's palette (`chart1`–`chart8`, `ink`, `neutral`, `muted`) and
+  states (`ok`, `warning`, `critical`, `info`). A state always comes with a label.
+- Every label, tick, axis name and panel is checked by the rules above, like any drawn string.
+- The server writes the scene's summary ("3D bar chart of Revenue, 15 bars, from 2.4 to 6.3")
+  and its pick note.
+- A drawing holds at most `MAX_SCENES`. A scene holds at most `MAX_SCENE_OBJECTS` objects,
+  `MAX_SCENE_INSTANCES` bars or points, `MAX_SCENE_PANELS` panels, `MAX_SCENE_MOTIONS` moving
+  objects and `MAX_SCENE_BYTES` bytes.
+
+**Picking fills a field; it never sends.** A scene may name the path of a `ChoicePicker` shown
+in the same drawing. Clicking an object with a value among the picker's options fills it:
+"Picking one fills Dock. Nothing is sent." The picker stays the way to choose by keyboard and
+screen reader. The form's **Send** still asks the person before any tool runs.
+
+A scene's panels, and the children of a wall or a stage, hold no button or field.
+
+**Depth** presents components the drawing shows: a card that tilts, a card that flips to its
+back, stacked layers, a carousel, a curved wall, or a stage of cards.
+
+**In the web home**, a scene is drawn with WebGL in the home's own colours, light and dark.
+three.js loads in its own chunk, only for a drawing that has a scene, once it is on screen.
+
+- Labels, ticks and panels are page text over the canvas.
+- The person orbits and zooms by pointer, or with the arrow keys, + and −; Home resets.
+- A pick is outlined and announced ("Picked: Dock 3").
+- Motion has **Pause motion**. It stops off screen, and reduced motion keeps the view still.
+- The next version of a drawing moves objects that keep their ids, and leaves the camera where
+  the person left it.
+- At most six scenes draw at once. Where WebGL is missing or fails, and on **Show as text**,
+  the scene is its words.
+
+Depth is CSS 3D. A flip card turns with its own **Show back** button, and its hidden face can't
+be reached. A carousel turns with **Previous** and **Next**. A face holding a field with a
+problem turns to the front. Under reduced motion and on narrow screens, depth lays out flat.
+
+**In the terminal**, a scene is its summary, its text view or its labelled objects with their
+states, and its panels; a flip card is its front and its back. `@zavora-ai/adk-surface-react`'s
+`DrawnView` draws scenes and depth as the web home does, in a host of your own.
 
 ## Moving from adk-ui 2
 

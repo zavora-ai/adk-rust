@@ -18,6 +18,8 @@ use super::a2ui::DataModel;
 use super::catalog::{Catalog, ChildSlot, ExtensionComponent, HomeNode, ResolvedComponent};
 use super::drawn::{ChartAxis, ChartKind, DrawnChart, DrawnKind, RefusalKind};
 
+mod scenes;
+
 /// Phrases of a decision and of the controls every surface owns, refused anywhere in a
 /// drawing after folding (spec 3.3 §8.1, §8.2; wave 4 decision 20).
 pub const RESERVED_PHRASES: &[&str] = &[
@@ -56,6 +58,33 @@ pub const MAX_ACTIONS: usize = 8;
 /// The most bytes the resolved properties of a drawing's extension components take as JSON,
 /// bound data included, so a chart in a list template cannot multiply its data unchecked.
 pub const MAX_RESOLVED_BYTES: usize = 256 * 1024;
+/// The most 3D scenes a drawing shows, its templates' copies counted: each takes a WebGL
+/// context in the home.
+pub const MAX_SCENES: usize = 4;
+/// The most objects a scene has.
+pub const MAX_SCENE_OBJECTS: usize = 256;
+/// The most bars and points a scene draws, in all.
+pub const MAX_SCENE_INSTANCES: usize = 4_096;
+/// The most points a scene's lines pass through, in all.
+pub const MAX_SCENE_LINE_POINTS: usize = 4_096;
+/// The most points along one side of a scene's grid.
+pub const MAX_SCENE_GRID_SIDE: u16 = 96;
+/// The most strings a scene shows: labels, axis names and ticks.
+pub const MAX_SCENE_TEXTS: usize = 128;
+/// The longest string a scene shows, in characters.
+pub const MAX_SCENE_TEXT_CHARS: usize = 80;
+/// The most held components a scene shows beside its objects.
+pub const MAX_SCENE_PANELS: usize = 8;
+/// The most objects of a scene that move.
+pub const MAX_SCENE_MOTIONS: usize = 32;
+/// The most lights a scene adds to its preset.
+pub const MAX_SCENE_LIGHTS: usize = 3;
+/// The deepest a scene's groups nest.
+pub const MAX_SCENE_GROUP_DEPTH: usize = 4;
+/// The most bytes a scene takes as JSON.
+pub const MAX_SCENE_BYTES: usize = 256 * 1024;
+/// The most children a depth effect presents.
+pub const MAX_DEPTH_CHILDREN: usize = 12;
 /// The most nodes one extension component's home view has.
 const MAX_HOME_NODES: usize = 64;
 /// The deepest one extension component's home view nests.
@@ -404,9 +433,14 @@ impl Validator {
             texts,
             extensions: BTreeMap::new(),
             resolved_bytes: 0,
+            scenes: 0,
+            selects: Vec::new(),
+            choices: BTreeMap::new(),
+            root_pass: false,
         };
         walk.tree()?;
-        let Walk { mut texts, extensions, .. } = walk;
+        let Walk { mut texts, mut extensions, selects, choices, .. } = walk;
+        check.selects(draft, &selects, &choices, &mut extensions)?;
         check.actions(draft, &components, self.bindable.as_ref(), &mut texts)?;
         Ok(ValidatedSurface { draft: draft.clone(), texts, extensions })
     }
@@ -1032,6 +1066,7 @@ impl Check {
         node: HomeNode,
         depth: usize,
         seen: &mut HomeSeen,
+        place: Place,
     ) -> Result<HomeNode, DrawRefusal> {
         seen.nodes += 1;
         if seen.nodes > MAX_HOME_NODES {
@@ -1049,7 +1084,7 @@ impl Check {
         let nested = |children: Vec<HomeNode>, seen: &mut HomeSeen| {
             children
                 .into_iter()
-                .map(|child| self.home(at, item, child, depth + 1, seen))
+                .map(|child| self.home(at, item, child, depth + 1, seen, place))
                 .collect::<Result<Vec<_>, _>>()
         };
         Ok(match node {
@@ -1064,12 +1099,23 @@ impl Check {
                 tabs.into_iter()
                     .map(|(title, child)| {
                         self.shows(at, item, "home/tab", &title)?;
-                        Ok((title, self.home(at, item, child, depth + 1, seen)?))
+                        Ok((title, self.home(at, item, child, depth + 1, seen, place)?))
                     })
                     .collect::<Result<Vec<_>, DrawRefusal>>()?,
             ),
             HomeNode::Divider => HomeNode::Divider,
             HomeNode::Child(index) => {
+                match place {
+                    Place::TextView => {
+                        return Err(self.cannot_show(
+                            Some(at),
+                            "its scene's text view holds a component; it says in words what the \
+                             scene shows",
+                        ));
+                    }
+                    Place::Panel | Place::Depth { shows_only: true } => seen.show_only.push(index),
+                    Place::View | Place::Depth { shows_only: false } => {}
+                }
                 match seen.children.get_mut(index) {
                     None => {
                         return Err(self.cannot_show(
@@ -1090,7 +1136,41 @@ impl Check {
                 }
                 HomeNode::Child(index)
             }
-            HomeNode::Chart(chart) => HomeNode::Chart(self.chart(at, item, chart)?),
+            HomeNode::Chart(chart) => {
+                if place == Place::TextView {
+                    return Err(self.cannot_show(
+                        Some(at),
+                        "its scene's text view holds a chart; it says in words what the scene \
+                         shows",
+                    ));
+                }
+                HomeNode::Chart(self.chart(at, item, chart)?)
+            }
+            HomeNode::Scene(scene) => {
+                if place != Place::View {
+                    return Err(self.cannot_show(
+                        Some(at),
+                        "its home view puts a scene inside a panel, a text view or a depth effect",
+                    ));
+                }
+                seen.scenes += 1;
+                HomeNode::Scene(Box::new(self.scene(at, item, *scene, depth, seen)?))
+            }
+            HomeNode::Depth { depth: effect, children } => {
+                if place != Place::View {
+                    return Err(self.cannot_show(
+                        Some(at),
+                        "its home view puts a depth effect inside a scene or another depth effect",
+                    ));
+                }
+                let effect = self.depth(at, item, effect, children.len())?;
+                let place = Place::Depth { shows_only: effect.effect.shows_only() };
+                let children = children
+                    .into_iter()
+                    .map(|child| self.home(at, item, child, depth + 1, seen, place))
+                    .collect::<Result<Vec<_>, _>>()?;
+                HomeNode::Depth { depth: effect, children }
+            }
         })
     }
 
@@ -1193,6 +1273,42 @@ impl Check {
 struct HomeSeen {
     nodes: usize,
     children: Vec<bool>,
+    /// The children placed where only what shows may be: a scene's panels, a wall or stage.
+    show_only: Vec<usize>,
+    /// The scenes it draws.
+    scenes: usize,
+    /// What its scenes' picks fill.
+    selects: Vec<Select>,
+}
+
+/// Where a home view node is placed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// In the view itself.
+    View,
+    /// In a scene's panel: only what shows.
+    Panel,
+    /// In a scene's text view: words only.
+    TextView,
+    /// Presented by a depth effect; a wall or a stage holds only what shows.
+    Depth { shows_only: bool },
+}
+
+/// A scene's pick: the component whose scene it is, the absolute path it fills and the
+/// values its objects pick.
+#[derive(Debug, Clone)]
+struct Select {
+    id: String,
+    component: String,
+    path: String,
+    values: Vec<String>,
+}
+
+/// A choice field the drawing shows: its label and its options' values.
+#[derive(Debug, Clone)]
+struct Choice {
+    label: String,
+    options: Vec<String>,
 }
 
 /// The walk over the component tree from `root`, expanding templates against the data model.
@@ -1203,12 +1319,22 @@ struct Walk<'a> {
     texts: Vec<ResolvedText>,
     extensions: BTreeMap<(String, String), ExtensionView>,
     resolved_bytes: usize,
+    /// The scenes the drawing draws.
+    scenes: usize,
+    /// What its scenes' picks fill.
+    selects: Vec<Select>,
+    /// The choice fields it shows, by absolute path: recorded on the walk from `root`.
+    choices: BTreeMap<String, Choice>,
+    /// The walk is from `root`: what it visits is shown.
+    root_pass: bool,
 }
 
 impl<'a> Walk<'a> {
     fn tree(&mut self) -> Result<(), DrawRefusal> {
         let mut visited = BTreeSet::new();
+        self.root_pass = true;
         self.visit("root", "", 0, &mut Vec::new(), &mut visited)?;
+        self.root_pass = false;
         // A component no one shows yet is checked too, so a later change that shows it
         // cannot bring a reserved word in unchecked.
         let unshown: Vec<&str> =
@@ -1253,11 +1379,18 @@ impl<'a> Walk<'a> {
         if let Some(extension) = check.catalog.extension(component.name) {
             self.extension(extension, at, scope, component)?;
         } else {
+            let mut label = None;
             for (field, value) in display_fields(component.name, component.props) {
                 for text in check.texts(at, scope, value, 0)? {
                     let resolved = check.display(Some(at), item, &field, &text)?;
+                    if field == "label" && label.is_none() {
+                        label = Some(resolved.text.clone());
+                    }
                     self.texts.push(resolved);
                 }
+            }
+            if self.root_pass && component.name == "ChoicePicker" {
+                self.choice(scope, component, label);
             }
             // A choice that matches no option, or a slider's value, is shown as it is.
             for text in check.shown_values(scope, component.name, component.props) {
@@ -1382,13 +1515,38 @@ impl<'a> Walk<'a> {
         let home = extension
             .home(&resolved)
             .map_err(|why| check.cannot_show(Some(at), format!("its home view: {why}")))?;
-        let mut seen = HomeSeen { nodes: 0, children: vec![false; ids.len()] };
-        let home = check.home(at, item, home, 0, &mut seen)?;
+        let mut seen = HomeSeen {
+            nodes: 0,
+            children: vec![false; ids.len()],
+            show_only: Vec::new(),
+            scenes: 0,
+            selects: Vec::new(),
+        };
+        let home = check.home(at, item, home, 0, &mut seen, Place::View)?;
         if let Some(index) = seen.children.iter().position(|shown| !shown) {
             return Err(
                 check.cannot_show(Some(at), format!("its home view leaves out child {index}"))
             );
         }
+        for index in &seen.show_only {
+            if let Some((id, name)) = ids.get(*index).and_then(|id| self.interactive(id)) {
+                return Err(check.cannot_show(
+                    Some(at),
+                    format!(
+                        "its home view shows {name} '{id}' in a scene's panel, on a wall or on a \
+                         stage, where things move under the pointer; those only show"
+                    ),
+                ));
+            }
+        }
+        self.scenes += seen.scenes;
+        if self.scenes > MAX_SCENES {
+            return Err(check.cannot_show(
+                Some(at),
+                format!("the drawing shows more than {MAX_SCENES} scenes"),
+            ));
+        }
+        self.selects.extend(seen.selects);
         self.shown += seen.nodes;
         if self.shown > MAX_SHOWN {
             return Err(check.cannot_show(

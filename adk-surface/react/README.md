@@ -18,7 +18,9 @@ The wire types (`DrawnSurface`, `AppView`, `AppOpen`, `AppRequest`, `AppAnswer`,
 npm install @zavora-ai/adk-surface-react
 ```
 
-React 18.3 or 19 is a peer dependency. The package has no other dependency.
+React 18.3 or 19 is a peer dependency. Its one dependency is `three` (0.185.1, pinned), which
+draws an agent's 3D scenes. It is imported only by a lazily loaded chunk, so a drawing without a
+scene never loads it, and your bundler splits it out.
 
 ## Use
 

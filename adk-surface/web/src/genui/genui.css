@@ -703,3 +703,409 @@ textarea.drawn-input {
 .drawn-extension {
   display: contents;
 }
+
+/* A 3D scene an extension component drew (genui extension catalogs): on the card, in the
+   chart and scene colours, never a decision's; its caption is the server's sentence. */
+.drawn-scene {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.drawn-scene-summary {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.drawn-scene-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.drawn-scene-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.drawn-scene-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.drawn-scene-note {
+  margin: 0;
+  color: var(--label);
+  font-size: 12px;
+}
+
+.drawn-scene-text {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.drawn-scene-objects {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.drawn-scene-object {
+  display: grid;
+  grid-template-columns: minmax(96px, 40%) 1fr;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.drawn-scene-object dt {
+  color: var(--text);
+}
+
+.drawn-scene-object dd {
+  margin: 0;
+  color: var(--text-2);
+}
+
+.drawn-scene-anchor,
+.drawn-depth-title {
+  margin: 0 0 4px;
+  color: var(--label);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Components presented in depth: laid out flat, in order. */
+.drawn-depth {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.drawn-depth-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* The 3D view: a canvas on the scene ground, with labels and panels as page text over it. */
+.drawn-scene-stage {
+  position: relative;
+  width: 100%;
+  min-height: 200px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--scene-ground);
+  touch-action: none;
+}
+
+.drawn-scene-stage:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.drawn-scene-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.drawn-scene-overlay,
+.drawn-scene-panels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.drawn-scene-label,
+.drawn-scene-axis,
+.drawn-scene-tick {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 1px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+  font-family: var(--font);
+  visibility: hidden;
+}
+
+.drawn-scene-label {
+  background: color-mix(in srgb, var(--card) 85%, transparent);
+  color: var(--text);
+}
+
+.drawn-scene-label-small {
+  font-size: 11px;
+}
+
+.drawn-scene-label-medium {
+  font-size: 13px;
+}
+
+.drawn-scene-label-large {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.drawn-scene-axis {
+  color: var(--chart-axis);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.drawn-scene-tick {
+  color: var(--chart-axis);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.drawn-scene-panel {
+  position: absolute;
+  left: 0;
+  top: 0;
+  max-width: 200px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  visibility: hidden;
+}
+
+.drawn-scene-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.drawn-scene-toggle,
+.drawn-depth-turn {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text-2);
+  font: 500 12px/1.4 var(--font);
+  cursor: pointer;
+}
+
+.drawn-scene-toggle:focus-visible,
+.drawn-depth-turn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.drawn-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Depth, with CSS 3D. */
+.drawn-depth[data-effect] {
+  perspective: 1100px;
+}
+
+.drawn-depth-card {
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 0.5s ease;
+}
+
+.drawn-depth[data-effect="tilt"] .drawn-depth-card {
+  transform: rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg));
+  transition: transform 0.15s ease-out;
+}
+
+/* A card's faces and layers are cards; a ring, wall or stage holds components drawn as they are. */
+.drawn-depth[data-effect="tilt"] .drawn-depth-item,
+.drawn-depth[data-effect="flip"] .drawn-depth-item,
+.drawn-depth[data-effect="layers"] .drawn-depth-item {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.drawn-depth[data-effect="carousel"] .drawn-depth-item,
+.drawn-depth[data-effect="wall"] .drawn-depth-item,
+.drawn-depth[data-effect="stage"] .drawn-depth-item {
+  background: var(--card);
+  border-radius: var(--radius);
+}
+
+.drawn-depth[data-effect="flip"] .drawn-depth-card {
+  display: grid;
+}
+
+.drawn-depth[data-effect="flip"] .drawn-depth-item {
+  grid-area: 1 / 1;
+  backface-visibility: hidden;
+}
+
+.drawn-depth[data-effect="flip"] .drawn-depth-back {
+  transform: rotateY(180deg);
+}
+
+.drawn-depth[data-face="back"] .drawn-depth-card {
+  transform: rotateY(180deg);
+}
+
+.drawn-depth-turn {
+  align-self: flex-start;
+}
+
+.drawn-depth-stack {
+  position: relative;
+  display: grid;
+  transform-style: preserve-3d;
+  transform: rotateX(10deg) rotateY(-12deg);
+}
+
+.drawn-depth-layer {
+  grid-area: 1 / 1;
+  transform: translate3d(calc(var(--i) * 14px), calc(var(--i) * -14px), calc(var(--i) * -40px));
+}
+
+/* A carousel: the front item in the middle at its own size, its neighbours behind it either
+   side, the rest out of sight until turned to. */
+.drawn-depth[data-effect="carousel"] {
+  overflow: hidden;
+}
+
+.drawn-depth-ring {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  padding: 4px 0;
+  transform-style: preserve-3d;
+}
+
+.drawn-depth-ring .drawn-depth-item {
+  grid-area: 1 / 1;
+  width: 62%;
+  transform: translateX(calc(var(--d) * 46%)) translateZ(calc(var(--ad) * -150px)) rotateY(calc(var(--d) * -28deg));
+  transition: transform 0.45s ease, opacity 0.45s ease;
+}
+
+.drawn-depth-ring .drawn-depth-current {
+  z-index: 1;
+}
+
+.drawn-depth-ring .drawn-depth-aside {
+  opacity: 0.5;
+}
+
+.drawn-depth-ring .drawn-depth-away {
+  visibility: hidden;
+  opacity: 0;
+}
+
+.drawn-depth-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--label);
+  font-size: 12px;
+}
+
+.drawn-depth-wall {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 10px;
+  transform-style: preserve-3d;
+}
+
+.drawn-depth-wall .drawn-depth-item {
+  transform: rotateY(calc(var(--d) * -12deg)) translateZ(calc(var(--ad) * -18px));
+}
+
+.drawn-depth-stage {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  padding: 10px;
+  transform-style: preserve-3d;
+  transform: rotateX(14deg) rotateY(var(--stage-turn, 0deg));
+  transition: transform 0.2s ease-out;
+  cursor: grab;
+}
+
+.drawn-depth-stage:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
+}
+
+/* Flat under reduced motion and on narrow screens: in order, nothing turned. */
+.drawn-depth[data-motion="reduced"] .drawn-depth-card,
+.drawn-depth[data-motion="reduced"] .drawn-depth-stack,
+.drawn-depth[data-motion="reduced"] .drawn-depth-layer,
+.drawn-depth[data-motion="reduced"] .drawn-depth-wall .drawn-depth-item,
+.drawn-depth[data-motion="reduced"] .drawn-depth-stage {
+  transform: none;
+  transition: none;
+}
+
+.drawn-depth[data-motion="reduced"] .drawn-depth-stack,
+.drawn-depth[data-motion="reduced"] .drawn-depth-ring {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.drawn-depth[data-motion="reduced"] .drawn-depth-ring .drawn-depth-item {
+  width: 100%;
+  transform: none;
+  visibility: visible;
+  opacity: 1;
+}
+
+.drawn-depth[data-motion="reduced"][data-effect="flip"] .drawn-depth-item {
+  backface-visibility: visible;
+}
+
+.drawn-depth[data-motion="reduced"][data-effect="flip"] .drawn-depth-item[aria-hidden="true"] {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  .drawn-depth-wall {
+    grid-auto-flow: row;
+  }
+
+  .drawn-depth-ring .drawn-depth-item {
+    width: 100%;
+    transform: none;
+  }
+
+  .drawn-depth-ring .drawn-depth-aside {
+    visibility: hidden;
+  }
+
+  .drawn-depth-wall .drawn-depth-item,
+  .drawn-depth-stage,
+  .drawn-depth-stack,
+  .drawn-depth-layer {
+    transform: none;
+  }
+}

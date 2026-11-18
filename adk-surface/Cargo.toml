@@ -240,5 +240,9 @@ required-features = ["web", "workflow"]
 name = "scripted_genui"
 required-features = ["web", "genui"]
 
+[[example]]
+name = "scripted_genui_scenes"
+required-features = ["web", "genui"]
+
 [package.metadata.docs.rs]
 all-features = true
