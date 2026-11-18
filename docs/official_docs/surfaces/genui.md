@@ -165,6 +165,23 @@ shows the plain notice above, and the technical reason — "catalog forms 1.0 ·
 Button · label matches reserved word "Allow once" after normalisation" — stays in the
 developer panel's **Protocols** tab.
 
+**Shown, with warnings.** Wording that pressures a person instead of informing them is
+shown, and the drawing agent is told what to change: the render tool's result carries A2UI 1.0
+`ValidationResult` warnings (`"severity": "warning"`) and its message ends "Change it: …".
+
+| Warned | Code |
+|---|---|
+| False urgency: "act now", "hurry", "last chance", "ends tonight" | `genui.warned.urgency` |
+| Scarcity: "left in stock", "almost gone", "selling fast" | `genui.warned.scarcity` |
+| Fake social proof: "12 people are viewing", "others bought", "trending now" | `genui.warned.social_proof` |
+| Confirmshaming: "No thanks, I don't want to save money" | `genui.warned.confirmshaming` |
+| A countdown: "ends in 04:59", "expires in 10 minutes" | `genui.warned.countdown` |
+| Text that passes for the home's own controls: "system message", "session expired", "verify your identity" | `genui.warned.host_imitation` |
+
+The phrases are matched on folded words, as rule 5 matches; `dark_patterns` runs them over a
+drawing's resolved texts. They warn rather than refuse until their false positives are known:
+none of `adk-ui`'s eleven sample drawings raises one.
+
 The `forms` 1.0 catalog is the A2UI v0.9.1 basic catalog without `Image`, `Icon`, `Modal`,
 `Video` and `AudioPlayer`: `Text`, `Row`, `Column`, `List`, `Card`, `Tabs`, `Divider`, `Button`,
 `TextField`, `CheckBox`, `ChoicePicker`, `Slider` and `DateTimeInput`.

@@ -932,21 +932,40 @@ impl DrawTool {
             .agent_tool_names()
             .map(|tools| self.shared.validator.clone().with_bindable_tools(tools));
         let validator = own_tools.as_ref().unwrap_or(&self.shared.validator);
-        if let Err(refusal) = validator.validate(&draft) {
-            tracing::info!(
-                surface.id = %draft.surface_id,
-                refusal.code = refusal.code(),
-                refusal.reason = %refusal.technical(),
-                "drawing refused"
-            );
-            let mut actions = ctx.actions();
-            actions.state_delta.insert(REFUSED_STATE_KEY.to_string(), json!(refusal));
-            ctx.set_actions(actions);
-            return Err(refused(&refusal));
-        }
+        let validated = match validator.validate(&draft) {
+            Ok(validated) => validated,
+            Err(refusal) => {
+                tracing::info!(
+                    surface.id = %draft.surface_id,
+                    refusal.code = refusal.code(),
+                    refusal.reason = %refusal.technical(),
+                    "drawing refused"
+                );
+                let mut actions = ctx.actions();
+                actions.state_delta.insert(REFUSED_STATE_KEY.to_string(), json!(refusal));
+                ctx.set_actions(actions);
+                return Err(refused(&refusal));
+            }
+        };
         let latest = self.latest(ctx, &draft.surface_id);
         let version = self.next_version(ctx, &draft.surface_id, latest.as_ref());
-        Ok(self.shown(ctx, DrawnEnvelope::of(&draft, version, validator.catalog().id())))
+        let mut result =
+            self.shown(ctx, DrawnEnvelope::of(&draft, version, validator.catalog().id()));
+        // Shown, and the agent is told what pressures the person, to draw it plainly next time.
+        if !validated.warnings.is_empty() {
+            tracing::info!(
+                surface.id = %draft.surface_id,
+                warnings = validated.warnings.len(),
+                "drawing shown with warnings"
+            );
+            let said: Vec<String> =
+                validated.warnings.iter().filter_map(|warning| warning.message.clone()).collect();
+            if let Some(message) = result.get("message").and_then(Value::as_str) {
+                result["message"] = json!(format!("{message} Change it: {}", said.join(" ")));
+            }
+            result["warnings"] = json!(validated.warnings);
+        }
+        Ok(result)
     }
 
     fn patch(&self, ctx: &dyn ToolContext, params: PatchParams) -> Result<Value> {

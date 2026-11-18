@@ -402,3 +402,33 @@ async fn a_screen_in_a2ui_1_0_syntax_is_drawn_and_a_refusal_says_so_as_a_validat
     assert!(error.contains("Not shown: it looks like a decision"), "{error}");
     assert!(error.contains("validationResult: {\"valid\":false,\"severity\":\"error\""), "{error}");
 }
+
+/// A drawing that pressures the person is shown, and the agent is told what to change as
+/// A2UI 1.0 `ValidationResult` warnings (spec 3.3 §7.4 rule 5, warning severity).
+#[tokio::test]
+async fn a_drawing_that_pressures_the_person_is_shown_with_warnings() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let card = json!({
+        "title": "Renewal",
+        "rows": [{ "label": "Offer", "value": "Only 2 left in stock" }, { "label": "Note", "value": "Act now" }]
+    });
+    let script =
+        vec![ScriptedResponse::function_call("render_card", card), ScriptedResponse::text("done")];
+    let harness = harness(script, sessions, &dir).await;
+
+    let events = send(&harness, "Show the renewal").await;
+
+    let drawn = drawings(&events);
+    let (_, response, record) = &drawn[0];
+    assert_eq!(response["status"], "shown", "{response}");
+    assert!(record.is_some(), "shown and recorded");
+    let warnings = response["warnings"].as_array().expect("warnings");
+    let codes: Vec<&str> = warnings.iter().filter_map(|w| w["code"].as_str()).collect();
+    assert!(
+        codes.contains(&"genui.warned.scarcity") && codes.contains(&"genui.warned.urgency"),
+        "{codes:?}"
+    );
+    assert!(warnings.iter().all(|w| w["severity"] == "warning" && w["valid"] == true));
+    assert!(response["message"].as_str().unwrap().contains("Change it:"));
+}

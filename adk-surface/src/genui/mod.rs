@@ -41,6 +41,8 @@ mod drawn;
 mod hints;
 #[cfg(feature = "genui-apps")]
 mod mcp_apps;
+#[cfg(feature = "genui")]
+mod patterns;
 mod scene;
 mod status;
 #[cfg(feature = "genui")]
@@ -87,6 +89,8 @@ pub use mcp_apps::{
     SURFACE_AUDIT_APP_CALL_ASKED, SURFACE_AUDIT_APP_CALL_HELD, SURFACE_AUDIT_APP_CALL_REFUSED,
     SURFACE_AUDIT_APP_MESSAGE_SENT, SURFACE_AUDIT_APP_ORIGIN_REFUSED,
 };
+#[cfg(feature = "genui")]
+pub use patterns::dark_patterns;
 pub use scene::{
     Axis, CameraPreset, DepthEffect, DrawnDepth, DrawnScene, LabelSize, LightKind, LineEnds,
     MotionKind, SceneAxes, SceneCamera, SceneColor, SceneFinish, SceneKind, SceneLight,

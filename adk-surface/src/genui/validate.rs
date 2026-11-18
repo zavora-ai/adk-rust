@@ -243,6 +243,9 @@ pub struct ValidatedSurface {
     pub draft: SurfaceDraft,
     /// Every string it shows, in tree order.
     pub texts: Vec<ResolvedText>,
+    /// What it should say differently: dark patterns, at warning severity (it is shown).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ValidationResult>,
     /// What each extension component shows, by component id and list item, as checked: the
     /// projection draws these and never resolves or projects a component again.
     #[serde(skip)]
@@ -507,7 +510,8 @@ impl Validator {
         let Walk { mut texts, mut extensions, selects, choices, .. } = walk;
         check.selects(draft, &selects, &choices, &mut extensions)?;
         check.actions(draft, &components, self.bindable.as_ref(), &mut texts)?;
-        Ok(ValidatedSurface { draft: draft.clone(), texts, extensions })
+        let warnings = super::patterns::dark_patterns(&texts);
+        Ok(ValidatedSurface { draft: draft.clone(), texts, warnings, extensions })
     }
 }
 
