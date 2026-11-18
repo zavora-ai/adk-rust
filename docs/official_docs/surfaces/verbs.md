@@ -32,7 +32,9 @@ any card.
 | `snooze` | `write_local`, only delays, can be changed back | Moves one item to `to`, which must be its wake plus one hour or plus one day |
 
 Snooze refuses an item that is not scheduled, waits on something other than one time, has
-already started, or ends before `to`. A `to` that is not one of the item's two times is refused,
+already started, or ends before `to`. A process a worker claimed only to park it on its wake —
+the moment after the item is scheduled, or a `kill -9` in that moment until the lease lapses —
+has not started. A `to` that is not one of the item's two times is refused,
 so an approval never applies more than its card showed: with "It moved since you saw this" when
 the item already wakes at `to` or later — someone moved it since the request was made — and
 otherwise with the two times it may move to, "It can only move to 19:00 or Tue 18:00", as for a

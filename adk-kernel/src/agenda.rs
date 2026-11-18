@@ -1079,6 +1079,12 @@ const QUESTION_NOT_SCHEDULED: &str = "scheduled: an observation is a question, a
 /// Why a question never becomes a process.
 const QUESTION_NOT_RUN: &str = "run: an observation is a question and never becomes a process";
 
+/// How long a reschedule waits for a park in progress to be recorded, and how often it looks:
+/// the park writes its row moments after its run turns `Waiting`, and the 250 ms suspend
+/// mirror clears a request it left.
+const PARK_RECORDED_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+const PARK_RECORDED_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+
 /// The refusal of `item`, which only a person `verb`, to anyone else (K-I23, spec 3.2 §7.10).
 fn needs_a_person(item: &AgendaItem, verb: &str) -> KernelError {
     let why = match &item.origin {
@@ -1586,7 +1592,8 @@ impl Agenda {
     /// ID --at|--cron`): a `Proposed` item is approved as by [`approve`](Self::approve) and
     /// its process created asleep on `wake`; an `Approved` one gets its process asleep on
     /// `wake`; a `Scheduled` one whose process has not started sleeps on `wake` instead —
-    /// a queued process parks on it when it is claimed.
+    /// a queued process parks on it when it is claimed, and one a worker claimed only to
+    /// park it on its wake set parks on `wake` (K-I2).
     ///
     /// # Errors
     ///
@@ -1630,7 +1637,11 @@ impl Agenda {
                 let pid =
                     self.process_of(id).await?.ok_or_else(|| wrong_state(&item, "rescheduled"))?;
                 let state = sup.runs.get(&pid).await?.map(|run| run.state);
-                if !matches!(state, Some(RunState::Waiting | RunState::Queued)) {
+                // A claim of a process whose row still holds its wake set only parks it on
+                // that set, before its first model call (K-I2): it has not started.
+                let parking = state == Some(RunState::Running)
+                    && sup.processes.get(&pid).await?.is_some_and(|meta| meta.wake.is_some());
+                if !parking && !matches!(state, Some(RunState::Waiting | RunState::Queued)) {
                     return Err(wrong_state(&item, "rescheduled (its process already started)"));
                 }
                 let wake = match item.expires_at {
@@ -1641,6 +1652,8 @@ impl Agenda {
                 if state == Some(RunState::Queued) {
                     // Parks at its claim, before its first model call, on the new wake set.
                     sup.processes.set_suspend_requested(&pid, true).await?;
+                } else {
+                    self.keep_wake_through_park(&pid, &wake).await?;
                 }
                 sup.roots_changed.notify_one();
                 let scheduled = item.clone().with_state(AgendaState::Scheduled { wake });
@@ -1661,6 +1674,29 @@ impl Agenda {
             && let Err(error) = approvals.cancel(&request.id, Some(note.to_string())).await
         {
             tracing::debug!(approval.id = %request.id, error = %error, "could not withdraw an agenda request");
+        }
+    }
+
+    /// Keeps `wake`, just written to the row of `pid`, through a park in progress. A park
+    /// writes back the row it read after its run turned `Waiting`: a run still `Running` once
+    /// `wake` is written reads `wake` there; one already `Waiting` may have read the row
+    /// before, so once its park is recorded — its sleep request cleared — a replaced `wake` is
+    /// written again.
+    async fn keep_wake_through_park(&self, pid: &str, wake: &WakeSet) -> Result<()> {
+        let sup = &self.inner.sup;
+        if sup.runs.get(pid).await?.is_none_or(|run| run.state != RunState::Waiting) {
+            return Ok(());
+        }
+        let deadline = tokio::time::Instant::now() + PARK_RECORDED_WITHIN;
+        loop {
+            let Some(meta) = sup.processes.get(pid).await? else { return Ok(()) };
+            if !meta.suspend_requested || tokio::time::Instant::now() >= deadline {
+                if meta.wake.as_ref() != Some(wake) {
+                    sup.processes.set_wake(pid, Some(wake.clone())).await?;
+                }
+                return Ok(());
+            }
+            tokio::time::sleep(PARK_RECORDED_POLL).await;
         }
     }
 

@@ -154,7 +154,7 @@ async fn main() -> anyhow::Result<()> {
 | `Agenda::propose(item, mode)` | Checks the policy, stores the item `proposed` and routes it |
 | `Agenda::approve(id, by)` | `proposed` → `approved` → `scheduled`; withdraws the item's inbox request |
 | `Agenda::reject(id, by, reason)` | `proposed` or `approved` → `rejected` |
-| `Agenda::schedule(id, wake, by)` | Puts the item's process to sleep on `wake`, approving a proposed item first |
+| `Agenda::schedule(id, wake, by)` | Puts the item's process to sleep on `wake`, approving a proposed item first; a scheduled item moves while its process has not started — queued, asleep, or claimed only to park on its wake set |
 | `Agenda::list(filter)`, `get(id)` | The items, oldest first |
 
 The items live in an `AgendaStore`: `InMemoryAgendaStore`, `SqliteAgendaStore` (in
