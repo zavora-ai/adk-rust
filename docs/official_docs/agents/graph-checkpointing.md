@@ -73,7 +73,7 @@ async fn run() -> adk_graph::Result<()> {
 | Unique IDs | A checkpoint ID is stored once; a second save with a stored ID fails |
 | Paging | `list_page(thread, before, limit)` returns at most `limit` checkpoints, newest first, below version `before` |
 | Thread isolation | `delete` and `prune` touch only the named thread |
-| Retention | `prune(thread, policy)` removes what a `RetentionPolicy` selects and never the newest checkpoint |
+| Retention | `prune(thread, policy)` removes what a `RetentionPolicy` selects, and never a checkpoint a resume still needs or the policy pins |
 | Fidelity | A loaded checkpoint equals the saved one, `created_at` to the microsecond |
 
 ### Concurrent writers
@@ -309,12 +309,62 @@ original call's. Read the log with `governed::effect_log(checkpointer, root)`.
 | Readers | Every thread of the lineage, so sibling forks find effects another fork ran |
 | Missing writes | A completed call whose writes are missing fails closed with `graph.effect_unavailable` and is not run |
 
-## Records and retention
+## Retention and deletion
 
-`RetentionPolicy` prunes the thread a run writes, never the effect log, so a pruned
-thread's forks still find the effects it ran. Pruning removes old step records with
-their checkpoints; the governed nodes' completed-run counts travel on every checkpoint,
-so pruning never makes a later run of a loop reuse an earlier run's record.
+A `RetentionPolicy` bounds a thread by count (`keep_last`), by age (`max_age`), or both.
+`CompiledGraph::with_checkpoint_retention` applies it after every checkpoint a run
+writes; `Checkpointer::prune(thread, policy)` applies it on demand, for example from a
+periodic job over threads that are idle. Whatever the limits say, a policy never removes
+a checkpoint a resume still needs (`checkpoint::needed_to_resume`) or one it pins:
+
+| Kept | Why |
+|------|-----|
+| The newest checkpoint | A resume without a checkpoint ID loads it |
+| Each pause no run has resumed | A caller was handed its ID in `GraphError::Interrupted` and resumes it with `ExecutionConfig::with_resume_from` |
+| Each effect-log entry | A governed node's call is answered from it instead of running again |
+| Each ID in `RetentionPolicy::pinned` | The caller pinned it with `pinning([...])` |
+
+Every checkpoint a run writes lists the thread's open pauses under
+`record::OPEN_PAUSES_METADATA_KEY` (`Checkpoint::open_pauses`). A run that pauses adds
+its checkpoint; a run that resumes a pause, by ID or as the thread's newest, removes it;
+`update_state` on a paused thread moves the pause to the revision it writes. A pause on a
+branch that a same-thread `with_resume_from` left behind therefore stays until a run
+resumes it or the thread is deleted. Functional workflows (`#[entrypoint]`) keep the
+same list. Checkpoints written before the list existed protect only the newest.
+
+```rust
+use std::time::Duration;
+
+use adk_graph::checkpoint::{Checkpointer, RetentionPolicy};
+
+async fn sweep(checkpointer: &dyn Checkpointer, thread_id: &str) -> adk_graph::Result<usize> {
+    // Keep a day of history and the last ten steps, plus one audited checkpoint.
+    let policy = RetentionPolicy::keep_last(10)
+        .with_max_age(Duration::from_secs(24 * 3600))
+        .pinning(["audited-checkpoint-id"]);
+    checkpointer.prune(thread_id, &policy).await
+}
+
+async fn forget(checkpointer: &dyn Checkpointer, thread_id: &str) -> adk_graph::Result<()> {
+    // Removes every checkpoint of the thread, open pauses included.
+    checkpointer.delete(thread_id).await
+}
+```
+
+| Operation | Removes | Keeps |
+|-----------|---------|-------|
+| `prune(thread, policy)` | What the policy selects | Everything in the table above, and other threads |
+| `delete(thread)` | Every checkpoint of the thread | Other threads, the effect log, and the threads of the thread's subgraph runs (`{thread}/{node}@{step}`) |
+
+Resuming from a checkpoint that retention or `delete` removed fails with
+`GraphError::CheckpointError` naming the ID, before any node runs. A store that hides
+metadata from the store it wraps, as `adk_harness::SealedCheckpointer` does, reads what
+a resume needs through its own view and pins it before delegating.
+
+Pruning removes old step records with their checkpoints; the governed nodes'
+completed-run counts travel on every checkpoint, so pruning never makes a later run of a
+loop reuse an earlier run's record. Retention removes the history time travel reads:
+`steps`, `fork_at` and `with_resume_from` reach only the checkpoints still stored.
 
 ## Running the conformance suite
 
@@ -342,7 +392,7 @@ adk_graph::checkpointer_conformance_tests!(harness = InMemory::default());
 ```
 
 The macro generates one test per case: round trip, version ordering, paging, load by
-ID, delete, prune policies, thread isolation, stale writes, concurrent writers across
+ID, delete, prune policies, what a resume needs, thread isolation, stale writes, concurrent writers across
 two handles, restart survival, a 512 KiB state, and identifier escaping. Attributes
 before `harness =` apply to every test, so a live-server suite is marked `#[ignore]`.
 

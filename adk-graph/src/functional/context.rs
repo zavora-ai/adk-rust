@@ -79,9 +79,20 @@ pub struct TaskContext {
     /// Calls made so far of each `#[task]`, keyed by task name, so each call
     /// gets its own execution-log key; see [`super::task_call_id`].
     task_call_counters: std::sync::Mutex<HashMap<String, usize>>,
-    /// The thread's newest checkpoint version, once read. Held across each save,
-    /// so parallel tasks write their checkpoints one at a time, in version order.
-    head_version: tokio::sync::Mutex<Option<u64>>,
+    /// The thread's newest checkpoint version and open pauses, once read. Held across
+    /// each save, so parallel tasks write their checkpoints one at a time, in version
+    /// order.
+    head: tokio::sync::Mutex<Option<Head>>,
+    /// The checkpoint this run resumed from, whose pause it answers.
+    resumed_from: Option<String>,
+}
+
+/// What a functional run knows of its thread's newest checkpoint.
+struct Head {
+    version: u64,
+    /// The thread's checkpoints where a run paused and no run has resumed
+    /// ([`OPEN_PAUSES_METADATA_KEY`](crate::record::OPEN_PAUSES_METADATA_KEY)).
+    open_pauses: std::collections::BTreeSet<String>,
 }
 
 impl TaskContext {
@@ -111,7 +122,8 @@ impl TaskContext {
             resume_values: HashMap::new(),
             interrupt_ordinal: Arc::new(RwLock::new(0)),
             task_call_counters: std::sync::Mutex::new(HashMap::new()),
-            head_version: tokio::sync::Mutex::new(None),
+            head: tokio::sync::Mutex::new(None),
+            resumed_from: None,
         }
     }
 
@@ -260,7 +272,7 @@ impl TaskContext {
             .with_metadata("execution_log", serde_json::to_value(&*log)?)
         };
 
-        self.save_checkpoint(checkpoint).await.map_err(|e| FunctionalError::CheckpointFailed {
+        self.save(checkpoint, true).await.map_err(|e| FunctionalError::CheckpointFailed {
             task: "interrupt".to_string(),
             message: e.to_string(),
         })?;
@@ -302,6 +314,22 @@ impl TaskContext {
     /// ```
     pub fn with_resume_values(mut self, resume_values: HashMap<String, Value>) -> Self {
         self.resume_values = resume_values;
+        self
+    }
+
+    /// Names the checkpoint this run resumes from, so the pause it holds is answered.
+    ///
+    /// Each checkpoint the run writes then lists the thread's other open pauses but not
+    /// that one, and retention may remove it. The `#[entrypoint]` macro passes
+    /// [`ExecutionConfig::resume_from`](crate::node::ExecutionConfig::resume_from).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let ctx = ctx.with_resumed_from(execution_config.resume_from.clone());
+    /// ```
+    pub fn with_resumed_from(mut self, checkpoint_id: Option<String>) -> Self {
+        self.resumed_from = checkpoint_id;
         self
     }
 
@@ -579,14 +607,52 @@ impl TaskContext {
         &self,
         checkpoint: crate::state::Checkpoint,
     ) -> crate::error::Result<String> {
-        let mut head = self.head_version.lock().await;
-        let current = match *head {
-            Some(version) => version,
-            None => self.checkpointer.load(&self.thread_id).await?.map_or(0, |c| c.version),
+        self.save(checkpoint, false).await
+    }
+
+    /// Saves `checkpoint` as the thread's next version, listing the thread's open pauses;
+    /// a `pause` checkpoint lists itself, so retention keeps it until a run resumes it.
+    async fn save(
+        &self,
+        mut checkpoint: crate::state::Checkpoint,
+        pause: bool,
+    ) -> crate::error::Result<String> {
+        let mut head = self.head.lock().await;
+        let mut next = match head.take() {
+            Some(head) => head,
+            None => {
+                let newest = self.checkpointer.load(&self.thread_id).await?;
+                let mut open_pauses: std::collections::BTreeSet<String> = match &newest {
+                    Some(newest) => newest.open_pauses()?.into_iter().collect(),
+                    None => Default::default(),
+                };
+                if let Some(resumed) = &self.resumed_from {
+                    open_pauses.remove(resumed);
+                }
+                Head { version: newest.map_or(0, |newest| newest.version), open_pauses }
+            }
         };
-        let id = self.checkpointer.save(&checkpoint.with_version(current + 1)).await?;
-        *head = Some(current + 1);
-        Ok(id)
+        let known = Head { version: next.version, open_pauses: next.open_pauses.clone() };
+        next.version += 1;
+        if pause {
+            next.open_pauses.insert(checkpoint.checkpoint_id.clone());
+        }
+        if !next.open_pauses.is_empty() {
+            checkpoint.metadata.insert(
+                crate::record::OPEN_PAUSES_METADATA_KEY.to_string(),
+                serde_json::to_value(&next.open_pauses)?,
+            );
+        }
+        match self.checkpointer.save(&checkpoint.with_version(next.version)).await {
+            Ok(id) => {
+                *head = Some(next);
+                Ok(id)
+            }
+            Err(error) => {
+                *head = Some(known);
+                Err(error)
+            }
+        }
     }
 
     /// Records an interrupt's answer in the execution log and checkpoints it, so a

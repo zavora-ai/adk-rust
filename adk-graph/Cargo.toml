@@ -101,6 +101,8 @@ adk-action = { path = "../adk-action" }
 adk-tool = { path = "../adk-tool" }
 # For composing SequentialAgent/ParallelAgent/LoopAgent as graph nodes.
 adk-agent = { path = "../adk-agent" }
+# `anthropic` for the live retention run on Anthropic.
+adk-model = { path = "../adk-model", default-features = false, features = ["anthropic"] }
 # For exercising the `#[entrypoint]`/`#[task]` expansion against this crate.
 adk-rust-macros = { path = "../adk-rust-macros" }
 

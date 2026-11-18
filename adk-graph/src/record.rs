@@ -8,6 +8,7 @@
 //! | [`RUN_METADATA_KEY`] | [`RunRecord`] | The run the checkpoint belongs to |
 //! | [`STEPS_METADATA_KEY`] | `Vec<`[`StepRecord`]`>` | The steps finished since the previous saved checkpoint |
 //! | [`LINEAGE_METADATA_KEY`] | [`Lineage`] | Where a forked thread came from; absent on a thread that was not forked |
+//! | [`OPEN_PAUSES_METADATA_KEY`] | `Vec<String>` | The checkpoints of the thread's pauses that no run has resumed; absent when there are none |
 //!
 //! A run is the work that started a thread from its entry nodes. It continues across
 //! pauses, approval turns and resumes; a finished thread that starts again from its entry
@@ -66,6 +67,13 @@ pub const RUN_METADATA_KEY: &str = "adk.graph.run";
 pub const STEPS_METADATA_KEY: &str = "adk.graph.steps";
 /// Checkpoint metadata key holding a forked thread's [`Lineage`].
 pub const LINEAGE_METADATA_KEY: &str = "adk.graph.lineage";
+/// Checkpoint metadata key holding the IDs of the thread's checkpoints where a run paused
+/// and no run has resumed since.
+///
+/// Every checkpoint a run writes carries the list as it stands, so the newest checkpoint
+/// always holds the current one; [`RetentionPolicy`](crate::checkpoint::RetentionPolicy)
+/// keeps the checkpoints it names.
+pub const OPEN_PAUSES_METADATA_KEY: &str = "adk.graph.open_pauses";
 
 /// The run a checkpoint belongs to (spec 3.3 §12).
 ///
@@ -291,6 +299,32 @@ impl Checkpoint {
     /// ```
     pub fn lineage(&self) -> Result<Option<Lineage>> {
         read_key(self, LINEAGE_METADATA_KEY)
+    }
+
+    /// The IDs of the thread's checkpoints where a run paused and no run has resumed, as
+    /// they stood when this checkpoint was written.
+    ///
+    /// Read from the newest checkpoint, this lists every pause of the thread a caller can
+    /// still resume by ID. A checkpoint written before the list existed reads as empty.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraphError::SerializationError`] when the list is malformed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::record::OPEN_PAUSES_METADATA_KEY;
+    /// use adk_graph::state::{Checkpoint, State};
+    /// use serde_json::json;
+    ///
+    /// let newest = Checkpoint::new("t1", State::new(), 3, vec!["pay".into()])
+    ///     .with_metadata(OPEN_PAUSES_METADATA_KEY, json!(["cp-2"]));
+    /// assert_eq!(newest.open_pauses()?, vec!["cp-2".to_string()]);
+    /// # Ok::<(), adk_graph::GraphError>(())
+    /// ```
+    pub fn open_pauses(&self) -> Result<Vec<String>> {
+        Ok(read_key(self, OPEN_PAUSES_METADATA_KEY)?.unwrap_or_default())
     }
 
     /// Whether a node of this checkpoint's frontier waits mid-step: the run stopped before

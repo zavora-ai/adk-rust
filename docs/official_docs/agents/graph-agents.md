@@ -1872,9 +1872,13 @@ let graph = graph
 ```
 
 Pruning happens after each save, so the cost stays proportional to the run and no
-external job is needed. **The newest checkpoint is never discarded**, whatever the
-policy says, because it is the one a resume loads — `keep_last(0)` is raised to
-one, and a thread whose every checkpoint is past the age limit keeps one.
+external job is needed. **A checkpoint a resume still needs is never discarded**,
+whatever the policy says: the newest, which a resume loads (`keep_last(0)` is raised
+to one, and a thread whose every checkpoint is past the age limit keeps one); each
+pause no run has resumed, whose ID a caller holds; and each effect-log entry.
+Resuming from an ID retention has removed fails before any node runs. See
+[Graph Checkpointing](graph-checkpointing.md#retention-and-deletion) for pins,
+on-demand sweeps and whole-thread deletion.
 
 Off by default, so an existing thread keeps its whole history and time travel can
 still reach every step. Set a policy when a thread is long-lived and you do not

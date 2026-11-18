@@ -12,8 +12,8 @@ use crate::graph::{CompiledGraph, Route};
 use crate::interrupt::{GraphToolConfirmationPause, Interrupt};
 use crate::node::{ExecutionConfig, Node, NodeContext};
 use crate::record::{
-    LINEAGE_METADATA_KEY, Lineage, NodeRecord, NodeStatus, RUN_METADATA_KEY, RunRecord,
-    STEPS_METADATA_KEY, StepKind, StepRecord, now as record_now,
+    LINEAGE_METADATA_KEY, Lineage, NodeRecord, NodeStatus, OPEN_PAUSES_METADATA_KEY,
+    RUN_METADATA_KEY, RunRecord, STEPS_METADATA_KEY, StepKind, StepRecord, now as record_now,
 };
 use crate::state::{Checkpoint, PendingWrite, State};
 use crate::stream::{StreamEvent, StreamMode};
@@ -91,6 +91,9 @@ pub struct PregelExecutor<'a> {
     /// The highest checkpoint version this run knows of for its thread; its next
     /// checkpoint is one higher.
     head_version: u64,
+    /// The thread's checkpoints where a run paused and no run has resumed, which every
+    /// checkpoint this run writes lists (`OPEN_PAUSES_METADATA_KEY`).
+    open_pauses: BTreeSet<String>,
     /// Writes of the nodes that finished in a super-step that has not completed.
     pending_writes: BTreeMap<String, PendingWrite>,
     /// A checkpoint being written in the background under `Durability::Async`.
@@ -195,6 +198,7 @@ impl<'a> PregelExecutor<'a> {
             restart_completed: false,
             run_start_step: 0,
             head_version: 0,
+            open_pauses: BTreeSet::new(),
             pending_writes: BTreeMap::new(),
             inflight: None,
             unsaved: false,
@@ -232,7 +236,18 @@ impl<'a> PregelExecutor<'a> {
         let checkpoint = if let Some(checkpoint_id) = &self.config.resume_from {
             // Resume from a specific checkpoint by ID
             if let Some(cp) = self.graph.checkpointer.as_ref() {
-                cp.load_by_id(checkpoint_id).await?
+                // Refused before any node runs: starting over instead would run again
+                // the nodes the caller meant to resume after.
+                let Some(checkpoint) = cp.load_by_id(checkpoint_id).await? else {
+                    return Err(GraphError::CheckpointError(format!(
+                        "cannot resume thread '{}' from checkpoint '{checkpoint_id}': no \
+                         checkpoint with that ID is stored. Retention removes a pause's \
+                         checkpoint once a run has resumed it, and deleting the thread removes \
+                         them all; resume from an ID `Checkpointer::list` returns",
+                        self.config.thread_id
+                    )));
+                };
+                Some(checkpoint)
             } else {
                 None
             }
@@ -254,12 +269,18 @@ impl<'a> PregelExecutor<'a> {
             self.label_offset = checkpoint.label_offset();
             // A fork from an earlier checkpoint continues after the thread's newest.
             self.head_version = checkpoint.version;
+            let mut open_pauses = checkpoint.open_pauses()?;
             if self.config.resume_from.is_some()
                 && let Some(cp) = self.graph.checkpointer.as_ref()
                 && let Some(newest) = cp.load(&checkpoint.thread_id).await?
             {
                 self.head_version = self.head_version.max(newest.version);
+                // The newest lists every open pause, those of other branches included.
+                open_pauses = newest.open_pauses()?;
             }
+            // Resuming a pause answers it; the thread's other open pauses stay listed.
+            open_pauses.retain(|id| *id != checkpoint.checkpoint_id);
+            self.open_pauses = open_pauses.into_iter().collect();
             let finished = checkpoint.pending_nodes.is_empty();
             self.state = checkpoint.state;
             self.step = checkpoint.step;
@@ -342,7 +363,7 @@ impl<'a> PregelExecutor<'a> {
             if !result.interrupts.is_empty() {
                 self.pause_frontier(&mut result)?;
                 let interrupt = result.interrupts[0].1.clone();
-                let checkpoint_id = self.save_checkpoint().await?;
+                let checkpoint_id = self.save_pause_checkpoint().await?;
                 return Err(GraphError::Interrupted(Box::new(
                     InterruptedExecution::new(
                         self.config.thread_id.clone(),
@@ -821,7 +842,7 @@ impl<'a> PregelExecutor<'a> {
                         // Persist before reporting: without this the pause cannot be
                         // resumed and the work already done is lost.
                         self.pending_writes.clear();
-                        let checkpoint_id = match self.save_checkpoint().await {
+                        let checkpoint_id = match self.save_pause_checkpoint().await {
                             Ok(checkpoint_id) => checkpoint_id,
                             Err(error) => {
                                 yield Err(error);
@@ -908,7 +929,7 @@ impl<'a> PregelExecutor<'a> {
                     // Persist before reporting: without this the interrupt is
                     // unresumable, because resuming loads the checkpoint for the
                     // thread.
-                    let checkpoint_id = match self.save_checkpoint().await {
+                    let checkpoint_id = match self.save_pause_checkpoint().await {
                         Ok(checkpoint_id) => checkpoint_id,
                         Err(error) => {
                             yield Err(error);
@@ -2194,6 +2215,10 @@ impl<'a> PregelExecutor<'a> {
                 (!self.occurrences.is_empty()).then(|| serde_json::to_value(&self.occurrences)),
             ),
             (HELD_METADATA_KEY, (!self.held.is_empty()).then(|| serde_json::to_value(&self.held))),
+            (
+                OPEN_PAUSES_METADATA_KEY,
+                (!self.open_pauses.is_empty()).then(|| serde_json::to_value(&self.open_pauses)),
+            ),
         ];
         for (key, value) in records {
             if let Some(Ok(value)) = value {
@@ -2201,6 +2226,13 @@ impl<'a> PregelExecutor<'a> {
             }
         }
         checkpoint
+    }
+
+    /// Writes the checkpoint of a pause, listed among the thread's open pauses so
+    /// retention keeps it until a run resumes it.
+    async fn save_pause_checkpoint(&mut self) -> Result<String> {
+        self.open_pauses.insert(self.next_checkpoint_id.clone());
+        self.save_checkpoint().await
     }
 
     /// Writes the run's checkpoint now, after any background write finishes.
@@ -2494,6 +2526,8 @@ impl CompiledGraph {
         if let Some(cp) = &self.checkpointer
             && let Some(checkpoint) = cp.load(thread_id).await?
         {
+            let mut open_pauses = checkpoint.open_pauses()?;
+            let revised = checkpoint.checkpoint_id.clone();
             let mut state = checkpoint.state;
             for (key, value) in updates {
                 self.schema.apply_update(&mut state, &key, value);
@@ -2512,6 +2546,18 @@ impl CompiledGraph {
                 if let Some(value) = checkpoint.metadata.get(key) {
                     new_checkpoint.metadata.insert(key.to_string(), value.clone());
                 }
+            }
+            // The revision of a pause is that pause now: resuming the thread resumes it.
+            for id in &mut open_pauses {
+                if *id == revised {
+                    id.clone_from(&new_checkpoint.checkpoint_id);
+                }
+            }
+            if !open_pauses.is_empty() {
+                new_checkpoint.metadata.insert(
+                    OPEN_PAUSES_METADATA_KEY.to_string(),
+                    serde_json::to_value(&open_pauses)?,
+                );
             }
             cp.save(&new_checkpoint).await?;
         }

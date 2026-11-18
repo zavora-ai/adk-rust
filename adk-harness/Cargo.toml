@@ -201,6 +201,8 @@ keyring = { version = "3.6.3", default-features = false, features = ["async-secr
 
 [dev-dependencies]
 adk-telemetry = { path = "../adk-telemetry" }
+# The `Checkpointer` conformance suite, run against `SealedCheckpointer`.
+adk-graph = { path = "../adk-graph", features = ["conformance"] }
 # `anthropic` for the live confirmation-wait run (spec 3.3 §10 C2) and the live take-over
 # run (spec 3.3 §10 H2).
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic"] }
