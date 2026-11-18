@@ -1295,6 +1295,12 @@ impl Agents {
             reason: Some(plan.preview.fields.join(", ")),
         });
         self.host(&next).await;
+        // A changed daily limit meets the unattended work the old one held at its next step,
+        // as the area's does (spec 3.3 §5.7).
+        if next.daily_limit_micro_usd != current.daily_limit_micro_usd {
+            let filter = ProcessFilter::default().target(next.id.clone());
+            inner.sup.readmit(&filter, &[crate::supervise::AGENT_LIMIT_HOLD]).await;
+        }
         Ok(AgentOutcome::Changed { agent: next })
     }
 

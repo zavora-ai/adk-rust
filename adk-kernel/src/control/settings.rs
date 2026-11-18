@@ -359,48 +359,6 @@ pub(crate) async fn start_of(kernel: &Kernel, partition: &PartitionId) -> Result
     Ok(Start { quiet, beside: config.proactivity.quiet_hours.into_iter().collect(), cap, mode })
 }
 
-/// Wakes `partition`'s processes admission put to sleep for `reason` (`quiet_hours` or
-/// `budget`), so admission decides on them again under a changed setting: one still held
-/// sleeps again, until the new end of quiet time or a budget with room.
-async fn readmit(kernel: &Kernel, partition: &PartitionId, reason: &str) {
-    let sup = kernel.supervision();
-    let filter = crate::stores::ProcessFilter::default().partition(partition.clone());
-    let metas = match sup.processes.list(&filter).await {
-        Ok(metas) => metas,
-        Err(error) => {
-            tracing::warn!(partition = %partition, error = %error, "could not list the processes a changed setting releases");
-            return;
-        }
-    };
-    let mut woken = 0;
-    for mut meta in metas {
-        if meta.labels.get(crate::supervise::ADMISSION_LABEL).map(String::as_str) != Some(reason)
-            || meta.suspended_by.is_some()
-        {
-            continue;
-        }
-        let Ok(Some(run)) = sup.runs.get(&meta.pid).await else { continue };
-        if run.state != adk_core::RunState::Waiting {
-            continue;
-        }
-        let held = meta.clone();
-        meta.wake = None;
-        meta.labels.remove(crate::supervise::ADMISSION_LABEL);
-        sup.put_meta(meta).await;
-        match sup.runs.wake(&run.run_id).await {
-            Ok(()) => woken += 1,
-            Err(error) => {
-                tracing::warn!(process.pid = %run.run_id, error = %error, "could not wake a process a changed setting releases");
-                // Its wake set and label stay, so its wake time or the next change wakes it.
-                sup.put_meta(held).await;
-            }
-        }
-    }
-    if woken > 0 {
-        sup.nudge();
-    }
-}
-
 /// The settings in force in `partition` on `kernel`.
 pub(crate) async fn view(
     kernel: &Kernel,
@@ -584,7 +542,8 @@ async fn change(
         })
         .await?;
     if let Some(reason) = setting.readmit {
-        readmit(kernel, &partition, reason).await;
+        let filter = crate::stores::ProcessFilter::default().partition(partition.clone());
+        kernel.supervision().readmit(&filter, &[reason]).await;
     }
     Ok(Json(AreaResponse { area: view(kernel, store.as_ref(), &partition).await? }))
 }

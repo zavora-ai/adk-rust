@@ -84,7 +84,8 @@ pub(crate) fn writes_own_row(run: &RunRecord, triggers: &BTreeSet<String>) -> bo
 /// hands a claimed run back, a resume after a drain wakes what the drain parked, a lost
 /// lease is recovered — so neither a checkpoint nor a cleared sleep request means the
 /// process was woken; only the consumed wake set does, and every wake clears it before it
-/// makes the run claimable.
+/// makes the run claimable. A process [held by admission](held_by_admission) is the
+/// exception: admission decides on it again instead.
 pub(crate) fn asleep_at_claim(run: &RunRecord, stored: Option<&ProcessMeta>) -> bool {
     match stored {
         Some(meta) => meta.wake.is_some(),
@@ -92,6 +93,14 @@ pub(crate) fn asleep_at_claim(run: &RunRecord, stored: Option<&ProcessMeta>) -> 
             run.idempotency_key.as_deref().is_some_and(|key| key.starts_with(ASLEEP_KEY_PREFIX))
         }
     }
+}
+
+/// Whether admission holds `meta` (spec 3.2 §7.9): it carries the [`ADMISSION_LABEL`] and
+/// the wake set admission gave it, and nothing suspended it. Such a process is deferred, not
+/// waiting for an event: any claim of it decides on it again, so a changed setting releases
+/// it by waking its run alone, whether it has parked yet or not (spec 3.3 §10 K3).
+pub(crate) fn held_by_admission(meta: &ProcessMeta) -> bool {
+    meta.wake.is_some() && meta.suspended_by.is_none() && meta.labels.contains_key(ADMISSION_LABEL)
 }
 
 /// How often, and how many times, a claim waits for the row of a run `spawn` enqueued.
@@ -640,9 +649,13 @@ impl Supervision {
 /// JSON, its successor sleeps on (spec 3.2 §7.4, §8.1 `adk-rust wake --cron`).
 pub(crate) const RECUR_LABEL: &str = "kernel.recur";
 
-/// The label a process deferred by admission carries: `quiet_hours`, `budget` or `quota`
-/// (spec 3.2 §7.9).
+/// The label a process deferred by admission carries: `quiet_hours`, `budget`, `quota`, or
+/// [`AGENT_LIMIT_HOLD`] (spec 3.2 §7.9, spec 3.3 §5.7).
 pub(crate) const ADMISSION_LABEL: &str = "kernel.admission";
+
+/// The [`ADMISSION_LABEL`] of unattended work its added agent's own daily limit holds (spec
+/// 3.3 §5.7).
+pub(crate) const AGENT_LIMIT_HOLD: &str = "the agent's daily limit";
 
 /// Whether `run` is one of the kernel's own `kernel.wake` runs, which admission never
 /// counts or holds.
@@ -932,6 +945,9 @@ impl Supervision {
             return Admission::Admit;
         }
         let class = class_of(run, meta);
+        // The settings are read and a hold is written under the gate that `readmit` takes, so
+        // a change either reaches this decision or finds the hold it made.
+        let _gate = self.admission.lock().await;
         // An added agent's own daily limit holds its unattended work until the next UTC day
         // (spec 3.3 §5.7, K-I11).
         if class != ProcessClass::Interactive
@@ -942,14 +958,13 @@ impl Supervision {
             meta.wake = Some(WakeSet::any_of([Wake::At(
                 next_day.and_time(chrono::NaiveTime::MIN).and_utc(),
             )]));
-            meta.labels.insert(ADMISSION_LABEL.to_string(), "the agent's daily limit".to_string());
+            meta.labels.insert(ADMISSION_LABEL.to_string(), AGENT_LIMIT_HOLD.to_string());
             self.put_meta(meta.clone()).await;
             self.suspend_local(&run.run_id);
             return Admission::Budget;
         }
         let quiet = self.quiet_windows(&meta.partition).await;
         let quotas = self.quotas_of(&meta.partition).await;
-        let _gate = self.admission.lock().await;
         let (running, background) = self.admitted(&meta.partition, &run.run_id).await;
         let budgeted = class != ProcessClass::Interactive
             && (quotas.caps_daily_usage()
@@ -1144,50 +1159,135 @@ impl Supervision {
         }
     }
 
+    /// Wakes the processes admission holds for one of `reasons` among those `filter` selects,
+    /// by partition and target, so admission decides on them again under a changed setting
+    /// (spec 3.3 §10 K3): one still held sleeps again, until the new end of quiet time or a
+    /// budget with room. A process admission has just deferred, still on its way to park, gets
+    /// a pending wake and is claimed again the moment it parks. No row changes, so a wake that
+    /// fails leaves the process asleep on its own wake set, for that wake or the next change.
+    /// Returns how many it woke.
+    pub(crate) async fn readmit(&self, filter: &ProcessFilter, reasons: &[&str]) -> usize {
+        let mut woken = 0;
+        {
+            // A hold decided under the old setting is written before this lists it.
+            let _gate = self.admission.lock().await;
+            let metas = match self.processes.list(filter).await {
+                Ok(metas) => metas,
+                Err(error) => {
+                    tracing::warn!(error = %error, "could not list the processes a changed setting releases");
+                    return 0;
+                }
+            };
+            for meta in metas.iter().filter(|meta| {
+                held_by_admission(meta)
+                    && meta
+                        .labels
+                        .get(ADMISSION_LABEL)
+                        .is_some_and(|reason| reasons.contains(&reason.as_str()))
+            }) {
+                let Ok(Some(run)) = self.runs.get(&meta.pid).await else { continue };
+                if !matches!(run.state, RunState::Waiting | RunState::Running)
+                    || filter.target.as_ref().is_some_and(|target| *target != run.target)
+                {
+                    continue;
+                }
+                match self.runs.wake(&run.run_id).await {
+                    Ok(()) => woken += 1,
+                    Err(error) => {
+                        tracing::warn!(process.pid = %run.run_id, error = %error, "could not wake a process a changed setting releases")
+                    }
+                }
+            }
+        }
+        if woken > 0 {
+            self.nudge();
+        }
+        woken
+    }
+
     /// The partitions with processes asleep on `BudgetReplenished` whose budget has room
-    /// again (spec 3.2 §7.9): a new UTC day, or a cap raised.
-    pub(crate) async fn replenished_partitions(&self) -> Vec<PartitionId> {
+    /// again (spec 3.2 §7.9) — a new UTC day, or a cap raised or lifted — each with a tag of
+    /// the processes asleep there and their claims. The budget wake's key carries the tag, so
+    /// one wake goes out for the work asleep now, and work held again after it gets the next.
+    pub(crate) async fn replenished_partitions(&self) -> Vec<(PartitionId, String)> {
+        /// The processes asleep on one partition's `BudgetReplenished`.
+        struct Asleep {
+            proactive: bool,
+            /// Whether admission holds one of them: a cap held it, so a lifted cap frees it.
+            held: bool,
+            need: u64,
+            claims: Vec<String>,
+        }
         let metas = match self.processes.list(&ProcessFilter::default()).await {
             Ok(metas) => metas,
             Err(_) => return Vec::new(),
         };
-        let mut partitions: BTreeMap<PartitionId, (bool, u64)> = BTreeMap::new();
-        for meta in &metas {
+        let mut partitions: BTreeMap<PartitionId, Asleep> = BTreeMap::new();
+        for meta in metas.iter().filter(|meta| meta.suspended_by.is_none()) {
             let Some(wake) = &meta.wake else { continue };
-            for wake in &wake.any_of {
-                if let Wake::BudgetReplenished { partition } = wake {
-                    let proactive =
-                        matches!(meta.kind, ProcessKind::Proposed | ProcessKind::Maintenance);
-                    let entry = partitions.entry(partition.clone()).or_insert((false, u64::MAX));
-                    entry.0 |= proactive;
-                    entry.1 = entry.1.min(self.item_need(meta).await);
-                }
+            let budgets: Vec<&PartitionId> = wake
+                .any_of
+                .iter()
+                .filter_map(|wake| match wake {
+                    Wake::BudgetReplenished { partition } => Some(partition),
+                    _ => None,
+                })
+                .collect();
+            if budgets.is_empty() {
+                continue;
+            }
+            // The router wakes a parked sleeper only.
+            let run = match self.runs.get(&meta.pid).await {
+                Ok(Some(run)) if run.state == RunState::Waiting => run,
+                _ => continue,
+            };
+            let need = self.item_need(meta).await;
+            for partition in budgets {
+                let asleep = partitions.entry(partition.clone()).or_insert(Asleep {
+                    proactive: false,
+                    held: false,
+                    need: u64::MAX,
+                    claims: Vec::new(),
+                });
+                asleep.proactive |=
+                    matches!(meta.kind, ProcessKind::Proposed | ProcessKind::Maintenance);
+                asleep.held |= held_by_admission(meta);
+                asleep.need = asleep.need.min(need);
+                asleep.claims.push(format!("{}@{}", meta.pid, run.lease_epoch));
             }
         }
         let mut replenished = Vec::new();
-        for (partition, (proactive, need)) in partitions {
-            // Without a cap there is nothing to replenish: such a sleeper waits on its other
-            // wakes.
-            let budgeted = proactive && self.daily_budget_caps();
+        for (partition, mut asleep) in partitions {
+            let budgeted = asleep.proactive && self.daily_budget_caps();
             let quotas = self.quotas_of(&partition).await;
-            if !quotas.caps_daily_usage() && !budgeted {
-                continue;
-            }
-            let fits = |cap: Option<u64>, spent: u64| {
-                cap.is_none_or(|cap| spent.saturating_add(need.max(1)) <= cap)
+            let room = if !quotas.caps_daily_usage() && !budgeted {
+                // No cap is left. Work a cap held has room; another sleeper waits on its
+                // other wakes.
+                asleep.held
+            } else {
+                let need = asleep.need;
+                let fits = |cap: Option<u64>, spent: u64| {
+                    cap.is_none_or(|cap| spent.saturating_add(need.max(1)) <= cap)
+                };
+                let used = self.partition_usage(&partition).await;
+                let mut room = fits(quotas.daily_spend_cap, used.micro_usd)
+                    && quotas.daily_caps.iter().all(|(unit, max)| used.units.get(*unit) < *max);
+                if budgeted {
+                    let proactive = self.proactive_usage(&partition).await;
+                    let (max_calls, max_tokens) = self.daily_budget_calls_and_tokens();
+                    room &= fits(self.daily_budget_cost(), proactive.micro_usd)
+                        && max_calls.is_none_or(|max| proactive.model_calls < max)
+                        && max_tokens.is_none_or(|max| proactive.total_tokens < max);
+                }
+                room
             };
-            let used = self.partition_usage(&partition).await;
-            let mut room = fits(quotas.daily_spend_cap, used.micro_usd)
-                && quotas.daily_caps.iter().all(|(unit, max)| used.units.get(*unit) < *max);
-            if budgeted {
-                let proactive = self.proactive_usage(&partition).await;
-                let (max_calls, max_tokens) = self.daily_budget_calls_and_tokens();
-                room &= fits(self.daily_budget_cost(), proactive.micro_usd)
-                    && max_calls.is_none_or(|max| proactive.model_calls < max)
-                    && max_tokens.is_none_or(|max| proactive.total_tokens < max);
-            }
             if room {
-                replenished.push(partition);
+                use sha2::Digest as _;
+
+                asleep.claims.sort();
+                let digest = sha2::Sha256::digest(asleep.claims.join("\n").as_bytes());
+                let tag = digest[..8].iter().map(|byte| format!("{byte:02x}")).collect();
+                replenished.push((partition, tag));
             }
         }
         replenished
@@ -1881,7 +1981,10 @@ impl WorkerHooks for KernelHooks {
             }
         }
         let persisted = stored.is_some();
-        let asleep = asleep_at_claim(run, stored.as_ref());
+        // A process admission held is decided on again at whatever claim reaches it, so a
+        // changed setting that wakes its run, parked or still parking, meets it now.
+        let held = stored.as_ref().is_some_and(held_by_admission);
+        let asleep = !held && asleep_at_claim(run, stored.as_ref());
         let mut meta = stored.unwrap_or_else(|| sup.inferred_meta(run));
         let from = if meta.wake.is_some() || meta.suspended_by.is_some() || run.attempt > 1 {
             RunState::Waiting
@@ -1907,6 +2010,10 @@ impl WorkerHooks for KernelHooks {
             if persisted {
                 // Woken, or its suspension lifted: the wake set is already consumed.
                 changed |= meta.suspended_by.take().is_some();
+            }
+            if held {
+                // Admission writes the row: the hold it decides on now, or none.
+                meta.wake = None;
             }
             if changed {
                 sup.put_meta(meta.clone()).await;
