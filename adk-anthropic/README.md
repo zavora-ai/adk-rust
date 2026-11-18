@@ -23,6 +23,7 @@ This project is an **unofficial** community-maintained library. It is not affili
 - **Computer use and browser use** — `computer_toolset_20260801` and `browser_toolset_20260801` (`ComputerToolset20260801`, `BrowserToolset20260801`), the earlier `computer_20251124` and `computer_20250124` with their beta headers, `toolset_name` on member calls and results, the `browser_state` result block, and `ComputerToolVersion::for_model` to pick the version a model accepts
 - **Prompt caching** — automatic (top-level `cache_control`) and explicit (block-level)
 - **Context management** — `ContextManagement` with tool result clearing and thinking block clearing (beta)
+- **On-demand compaction** — `MessageCreateParams::compaction` (`CompactionParam`) asks for a signed `CompactionBlock` in place of a reply, which later requests send first; the client adds the `compact-2026-09-04` beta header (beta)
 - **Citations** — document-level citations with char, page, and content block locations
 - **Vision** — URL and base64 image analysis
 - **PDF processing** — URL, base64, and Files API PDF analysis with citations

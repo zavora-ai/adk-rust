@@ -313,7 +313,7 @@ pub use identity::{
 pub use instruction_template::inject_session_state;
 pub use intra_compaction::{
     CompactedHistory, CompactionTrigger, HistoryCompactionRequest, HistoryCompactor,
-    IntraCompactionConfig,
+    IntraCompactionConfig, NativeCompactionRequest,
 };
 pub use lease::{InMemoryLeaseStore, Lease, LeaseStore};
 pub use metering::{
@@ -327,7 +327,7 @@ pub use model::{
     ToolDeclarations, ToolDeclarationsIter, ToolDeclarationsKeys, ToolDeclarationsValues,
     UsageMetadata, nullable_count,
 };
-pub use model::{NativeWebSearch, NativeWebSearchTool};
+pub use model::{NativeCompaction, NativeWebSearch, NativeWebSearchTool};
 pub use policy::{
     ArgPredicate, DeclarativePolicy, DeclarativePolicyBuilder, PolicyCall, PolicyDecision,
     PolicyRule, StrictestPolicy, ToolPolicy, ToolPolicyRequest,

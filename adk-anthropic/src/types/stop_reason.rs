@@ -34,6 +34,9 @@ pub enum StopReason {
     /// The model's context window was exceeded
     ModelContextWindowExceeded,
 
+    /// The response is a compaction block in place of a reply (beta `compact-2026-09-04`).
+    Compaction,
+
     /// A stop reason this client does not know, as the API sent it.
     #[serde(untagged)]
     Unknown(String),
@@ -51,6 +54,7 @@ impl StopReason {
             StopReason::Refusal => "refusal",
             StopReason::PauseRun => "pause_run",
             StopReason::ModelContextWindowExceeded => "model_context_window_exceeded",
+            StopReason::Compaction => "compaction",
             StopReason::Unknown(value) => value,
         }
     }
@@ -75,6 +79,7 @@ impl FromStr for StopReason {
             "refusal" => Ok(StopReason::Refusal),
             "pause_run" => Ok(StopReason::PauseRun),
             "model_context_window_exceeded" => Ok(StopReason::ModelContextWindowExceeded),
+            "compaction" => Ok(StopReason::Compaction),
             other => Ok(StopReason::Unknown(other.to_string())),
         }
     }

@@ -167,8 +167,9 @@ impl Toolset for WeatherTools {
 | `max_cost_micro_usd(request)` | `None` | Upper bound on the request's cost; a spend cap refuses a model that returns `None` |
 | `context_window()` | `None` | The model's context window in tokens; auto-compaction sets its threshold from it, or uses 100,000 tokens without one |
 | `native_web_search()` | `None` | The provider-executed web search the model's transport serves |
+| `native_compaction()` | `None` | The conversation compaction the model's provider performs itself; auto-compaction asks it for the summary (`NativeCompactionRequest`) and keeps its signed result (`is_native_compaction`) |
 
-Wrappers around another `Llm` forward `max_cost_micro_usd`, `context_window`, and `native_web_search`.
+Wrappers around another `Llm` forward `max_cost_micro_usd`, `context_window`, `native_web_search`, and `native_compaction`.
 
 ### SchemaAdapter
 

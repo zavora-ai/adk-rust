@@ -1140,6 +1140,10 @@ impl Llm for MeteredLlm {
     fn native_web_search(&self) -> Option<crate::NativeWebSearch> {
         self.inner.native_web_search()
     }
+
+    fn native_compaction(&self) -> Option<crate::NativeCompaction> {
+        self.inner.native_compaction()
+    }
 }
 
 #[cfg(test)]

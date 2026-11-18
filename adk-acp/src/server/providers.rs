@@ -274,6 +274,10 @@ impl Llm for SwitchableModel {
     fn native_web_search(&self) -> Option<NativeWebSearch> {
         self.current().and_then(|model| model.native_web_search())
     }
+
+    fn native_compaction(&self) -> Option<adk_core::NativeCompaction> {
+        self.current().and_then(|model| model.native_compaction())
+    }
 }
 
 /// The schema adapter of whichever model backs a [`SwitchableModel`].

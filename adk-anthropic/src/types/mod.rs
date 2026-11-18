@@ -14,6 +14,7 @@ mod citations_delta;
 mod client_toolset;
 mod code_execution_result_block;
 mod code_execution_tool_result_block;
+mod compaction;
 mod content;
 mod content_block;
 mod content_block_delta;
@@ -116,6 +117,7 @@ pub use client_toolset::{
 };
 pub use code_execution_result_block::CodeExecutionResultBlock;
 pub use code_execution_tool_result_block::CodeExecutionToolResultBlock;
+pub use compaction::{COMPACTION_BETA, CompactionBlock, CompactionParam};
 pub use content::Content;
 pub use content_block::ContentBlock;
 pub use content_block_delta::ContentBlockDelta;

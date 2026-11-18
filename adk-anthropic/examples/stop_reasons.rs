@@ -213,6 +213,9 @@ fn handle_response(response: &adk_anthropic::Message) -> String {
                     .collect::<String>()
             )
         }
+        Some(StopReason::Compaction) => {
+            "[COMPACTION — a summary in place of a reply; send it first next time]".to_string()
+        }
         Some(StopReason::Unknown(reason)) => {
             format!("[UNKNOWN STOP REASON {reason} — newer than this client]")
         }

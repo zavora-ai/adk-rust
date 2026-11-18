@@ -19,18 +19,25 @@ pub(super) fn preserve(message: &Message) -> Option<Part> {
             | ContentBlock::RedactedThinking(_) => true,
             // A block type newer than this client is replayed as the API sent it.
             ContentBlock::Unknown(_) => true,
+            // The signed summary goes back exactly as the API returned it.
+            ContentBlock::Compaction(_) => true,
             ContentBlock::Text(text) => {
                 text.citations.as_ref().is_some_and(|items| !items.is_empty())
             }
             _ => false,
         });
     // Flagged replay-only: the copy is not a tool result, and it holds the turn's thinking.
-    needed.then(|| Part::ServerToolResponse {
-        server_tool_response: json!({
+    // A compaction's copy is also flagged as one, so the runner can tell it from a reply.
+    needed.then(|| {
+        let mut copy = json!({
             "type": KIND,
             adk_core::history::REPLAY_ONLY_KEY: true,
             "content": message.content,
-        }),
+        });
+        if message.content.iter().any(|block| matches!(block, ContentBlock::Compaction(_))) {
+            copy[adk_core::intra_compaction::NATIVE_COMPACTION_KEY] = json!(true);
+        }
+        Part::ServerToolResponse { server_tool_response: copy }
     })
 }
 
@@ -65,10 +72,14 @@ pub(super) fn restore(
             return None;
         }
     };
+    // A compaction's summary reaches the ADK parts as text under the summary heading.
     let original: String = blocks
         .iter()
         .filter_map(|block| match block {
-            ContentBlock::Text(text) => Some(text.text.as_str()),
+            ContentBlock::Text(text) => Some(text.text.clone()),
+            ContentBlock::Compaction(compaction) => {
+                Some(adk_core::intra_compaction::compaction_summary_text(&compaction.content))
+            }
             _ => None,
         })
         .collect();

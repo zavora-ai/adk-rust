@@ -1,87 +1,74 @@
-//! Server-side compaction with the Anthropic Messages API.
+//! On-demand compaction with the Anthropic Messages API (beta `compact-2026-09-04`).
 //!
-//! Demonstrates how compaction events appear in SSE streaming when the server
-//! summarises long conversations. Also shows the `CompactionMetadata` type
-//! for non-streaming responses.
-//!
-//! Note: Compaction fires only on very long conversations that approach the
-//! context window limit. This example shows the type system and streaming
-//! event handling — you'll see compaction events in production with long
-//! agentic conversations.
+//! Asks Claude for a summary of a conversation in place of a reply, then continues the
+//! conversation from the signed `compaction` block, which goes first in `messages` in place of
+//! the turns it summarizes. The client adds the beta header to both requests.
 //!
 //! Run: `ANTHROPIC_API_KEY=sk-... cargo run -p adk-anthropic --example compaction`
 
 use adk_anthropic::{
-    Anthropic, CompactionMetadata, ContentBlockDelta, KnownModel, MessageCreateParams,
-    MessageParam, MessageRole, MessageStreamEvent,
+    Anthropic, CompactionParam, ContentBlock, MessageCreateParams, MessageParam, MessageRole,
+    Model, StopReason,
 };
-use futures::StreamExt;
-use std::pin::pin;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = dotenvy::dotenv();
-
     let client = Anthropic::new(None)?;
+    let model = Model::Custom("claude-haiku-5-5".to_string());
 
-    // ── 1. Show CompactionMetadata type ──────────────────────────
-    println!("=== CompactionMetadata Type ===\n");
+    let conversation = vec![
+        MessageParam::new_with_string(
+            "I am building a recipe app. Help me name the main entities in the data model."
+                .to_string(),
+            MessageRole::User,
+        ),
+        MessageParam::new_with_string(
+            "Start with Recipe, Ingredient, and Step. Add a RecipeIngredient entry that holds \
+             the quantity and unit for each ingredient in a recipe."
+                .to_string(),
+            MessageRole::Assistant,
+        ),
+        MessageParam::new_with_string(
+            "Good. Now suggest field names for Recipe.".to_string(),
+            MessageRole::User,
+        ),
+    ];
 
-    let example = CompactionMetadata {
-        compacted_token_count: 45000,
-        summary_token_count: 2500,
-        context_window_remaining: 152500,
+    // ── 1. Ask for a summary in place of a reply ─────────────────
+    let mut params = MessageCreateParams::new(4_096, conversation, model.clone());
+    params.compaction = Some(CompactionParam::summarize());
+    let compacted = client.send(params).await?;
+    if compacted.stop_reason != Some(StopReason::Compaction) {
+        println!(
+            "No summary came back (stop reason {:?}); keep the history.",
+            compacted.stop_reason
+        );
+        return Ok(());
+    }
+    let Some(ContentBlock::Compaction(block)) = compacted.content.first() else {
+        println!("The response held no compaction block.");
+        return Ok(());
     };
-    println!("Example compaction event:");
-    println!("{}\n", serde_json::to_string_pretty(&example)?);
+    println!("=== Summary ===\n{}\n", block.content);
+    if let Some(iterations) = compacted.usage.raw.as_deref().and_then(|raw| raw.get("iterations")) {
+        println!("=== Usage of the summarization call ===\n{iterations}\n");
+    }
 
-    // ── 2. Streaming with compaction event handling ───────────────
-    println!("=== Streaming (with compaction event handler) ===\n");
-
-    // Build a multi-turn conversation to demonstrate the streaming pattern.
-    // In production, compaction fires on very long conversations.
-    let messages = vec![MessageParam::new_with_string(
-        "You are helping me refactor a large codebase. We've been working for a while. \
-             Summarize what a good refactoring strategy looks like in 2-3 sentences."
-            .to_string(),
-        MessageRole::User,
-    )];
-
-    let params =
-        MessageCreateParams::new_streaming(1024, messages, KnownModel::ClaudeSonnet46.into());
-
-    let stream = client.stream(&params).await?;
-    let mut stream = pin!(stream);
-
-    let mut saw_compaction = false;
-
-    while let Some(event) = stream.next().await {
-        match event? {
-            MessageStreamEvent::ContentBlockDelta(delta) => {
-                if let ContentBlockDelta::TextDelta(text) = &delta.delta {
-                    print!("{}", text.text);
-                }
-            }
-            MessageStreamEvent::CompactionEvent(meta) => {
-                saw_compaction = true;
-                println!("\n\n[COMPACTION EVENT]");
-                println!("  compacted_token_count:    {}", meta.compacted_token_count);
-                println!("  summary_token_count:      {}", meta.summary_token_count);
-                println!("  context_window_remaining: {}", meta.context_window_remaining);
-            }
-            MessageStreamEvent::MessageDelta(delta) => {
-                if let Some(reason) = &delta.delta.stop_reason {
-                    println!("\n\n[stop: {reason}]");
-                }
-            }
-            _ => {}
+    // ── 2. Continue from the block, which replaces the summarized turns ──
+    let messages = vec![
+        MessageParam::new_with_blocks(compacted.content.clone(), MessageRole::Assistant),
+        MessageParam::new_with_string(
+            "Now suggest field names for Ingredient.".to_string(),
+            MessageRole::User,
+        ),
+    ];
+    let reply = client.send(MessageCreateParams::new(1_024, messages, model)).await?;
+    println!("=== Reply after the summary ===");
+    for block in &reply.content {
+        if let Some(text) = block.as_text() {
+            println!("{}", text.text);
         }
     }
-
-    if !saw_compaction {
-        println!("\n\n(No compaction event — expected for short conversations.");
-        println!(" Compaction fires when context approaches the window limit.)");
-    }
-
     Ok(())
 }

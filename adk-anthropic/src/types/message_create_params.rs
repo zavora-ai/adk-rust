@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-    CacheControlEphemeral, CitationsConfig, Content, ContentBlock, ContentBlockSourceContent,
-    ContextManagement, DocumentSource, EffortLevel, ImageBlock, ImageSource, MessageParam,
-    MessageParamContent, Metadata, Model, OutputConfig, OutputFormat, SkillRef, SpeedMode,
-    SystemPrompt, TextBlock, ThinkingConfig, ToolChoice, ToolResultBlockContent, ToolUnionParam,
+    CacheControlEphemeral, CitationsConfig, CompactionParam, Content, ContentBlock,
+    ContentBlockSourceContent, ContextManagement, DocumentSource, EffortLevel, ImageBlock,
+    ImageSource, MessageParam, MessageParamContent, Metadata, Model, OutputConfig, OutputFormat,
+    SkillRef, SpeedMode, SystemPrompt, TextBlock, ThinkingConfig, ToolChoice,
+    ToolResultBlockContent, ToolUnionParam,
 };
 
 /// Security limits for DoS prevention
@@ -115,6 +116,12 @@ pub struct MessageCreateParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_management: Option<ContextManagement>,
 
+    /// Asks for a summary of the conversation in place of a reply. Requires beta header
+    /// `compact-2026-09-04`, which the client adds; it cannot be combined with
+    /// `context_management`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<CompactionParam>,
+
     /// Geographic routing for data residency control (e.g. "US", "EU").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inference_geo: Option<String>,
@@ -189,6 +196,7 @@ impl MessageCreateParams {
             output_config: None,
 
             context_management: None,
+            compaction: None,
             inference_geo: None,
             service_tier: None,
             container: None,
@@ -221,6 +229,7 @@ impl MessageCreateParams {
             output_config: None,
 
             context_management: None,
+            compaction: None,
             inference_geo: None,
             service_tier: None,
             container: None,
@@ -632,6 +641,29 @@ impl MessageCreateParams {
                 MessageParamContent::String(_) => false,
             })
     }
+
+    /// Whether the request needs the `compact-2026-09-04` beta: it asks for a compaction or
+    /// carries a compaction block.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_anthropic::{CompactionParam, KnownModel, MessageCreateParams};
+    ///
+    /// let mut params = MessageCreateParams::simple("Hello", KnownModel::ClaudeSonnet46);
+    /// assert!(!params.requires_compaction_beta());
+    /// params.compaction = Some(CompactionParam::summarize());
+    /// assert!(params.requires_compaction_beta());
+    /// ```
+    pub fn requires_compaction_beta(&self) -> bool {
+        self.compaction.is_some()
+            || self.messages.iter().any(|message| match &message.content {
+                MessageParamContent::Array(blocks) => {
+                    blocks.iter().any(|block| matches!(block, ContentBlock::Compaction(_)))
+                }
+                MessageParamContent::String(_) => false,
+            })
+    }
 }
 
 impl Default for MessageCreateParams {
@@ -656,6 +688,7 @@ impl Default for MessageCreateParams {
             output_config: None,
 
             context_management: None,
+            compaction: None,
             inference_geo: None,
             service_tier: None,
             container: None,
@@ -724,6 +757,7 @@ impl ContentSize {
                 DocumentSource::UrlPdf(_) | DocumentSource::File(_) => {}
             },
             ContentBlock::Thinking(thinking) => self.text += thinking.thinking.len(),
+            ContentBlock::Compaction(compaction) => self.text += compaction.content.len(),
             ContentBlock::CodeExecutionResult(result) => self.text += result.output.len(),
             // Server-generated blocks replayed verbatim; the API produced them within its limits.
             ContentBlock::WebSearchToolResult(_)

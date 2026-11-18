@@ -110,6 +110,10 @@ impl Llm for InstrumentedLlm {
         self.inner.context_window()
     }
 
+    fn native_compaction(&self) -> Option<adk_core::NativeCompaction> {
+        self.inner.native_compaction()
+    }
+
     fn name(&self) -> &str {
         self.inner.name()
     }

@@ -4447,16 +4447,19 @@ impl Agent for LlmAgent {
                         .iter()
                         .take_while(|content| content.role == "system")
                         .count();
-                    let request = adk_core::HistoryCompactionRequest {
-                        preamble: &conversation_history[..preamble],
-                        history: &conversation_history[preamble..],
-                        reported_prompt_tokens,
-                        trigger: if rejected.is_some() {
-                            adk_core::CompactionTrigger::ContextLimitExceeded
-                        } else {
-                            adk_core::CompactionTrigger::BeforeModelCall
-                        },
+                    let trigger = if rejected.is_some() {
+                        adk_core::CompactionTrigger::ContextLimitExceeded
+                    } else {
+                        adk_core::CompactionTrigger::BeforeModelCall
                     };
+                    let request = adk_core::HistoryCompactionRequest::new(
+                        &conversation_history[preamble..],
+                        trigger,
+                    )
+                    .with_preamble(&conversation_history[..preamble])
+                    .with_reported_prompt_tokens(reported_prompt_tokens)
+                    .with_tools(&tool_declarations)
+                    .with_config(config.as_ref());
                     match compactor.compact(ctx.clone(), model.clone(), request).await {
                         Ok(Some(compacted)) => {
                             conversation_history.truncate(preamble);

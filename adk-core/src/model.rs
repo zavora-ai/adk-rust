@@ -189,6 +189,42 @@ pub trait Llm: Send + Sync {
     fn native_web_search(&self) -> Option<NativeWebSearch> {
         None
     }
+
+    /// The conversation compaction this model's provider performs itself, if any.
+    ///
+    /// The runner's auto-compaction asks such a model for the summary
+    /// ([`NativeCompactionRequest`](crate::intra_compaction::NativeCompactionRequest)) in place
+    /// of writing one with its own summarizer, and keeps the provider's signed result in the
+    /// history so the provider reads it back
+    /// ([`is_native_compaction`](crate::intra_compaction::is_native_compaction)).
+    ///
+    /// The default returns `None`. Wrappers forward to the model they wrap.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Llm, LlmRequest, LlmResponseStream, NativeCompaction};
+    ///
+    /// struct Hosted;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Llm for Hosted {
+    ///     fn name(&self) -> &str {
+    ///         "hosted"
+    ///     }
+    ///     async fn generate_content(&self, _: LlmRequest, _: bool) -> adk_core::Result<LlmResponseStream> {
+    ///         unimplemented!()
+    ///     }
+    ///     fn native_compaction(&self) -> Option<NativeCompaction> {
+    ///         Some(NativeCompaction::new("anthropic").keeping_thinking())
+    ///     }
+    /// }
+    ///
+    /// assert!(Hosted.native_compaction().unwrap().keeps_thinking);
+    /// ```
+    fn native_compaction(&self) -> Option<NativeCompaction> {
+        None
+    }
 }
 
 /// Tool declarations keyed by tool name, in the order the agent declares them.
@@ -892,6 +928,41 @@ impl NativeWebSearch {
     /// allowlist.
     pub fn new(provider: &'static str, tool: NativeWebSearchTool, allowed_domains: bool) -> Self {
         Self { provider, tool, allowed_domains }
+    }
+}
+
+/// The conversation compaction a model's provider performs itself, as
+/// [`Llm::native_compaction`] reports it.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::NativeCompaction;
+///
+/// let compaction = NativeCompaction::new("anthropic").keeping_thinking();
+/// assert_eq!(compaction.provider, "anthropic");
+/// assert!(compaction.keeps_thinking);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[non_exhaustive]
+pub struct NativeCompaction {
+    /// Provider that writes the summary, such as `"anthropic"`.
+    pub provider: &'static str,
+    /// Whether the turns kept after the summary keep their thinking: the provider accepts
+    /// thinking that was produced before the summary replaced the turns it followed.
+    pub keeps_thinking: bool,
+}
+
+impl NativeCompaction {
+    /// The compaction `provider` performs; the kept turns lose their thinking.
+    pub fn new(provider: &'static str) -> Self {
+        Self { provider, keeps_thinking: false }
+    }
+
+    /// The kept turns keep their thinking after the summary.
+    pub fn keeping_thinking(mut self) -> Self {
+        self.keeps_thinking = true;
+        self
     }
 }
 
