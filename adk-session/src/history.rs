@@ -334,9 +334,15 @@ impl SessionHistory {
                 format!("serialize fork origin failed: {e}"),
             )
         })?;
+        // A fork is a new, active session: it keeps neither the source's archive mark nor the
+        // events that set it, so a later rewind of the fork cannot archive it again.
+        let events: Vec<Event> =
+            events.into_iter().filter(|event| !crate::archive::is_marker_event(event)).collect();
         let mut initial_state = self.creation_state();
+        initial_state.remove(crate::archive::ARCHIVE_KEY);
         initial_state.insert(FORK_ORIGIN_KEY.to_string(), origin_value.clone());
         let mut state = self.state_after(&events);
+        state.remove(crate::archive::ARCHIVE_KEY);
         state.insert(FORK_ORIGIN_KEY.to_string(), origin_value);
 
         let change = HistoryChange {

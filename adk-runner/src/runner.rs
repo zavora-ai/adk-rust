@@ -1146,6 +1146,11 @@ impl Runner {
                     return;
                 }
             };
+            // An archived session is read-only: no turn adds to it until it is unarchived.
+            if let Err(error) = adk_session::ensure_writable(session.as_ref()) {
+                yield Err(error);
+                return;
+            }
 
             // A saved message that was never screened — saved by an earlier release, or
             // appended to the session directly — is screened before any model sees it.
@@ -2370,6 +2375,7 @@ impl Runner {
             SessionId::try_from(session_id)?,
         );
         let session = self.session_service.get_for_identity(&identity).await?;
+        adk_session::ensure_writable(session.as_ref())?;
         let mut in_flight = InFlightCalls::default();
         for event in session.events().all() {
             in_flight.observe(&event);

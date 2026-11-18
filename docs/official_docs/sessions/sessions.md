@@ -79,7 +79,9 @@ pub trait SessionService: Send + Sync {
 
 The trait also has identity-addressed methods (`get_for_identity`, `append_event_for_identity`,
 `delete_for_identity`), `delete_all_sessions`, and `health_check`; see
-[Typed Session Identity](#typed-session-identity).
+[Typed Session Identity](#typed-session-identity). `archive`, `unarchive`, `export_session`,
+`list_active`, and `list_archived` work on every backend; see
+[Archive, Unarchive and Export](#archive-unarchive-and-export).
 
 ### Behaviour Every Backend Follows
 
@@ -819,6 +821,69 @@ A new session never inherits events left under its path. App names, user IDs, an
 > ```toml
 > adk-session = { version = "3.0.0", features = ["firestore"] }
 > ```
+
+## Archive, Unarchive and Export
+
+Archiving puts a finished conversation away without deleting it: the session keeps its events
+and state, leaves the listing people see, and takes no new turn until it is unarchived. Every
+backend supports it through default `SessionService` methods built on `get_for_identity`,
+`append_event_for_identity` and `list`, and the shared archive contract
+(`adk-session/tests/common/archive_contract.rs`) runs on each one.
+
+| Method | What it does |
+|--------|--------------|
+| `archive(identity, reason)` | Appends a content-less marker event (author `adk.session`) that writes an `ArchiveMark { archived_at, reason }` to the session's own state under `adk:archived`; archiving an archived session returns its mark and writes nothing |
+| `unarchive(identity)` | Appends a marker event that sets `adk:archived` to `null`; unarchiving a session that is not archived writes nothing |
+| `list_active(req)` | The sessions that are not archived, in `list` order; `offset` and `limit` count only these |
+| `list_archived(req)` | The archived sessions, in `list` order; `offset` and `limit` count only these |
+| `export_session(identity)` | A `SessionBundle`: one JSON document (`adk.session.bundle/v1`) with the identity, the session's own state, every event and the archive mark; the `app:` and `user:` tiers stay out |
+| `ensure_writable(&session)` | Refuses an archived session with `session.archived` (`Conflict`, HTTP 409) |
+
+`list` still lists every session, archived ones with their mark in their state; a host shows
+people `list_active`. The marker events carry no content, so no model sees them, and the
+archive and unarchive are part of the session's history.
+
+| Where | What an archived session gets |
+|-------|-------------------------------|
+| `adk_runner::Runner` | Every turn, and `recover_unanswered_calls`, fails with `session.archived` before the user message is saved and before any agent runs, so no agent, schedule, chat or API turn adds to it |
+| `adk-server` | `GET /api/apps/{app}/users/{user}/sessions` leaves it out; `?archived=true` lists the archived sessions instead |
+| `adk-rust sessions` | `list` leaves it out (`list --archived` shows them), `--continue` skips it, `archive <id> [--reason …]`, `unarchive <id>`, `export <id> [--out FILE]`, and `rewind` refuses it |
+
+```rust
+use adk_core::identity::{AdkIdentity, AppName, SessionId, UserId};
+use adk_session::{ListRequest, SessionService};
+
+async fn shelve(service: &dyn SessionService) -> adk_core::Result<String> {
+    let identity = AdkIdentity::new(
+        AppName::try_from("my_app")?,
+        UserId::try_from("user_123")?,
+        SessionId::try_from("session_abc")?,
+    );
+    let mark = service.archive(&identity, Some("trip booked".into())).await?;
+    println!("archived at {}", mark.archived_at);
+
+    // What a person sees no longer includes it.
+    let active = service
+        .list_active(ListRequest {
+            app_name: "my_app".into(),
+            user_id: "user_123".into(),
+            limit: None,
+            offset: None,
+        })
+        .await?;
+    println!("{} active sessions", active.len());
+
+    // The whole conversation as one portable JSON document.
+    let bundle = service.export_session(&identity).await?;
+    let json = serde_json::to_string_pretty(&bundle).map_err(|e| adk_core::AdkError::session(e.to_string()))?;
+
+    service.unarchive(&identity).await?;
+    Ok(json)
+}
+```
+
+A turn started while a session is archived fails; a turn already running when the session is
+archived finishes its writes.
 
 ## Subject Export and Erasure
 

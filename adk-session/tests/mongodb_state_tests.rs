@@ -108,3 +108,9 @@ mod subject_data {
         harness = crate::common::subject_data::SessionData(super::Backend),
     );
 }
+
+#[tokio::test]
+#[ignore = "requires a MongoDB server at MONGODB_URL"]
+async fn mongodb_archive_contract() {
+    common::archive_contract::assert_archive_contract(&service().await, &run_app("archive")).await;
+}

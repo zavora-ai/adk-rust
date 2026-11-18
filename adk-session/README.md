@@ -24,6 +24,7 @@ Session management and state persistence for Rust Agent Development Kit (ADK-Rus
 - **Identifier validation** - Every backend rejects an empty, oversized, or NUL-containing app name, user ID, or session ID with an `InvalidInput` error before it touches storage
 - **One session contract** - On every backend, `create` for an existing identity fails with `session.already_exists` and writes nothing, appends to a missing session fail with `session.not_found`, events with equal timestamps keep their append order, and `list` returns the most recently updated session first; the shared conformance suite checks each backend
 - **Rewind** - `rewind` and `rewind_steps` address a session by its full identity and keep the state it was created with (in-memory, SQLite, and `EncryptedSession`)
+- **Archive** - `archive`, `unarchive`, `list_active`, `list_archived` and `export_session` on every backend: an archived session keeps its history, leaves the listing people see, takes no new turn (`session.archived`), and exports as one JSON bundle (`adk.session.bundle/v1`)
 - **Moved history** - `Session::take_events` moves a loaded session's events out instead of copying them; every backend implements it, and the runner uses it for each invocation
 
 ## Installation

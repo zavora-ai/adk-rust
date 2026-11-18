@@ -2943,3 +2943,13 @@ async fn test_vertex_delete_all_sessions_erases_the_users_sessions() {
     server.abort();
     let _ = server.await;
 }
+
+#[tokio::test]
+async fn test_vertex_archive_contract() {
+    let (_state, service, server) = test_service().await;
+
+    common::archive_contract::assert_archive_contract(&service, "1001").await;
+
+    server.abort();
+    let _ = server.await;
+}

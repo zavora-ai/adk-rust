@@ -402,3 +402,10 @@ mod subject_data {
         harness = crate::common::subject_data::SessionData(super::Backend),
     );
 }
+
+#[tokio::test]
+#[ignore = "requires a Redis server at REDIS_URL"]
+async fn redis_standalone_archive_contract() {
+    common::archive_contract::assert_archive_contract(&standalone().await, &run_app("archive"))
+        .await;
+}

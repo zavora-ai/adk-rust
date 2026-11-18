@@ -345,7 +345,9 @@ pub trait SessionService: Send + Sync {
     /// Lists the sessions of an app and user, most recently updated first.
     ///
     /// Sessions updated at the same instant are ordered by session ID, descending, so
-    /// `offset`/`limit` pages are stable.
+    /// `offset`/`limit` pages are stable. Archived sessions are listed too, with their
+    /// [`ArchiveMark`](crate::ArchiveMark) in their state;
+    /// [`list_active`](SessionService::list_active) leaves them out.
     async fn list(&self, req: ListRequest) -> Result<Vec<Box<dyn Session>>>;
     /// Delete a session by its identifiers.
     async fn delete(&self, req: DeleteRequest) -> Result<()>;
@@ -606,4 +608,156 @@ pub trait SessionService: Send + Sync {
     async fn health_check(&self) -> Result<()> {
         Ok(())
     }
+
+    /// Archives the session `identity`: it keeps its events and state, is left out of
+    /// [`list_active`](SessionService::list_active), and takes no new turns until
+    /// [`unarchive`](SessionService::unarchive) (see [`crate::archive`]).
+    ///
+    /// The mark is written to the session's own state under [`ARCHIVE_KEY`](crate::ARCHIVE_KEY)
+    /// by a content-less marker event, through
+    /// [`append_event_for_identity`](SessionService::append_event_for_identity), so it works on
+    /// every backend. Archiving an archived session changes nothing and returns its mark.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_session::{CreateRequest, InMemorySessionService, SessionService};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> adk_core::Result<()> {
+    /// let service = InMemorySessionService::new();
+    /// let session = service
+    ///     .create(CreateRequest {
+    ///         app_name: "app".into(),
+    ///         user_id: "ana".into(),
+    ///         session_id: Some("s".into()),
+    ///         state: Default::default(),
+    ///     })
+    ///     .await?;
+    /// let identity = session.try_identity()?;
+    /// let first = service.archive(&identity, Some("done".into())).await?;
+    /// let again = service.archive(&identity, None).await?;
+    /// assert_eq!(first, again);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `session.not_found` when the session does not exist, or a backend error.
+    async fn archive(
+        &self,
+        identity: &AdkIdentity,
+        reason: Option<String>,
+    ) -> Result<crate::ArchiveMark> {
+        let session = self.get_for_identity(identity).await?;
+        if let Some(mark) = crate::ArchiveMark::of(session.as_ref()) {
+            return Ok(mark);
+        }
+        let mark = crate::ArchiveMark::new(reason);
+        self.append_event_for_identity(AppendEventRequest {
+            identity: identity.clone(),
+            event: mark.event()?,
+        })
+        .await?;
+        Ok(mark)
+    }
+
+    /// Unarchives the session `identity`: it lists and takes turns again. Unarchiving a
+    /// session that is not archived changes nothing.
+    ///
+    /// The mark is cleared by a content-less marker event that sets
+    /// [`ARCHIVE_KEY`](crate::ARCHIVE_KEY) to `null`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `session.not_found` when the session does not exist, or a backend error.
+    async fn unarchive(&self, identity: &AdkIdentity) -> Result<()> {
+        let session = self.get_for_identity(identity).await?;
+        if crate::ArchiveMark::of(session.as_ref()).is_none() {
+            return Ok(());
+        }
+        self.append_event_for_identity(AppendEventRequest {
+            identity: identity.clone(),
+            event: crate::archive::marker_event(Value::Null),
+        })
+        .await
+    }
+
+    /// Writes the session `identity` out as a portable [`SessionBundle`](crate::SessionBundle):
+    /// its identity, its own state, every event and its archive mark.
+    ///
+    /// # Errors
+    ///
+    /// Returns `session.not_found` when the session does not exist, or a backend error.
+    async fn export_session(&self, identity: &AdkIdentity) -> Result<crate::SessionBundle> {
+        let session = self.get_for_identity(identity).await?;
+        Ok(crate::SessionBundle::of(session.as_ref()))
+    }
+
+    /// Lists the sessions of an app and user that are not archived, in
+    /// [`list`](SessionService::list)'s order; `offset` and `limit` count only these.
+    ///
+    /// This is the listing a person sees: `adk-rust sessions list` and the REST API's
+    /// session list use it. The default reads [`list`](SessionService::list) a page at a
+    /// time and leaves archived sessions out.
+    ///
+    /// # Errors
+    ///
+    /// Returns what [`list`](SessionService::list) returns.
+    async fn list_active(&self, req: ListRequest) -> Result<Vec<Box<dyn Session>>> {
+        list_kept(self, req, crate::archive::Keep::Active).await
+    }
+
+    /// Lists the archived sessions of an app and user, in [`list`](SessionService::list)'s
+    /// order; `offset` and `limit` count only these.
+    ///
+    /// # Errors
+    ///
+    /// Returns what [`list`](SessionService::list) returns.
+    async fn list_archived(&self, req: ListRequest) -> Result<Vec<Box<dyn Session>>> {
+        list_kept(self, req, crate::archive::Keep::Archived).await
+    }
+}
+
+/// The sessions of `req` that `keep` keeps, with `offset` and `limit` counting only those,
+/// read from `list` a page at a time.
+async fn list_kept<S: SessionService + ?Sized>(
+    service: &S,
+    req: ListRequest,
+    keep: crate::archive::Keep,
+) -> Result<Vec<Box<dyn Session>>> {
+    validate_scope(&req.app_name, &req.user_id)?;
+    let mut skip = req.offset.unwrap_or(0);
+    let limit = req.limit.unwrap_or(usize::MAX);
+    let mut kept = Vec::new();
+    let mut position = 0;
+    while kept.len() < limit {
+        let page = service
+            .list(ListRequest {
+                app_name: req.app_name.clone(),
+                user_id: req.user_id.clone(),
+                limit: Some(crate::archive::LIST_PAGE),
+                offset: Some(position),
+            })
+            .await?;
+        let read = page.len();
+        position += read;
+        for session in page {
+            if !keep.keeps(session.as_ref()) {
+                continue;
+            }
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            if kept.len() < limit {
+                kept.push(session);
+            }
+        }
+        if read < crate::archive::LIST_PAGE {
+            break;
+        }
+    }
+    Ok(kept)
 }

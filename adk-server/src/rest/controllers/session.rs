@@ -1,6 +1,6 @@
 use axum::{
     Extension, Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
@@ -305,26 +305,37 @@ pub async fn delete_session_from_path(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// List sessions for a user (adk-go compatible)
+/// Which sessions `GET .../sessions` lists.
+#[derive(Debug, Default, Deserialize)]
+pub struct ListSessionsQuery {
+    /// `true` lists the archived sessions instead of the active ones.
+    #[serde(default)]
+    pub archived: bool,
+}
+
+/// List sessions for a user (adk-go compatible); archived sessions only with `?archived=true`.
 pub async fn list_sessions(
     State(controller): State<SessionController>,
     Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Path(params): Path<SessionPathParams>,
+    Query(query): Query<ListSessionsQuery>,
 ) -> Result<Json<Vec<SessionResponse>>, StatusCode> {
     let user_id = authorize_user_id(&request_context, &params.user_id)?;
 
     tracing::info!("list_sessions called with app_name: {}, user_id: {}", params.app_name, user_id);
 
-    let sessions = controller
-        .session_service
-        .list(adk_session::ListRequest {
-            app_name: params.app_name.clone(),
-            user_id,
-            limit: None,
-            offset: None,
-        })
-        .await
-        .map_err(|e| error_status("list", &e))?;
+    let request = adk_session::ListRequest {
+        app_name: params.app_name.clone(),
+        user_id,
+        limit: None,
+        offset: None,
+    };
+    let listed = if query.archived {
+        controller.session_service.list_archived(request).await
+    } else {
+        controller.session_service.list_active(request).await
+    };
+    let sessions = listed.map_err(|e| error_status("list", &e))?;
 
     tracing::info!("Found {} sessions", sessions.len());
 

@@ -1,3 +1,4 @@
+pub mod archive_contract;
 pub mod history_contract;
 pub mod integrity_contract;
 pub mod session_contract;
