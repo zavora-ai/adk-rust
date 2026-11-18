@@ -194,6 +194,7 @@ enum ContentBlockBuilder {
         name: String,
         input: ToolInput,
         cache_control: Option<CacheControlEphemeral>,
+        toolset_name: Option<String>,
     },
     ServerToolUse {
         id: String,
@@ -252,6 +253,7 @@ impl ContentBlockBuilder {
                 name: tool_use.name,
                 input: ToolInput::new(tool_use.input),
                 cache_control: tool_use.cache_control,
+                toolset_name: tool_use.toolset_name,
             },
             ContentBlock::ServerToolUse(server_tool_use) => ContentBlockBuilder::ServerToolUse {
                 id: server_tool_use.id,
@@ -317,9 +319,15 @@ impl ContentBlockBuilder {
             ContentBlockBuilder::Text { text, citations, cache_control } => {
                 Ok(Some(ContentBlock::Text(TextBlock { text, citations, cache_control })))
             }
-            ContentBlockBuilder::ToolUse { id, name, input, cache_control } => {
+            ContentBlockBuilder::ToolUse { id, name, input, cache_control, toolset_name } => {
                 Ok(input.resolve(stop_reason).map(|input| {
-                    ContentBlock::ToolUse(ToolUseBlock { id, name, input, cache_control })
+                    ContentBlock::ToolUse(ToolUseBlock {
+                        id,
+                        name,
+                        input,
+                        cache_control,
+                        toolset_name,
+                    })
                 }))
             }
             ContentBlockBuilder::ServerToolUse { id, name, input, cache_control, caller } => {
@@ -660,6 +668,46 @@ mod tests {
         let tool_use = message.content[0].as_tool_use().expect("Expected ToolUseBlock");
 
         assert_eq!(tool_use.input, input, "Tool input should match initial value");
+    }
+
+    /// A streamed toolset member call keeps its `toolset_name`.
+    #[tokio::test]
+    async fn streamed_toolset_member_keeps_its_toolset_name() {
+        let block = ContentBlock::ToolUse(ToolUseBlock::member(
+            "toolu_1",
+            crate::types::COMPUTER_TOOLSET,
+            "left_click",
+            serde_json::json!({}),
+        ));
+        let events = vec![
+            Ok(start_event()),
+            Ok(MessageStreamEvent::ContentBlockStart(ContentBlockStartEvent::new(block, 0))),
+            Ok(MessageStreamEvent::ContentBlockDelta(ContentBlockDeltaEvent::new(
+                ContentBlockDelta::InputJsonDelta(InputJsonDelta::new(
+                    r#"{"coordinate": [5, 9]}"#.to_string(),
+                )),
+                0,
+            ))),
+            Ok(MessageStreamEvent::ContentBlockStop(ContentBlockStopEvent::new(0))),
+            Ok(MessageStreamEvent::MessageDelta(MessageDeltaEvent::new(
+                MessageDelta::new().with_stop_reason(StopReason::ToolUse),
+                MessageDeltaUsage::new(10),
+            ))),
+        ];
+        let (mut acc_stream, rx) = AccumulatingStream::new(stream::iter(events));
+        use futures::StreamExt;
+        while acc_stream.next().await.is_some() {}
+        let message = rx.await.expect("channel closed").expect("accumulation failed");
+        let tool_use = message.content[0].as_tool_use().expect("Expected ToolUseBlock");
+        assert_eq!(
+            tool_use,
+            &ToolUseBlock::member(
+                "toolu_1",
+                "computer",
+                "left_click",
+                serde_json::json!({ "coordinate": [5, 9] })
+            )
+        );
     }
 
     fn start_event() -> MessageStreamEvent {

@@ -92,3 +92,86 @@ async fn live_current_models_complete_a_tool_call() {
         assert!(!answer.trim().is_empty(), "{label}: empty answer");
     }
 }
+
+/// Claude Haiku 5.5 consults Claude Sonnet 5.5 through the advisor tool; the response's cost
+/// includes the advisor call, and the spend ledger commits it.
+#[tokio::test]
+#[ignore = "calls the Anthropic API; needs ANTHROPIC_API_KEY"]
+async fn haiku_consults_a_sonnet_advisor_and_the_ledger_counts_it() {
+    use adk_core::{InMemorySpendLedger, ModelCallScope, SpendKey, SpendLedger, SpendPeriod};
+    use std::sync::Arc;
+
+    let key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY");
+    let client =
+        AnthropicClient::new(AnthropicConfig::new(key, "claude-haiku-5-5").with_max_tokens(2_048))
+            .unwrap();
+    let mut request = LlmRequest::new(
+        "claude-haiku-5-5",
+        vec![
+            Content::new("system").with_text(
+                "Before you answer, call the advisor tool once for guidance, then answer in at \
+                 most three sentences.",
+            ),
+            Content::new("user").with_text(
+                "Our nightly job deletes rows older than 30 days with one DELETE statement and \
+                 now times out on a 400M-row PostgreSQL table. How should we fix it safely?",
+            ),
+        ],
+    );
+    request.tools.insert(
+        "advisor".to_string(),
+        json!({
+            "name": "advisor",
+            "description": "Consults a stronger Claude model for guidance mid-task (server-side).",
+            "x-adk-anthropic-tool": {
+                "type": "advisor_20260301",
+                "name": "advisor",
+                "model": "claude-sonnet-5-5",
+                "max_uses": 1,
+                "max_tokens": 2_048
+            }
+        }),
+    );
+    let bound = client.max_cost_micro_usd(&request).expect("a bounded advisor");
+
+    let ledger = Arc::new(InMemorySpendLedger::default());
+    let scope = ModelCallScope::new().with_spend_ledger(ledger.clone(), "acme");
+    let responses: Vec<LlmResponse> = scope
+        .generate(&client, request, false)
+        .await
+        .expect("request accepted")
+        .try_collect()
+        .await
+        .expect("response parsed");
+    let response = responses.last().expect("a response");
+    let usage = response.usage_metadata.as_ref().expect("usage");
+    let iterations = usage.provider_usage.as_ref().and_then(|raw| raw.get("iterations"));
+    let advisor_calls = iterations
+        .and_then(|iterations| iterations.as_array())
+        .map(|iterations| iterations.iter().filter(|it| it["type"] == "advisor_message").count())
+        .unwrap_or(0);
+    let executor_only = adk_model::PricingCatalog::standard()
+        .cost_usd(Some("anthropic"), "claude-haiku-5-5", usage)
+        .unwrap();
+    let spent = ledger
+        .spent(&SpendKey::org("acme").with_vendor("anthropic"), SpendPeriod::Day)
+        .await
+        .unwrap();
+    println!("iterations: {}", iterations.map(ToString::to_string).unwrap_or_default());
+    println!(
+        "cost: {:?} USD (executor alone {executor_only} USD); bound {bound} micro-USD; ledger {spent} micro-USD",
+        usage.cost
+    );
+    let text: String = response
+        .content
+        .iter()
+        .flat_map(|content| content.parts.iter())
+        .filter_map(Part::text)
+        .collect();
+    println!("answer: {text}");
+    assert_eq!(response.error_code, None);
+    assert_eq!(advisor_calls, 1, "the executor consulted the advisor once");
+    assert!(usage.cost.unwrap() > executor_only);
+    assert_eq!(Some(spent), adk_core::usd_to_micro_usd(usage.cost.unwrap()));
+    assert!(spent <= bound);
+}
