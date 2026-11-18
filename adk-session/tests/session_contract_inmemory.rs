@@ -94,3 +94,9 @@ mod subject_data {
         ))
     );
 }
+
+#[tokio::test]
+async fn test_inmemory_archive_contract() {
+    let service = InMemorySessionService::new();
+    common::archive_contract::assert_archive_contract(&service, "archive_app").await;
+}

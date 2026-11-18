@@ -132,3 +132,9 @@ mod subject_data {
         harness = crate::common::subject_data::SessionData(super::FileDatabase::new())
     );
 }
+
+#[tokio::test]
+async fn test_sqlite_archive_contract() {
+    let service = in_memory().await;
+    common::archive_contract::assert_archive_contract(&service, "archive_app").await;
+}

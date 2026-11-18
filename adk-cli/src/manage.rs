@@ -39,18 +39,25 @@ pub async fn sessions(command: SessionsCommands) -> Result<()> {
     let user = crate::setup::os_user();
     let store = db.sessions.as_ref();
     match command {
-        SessionsCommands::List => {
-            let mut listed = store
-                .list(ListRequest {
-                    app_name: APP_NAME.into(),
-                    user_id: user.clone(),
-                    limit: None,
-                    offset: None,
-                })
-                .await?;
+        SessionsCommands::List { archived } => {
+            let request = ListRequest {
+                app_name: APP_NAME.into(),
+                user_id: user.clone(),
+                limit: None,
+                offset: None,
+            };
+            let mut listed = if archived {
+                store.list_archived(request).await?
+            } else {
+                store.list_active(request).await?
+            };
             listed.sort_by_key(|session| std::cmp::Reverse(session.last_update_time()));
             if listed.is_empty() {
-                println!("No sessions yet. Start one with `adk-rust`.");
+                if archived {
+                    println!("No archived sessions.");
+                } else {
+                    println!("No sessions yet. Start one with `adk-rust`.");
+                }
             }
             for session in listed {
                 let full = get(store, &user, session.id()).await?;
@@ -159,8 +166,43 @@ pub async fn sessions(command: SessionsCommands) -> Result<()> {
                 safe(fork.session.id())
             );
         }
+        SessionsCommands::Archive { id, reason } => {
+            let session = get(store, &user, &id).await?;
+            let mark = store.archive(&session.try_identity()?, reason).await?;
+            println!(
+                "archived session {} at {}; `adk-rust sessions unarchive {}` brings it back",
+                safe(&id),
+                mark.archived_at.format("%Y-%m-%d %H:%M"),
+                safe(&id)
+            );
+        }
+        SessionsCommands::Unarchive { id } => {
+            let session = get(store, &user, &id).await?;
+            store.unarchive(&session.try_identity()?).await?;
+            println!("session {} is back in `adk-rust sessions list`", safe(&id));
+        }
+        SessionsCommands::Export { id, out } => {
+            let session = get(store, &user, &id).await?;
+            let bundle = adk_session::SessionBundle::of(session.as_ref());
+            let json = serde_json::to_string_pretty(&bundle)?;
+            match out {
+                Some(path) => {
+                    // The conversation stays readable by its owner only, as harness.db is.
+                    write_private(&path, json.as_bytes())
+                        .with_context(|| format!("cannot write {}", path.display()))?;
+                    println!(
+                        "wrote session {} ({} events) to {}",
+                        safe(&id),
+                        bundle.events.len(),
+                        path.display()
+                    );
+                }
+                None => println!("{json}"),
+            }
+        }
         SessionsCommands::Rewind { id, turn, redo, yes } => {
             let session = get(store, &user, &id).await?;
+            adk_session::ensure_writable(session.as_ref())?;
             let harness = session_harness(&db, session.as_ref())?.with_context(|| {
                 format!(
                     "session {} records no workspace, so it has no snapshots to rewind to",
@@ -246,6 +288,19 @@ async fn get(
         })
         .await
         .with_context(|| format!("no session {id}; `adk-rust sessions list` shows yours"))
+}
+
+/// Writes `bytes` to `path`, creating it readable and writable by its owner only on Unix.
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)?.write_all(bytes)
 }
 
 /// `adk-rust memory …` (spec 3.1 §7.15.2, §10 L2).

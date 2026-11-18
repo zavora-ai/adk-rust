@@ -213,3 +213,50 @@ async fn test_delete_session() {
 
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
+
+/// The session list leaves archived sessions out; `?archived=true` lists them instead.
+#[tokio::test]
+async fn the_session_list_leaves_archived_sessions_out() {
+    let sessions = Arc::new(adk_session::InMemorySessionService::new());
+    for id in ["kept", "shelved"] {
+        sessions
+            .create(CreateRequest {
+                app_name: "test-app".into(),
+                user_id: "user123".into(),
+                session_id: Some(id.into()),
+                state: Default::default(),
+            })
+            .await
+            .unwrap();
+    }
+    let shelved = adk_core::AdkIdentity::new(
+        adk_core::AppName::try_from("test-app").unwrap(),
+        adk_core::UserId::try_from("user123").unwrap(),
+        adk_core::SessionId::try_from("shelved").unwrap(),
+    );
+    sessions.archive(&shelved, Some("done".into())).await.unwrap();
+    let app = create_app(adk_server::ServerConfig::new(Arc::new(MockAgentLoader), sessions));
+
+    let mut listed = Vec::new();
+    for uri in [
+        "/api/apps/test-app/users/user123/sessions",
+        "/api/apps/test-app/users/user123/sessions?archived=true",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let ids: Vec<String> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|session| session["id"].as_str().unwrap().to_string())
+            .collect();
+        listed.push(ids);
+    }
+    assert_eq!(listed, [vec!["kept".to_string()], vec!["shelved".to_string()]]);
+}

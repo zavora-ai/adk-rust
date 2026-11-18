@@ -665,3 +665,34 @@ fn schema_rendering_and_answer_validation_follow_the_schema() {
     );
     assert!(validate_answer(&schema, &json!("prod")).is_err());
 }
+
+/// `Runner::prewarm` starts the operator's MCP servers the first run would start, so the first
+/// turn does not wait for the server's start and handshake; the timings print.
+#[tokio::test]
+async fn prewarm_starts_the_operators_servers_before_the_first_turn() {
+    let status = |f: &common::Fixture| {
+        let mcp = f.harness.agent().runtime().mcp().cloned().expect("mcp is configured");
+        async move { mcp.manager().server_status("fixture").await.unwrap() }
+    };
+    let script = || vec![call("mcp_list_resources", json!({ "server": "fixture" })), done()];
+
+    let cold = common::fixture(script(), |b| b.mcp_servers(servers())).await;
+    assert_ne!(status(&cold).await, adk_tool::mcp::ServerStatus::Running);
+    let started = std::time::Instant::now();
+    let events = cold.send("notes").await;
+    let cold_turn = started.elapsed();
+    assert_eq!(outcome(&response_of(&events, "mcp_list_resources")), Outcome::Executed);
+
+    let warm = common::fixture(script(), |b| b.mcp_servers(servers())).await;
+    let report = warm.harness.runner().prewarm(adk_runner::Prewarm::new()).await.unwrap();
+    assert_eq!(status(&warm).await, adk_tool::mcp::ServerStatus::Running, "started by prewarm");
+    let started = std::time::Instant::now();
+    let events = warm.send("notes").await;
+    let warm_turn = started.elapsed();
+    assert_eq!(outcome(&response_of(&events, "mcp_list_resources")), Outcome::Executed);
+    println!(
+        "first turn with a stdio MCP server: cold {cold_turn:?}, after prewarm {warm_turn:?} \
+         (prewarm took {:?})",
+        report.elapsed
+    );
+}

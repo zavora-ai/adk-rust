@@ -951,7 +951,7 @@ async fn latest_in_workspace(
     keep: impl Fn(&dyn adk_session::State) -> bool,
 ) -> Result<Option<String>> {
     let mut listed = sessions
-        .list(adk_session::ListRequest {
+        .list_active(adk_session::ListRequest {
             app_name: APP_NAME.to_string(),
             user_id: user.to_string(),
             limit: None,

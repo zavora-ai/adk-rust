@@ -225,6 +225,44 @@ pub trait Llm: Send + Sync {
     fn native_compaction(&self) -> Option<NativeCompaction> {
         None
     }
+
+    /// Opens what the first call to this model would otherwise open, such as the pooled
+    /// TLS connection to the provider, so a turn that follows soon after starts on it.
+    ///
+    /// It sends no prompt and spends no tokens. What it opens lasts as long as the client
+    /// keeps an idle connection (90 seconds for `adk-anthropic`); call it again after that.
+    /// The default does nothing. Wrappers forward to the model they wrap.
+    ///
+    /// # Errors
+    ///
+    /// Returns the provider's error when it cannot be reached; a turn would meet the same
+    /// error, so a caller may log it and carry on.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Llm, LlmRequest, LlmResponseStream};
+    ///
+    /// struct Local;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Llm for Local {
+    ///     fn name(&self) -> &str {
+    ///         "local"
+    ///     }
+    ///     async fn generate_content(&self, _: LlmRequest, _: bool) -> adk_core::Result<LlmResponseStream> {
+    ///         Ok(Box::pin(futures::stream::empty()))
+    ///     }
+    /// }
+    ///
+    /// # futures::executor::block_on(async {
+    /// Local.prewarm().await?;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// # }).unwrap();
+    /// ```
+    async fn prewarm(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Tool declarations keyed by tool name, in the order the agent declares them.

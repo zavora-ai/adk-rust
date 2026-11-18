@@ -390,10 +390,10 @@ pub async fn open_harness_db_in(dir: &Path) -> Result<HarnessDb> {
     })
 }
 
-/// The id of `user_id`'s most recently updated session, if any.
+/// The id of `user_id`'s most recently updated session that is not archived, if any.
 pub async fn latest(sessions: &dyn SessionService, user_id: &str) -> Result<Option<String>> {
     let recent = sessions
-        .list(ListRequest {
+        .list_active(ListRequest {
             app_name: APP_NAME.to_string(),
             user_id: user_id.to_string(),
             limit: Some(1),

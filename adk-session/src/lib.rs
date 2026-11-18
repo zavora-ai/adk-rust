@@ -15,6 +15,7 @@
 //!   stores, the lease, run, schedule, and governance state stores of the durable runtime, and
 //!   the subject registries and consent stores of [`adk_core::subject`]
 //! - [`SessionSubjectData`] - A subject's sessions, exported and erased through any backend
+//! - [`archive`] - Archive, unarchive and export sessions on every backend
 //! - [`Session`] - Conversation session with state and events
 //! - [`State`] - Key-value state with typed prefixes
 //! - [`SessionService`] - Trait for custom session backends
@@ -57,6 +58,7 @@
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 /// SQL-backed approval stores for calls held for confirmation.
 pub mod approval;
+pub mod archive;
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 /// SQL-backed audit log stores for signed, Merkle-hashed audit logs.
 pub mod audit_log;
@@ -194,6 +196,9 @@ pub mod subject_redis;
 /// Vertex AI Session API backend.
 pub mod vertex;
 
+pub use archive::{
+    ARCHIVE_AUTHOR, ARCHIVE_KEY, ArchiveMark, SESSION_BUNDLE_FORMAT, SessionBundle, ensure_writable,
+};
 pub use consent_gate::ConsentGatedSessionService;
 pub use event::{Event, EventActions, Events};
 pub use history::{

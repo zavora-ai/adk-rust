@@ -1202,8 +1202,34 @@ pub enum ServeAgent {
 #[cfg(all(feature = "harness", feature = "persist"))]
 #[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
 pub enum SessionsCommands {
-    /// List your sessions, most recent first
-    List,
+    /// List your sessions, most recent first; archived ones only with --archived
+    List {
+        /// List the archived sessions instead
+        #[arg(long)]
+        archived: bool,
+    },
+    /// Put a finished session away: kept, read-only, left out of `sessions list` and of
+    /// `--continue`
+    Archive {
+        /// Session id
+        id: String,
+        /// Why, kept with the archive mark
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Bring an archived session back, so it lists and continues again
+    Unarchive {
+        /// Session id
+        id: String,
+    },
+    /// Write a session out as one portable JSON bundle (`adk.session.bundle/v1`)
+    Export {
+        /// Session id
+        id: String,
+        /// The file to write; standard output when omitted
+        #[arg(long, value_name = "FILE")]
+        out: Option<std::path::PathBuf>,
+    },
     /// Show a session's conversation
     Show {
         /// Session id

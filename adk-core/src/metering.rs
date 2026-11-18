@@ -1144,6 +1144,10 @@ impl Llm for MeteredLlm {
     fn native_compaction(&self) -> Option<crate::NativeCompaction> {
         self.inner.native_compaction()
     }
+
+    async fn prewarm(&self) -> Result<()> {
+        self.inner.prewarm().await
+    }
 }
 
 #[cfg(test)]

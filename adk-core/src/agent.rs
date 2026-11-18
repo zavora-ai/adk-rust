@@ -370,6 +370,54 @@ pub trait Agent: Send + Sync {
         }
     }
 
+    /// Readies what this agent's first turn would otherwise start, such as its model's
+    /// connection and its toolsets' servers, so the turn starts without that wait.
+    ///
+    /// `adk_runner::Runner::prewarm` calls this on its root agent. It sends no prompt and
+    /// runs no tool. The default prewarms each of [`sub_agents`](Self::sub_agents); an agent
+    /// that owns a model or toolsets readies them, then its sub-agents.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error a model or toolset gave; a turn would meet the same error.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Agent, EventStream, InvocationContext, Result};
+    /// use async_trait::async_trait;
+    /// use std::sync::Arc;
+    ///
+    /// struct Leaf;
+    ///
+    /// #[async_trait]
+    /// impl Agent for Leaf {
+    ///     fn name(&self) -> &str {
+    ///         "leaf"
+    ///     }
+    ///     fn description(&self) -> &str {
+    ///         "does nothing"
+    ///     }
+    ///     fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+    ///         &[]
+    ///     }
+    ///     async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+    ///         Ok(Box::pin(futures::stream::empty()))
+    ///     }
+    /// }
+    ///
+    /// # futures::executor::block_on(async {
+    /// Leaf.prewarm().await?;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// # }).unwrap();
+    /// ```
+    async fn prewarm(&self) -> Result<()> {
+        for agent in self.sub_agents() {
+            agent.prewarm().await?;
+        }
+        Ok(())
+    }
+
     /// Screens a user message with the input guardrails of this agent and of every agent
     /// below it.
     ///

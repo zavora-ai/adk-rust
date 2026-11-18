@@ -181,6 +181,50 @@ fn build(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<Runner> {
 }
 ```
 
+### Prewarming a Runner
+
+`Runner::prewarm` does before the first message what a first turn would otherwise do before its
+first token, and sends no prompt:
+
+| Part | What it readies |
+|------|-----------------|
+| `Llm::prewarm` | The model client's pooled connections. `AnthropicClient` sends one `GET /v1/models` on its request client and one on its stream client, which spends no tokens; other providers keep the default, which does nothing |
+| `Agent::prewarm` | Every agent in the tree: `LlmAgent` and `CodeActAgent` prewarm their model, a harness also starts the MCP servers its first run would start, and the default prewarms `sub_agents` |
+| `Prewarm::session(user, session)` | Reads the session, so the session store's connection is open, and refuses an archived session with `session.archived` |
+
+It is refused while the runner is frozen, and stops with `runner.prewarm.timeout` after
+`Prewarm::budget` (10 seconds by default). A warm model connection lasts while the client keeps
+it idle — 90 seconds for `adk-anthropic` — and `PrewarmReport::warm_until` says when to prewarm
+again. The `adk-rust` REPL prewarms while the person types the first message, and `adk-rust up`
+and `HarnessLauncher`'s `up` prewarm the kernel's agent at boot.
+
+```rust
+use adk_core::{SessionId, UserId};
+use adk_runner::{Prewarm, Runner};
+use std::time::Duration;
+
+async fn ready(runner: &Runner) -> adk_core::Result<()> {
+    let report = runner
+        .prewarm(
+            Prewarm::new()
+                .session(UserId::new("ana")?, SessionId::new("trip")?)
+                .budget(Duration::from_secs(5)),
+        )
+        .await?;
+    println!("ready in {:?}; warm until {}", report.elapsed, report.warm_until);
+    Ok(())
+}
+```
+
+What a prewarm saves depends on what the first turn would start:
+
+| Part | Cold cost on a first turn | Prewarmed |
+|------|---------------------------|-----------|
+| A stdio MCP server's start and handshake | Tens of milliseconds for a small binary, hundreds for a Node server, more through `npx` | Started ahead by a harness |
+| The model's TLS connection | Tens of milliseconds, against a first token of hundreds | Opened ahead |
+| Opening a session store, building the agent and runner | Milliseconds and less, paid once when the host starts | Not prewarmed |
+| An OS sandbox | A few milliseconds per command, each its own sandboxed process | Nothing to prewarm |
+
 ### Prompt caching
 
 **Caching is a provider-level concern and needs no Runner configuration.** Each

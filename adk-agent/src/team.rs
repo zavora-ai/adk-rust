@@ -1388,6 +1388,13 @@ impl Agent for CompiledTeam {
         }
     }
 
+    async fn prewarm(&self) -> Result<()> {
+        for member in &self.members {
+            member.prewarm().await?;
+        }
+        Ok(())
+    }
+
     async fn govern_transfer(
         &self,
         request: &adk_core::AgentTransferRequest,
@@ -1579,6 +1586,10 @@ impl Agent for TeamMemberAgent {
     // `sub_agents` is empty on purpose, so the default `close` would stop here.
     async fn close(&self) {
         self.agent.close().await;
+    }
+
+    async fn prewarm(&self) -> Result<()> {
+        self.agent.prewarm().await
     }
 
     fn configure_run(&self, _agent_name: &str, config: &mut RunConfig) {

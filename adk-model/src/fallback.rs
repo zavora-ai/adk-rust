@@ -514,6 +514,19 @@ impl Llm for FallbackLlm {
         let first = compactions.next()??;
         compactions.all(|compaction| compaction == Some(first)).then_some(first)
     }
+
+    /// Prewarms the first model, which serves the next call; the fallbacks are prewarmed too,
+    /// and their failures only logged.
+    async fn prewarm(&self) -> Result<()> {
+        let mut models = self.models.iter();
+        let Some(first) = models.next() else { return Ok(()) };
+        for model in models {
+            if let Err(error) = model.prewarm().await {
+                tracing::debug!(model = model.name(), error = %error, "a fallback model did not prewarm");
+            }
+        }
+        first.prewarm().await
+    }
 }
 
 #[cfg(test)]

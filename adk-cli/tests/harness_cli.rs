@@ -1217,3 +1217,64 @@ fn a_calls_ledger_record_outlives_the_process() {
         "{recorded:?}"
     );
 }
+
+/// A finished session is archived, left out of `sessions list`, refused a turn, exported as a
+/// bundle, and unarchived to continue (spec 3.0 parity item 23).
+#[test]
+fn an_archived_session_is_listed_apart_refused_exported_and_unarchived() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let dir = dir_arg(ws.path());
+    let turn = |reply: &str| {
+        let script = format!(r#"[{{"text": "{reply}"}}]"#);
+        run(
+            &[
+                "code",
+                "book the train",
+                "--dir",
+                &dir,
+                "--session",
+                "trip",
+                "--model-script",
+                &script,
+            ],
+            home.path(),
+            ws.path(),
+        )
+    };
+    let first = turn("Booked the 09:12.");
+    assert_eq!(first.status.code(), Some(0), "{}", text(&first));
+
+    let archived =
+        run(&["sessions", "archive", "trip", "--reason", "booked"], home.path(), ws.path());
+    assert!(text(&archived).contains("archived session trip"), "{}", text(&archived));
+    let listed = text(&run(&["sessions", "list"], home.path(), ws.path()));
+    assert!(!listed.contains("trip"), "{listed}");
+    let shelf = text(&run(&["sessions", "list", "--archived"], home.path(), ws.path()));
+    assert!(shelf.contains("trip"), "{shelf}");
+
+    let refused = turn("Never sent.");
+    assert_ne!(refused.status.code(), Some(0), "{}", text(&refused));
+    assert!(text(&refused).contains("is read-only"), "{}", text(&refused));
+
+    let export = ws.path().join("trip.json");
+    let exported = run(
+        &["sessions", "export", "trip", "--out", &export.display().to_string()],
+        home.path(),
+        ws.path(),
+    );
+    assert!(exported.status.success(), "{}", text(&exported));
+    let bundle: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&export).unwrap()).unwrap();
+    assert_eq!(bundle["format"], "adk.session.bundle/v1");
+    assert_eq!(bundle["archived"]["reason"], "booked");
+    assert!(bundle.to_string().contains("Booked the 09:12."), "{bundle}");
+    assert!(!bundle.to_string().contains("Never sent."), "{bundle}");
+
+    let back = run(&["sessions", "unarchive", "trip"], home.path(), ws.path());
+    assert!(back.status.success(), "{}", text(&back));
+    let listed = text(&run(&["sessions", "list"], home.path(), ws.path()));
+    assert!(listed.contains("trip"), "{listed}");
+    let again = turn("Return booked.");
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again));
+}

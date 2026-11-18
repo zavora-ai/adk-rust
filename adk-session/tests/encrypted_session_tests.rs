@@ -554,3 +554,8 @@ async fn encrypted_delete_all_sessions_erases_the_user_tier() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn encrypted_session_archive_contract() {
+    common::archive_contract::assert_archive_contract(&encrypted_in_memory(), APP).await;
+}
