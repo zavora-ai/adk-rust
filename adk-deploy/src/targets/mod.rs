@@ -417,6 +417,17 @@ impl RuntimeOptions {
 /// The default container port.
 pub const DEFAULT_PORT: u16 = 8080;
 
+/// Who receives traffic from the provider's network, as a target's `ingress` setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum Ingress {
+    /// Only the private network the provider places the agent on.
+    Internal,
+    /// Beyond the private network. Requires `[auth]` in `bearer` or `oidc` mode.
+    Public,
+}
+
 /// The provider-neutral description of the agent container, derived from a manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

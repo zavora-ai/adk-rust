@@ -47,6 +47,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Deserialize;
 
+pub use super::Ingress;
 use super::yaml::Yaml;
 use super::{
     DeployPlan, DeployRequest, DeployTarget, DeploymentOutcome, DeploymentStatus, PlannedResource,
@@ -61,19 +62,6 @@ pub const DEFAULT_RUNTIME_IMAGE: &str = "gcr.io/distroless/cc-debian12:nonroot";
 const DEFAULT_OUT_DIR: &str = ".adk-deploy/container";
 /// The `nonroot` user of the distroless runtime image.
 const AGENT_UID: u32 = 65532;
-
-/// Who receives traffic from the provider's network.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-#[non_exhaustive]
-pub enum Ingress {
-    /// Only the private network: Compose publishes on `127.0.0.1`, Kubernetes uses a
-    /// `ClusterIP` service.
-    Internal,
-    /// Beyond the private network: Compose publishes on every interface, Kubernetes uses a
-    /// `LoadBalancer` service. Requires `[auth]`.
-    Public,
-}
 
 /// What `deploy` does after writing the files.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -119,7 +107,8 @@ pub struct ContainerTargetConfig {
     /// Public host names the agent answers, besides loopback names and IP addresses.
     #[serde(default)]
     pub allowed_hosts: Vec<String>,
-    /// Ingress (default `internal`).
+    /// Ingress (default `internal`): `internal` publishes on `127.0.0.1` and uses a `ClusterIP`
+    /// service; `public` publishes on every interface and uses a `LoadBalancer` service.
     pub ingress: Option<Ingress>,
     /// Host address Compose publishes the port on (default `127.0.0.1`, or `0.0.0.0` for
     /// public ingress).
