@@ -52,11 +52,10 @@ async fn preloaded_memories_reach_each_request_once_under_a_history_processor() 
             "rows",
             "user",
             "earlier",
-            vec![MemoryEntry {
-                content: Content::new("user").with_text("rows are counted per page"),
-                author: "user".into(),
-                timestamp: chrono::Utc::now(),
-            }],
+            vec![MemoryEntry::new(
+                Content::new("user").with_text("rows are counted per page"),
+                "user",
+            )],
         )
         .await
         .unwrap();

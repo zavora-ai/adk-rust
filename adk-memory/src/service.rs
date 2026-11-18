@@ -1,12 +1,85 @@
 use adk_core::{Content, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use std::time::Duration;
 
-#[derive(Debug, Clone, serde::Serialize)]
+/// One stored memory: what was said or learned, who said it, and when.
+///
+/// | Field | Set by | Meaning |
+/// |-------|--------|---------|
+/// | `id` | [`with_id`](Self::with_id), or the backend when it stores the entry | The handle [`MemoryService::delete_memory`] takes; every entry a backend returns carries one |
+/// | `expires_at` | [`with_ttl`](Self::with_ttl), [`with_expires_at`](Self::with_expires_at), or the service's default TTL | When the entry stops being recalled; `None` keeps it until it is deleted |
+///
+/// [`crate::expiry`] states the expiry rule every backend applies.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::Content;
+/// use adk_memory::MemoryEntry;
+/// use std::time::Duration;
+///
+/// let entry = MemoryEntry::new(Content::new("user").with_text("Parking: level 3, bay 12."), "user")
+///     .with_id("parking-today")
+///     .with_ttl(Duration::from_secs(8 * 60 * 60));
+/// assert_eq!(entry.id.as_deref(), Some("parking-today"));
+/// assert!(!entry.is_expired_at(chrono::Utc::now()));
+/// ```
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct MemoryEntry {
+    /// The entry's id within its user's memory; `None` until a backend stores it, unless set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// What the memory holds.
     pub content: Content,
+    /// Who the memory came from.
     pub author: String,
+    /// When the memory was recorded.
     pub timestamp: DateTime<Utc>,
+    /// When the memory expires; `None` takes the service's default TTL, or never expires.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+impl MemoryEntry {
+    /// An entry of `content` by `author`, recorded now, without an id or an expiry.
+    pub fn new(content: Content, author: impl Into<String>) -> Self {
+        Self { id: None, content, author: author.into(), timestamp: Utc::now(), expires_at: None }
+    }
+
+    /// Sets when the memory was recorded.
+    pub fn with_timestamp(mut self, timestamp: DateTime<Utc>) -> Self {
+        self.timestamp = timestamp;
+        self
+    }
+
+    /// Sets the entry's id, so a caller can delete it later without searching for it.
+    ///
+    /// The id should be unique within the user's memory:
+    /// [`delete_memory`](MemoryService::delete_memory) removes every entry carrying it.
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    /// Expires the entry at `expires_at`, overriding the service's default TTL.
+    pub fn with_expires_at(mut self, expires_at: DateTime<Utc>) -> Self {
+        self.expires_at = Some(crate::expiry::to_millis(expires_at));
+        self
+    }
+
+    /// Expires the entry `ttl` from now, overriding the service's default TTL.
+    pub fn with_ttl(self, ttl: Duration) -> Self {
+        let expires_at = crate::expiry::expiry_after(Utc::now(), ttl);
+        self.with_expires_at(expires_at)
+    }
+
+    /// Whether the entry has expired at `now`, by [`crate::expiry::is_expired`].
+    pub fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
+        crate::expiry::is_expired(self.expires_at, now)
+    }
 }
 
 /// One stored memory of a user, as [`MemoryService::export_user`] returns it.
@@ -18,17 +91,15 @@ pub struct MemoryEntry {
 /// use adk_memory::{MemoryEntry, UserMemory};
 ///
 /// let memory = UserMemory {
-///     entry: MemoryEntry {
-///         content: Content::new("user").with_text("Hometown: Nairobi."),
-///         author: "user".to_string(),
-///         timestamp: chrono::Utc::now(),
-///     },
+///     entry: MemoryEntry::new(Content::new("user").with_text("Hometown: Nairobi."), "user")
+///         .with_id("m1"),
 ///     session_id: Some("s1".to_string()),
 ///     project_id: None,
 /// };
 /// let json = serde_json::to_value(&memory).unwrap();
 /// assert_eq!(json["sessionId"], "s1");
 /// assert_eq!(json["author"], "user");
+/// assert_eq!(json["id"], "m1");
 /// ```
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -149,6 +220,45 @@ pub trait MemoryService: Send + Sync {
     ) -> Result<Vec<MemoryEntry>> {
         let _ = (app_name, user_id, limit);
         Err(adk_core::AdkError::memory("list_recent not implemented"))
+    }
+
+    /// Deletes the memory `memory_id` of `user_id` in `app_name`, global or in any project,
+    /// and returns how many entries it removed: 0 when the user holds none with that id.
+    ///
+    /// `memory_id` is the [`MemoryEntry::id`] a search, listing or export returned, or the id
+    /// the caller set with [`MemoryEntry::with_id`]. Another user's entry with the same id is
+    /// never touched.
+    ///
+    /// # Errors
+    ///
+    /// The default returns an error, so a backend that cannot delete one entry is reported
+    /// rather than silently keeping it.
+    async fn delete_memory(&self, app_name: &str, user_id: &str, memory_id: &str) -> Result<u64> {
+        let _ = (app_name, user_id, memory_id);
+        Err(adk_core::AdkError::memory(
+            "delete_memory is not implemented by this memory backend; every adk-memory backend \
+             implements it, or remove the user's entries with delete_user",
+        ))
+    }
+
+    /// Removes every stored entry whose expiry has passed, across all apps and users, and
+    /// returns how many it removed.
+    ///
+    /// Reads never return an expired entry, so a purge reclaims storage without changing what
+    /// a search recalls. A backend whose store expires data natively (Redis key expiry, the
+    /// MongoDB TTL index, Memory Bank) also removes entries on the store's own schedule; the
+    /// count covers only what this call removed. [`crate::expiry::spawn_expiry_sweep`] runs
+    /// it on an interval.
+    ///
+    /// # Errors
+    ///
+    /// The default returns an error, so a backend that cannot purge is reported rather than
+    /// silently keeping expired entries.
+    async fn purge_expired(&self) -> Result<u64> {
+        Err(adk_core::AdkError::memory(
+            "purge_expired is not implemented by this memory backend; every adk-memory backend \
+             implements it",
+        ))
     }
 
     /// Verify backend connectivity.

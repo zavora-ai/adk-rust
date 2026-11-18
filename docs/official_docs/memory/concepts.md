@@ -5,22 +5,55 @@ these four and the rest of the section follows.
 
 ## `MemoryEntry`
 
-A single memory record: some content, who authored it, and when.
+A single memory record: some content, who authored it, when, its id, and when it expires.
 
 ```rust
-use adk_memory::MemoryEntry;
 use adk_core::Content;
-use chrono::Utc;
+use adk_memory::MemoryEntry;
+use std::time::Duration;
 
-let entry = MemoryEntry {
-    content: Content::new("user").with_text("I prefer dark mode"),
-    author: "user".to_string(),
-    timestamp: Utc::now(),
-};
+let entry = MemoryEntry::new(Content::new("user").with_text("I prefer dark mode"), "user");
+let parking = MemoryEntry::new(Content::new("user").with_text("Parked on level 3"), "user")
+    .with_id("parking-today")
+    .with_ttl(Duration::from_secs(8 * 60 * 60));
 ```
 
 Entries are the unit of storage and the unit of recall — `search` returns the
 entries most relevant to a query.
+
+| Field | Set with | Meaning |
+|-------|----------|---------|
+| `id` | `with_id`, or the backend when it stores the entry | The handle `delete_memory` takes; every entry a backend returns carries one |
+| `expires_at` | `with_ttl`, `with_expires_at`, or the service's default TTL | When the entry stops being recalled; `None` keeps it until it is deleted |
+
+`MemoryEntry` is `#[non_exhaustive]`: build it with `MemoryEntry::new` and the `with_*` methods.
+
+## Expiry
+
+An entry expires at its `expires_at`. An entry written without one takes the service's default
+TTL, measured from the write; a service without a default keeps it until it is deleted.
+
+| Step | Rule |
+|------|------|
+| Write | The entry's own expiry, else `now + default TTL`, else none, to the millisecond |
+| Read | An entry is expired once `expires_at <= now`; `search` and `list_recent` never return one |
+| Purge | `purge_expired` removes expired entries; `adk_memory::expiry::spawn_expiry_sweep` runs it on an interval |
+| Delete | `delete_memory(app, user, id)` removes one entry, global or in any project |
+
+`adk_memory::expiry` holds the rule every backend applies, and the `conformance` suite holds each
+backend to it. `export_user` lists what a backend still holds, so an expired entry that no purge
+has removed yet appears there with its `expires_at`.
+
+```rust
+use adk_memory::{InMemoryMemoryService, MemoryService};
+use adk_memory::expiry::spawn_expiry_sweep;
+use std::sync::Arc;
+use std::time::Duration;
+
+let memory: Arc<dyn MemoryService> =
+    Arc::new(InMemoryMemoryService::new().with_default_ttl(Duration::from_secs(30 * 24 * 3600)));
+let sweep = spawn_expiry_sweep(memory.clone(), Duration::from_secs(3600));
+```
 
 ## The `MemoryService` trait
 
@@ -42,6 +75,8 @@ pub trait MemoryService: Send + Sync {
     async fn add_entry(&self, app: &str, user: &str, entry: MemoryEntry) -> Result<()>;
     async fn delete_entries(&self, app: &str, user: &str, query: &str) -> Result<u64>;
     async fn list_recent(&self, app: &str, user: &str, limit: usize) -> Result<Vec<MemoryEntry>>;
+    async fn delete_memory(&self, app: &str, user: &str, memory_id: &str) -> Result<u64>;
+    async fn purge_expired(&self) -> Result<u64>;
     // …plus health_check (default: Ok), supports_project_scoping (default: false),
     // and the project-scoped methods below
 }
@@ -55,6 +90,8 @@ pub trait MemoryService: Send + Sync {
   embedding similarity, or graph token-scoring — but the contract is the same.
 - **`list_recent`** lists a user's newest entries, global and project-scoped, with no
   query — for "what does the agent remember?" views.
+- **`delete_memory`** removes one entry by the id a search, listing or export returned,
+  and **`purge_expired`** removes every expired entry ([Expiry](#expiry)).
 
 ## `SearchRequest` / `SearchResponse`
 

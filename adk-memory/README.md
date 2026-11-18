@@ -60,11 +60,7 @@ use chrono::Utc;
 async fn main() -> adk_core::Result<()> {
     let service = InMemoryMemoryService::new();
 
-    let entries = vec![MemoryEntry {
-        content: Content::new("user").with_text("The user prefers the dark theme."),
-        author: "system".to_string(),
-        timestamp: Utc::now(),
-    }];
+    let entries = vec![MemoryEntry::new(Content::new("user").with_text("The user prefers the dark theme."), "system")];
 
     service.add_session("my_app", "user_123", "session_456", entries).await?;
 
@@ -108,11 +104,7 @@ use chrono::Utc;
 #[tokio::main]
 async fn main() -> adk_core::Result<()> {
     let service = InMemoryMemoryService::new();
-    let entry = MemoryEntry {
-        content: Content::new("user").with_text("Launch is planned for March"),
-        author: "user".to_string(),
-        timestamp: Utc::now(),
-    };
+    let entry = MemoryEntry::new(Content::new("user").with_text("Launch is planned for March"), "user");
 
     // Global entry (no project scope)
     service.add_session("app", "user", "sess-1", vec![entry.clone()]).await?;
@@ -237,6 +229,7 @@ fn main() {
 | `vertex-memory` | Vertex AI Memory Bank | Managed memory generation and retrieval on the Gemini Enterprise Agent Platform |
 | `graph-memory` | SQLite | `GraphMemoryService` knowledge graph (implies `sqlite-memory`) |
 | `embedding-trait` | — | The `EmbeddingProvider` trait without a vector backend |
+| `conformance` | — | `adk_memory::conformance` and `memory_conformance_tests!`, the id and expiry suite for a backend's tests |
 
 ```toml
 # SQLite
@@ -254,6 +247,37 @@ adk-memory = { version = "3.0.0", features = ["database-memory"] }
 | Redis | Key segments are percent-encoded (`%` → `%25`, `:` → `%3A`); identifiers without either character keep their keys. `delete_user` deletes only the named user's keys. |
 | Neo4j | Entry ids are scoped by app, user, project and session; `add_session` merges on them, so re-ingesting a session updates it. Vector search over-fetches candidates before filtering to the tenant — see `Neo4jMemoryService::with_vector_candidate_cap`. |
 
+## Expiry and Deletion
+
+Every backend stores an id and an expiry with each entry, never returns an expired entry from
+`search` or `list_recent`, and implements `delete_memory` and `purge_expired`. The rule lives in
+`adk_memory::expiry`; the `conformance` suite holds each backend to it.
+
+| API | Behaviour |
+|-----|-----------|
+| `MemoryEntry::with_ttl`, `with_expires_at` | The entry's own expiry |
+| `with_default_ttl` on each service (`RedisMemoryConfig::ttl` for Redis) | The expiry of an entry written without one, measured from the write |
+| `MemoryService::delete_memory(app, user, id)` | Removes the entry with that id, global or in any project; returns how many it removed |
+| `MemoryService::purge_expired()` | Removes every expired entry; Redis keys, the MongoDB TTL index, and Memory Bank also expire entries natively |
+| `expiry::spawn_expiry_sweep(service, every)` | Runs `purge_expired` on an interval |
+
+```rust
+use adk_core::Content;
+use adk_memory::{InMemoryMemoryService, MemoryEntry, MemoryService};
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let memory = InMemoryMemoryService::new().with_default_ttl(Duration::from_secs(30 * 24 * 3600));
+    let parking = MemoryEntry::new(Content::new("user").with_text("Parked on level 3"), "user")
+        .with_id("parking")
+        .with_ttl(Duration::from_secs(8 * 3600));
+    memory.add_session("app", "ada", "s1", vec![parking]).await?;
+    assert_eq!(memory.delete_memory("app", "ada", "parking").await?, 1);
+    Ok(())
+}
+```
+
 ## Schema Migrations
 
 The SQLite, PostgreSQL, MongoDB, and Neo4j backends include a versioned migration system. Migrations are forward-only, idempotent, and tracked in a registry table. `schema_version()` returns 0 only when the registry table does not exist; a failed read is an error. PostgreSQL `migrate()` holds the advisory lock `PostgresMemoryService::ADVISORY_LOCK_KEY` on one connection.
@@ -264,6 +288,7 @@ The example below needs the `sqlite-memory` feature.
 |---------|-------------|
 | v1 | Initial schema (tables, indexes, FTS) |
 | v2 | Add `project_id` column/index for project-scoped memory |
+| v3 | Add `memory_id` and `expires_at` (MongoDB: a TTL index on `expires_at`); existing entries get ids |
 
 ```rust
 use adk_memory::SqliteMemoryService;
@@ -289,6 +314,7 @@ async fn main() -> adk_core::Result<()> {
 | `add_session(app, user, session, entries)` | required |
 | `search(SearchRequest)` | required |
 | `delete_user`, `delete_session`, `add_entry`, `delete_entries`, `list_recent` | Return a "not implemented" error; backends override them |
+| `delete_memory(app, user, id)`, `purge_expired()` | Return an error; every backend in this crate implements them |
 | `export_user(app, user)` | Returns `subject.unsupported`; every backend in this crate lists the user's entries, global and project-scoped |
 | `health_check()` | `Ok(())` |
 | `supports_project_scoping()` | `false` |
@@ -341,6 +367,9 @@ skipped and search returns nothing; deletes and exports always pass through. See
 | `schema_version()` returns read failures as errors | — |
 | Keyword search matches through punctuation and returns the best matches first | — |
 | PostgreSQL `migrate()` releases its advisory lock | — |
+| `MemoryEntry` gains `id` and `expires_at` and is `#[non_exhaustive]` | Build it with `MemoryEntry::new` and its `with_*` methods |
+| `MemoryService` gains `delete_memory` and `purge_expired` | A wrapper forwards both |
+| `RedisMemoryConfig::ttl` is each entry's default TTL, not a session list's | — |
 
 See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
 

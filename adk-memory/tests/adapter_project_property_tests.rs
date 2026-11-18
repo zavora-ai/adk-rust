@@ -5,7 +5,6 @@
 
 use adk_core::{Content, Memory};
 use adk_memory::{InMemoryMemoryService, MemoryService, MemoryServiceAdapter};
-use chrono::Utc;
 use proptest::prelude::*;
 use std::sync::Arc;
 
@@ -50,11 +49,7 @@ proptest! {
             let user = "test-user";
 
             // Add a global entry via the service directly
-            let global_entry = adk_memory::MemoryEntry {
-                content: Content::new("user").with_text(&global_text),
-                author: "author".to_string(),
-                timestamp: Utc::now(),
-            };
+            let global_entry = adk_memory::MemoryEntry::new(Content::new("user").with_text(&global_text), "author");
             MemoryService::add_session(
                 service.as_ref(), app, user, "global-session", vec![global_entry],
             )
@@ -62,11 +57,7 @@ proptest! {
             .unwrap();
 
             // Add a project entry via the service directly
-            let project_entry = adk_memory::MemoryEntry {
-                content: Content::new("user").with_text(&project_text),
-                author: "author".to_string(),
-                timestamp: Utc::now(),
-            };
+            let project_entry = adk_memory::MemoryEntry::new(Content::new("user").with_text(&project_text), "author");
             MemoryService::add_session_to_project(
                 service.as_ref(), app, user, "project-session", &project_id, vec![project_entry],
             )

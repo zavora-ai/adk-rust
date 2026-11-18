@@ -11,7 +11,7 @@ agent code doesn't change.
 | `InMemoryMemoryService` | *(default)* | Process only | Keyword | Development, tests, demos |
 | `SqliteMemoryService` | `sqlite-memory` | A file | Keyword | Single-node apps, local persistence |
 | `PostgresMemoryService` | `database-memory` | Postgres + `pgvector` | **Vector similarity** with an embedding provider; full-text (`tsvector`) without | Production semantic search |
-| `RedisMemoryService` | `redis-memory` | Redis (optional TTL) | Keyword | Fast, ephemeral-ish, shared cache |
+| `RedisMemoryService` | `redis-memory` | Redis, keys expire natively | Keyword | Fast, ephemeral-ish, shared cache |
 | `MongoMemoryService` | `mongodb-memory` | MongoDB | Atlas Vector Search with an embedding provider; text search without | Existing Mongo infra |
 | `Neo4jMemoryService` | `neo4j-memory` | Neo4j | Vector index with an embedding provider; entries linked by `FOLLOWS` | Existing Neo4j infra |
 | `VertexAiMemoryBankService` | `vertex-memory` | Vertex AI Agent Engine Memory Bank | Memory Bank similarity retrieval | Gemini Enterprise Agent Platform deployments |
@@ -86,7 +86,7 @@ use std::time::Duration;
 
 let memory = RedisMemoryService::new(RedisMemoryConfig {
     url: "redis://localhost:6379".into(),
-    ttl: Some(Duration::from_secs(60 * 60 * 24 * 30)),   // optional expiry
+    ttl: Some(Duration::from_secs(60 * 60 * 24 * 30)),   // default TTL of each entry
 }).await?;
 ```
 
@@ -128,6 +128,40 @@ pub trait EmbeddingProvider: Send + Sync {
 
 Keyword backends (InMemory, SQLite, Redis) don't need one. Match the embedding
 model you index with the one you query with.
+
+## Expiry and deletion
+
+Every backend stores an id and an expiry with each entry, never recalls an expired entry, and
+implements `delete_memory` and `purge_expired` ([Expiry](concepts.md#expiry)). Each one sets
+its default TTL with `with_default_ttl` (Redis also through `RedisMemoryConfig::ttl`):
+
+```rust
+use adk_memory::SqliteMemoryService;
+use std::time::Duration;
+
+let memory = SqliteMemoryService::new("sqlite:memory.db")
+    .await?
+    .with_default_ttl(Duration::from_secs(30 * 24 * 3600));
+memory.migrate().await?;
+```
+
+| Backend | Expired entries are removed by | Id of an entry written before 3.0 |
+|---------|-------------------------------|-----------------------------------|
+| InMemory | `purge_expired` | — |
+| SQLite | `purge_expired` | A random id, assigned by migration 3 |
+| Postgres | `purge_expired` | The row's UUID, assigned by migration 3 |
+| Redis | A list key expires natively with its latest entry; `purge_expired` removes expired entries from live lists and index members whose list is gone | None |
+| MongoDB | The TTL index migration 3 creates on `expires_at` (MongoDB's TTL monitor runs every 60 seconds), or `purge_expired` at once | The document's `_id` |
+| Neo4j | `purge_expired`, which also deletes sessions left without entries | The node's internal id |
+| Vertex AI Memory Bank | Memory Bank, at each memory's `expireTime`; `purge_expired` returns 0 | The memory's resource name |
+| Knowledge graph | `purge_expired`, over the episodic log | A random id, assigned by migration 2 |
+
+Memory Bank generates memories from the entries it is given, so an entry's expiry becomes the
+`expireTime` of each memory the generation creates or updates: the service generates once per
+distinct expiry and patches those memories. Without a per-entry expiry or `with_default_ttl`, the
+reasoning engine's own `memoryBankConfig.ttlConfig`, configured on the engine outside this
+client, decides when memories expire. The knowledge graph's TTL covers the episodic log that
+`add_session` writes; entities, observations and relations end through the graph operations.
 
 ## Migrations
 

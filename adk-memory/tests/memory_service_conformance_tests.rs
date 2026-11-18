@@ -2,8 +2,8 @@
 //! `add_entry_to_project`, `search` and `delete_entries_in_project` (spec 3.1 §10 M2).
 //!
 //! The harness's `MemoryServiceIndex` links each long-term fact to its entry by `author`
-//! and scopes it by project, and removes it with `delete_entries_in_project` on the fact
-//! id it carries as a second text part. The PostgreSQL suite is `#[ignore]`d and runs in
+//! and scopes it by project; `memory_conformance_tests.rs` covers the `delete_memory` it
+//! removes a fact with. The PostgreSQL suite is `#[ignore]`d and runs in
 //! CI's postgres job (`scripts/test-postgres.sh`).
 
 use adk_core::{Content, Part};
@@ -13,14 +13,13 @@ const APP: &str = "m2-app";
 const USER: &str = "m2-user";
 
 fn entry(author: &str, parts: &[&str]) -> MemoryEntry {
-    MemoryEntry {
-        content: Content {
+    MemoryEntry::new(
+        Content {
             role: "user".to_string(),
             parts: parts.iter().map(|text| Part::Text { text: (*text).to_string() }).collect(),
         },
-        author: author.to_string(),
-        timestamp: chrono::Utc::now(),
-    }
+        author.to_string(),
+    )
 }
 
 async fn authors(service: &dyn MemoryService, query: &str, project: Option<&str>) -> Vec<String> {

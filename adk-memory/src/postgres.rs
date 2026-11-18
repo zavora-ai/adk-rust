@@ -18,8 +18,10 @@ use crate::migration::pg_runner;
 use crate::service::*;
 use adk_core::Result;
 use async_trait::async_trait;
+use chrono::Utc;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::instrument;
 
 /// Maximum dimensions for a direct `vector` index in pgvector.
@@ -106,6 +108,7 @@ pub struct PostgresMemoryService {
     vector_index: VectorIndexType,
     /// True when dims > 2000 and we use halfvec expression indexing.
     use_halfvec: bool,
+    default_ttl: Option<Duration>,
 }
 
 /// Builder for [`PostgresMemoryService`] with configurable vector index.
@@ -150,6 +153,7 @@ impl PostgresMemoryServiceBuilder {
             embedding_provider: self.embedding_provider,
             vector_index: self.vector_index,
             use_halfvec,
+            default_ttl: None,
         })
     }
 }
@@ -173,7 +177,13 @@ impl PostgresMemoryService {
             adk_core::AdkError::memory(format!("memory database connection failed: {e}"))
         })?;
         let use_halfvec = needs_halfvec(&embedding_provider);
-        Ok(Self { pool, embedding_provider, vector_index: VectorIndexType::default(), use_halfvec })
+        Ok(Self {
+            pool,
+            embedding_provider,
+            vector_index: VectorIndexType::default(),
+            use_halfvec,
+            default_ttl: None,
+        })
     }
 
     /// Create a builder for fine-grained configuration.
@@ -200,7 +210,13 @@ impl PostgresMemoryService {
     /// Create a memory service from an existing connection pool.
     pub fn from_pool(pool: PgPool, embedding_provider: Option<Arc<dyn EmbeddingProvider>>) -> Self {
         let use_halfvec = needs_halfvec(&embedding_provider);
-        Self { pool, embedding_provider, vector_index: VectorIndexType::default(), use_halfvec }
+        Self {
+            pool,
+            embedding_provider,
+            vector_index: VectorIndexType::default(),
+            use_halfvec,
+            default_ttl: None,
+        }
     }
 
     /// Create a memory service from an existing pool with a specific index type.
@@ -210,7 +226,97 @@ impl PostgresMemoryService {
         vector_index: VectorIndexType,
     ) -> Self {
         let use_halfvec = needs_halfvec(&embedding_provider);
-        Self { pool, embedding_provider, vector_index, use_halfvec }
+        Self { pool, embedding_provider, vector_index, use_halfvec, default_ttl: None }
+    }
+
+    /// Expires each entry written without an expiry `ttl` after it is written.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_memory::PostgresMemoryService;
+    /// use std::time::Duration;
+    ///
+    /// let service = PostgresMemoryService::new("postgres://...", None)
+    ///     .await?
+    ///     .with_default_ttl(Duration::from_secs(30 * 24 * 3600));
+    /// ```
+    pub fn with_default_ttl(mut self, ttl: Duration) -> Self {
+        self.default_ttl = Some(ttl);
+        self
+    }
+
+    /// Embeds `entries` in one batch when a provider is set, then inserts them in one
+    /// transaction, each stamped with its id and expiry.
+    async fn insert(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+        project_id: Option<&str>,
+        entries: Vec<MemoryEntry>,
+    ) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let now = Utc::now();
+        let texts: Vec<String> =
+            entries.iter().map(|e| crate::text::extract_text(&e.content)).collect();
+        let mut embeddings = match &self.embedding_provider {
+            Some(provider) => {
+                let non_empty: Vec<String> = texts
+                    .iter()
+                    .map(|t| if t.is_empty() { " ".to_string() } else { t.clone() })
+                    .collect();
+                let embeddings = provider.embed(&non_empty).await.map_err(|e| {
+                    adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
+                })?;
+                if embeddings.len() != entries.len() {
+                    return Err(adk_core::AdkError::memory(format!(
+                        "embedding provider returned {} embeddings for {} entries",
+                        embeddings.len(),
+                        entries.len()
+                    )));
+                }
+                embeddings.into_iter().map(|e| Some(pgvector::Vector::from(e))).collect()
+            }
+            None => vec![None; entries.len()],
+        }
+        .into_iter();
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
+        for (entry, text) in entries.into_iter().zip(&texts) {
+            let entry = crate::expiry::stamp(entry, self.default_ttl, now);
+            let content_json = serde_json::to_value(&entry.content)
+                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
+            sqlx::query(
+                r#"
+                INSERT INTO memory_entries
+                    (app_name, user_id, session_id, content, author, timestamp, embedding,
+                     search_text, project_id, memory_id, expires_at)
+                VALUES
+                    ($1, $2, $3, $4, $5, $6, $7, to_tsvector('simple', $8), $9, $10, $11)
+                "#,
+            )
+            .bind(app_name)
+            .bind(user_id)
+            .bind(session_id)
+            .bind(&content_json)
+            .bind(&entry.author)
+            .bind(entry.timestamp)
+            .bind(embeddings.next().flatten())
+            .bind(text)
+            .bind(project_id)
+            .bind(&entry.id)
+            .bind(entry.expires_at)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
+        }
+        tx.commit().await.map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))
     }
 
     /// The registry table used to track applied migration versions.
@@ -221,6 +327,16 @@ impl PostgresMemoryService {
         ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS project_id TEXT;\
         CREATE INDEX IF NOT EXISTS idx_memory_app_user_project \
             ON memory_entries(app_name, user_id, project_id);";
+
+    /// V3 migration: memory ids and expiry, with ids backfilled from the row id.
+    const V3_MIGRATION_SQL: &'static str = "\
+        ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS memory_id TEXT;\
+        ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;\
+        UPDATE memory_entries SET memory_id = id::text WHERE memory_id IS NULL;\
+        CREATE INDEX IF NOT EXISTS idx_memory_app_user_memory_id \
+            ON memory_entries(app_name, user_id, memory_id);\
+        CREATE INDEX IF NOT EXISTS idx_memory_expires_at \
+            ON memory_entries(expires_at) WHERE expires_at IS NOT NULL;";
 
     /// Advisory lock key that [`migrate`](Self::migrate) holds while it runs.
     ///
@@ -346,6 +462,7 @@ impl PostgresMemoryService {
         let steps: &[(i64, &str, &str)] = &[
             (1, "create memory_entries table with vector and tsvector columns", &v1_sql),
             (2, "add project_id column and composite index", v2_sql),
+            (3, "add memory_id and expires_at columns", Self::V3_MIGRATION_SQL),
         ];
 
         let mut conn =
@@ -423,82 +540,14 @@ impl MemoryService for PostgresMemoryService {
         session_id: &str,
         entries: Vec<MemoryEntry>,
     ) -> Result<()> {
-        if entries.is_empty() {
-            return Ok(());
-        }
-
-        // Collect texts for batch embedding
-        let texts: Vec<String> =
-            entries.iter().map(|e| crate::text::extract_text(&e.content)).collect();
-
-        let embeddings = if let Some(provider) = &self.embedding_provider {
-            let non_empty_texts: Vec<String> = texts
-                .iter()
-                .map(|t| if t.is_empty() { " ".to_string() } else { t.clone() })
-                .collect();
-            Some(provider.embed(&non_empty_texts).await.map_err(|e| {
-                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
-            })?)
-        } else {
-            None
-        };
-
-        for (i, entry) in entries.iter().enumerate() {
-            let content_json = serde_json::to_value(&entry.content)
-                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
-            let text = &texts[i];
-
-            if let Some(ref embs) = embeddings {
-                let embedding = pgvector::Vector::from(embs[i].clone());
-                sqlx::query(
-                    r#"
-                    INSERT INTO memory_entries
-                        (app_name, user_id, session_id, content, author, timestamp, embedding, search_text, project_id)
-                    VALUES
-                        ($1, $2, $3, $4, $5, $6, $7, to_tsvector('simple', $8), $9)
-                    "#,
-                )
-                .bind(app_name)
-                .bind(user_id)
-                .bind(session_id)
-                .bind(&content_json)
-                .bind(&entry.author)
-                .bind(entry.timestamp)
-                .bind(embedding)
-                .bind(text)
-                .bind(None::<String>)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
-            } else {
-                sqlx::query(
-                    r#"
-                    INSERT INTO memory_entries
-                        (app_name, user_id, session_id, content, author, timestamp, search_text, project_id)
-                    VALUES
-                        ($1, $2, $3, $4, $5, $6, to_tsvector('simple', $7), $8)
-                    "#,
-                )
-                .bind(app_name)
-                .bind(user_id)
-                .bind(session_id)
-                .bind(&content_json)
-                .bind(&entry.author)
-                .bind(entry.timestamp)
-                .bind(text)
-                .bind(None::<String>)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
-            }
-        }
-
-        Ok(())
+        self.insert(app_name, user_id, session_id, None, entries).await
     }
 
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id))]
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse> {
         let limit = req.limit.unwrap_or(10) as i64;
+        // Mirrors `expiry::is_expired`: an entry is live while `expires_at > now`.
+        let now = Utc::now();
 
         let rows = if let Some(ref provider) = self.embedding_provider {
             // Vector cosine similarity search
@@ -520,11 +569,12 @@ impl MemoryService for PostgresMemoryService {
                     None => {
                         let sql = format!(
                             r#"
-                            SELECT content, author, timestamp,
+                            SELECT memory_id, content, author, timestamp, expires_at,
                                    (embedding::halfvec({dims}) <=> $3::halfvec({dims})) AS distance
                             FROM memory_entries
                             WHERE app_name = $1 AND user_id = $2 AND embedding IS NOT NULL
                               AND project_id IS NULL
+                              AND (expires_at IS NULL OR expires_at > $5)
                             ORDER BY embedding::halfvec({dims}) <=> $3::halfvec({dims})
                             LIMIT $4
                             "#
@@ -535,6 +585,7 @@ impl MemoryService for PostgresMemoryService {
                             .bind(&req.user_id)
                             .bind(&query_vec)
                             .bind(limit)
+                            .bind(now)
                             .fetch_all(&self.pool)
                             .await
                             .map_err(|e| {
@@ -544,11 +595,12 @@ impl MemoryService for PostgresMemoryService {
                     Some(pid) => {
                         let sql = format!(
                             r#"
-                            SELECT content, author, timestamp,
+                            SELECT memory_id, content, author, timestamp, expires_at,
                                    (embedding::halfvec({dims}) <=> $3::halfvec({dims})) AS distance
                             FROM memory_entries
                             WHERE app_name = $1 AND user_id = $2 AND embedding IS NOT NULL
                               AND (project_id IS NULL OR project_id = $5)
+                              AND (expires_at IS NULL OR expires_at > $6)
                             ORDER BY embedding::halfvec({dims}) <=> $3::halfvec({dims})
                             LIMIT $4
                             "#
@@ -560,6 +612,7 @@ impl MemoryService for PostgresMemoryService {
                             .bind(&query_vec)
                             .bind(limit)
                             .bind(pid)
+                            .bind(now)
                             .fetch_all(&self.pool)
                             .await
                             .map_err(|e| {
@@ -571,10 +624,11 @@ impl MemoryService for PostgresMemoryService {
                 match &req.project_id {
                     None => sqlx::query(
                         r#"
-                            SELECT content, author, timestamp, (embedding <=> $3) AS distance
+                            SELECT memory_id, content, author, timestamp, expires_at, (embedding <=> $3) AS distance
                             FROM memory_entries
                             WHERE app_name = $1 AND user_id = $2 AND embedding IS NOT NULL
                               AND project_id IS NULL
+                              AND (expires_at IS NULL OR expires_at > $5)
                             ORDER BY embedding <=> $3
                             LIMIT $4
                             "#,
@@ -583,15 +637,17 @@ impl MemoryService for PostgresMemoryService {
                     .bind(&req.user_id)
                     .bind(&query_vec)
                     .bind(limit)
+                    .bind(now)
                     .fetch_all(&self.pool)
                     .await
                     .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?,
                     Some(pid) => sqlx::query(
                         r#"
-                            SELECT content, author, timestamp, (embedding <=> $3) AS distance
+                            SELECT memory_id, content, author, timestamp, expires_at, (embedding <=> $3) AS distance
                             FROM memory_entries
                             WHERE app_name = $1 AND user_id = $2 AND embedding IS NOT NULL
                               AND (project_id IS NULL OR project_id = $5)
+                              AND (expires_at IS NULL OR expires_at > $6)
                             ORDER BY embedding <=> $3
                             LIMIT $4
                             "#,
@@ -601,6 +657,7 @@ impl MemoryService for PostgresMemoryService {
                     .bind(query_vec)
                     .bind(limit)
                     .bind(pid)
+                    .bind(now)
                     .fetch_all(&self.pool)
                     .await
                     .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?,
@@ -612,11 +669,12 @@ impl MemoryService for PostgresMemoryService {
                 None => {
                     sqlx::query(
                         r#"
-                        SELECT content, author, timestamp, ts_rank(search_text, plainto_tsquery('simple', $3)) AS rank_score
+                        SELECT memory_id, content, author, timestamp, expires_at, ts_rank(search_text, plainto_tsquery('simple', $3)) AS rank_score
                         FROM memory_entries
                         WHERE app_name = $1 AND user_id = $2
                           AND search_text @@ plainto_tsquery('simple', $3)
                           AND project_id IS NULL
+                              AND (expires_at IS NULL OR expires_at > $5)
                         ORDER BY rank_score DESC
                         LIMIT $4
                         "#,
@@ -625,6 +683,7 @@ impl MemoryService for PostgresMemoryService {
                     .bind(&req.user_id)
                     .bind(&req.query)
                     .bind(limit)
+                    .bind(now)
                     .fetch_all(&self.pool)
                     .await
                     .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?
@@ -632,11 +691,12 @@ impl MemoryService for PostgresMemoryService {
                 Some(pid) => {
                     sqlx::query(
                         r#"
-                        SELECT content, author, timestamp, ts_rank(search_text, plainto_tsquery('simple', $3)) AS rank_score
+                        SELECT memory_id, content, author, timestamp, expires_at, ts_rank(search_text, plainto_tsquery('simple', $3)) AS rank_score
                         FROM memory_entries
                         WHERE app_name = $1 AND user_id = $2
                           AND search_text @@ plainto_tsquery('simple', $3)
                           AND (project_id IS NULL OR project_id = $5)
+                              AND (expires_at IS NULL OR expires_at > $6)
                         ORDER BY rank_score DESC
                         LIMIT $4
                         "#,
@@ -646,6 +706,7 @@ impl MemoryService for PostgresMemoryService {
                     .bind(&req.query)
                     .bind(limit)
                     .bind(pid)
+                    .bind(now)
                     .fetch_all(&self.pool)
                     .await
                     .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?
@@ -677,8 +738,11 @@ impl MemoryService for PostgresMemoryService {
                             adk_core::Content { role: "user".to_string(), parts: vec![] }
                         });
                     let author: String = row.get("author");
-                    let timestamp: chrono::DateTime<chrono::Utc> = row.get("timestamp");
-                    MemoryEntry { content, author, timestamp }
+                    let mut entry =
+                        MemoryEntry::new(content, author).with_timestamp(row.get("timestamp"));
+                    entry.id = row.get("memory_id");
+                    entry.expires_at = row.get("expires_at");
+                    entry
                 })
                 .collect();
 
@@ -694,9 +758,10 @@ impl MemoryService for PostgresMemoryService {
     ) -> Result<Vec<MemoryEntry>> {
         let rows = sqlx::query(
             r#"
-            SELECT content, author, timestamp
+            SELECT memory_id, content, author, timestamp, expires_at
             FROM memory_entries
             WHERE app_name = $1 AND user_id = $2
+              AND (expires_at IS NULL OR expires_at > $4)
             ORDER BY timestamp DESC
             LIMIT $3
             "#,
@@ -704,6 +769,7 @@ impl MemoryService for PostgresMemoryService {
         .bind(app_name)
         .bind(user_id)
         .bind(limit as i64)
+        .bind(Utc::now())
         .fetch_all(&self.pool)
         .await
         .map_err(|e| adk_core::AdkError::memory(format!("list_recent failed: {e}")))?;
@@ -717,9 +783,11 @@ impl MemoryService for PostgresMemoryService {
                         role: "user".to_string(),
                         parts: vec![],
                     });
-                let author: String = row.get("author");
-                let timestamp: chrono::DateTime<chrono::Utc> = row.get("timestamp");
-                MemoryEntry { content, author, timestamp }
+                let mut entry = MemoryEntry::new(content, row.get::<String, _>("author"))
+                    .with_timestamp(row.get("timestamp"));
+                entry.id = row.get("memory_id");
+                entry.expires_at = row.get("expires_at");
+                entry
             })
             .collect())
     }
@@ -727,8 +795,8 @@ impl MemoryService for PostgresMemoryService {
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
     async fn export_user(&self, app_name: &str, user_id: &str) -> Result<Vec<UserMemory>> {
         let rows = sqlx::query(
-            "SELECT session_id, project_id, content, author, timestamp FROM memory_entries \
-             WHERE app_name = $1 AND user_id = $2 ORDER BY timestamp, id",
+            "SELECT session_id, project_id, memory_id, content, author, timestamp, expires_at \
+             FROM memory_entries WHERE app_name = $1 AND user_id = $2 ORDER BY timestamp, id",
         )
         .bind(app_name)
         .bind(user_id)
@@ -740,14 +808,15 @@ impl MemoryService for PostgresMemoryService {
                 let content: serde_json::Value = row.get("content");
                 // Entries added without a session are stored with an empty session id.
                 let session_id: String = row.get("session_id");
+                let content = serde_json::from_value(content).map_err(|e| {
+                    adk_core::AdkError::memory(format!("stored content is corrupt: {e}"))
+                })?;
+                let mut entry = MemoryEntry::new(content, row.get::<String, _>("author"))
+                    .with_timestamp(row.get("timestamp"));
+                entry.id = row.get("memory_id");
+                entry.expires_at = row.get("expires_at");
                 Ok(UserMemory {
-                    entry: MemoryEntry {
-                        content: serde_json::from_value(content).map_err(|e| {
-                            adk_core::AdkError::memory(format!("stored content is corrupt: {e}"))
-                        })?,
-                        author: row.get("author"),
-                        timestamp: row.get("timestamp"),
-                    },
+                    entry,
                     session_id: (!session_id.is_empty()).then_some(session_id),
                     project_id: row.get("project_id"),
                 })
@@ -813,78 +882,7 @@ impl MemoryService for PostgresMemoryService {
         entries: Vec<MemoryEntry>,
     ) -> Result<()> {
         validate_project_id(project_id)?;
-
-        if entries.is_empty() {
-            return Ok(());
-        }
-
-        // Collect texts for batch embedding
-        let texts: Vec<String> =
-            entries.iter().map(|e| crate::text::extract_text(&e.content)).collect();
-
-        let embeddings = if let Some(provider) = &self.embedding_provider {
-            let non_empty_texts: Vec<String> = texts
-                .iter()
-                .map(|t| if t.is_empty() { " ".to_string() } else { t.clone() })
-                .collect();
-            Some(provider.embed(&non_empty_texts).await.map_err(|e| {
-                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
-            })?)
-        } else {
-            None
-        };
-
-        for (i, entry) in entries.iter().enumerate() {
-            let content_json = serde_json::to_value(&entry.content)
-                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
-            let text = &texts[i];
-
-            if let Some(ref embs) = embeddings {
-                let embedding = pgvector::Vector::from(embs[i].clone());
-                sqlx::query(
-                    r#"
-                    INSERT INTO memory_entries
-                        (app_name, user_id, session_id, content, author, timestamp, embedding, search_text, project_id)
-                    VALUES
-                        ($1, $2, $3, $4, $5, $6, $7, to_tsvector('simple', $8), $9)
-                    "#,
-                )
-                .bind(app_name)
-                .bind(user_id)
-                .bind(session_id)
-                .bind(&content_json)
-                .bind(&entry.author)
-                .bind(entry.timestamp)
-                .bind(embedding)
-                .bind(text)
-                .bind(project_id)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
-            } else {
-                sqlx::query(
-                    r#"
-                    INSERT INTO memory_entries
-                        (app_name, user_id, session_id, content, author, timestamp, search_text, project_id)
-                    VALUES
-                        ($1, $2, $3, $4, $5, $6, to_tsvector('simple', $7), $8)
-                    "#,
-                )
-                .bind(app_name)
-                .bind(user_id)
-                .bind(session_id)
-                .bind(&content_json)
-                .bind(&entry.author)
-                .bind(entry.timestamp)
-                .bind(text)
-                .bind(project_id)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
-            }
-        }
-
-        Ok(())
+        self.insert(app_name, user_id, session_id, Some(project_id), entries).await
     }
 
     /// Add a single global entry (`project_id = NULL`).
@@ -894,62 +892,8 @@ impl MemoryService for PostgresMemoryService {
     /// though project-scoped writes work.
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
     async fn add_entry(&self, app_name: &str, user_id: &str, entry: MemoryEntry) -> Result<()> {
-        let text = crate::text::extract_text(&entry.content);
-        let content_json = serde_json::to_value(&entry.content)
-            .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
-
-        if let Some(provider) = &self.embedding_provider {
-            let embed_text = if text.is_empty() { " ".to_string() } else { text.clone() };
-            let embeddings = provider.embed(&[embed_text]).await.map_err(|e| {
-                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
-            })?;
-            let embedding =
-                pgvector::Vector::from(embeddings.into_iter().next().ok_or_else(|| {
-                    adk_core::AdkError::memory(
-                        "embedding provider returned empty result".to_string(),
-                    )
-                })?);
-            sqlx::query(
-                r#"
-                INSERT INTO memory_entries
-                    (app_name, user_id, session_id, content, author, timestamp, embedding, search_text, project_id)
-                VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, to_tsvector('simple', $8), NULL)
-                "#,
-            )
-            .bind(app_name)
-            .bind(user_id)
-            .bind("")
-            .bind(&content_json)
-            .bind(&entry.author)
-            .bind(entry.timestamp)
-            .bind(embedding)
-            .bind(&text)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
-        } else {
-            sqlx::query(
-                r#"
-                INSERT INTO memory_entries
-                    (app_name, user_id, session_id, content, author, timestamp, search_text, project_id)
-                VALUES
-                    ($1, $2, $3, $4, $5, $6, to_tsvector('simple', $7), NULL)
-                "#,
-            )
-            .bind(app_name)
-            .bind(user_id)
-            .bind("")
-            .bind(&content_json)
-            .bind(&entry.author)
-            .bind(entry.timestamp)
-            .bind(&text)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
-        }
-
-        Ok(())
+        // Entries added without a session are stored with an empty session id.
+        self.insert(app_name, user_id, "", None, vec![entry]).await
     }
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
@@ -961,65 +905,7 @@ impl MemoryService for PostgresMemoryService {
         entry: MemoryEntry,
     ) -> Result<()> {
         validate_project_id(project_id)?;
-
-        let text = crate::text::extract_text(&entry.content);
-        let content_json = serde_json::to_value(&entry.content)
-            .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
-
-        if let Some(provider) = &self.embedding_provider {
-            let embed_text = if text.is_empty() { " ".to_string() } else { text.clone() };
-            let embeddings = provider.embed(&[embed_text]).await.map_err(|e| {
-                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
-            })?;
-            let embedding =
-                pgvector::Vector::from(embeddings.into_iter().next().ok_or_else(|| {
-                    adk_core::AdkError::memory(
-                        "embedding provider returned empty result".to_string(),
-                    )
-                })?);
-            sqlx::query(
-                r#"
-                INSERT INTO memory_entries
-                    (app_name, user_id, session_id, content, author, timestamp, embedding, search_text, project_id)
-                VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, to_tsvector('simple', $8), $9)
-                "#,
-            )
-            .bind(app_name)
-            .bind(user_id)
-            .bind("")
-            .bind(&content_json)
-            .bind(&entry.author)
-            .bind(entry.timestamp)
-            .bind(embedding)
-            .bind(&text)
-            .bind(project_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
-        } else {
-            sqlx::query(
-                r#"
-                INSERT INTO memory_entries
-                    (app_name, user_id, session_id, content, author, timestamp, search_text, project_id)
-                VALUES
-                    ($1, $2, $3, $4, $5, $6, to_tsvector('simple', $7), $8)
-                "#,
-            )
-            .bind(app_name)
-            .bind(user_id)
-            .bind("")
-            .bind(&content_json)
-            .bind(&entry.author)
-            .bind(entry.timestamp)
-            .bind(&text)
-            .bind(project_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
-        }
-
-        Ok(())
+        self.insert(app_name, user_id, "", Some(project_id), vec![entry]).await
     }
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id, query = %query))]
@@ -1065,6 +951,30 @@ impl MemoryService for PostgresMemoryService {
         .execute(&self.pool)
         .await
         .map_err(|e| adk_core::AdkError::memory(format!("delete_project failed: {e}")))?;
+        Ok(result.rows_affected())
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
+    async fn delete_memory(&self, app_name: &str, user_id: &str, memory_id: &str) -> Result<u64> {
+        let result = sqlx::query(
+            "DELETE FROM memory_entries WHERE app_name = $1 AND user_id = $2 AND memory_id = $3",
+        )
+        .bind(app_name)
+        .bind(user_id)
+        .bind(memory_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| adk_core::AdkError::memory(format!("delete_memory failed: {e}")))?;
+        Ok(result.rows_affected())
+    }
+
+    #[instrument(skip_all)]
+    async fn purge_expired(&self) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM memory_entries WHERE expires_at <= $1")
+            .bind(Utc::now())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("purge_expired failed: {e}")))?;
         Ok(result.rows_affected())
     }
 

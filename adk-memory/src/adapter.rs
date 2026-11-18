@@ -19,7 +19,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::Utc;
 
 use crate::{MemoryService, SearchRequest};
 
@@ -78,11 +77,7 @@ impl adk_core::Memory for MemoryServiceAdapter {
 
     async fn add(&self, entry: adk_core::MemoryEntry) -> adk_core::Result<()> {
         let inner = self.inner.clone();
-        let mem_entry = crate::MemoryEntry {
-            content: entry.content,
-            author: entry.author,
-            timestamp: Utc::now(),
-        };
+        let mem_entry = crate::MemoryEntry::new(entry.content, entry.author);
         if let Some(ref pid) = self.project_id {
             inner.add_entry_to_project(&self.app_name, &self.user_id, pid, mem_entry).await
         } else {
@@ -138,11 +133,7 @@ impl adk_core::Memory for MemoryServiceAdapter {
         project_id: &str,
     ) -> adk_core::Result<()> {
         let inner = self.inner.clone();
-        let mem_entry = crate::MemoryEntry {
-            content: entry.content,
-            author: entry.author,
-            timestamp: Utc::now(),
-        };
+        let mem_entry = crate::MemoryEntry::new(entry.content, entry.author);
         inner.add_entry_to_project(&self.app_name, &self.user_id, project_id, mem_entry).await
     }
 }

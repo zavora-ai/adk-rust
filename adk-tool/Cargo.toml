@@ -172,6 +172,10 @@ name = "preload_memory_tests"
 required-features = ["memory-tools"]
 
 [[test]]
+name = "memory_expiry_tests"
+required-features = ["memory-tools"]
+
+[[test]]
 name = "example_store_contract"
 required-features = ["example-store"]
 

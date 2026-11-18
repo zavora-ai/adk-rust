@@ -9,6 +9,18 @@
 //! Endpoints are the v1beta1 Memory Bank surface under
 //! `projects/{project}/locations/{location}/reasoningEngines/{engine}`.
 //!
+//! # Ids and expiry
+//!
+//! A memory's [`MemoryEntry::id`] is its resource name, which
+//! [`delete_memory`](MemoryService::delete_memory) takes. Memory Bank generates memories
+//! from the content it is given, so a memory's expiry is its `expireTime`: when an entry
+//! carries an expiry, or [`with_default_ttl`](VertexAiMemoryBankService::with_default_ttl)
+//! sets one, each memory the generation creates or updates is patched to expire then.
+//! Without either, the engine's own TTL configuration (`memoryBankConfig.ttlConfig`,
+//! set on the reasoning engine outside this client) decides. Memory Bank deletes a memory
+//! at its `expireTime`; search skips one that has passed before then, and
+//! [`purge_expired`](MemoryService::purge_expired) has nothing to remove.
+//!
 //! Transport, credential caching, and operation polling come from
 //! [`adk_gcp`]: [`GcpHttpClient`] carries the ADC/auth-header/bounded-read
 //! plumbing and [`LroPoller`] the identity-pinned operation polling, both
@@ -208,6 +220,7 @@ pub struct VertexAiMemoryBankService {
     project_id: String,
     location: String,
     reasoning_engine: Option<String>,
+    default_ttl: Option<Duration>,
 }
 
 impl VertexAiMemoryBankService {
@@ -255,7 +268,28 @@ impl VertexAiMemoryBankService {
             project_id: config.project_id,
             location: config.location,
             reasoning_engine: config.reasoning_engine,
+            default_ttl: None,
         })
+    }
+
+    /// Expires each memory generated from entries without an expiry `ttl` after it is
+    /// generated, by setting its `expireTime`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_memory::{VertexAiMemoryBankService, VertexAiMemoryConfig};
+    /// use std::time::Duration;
+    ///
+    /// # fn main() -> adk_core::Result<()> {
+    /// let memory = VertexAiMemoryBankService::new_with_adc(VertexAiMemoryConfig::from_env()?)?
+    ///     .with_default_ttl(Duration::from_secs(30 * 24 * 3600));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_default_ttl(mut self, ttl: Duration) -> Self {
+        self.default_ttl = Some(ttl);
+        self
     }
 
     /// Generates memories from an explicit slice of events.
@@ -280,14 +314,18 @@ impl VertexAiMemoryBankService {
     ) -> Result<()> {
         let contents: Vec<&Content> =
             events.iter().filter_map(|event| event.llm_response.content.as_ref()).collect();
-        self.generate_memories(app_name, user_id, &contents).await
+        let expire_time = self.default_ttl.map(|ttl| crate::expiry::expiry_after(Utc::now(), ttl));
+        self.generate_memories(app_name, user_id, &contents, expire_time).await
     }
 
+    /// Generates memories from `contents`, then sets `expire_time` on each memory the
+    /// generation created or updated.
     async fn generate_memories(
         &self,
         app_name: &str,
         user_id: &str,
         contents: &[&Content],
+        expire_time: Option<DateTime<Utc>>,
     ) -> Result<()> {
         if contents.is_empty() {
             debug!("no content-bearing entries; skipping memories:generate");
@@ -306,8 +344,39 @@ impl VertexAiMemoryBankService {
             .await?
             .json(&body);
         let operation = self.client.send_value(request).await?;
-        // :generate's LRO response payload is not needed — only completion.
-        self.wait_for_operation(operation, "memories generate").await?;
+        let response = self.wait_for_operation(operation, "memories generate").await?;
+        let Some(expire_time) = expire_time else { return Ok(()) };
+        let generated: GenerateMemoriesResponse = response
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| {
+                let error = truncate_for_error(&error.to_string());
+                self.client.errors().invalid_response(format!(
+                    "failed to parse memories:generate response: {error}"
+                ))
+            })?
+            .unwrap_or_default();
+        for generated in generated.generated_memories {
+            if matches!(generated.action.as_deref(), Some("CREATED" | "UPDATED")) {
+                self.set_expire_time(&generated.memory.name, expire_time).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Sets the `expireTime` of the memory `memory_name`.
+    async fn set_expire_time(&self, memory_name: &str, expire_time: DateTime<Utc>) -> Result<()> {
+        validate_memory_resource_name(memory_name, &self.project_id, &self.location)?;
+        let request = self
+            .client
+            .request(Method::PATCH, memory_name)
+            .await?
+            .query(&[("updateMask", "expireTime")])
+            .json(&json!({
+                "expireTime": expire_time.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+            }));
+        let operation = self.client.send_value(request).await?;
+        self.wait_for_operation(operation, "memory update").await?;
         Ok(())
     }
 
@@ -336,7 +405,7 @@ impl VertexAiMemoryBankService {
         })
     }
 
-    async fn delete_memory(&self, memory_name: &str) -> Result<()> {
+    async fn delete_memory_resource(&self, memory_name: &str) -> Result<()> {
         validate_memory_resource_name(memory_name, &self.project_id, &self.location)?;
         let request = self.client.request(Method::DELETE, memory_name).await?;
         let operation = self.client.send_value(request).await?;
@@ -404,8 +473,21 @@ impl MemoryService for VertexAiMemoryBankService {
         _session_id: &str,
         entries: Vec<MemoryEntry>,
     ) -> Result<()> {
-        let contents: Vec<&Content> = entries.iter().map(|entry| &entry.content).collect();
-        self.generate_memories(app_name, user_id, &contents).await
+        // One generation per distinct expiry, so each generated memory takes its sources'
+        // expiry; entries without one form a single generation, as before expiry existed.
+        let now = Utc::now();
+        let mut groups: Vec<(Option<DateTime<Utc>>, Vec<&Content>)> = Vec::new();
+        for entry in &entries {
+            let expiry = crate::expiry::resolve_expiry(entry, self.default_ttl, now);
+            match groups.iter_mut().find(|(at, _)| *at == expiry) {
+                Some((_, contents)) => contents.push(&entry.content),
+                None => groups.push((expiry, vec![&entry.content])),
+            }
+        }
+        for (expiry, contents) in groups {
+            self.generate_memories(app_name, user_id, &contents, expiry).await?;
+        }
+        Ok(())
     }
 
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse> {
@@ -428,7 +510,14 @@ impl MemoryService for VertexAiMemoryBankService {
                 json!({ "searchQuery": req.query, "topK": top_k }),
             )
             .await?;
-        let memories = response.retrieved_memories.into_iter().map(retrieved_to_entry).collect();
+        // Memory Bank deletes an expired memory on its own schedule; until then it is skipped.
+        let now = Utc::now();
+        let memories = response
+            .retrieved_memories
+            .into_iter()
+            .map(retrieved_to_entry)
+            .filter(|entry| !entry.is_expired_at(now))
+            .collect();
         Ok(SearchResponse { memories })
     }
 
@@ -474,7 +563,7 @@ impl MemoryService for VertexAiMemoryBankService {
             let response =
                 self.retrieve_page(&parent, &scope, "simpleRetrievalParams", params).await?;
             for retrieved in &response.retrieved_memories {
-                self.delete_memory(&retrieved.memory.name).await?;
+                self.delete_memory_resource(&retrieved.memory.name).await?;
             }
             match response.next_page_token {
                 Some(token) if !token.is_empty() => page_token = Some(token),
@@ -484,6 +573,31 @@ impl MemoryService for VertexAiMemoryBankService {
         Err(self.client.errors().invalid_response(format!(
             "vertex memory deletion did not converge after {DELETE_MAX_PAGES} pages; remaining memories for this scope must be deleted in Google Cloud",
         )))
+    }
+
+    /// Deletes the memory whose resource name is `memory_id`, after reading it to confirm it
+    /// belongs to `user_id` in `app_name`. A memory of another scope, or one that does not
+    /// exist, is reported as 0 removed.
+    async fn delete_memory(&self, app_name: &str, user_id: &str, memory_id: &str) -> Result<u64> {
+        let parent = self.memories_parent(app_name)?;
+        if !memory_id.starts_with(&format!("{parent}/memories/")) {
+            return Ok(0);
+        }
+        validate_memory_resource_name(memory_id, &self.project_id, &self.location)?;
+        let request = self.client.request(Method::GET, memory_id).await?;
+        let Some(memory) = self.client.send_value_allow_not_found(request).await? else {
+            return Ok(0);
+        };
+        if memory.get("scope") != Some(&memory_scope(app_name, user_id)) {
+            return Ok(0);
+        }
+        self.delete_memory_resource(memory_id).await?;
+        Ok(1)
+    }
+
+    /// Memory Bank deletes a memory at its `expireTime` itself, so there is nothing to purge.
+    async fn purge_expired(&self) -> Result<u64> {
+        Ok(0)
     }
 
     async fn health_check(&self) -> Result<()> {
@@ -500,20 +614,18 @@ fn memory_scope(app_name: &str, user_id: &str) -> Value {
 }
 
 fn retrieved_to_entry(retrieved: RetrievedMemory) -> MemoryEntry {
-    // MemoryEntry has no metadata slot, so the memory resource name cannot
-    // be preserved; updateTime survives as the entry timestamp.
-    let timestamp = retrieved
-        .memory
-        .update_time
-        .as_deref()
-        .or(retrieved.memory.create_time.as_deref())
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+    let parse =
+        |value: Option<&str>| value.and_then(|value| DateTime::parse_from_rfc3339(value).ok());
+    let memory = retrieved.memory;
+    // updateTime survives as the entry timestamp.
+    let timestamp = parse(memory.update_time.as_deref().or(memory.create_time.as_deref()))
         .map_or_else(Utc::now, |parsed| parsed.with_timezone(&Utc));
-    MemoryEntry {
-        content: Content::new("model").with_text(retrieved.memory.fact),
-        author: "memory_bank".to_string(),
-        timestamp,
-    }
+    let mut entry = MemoryEntry::new(Content::new("model").with_text(memory.fact), "memory_bank")
+        .with_timestamp(timestamp);
+    entry.expires_at = parse(memory.expire_time.as_deref())
+        .map(|at| crate::expiry::to_millis(at.with_timezone(&Utc)));
+    entry.id = Some(memory.name);
+    entry
 }
 
 #[derive(Debug, Deserialize)]
@@ -540,6 +652,29 @@ struct VertexMemory {
     create_time: Option<String>,
     #[serde(default)]
     update_time: Option<String>,
+    #[serde(default)]
+    expire_time: Option<String>,
+}
+
+/// The `response` of a finished `memories:generate` operation.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerateMemoriesResponse {
+    #[serde(default)]
+    generated_memories: Vec<GeneratedMemory>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeneratedMemory {
+    memory: GeneratedMemoryName,
+    /// `CREATED`, `UPDATED` or `DELETED`.
+    #[serde(default)]
+    action: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeneratedMemoryName {
+    name: String,
 }
 
 /// Rejects memory resource names outside this service's project and

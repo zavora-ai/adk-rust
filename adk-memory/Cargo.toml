@@ -29,12 +29,15 @@ sqlx = { workspace = true, features = ["runtime-tokio", "chrono", "json"], optio
 pgvector = { workspace = true, features = ["sqlx"], optional = true }
 mongodb = { version = "3", optional = true }
 neo4rs = { version = "0.8", optional = true }
-uuid = { workspace = true, optional = true }
+uuid.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
 fred = { version = "10", optional = true }
 reqwest = { workspace = true, optional = true }
 google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
 
 [dev-dependencies]
+# Path-only self dependency, so the crate's own tests run the conformance suite.
+adk-memory = { path = ".", features = ["conformance"] }
 adk-core = { path = "../adk-core", features = ["conformance"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
 proptest = "1.5"
@@ -52,8 +55,10 @@ sqlite-memory = ["dep:sqlx", "sqlx/sqlite"]
 # Reuses the SQLite migration runner from the sqlite-memory backend.
 graph-memory = ["sqlite-memory"]
 database-memory = ["dep:sqlx", "sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs", "dep:pgvector"]
-redis-memory = ["dep:fred"]
+redis-memory = ["dep:fred", "fred/i-scripts"]
 mongodb-memory = ["dep:mongodb"]
-neo4j-memory = ["dep:neo4rs", "dep:uuid"]
+neo4j-memory = ["dep:neo4rs"]
 # Vertex AI Agent Engine Memory Bank backend (memories:generate / memories:retrieve)
 vertex-memory = ["dep:adk-gcp", "dep:google-cloud-auth", "dep:reqwest"]
+# The MemoryService conformance suite (`adk_memory::conformance`) for backend tests.
+conformance = []

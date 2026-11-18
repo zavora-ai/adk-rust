@@ -1,8 +1,10 @@
 use crate::service::*;
 use adk_core::Result;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct MemoryKey {
@@ -30,6 +32,9 @@ const DIRECT_SESSION: &str = "__direct__";
 /// matches, newest first among equal scores. Entries without words, such as an image, are
 /// stored and listed but never match a query.
 ///
+/// Expired entries are never returned; [`purge_expired`](MemoryService::purge_expired)
+/// removes them, and [`with_default_ttl`](Self::with_default_ttl) sets the default TTL.
+///
 /// # Example
 ///
 /// ```rust
@@ -39,11 +44,7 @@ const DIRECT_SESSION: &str = "__direct__";
 /// # #[tokio::main(flavor = "current_thread")]
 /// # async fn main() -> adk_core::Result<()> {
 /// let service = InMemoryMemoryService::new();
-/// let entry = MemoryEntry {
-///     content: Content::new("user").with_text("Hometown: Nairobi."),
-///     author: "user".to_string(),
-///     timestamp: chrono::Utc::now(),
-/// };
+/// let entry = MemoryEntry::new(Content::new("user").with_text("Hometown: Nairobi."), "user");
 /// service.add_session("app", "ada", "s1", vec![entry]).await?;
 /// let found = service
 ///     .search(SearchRequest {
@@ -61,11 +62,40 @@ const DIRECT_SESSION: &str = "__direct__";
 /// ```
 pub struct InMemoryMemoryService {
     store: Arc<RwLock<MemoryStore>>,
+    default_ttl: Option<Duration>,
 }
 
 impl InMemoryMemoryService {
+    /// An empty in-process memory whose entries never expire unless they carry an expiry.
     pub fn new() -> Self {
-        Self { store: Arc::new(RwLock::new(HashMap::new())) }
+        Self { store: Arc::new(RwLock::new(HashMap::new())), default_ttl: None }
+    }
+
+    /// Expires each entry written without an expiry `ttl` after it is written.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_memory::InMemoryMemoryService;
+    /// use std::time::Duration;
+    ///
+    /// let service = InMemoryMemoryService::new().with_default_ttl(Duration::from_secs(7 * 24 * 3600));
+    /// # let _ = service;
+    /// ```
+    pub fn with_default_ttl(mut self, ttl: Duration) -> Self {
+        self.default_ttl = Some(ttl);
+        self
+    }
+
+    fn stored(
+        &self,
+        entry: MemoryEntry,
+        project_id: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> StoredEntry {
+        let entry = crate::expiry::stamp(entry, self.default_ttl, now);
+        let words = crate::text::extract_words_from_content(&entry.content);
+        StoredEntry { entry, words, project_id: project_id.map(str::to_string) }
     }
 
     fn has_intersection(set1: &HashSet<String>, set2: &HashSet<String>) -> bool {
@@ -93,13 +123,9 @@ impl MemoryService for InMemoryMemoryService {
     ) -> Result<()> {
         let key = MemoryKey { app_name: app_name.to_string(), user_id: user_id.to_string() };
 
-        let stored_entries: Vec<StoredEntry> = entries
-            .into_iter()
-            .map(|entry| {
-                let words = crate::text::extract_words_from_content(&entry.content);
-                StoredEntry { entry, words, project_id: None }
-            })
-            .collect();
+        let now = Utc::now();
+        let stored_entries: Vec<StoredEntry> =
+            entries.into_iter().map(|entry| self.stored(entry, None, now)).collect();
 
         if stored_entries.is_empty() {
             return Ok(());
@@ -128,13 +154,9 @@ impl MemoryService for InMemoryMemoryService {
 
         let key = MemoryKey { app_name: app_name.to_string(), user_id: user_id.to_string() };
 
-        let stored_entries: Vec<StoredEntry> = entries
-            .into_iter()
-            .map(|entry| {
-                let words = crate::text::extract_words_from_content(&entry.content);
-                StoredEntry { entry, words, project_id: Some(project_id.to_string()) }
-            })
-            .collect();
+        let now = Utc::now();
+        let stored_entries: Vec<StoredEntry> =
+            entries.into_iter().map(|entry| self.stored(entry, Some(project_id), now)).collect();
 
         if stored_entries.is_empty() {
             return Ok(());
@@ -149,8 +171,7 @@ impl MemoryService for InMemoryMemoryService {
 
     async fn add_entry(&self, app_name: &str, user_id: &str, entry: MemoryEntry) -> Result<()> {
         let key = MemoryKey { app_name: app_name.to_string(), user_id: user_id.to_string() };
-        let words = crate::text::extract_words_from_content(&entry.content);
-        let stored = StoredEntry { entry, words, project_id: None };
+        let stored = self.stored(entry, None, Utc::now());
 
         let mut store = self.store.write().unwrap();
         let sessions = store.entry(key).or_default();
@@ -169,8 +190,7 @@ impl MemoryService for InMemoryMemoryService {
         validate_project_id(project_id)?;
 
         let key = MemoryKey { app_name: app_name.to_string(), user_id: user_id.to_string() };
-        let words = crate::text::extract_words_from_content(&entry.content);
-        let stored = StoredEntry { entry, words, project_id: Some(project_id.to_string()) };
+        let stored = self.stored(entry, Some(project_id), Utc::now());
 
         let mut store = self.store.write().unwrap();
         let sessions = store.entry(key).or_default();
@@ -213,11 +233,17 @@ impl MemoryService for InMemoryMemoryService {
         limit: usize,
     ) -> Result<Vec<MemoryEntry>> {
         let key = MemoryKey { app_name: app_name.to_string(), user_id: user_id.to_string() };
+        let now = Utc::now();
         let store = self.store.read().unwrap();
         let mut entries: Vec<MemoryEntry> = store
             .get(&key)
             .map(|sessions| {
-                sessions.values().flatten().map(|stored| stored.entry.clone()).collect()
+                sessions
+                    .values()
+                    .flatten()
+                    .filter(|stored| !stored.entry.is_expired_at(now))
+                    .map(|stored| stored.entry.clone())
+                    .collect()
             })
             .unwrap_or_default();
         // Newest first. `Reverse` keeps this a key-based sort, which clippy prefers, without
@@ -289,6 +315,31 @@ impl MemoryService for InMemoryMemoryService {
         Ok(())
     }
 
+    async fn delete_memory(&self, app_name: &str, user_id: &str, memory_id: &str) -> Result<u64> {
+        let key = MemoryKey { app_name: app_name.to_string(), user_id: user_id.to_string() };
+        let mut store = self.store.write().unwrap();
+        let Some(sessions) = store.get_mut(&key) else { return Ok(0) };
+        let mut removed: u64 = 0;
+        for entries in sessions.values_mut() {
+            let before = entries.len();
+            entries.retain(|stored| stored.entry.id.as_deref() != Some(memory_id));
+            removed += (before - entries.len()) as u64;
+        }
+        Ok(removed)
+    }
+
+    async fn purge_expired(&self) -> Result<u64> {
+        let now = Utc::now();
+        let mut store = self.store.write().unwrap();
+        let mut removed: u64 = 0;
+        for entries in store.values_mut().flat_map(HashMap::values_mut) {
+            let before = entries.len();
+            entries.retain(|stored| !stored.entry.is_expired_at(now));
+            removed += (before - entries.len()) as u64;
+        }
+        Ok(removed)
+    }
+
     async fn export_user(&self, app_name: &str, user_id: &str) -> Result<Vec<UserMemory>> {
         let key = MemoryKey { app_name: app_name.to_string(), user_id: user_id.to_string() };
         let store = self.store.read().unwrap();
@@ -321,8 +372,12 @@ impl MemoryService for InMemoryMemoryService {
             None => return Ok(SearchResponse { memories: Vec::new() }),
         };
 
+        let now = Utc::now();
         let mut matches = Vec::new();
         for stored in sessions.values().flatten() {
+            if stored.entry.is_expired_at(now) {
+                continue;
+            }
             let in_scope = match (&stored.project_id, &req.project_id) {
                 // Global entries are always in scope; project entries only in their project.
                 (None, _) => true,

@@ -24,6 +24,7 @@ use mongodb::bson::{DateTime as BsonDateTime, Document, doc};
 use mongodb::options::IndexOptions;
 use mongodb::{Client, Database, IndexModel};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::instrument;
 
 /// MongoDB-backed memory service with optional Atlas Vector Search support.
@@ -42,6 +43,7 @@ use tracing::instrument;
 pub struct MongoMemoryService {
     db: Database,
     embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
+    default_ttl: Option<Duration>,
 }
 
 impl MongoMemoryService {
@@ -58,7 +60,60 @@ impl MongoMemoryService {
         embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
     ) -> Result<Self> {
         let db = client.database(database_name);
-        Ok(Self { db, embedding_provider })
+        Ok(Self { db, embedding_provider, default_ttl: None })
+    }
+
+    /// Expires each entry written without an expiry `ttl` after it is written.
+    ///
+    /// The TTL index that [`migrate`](Self::migrate) creates on `expires_at` lets MongoDB
+    /// delete expired entries itself, on its TTL monitor's schedule (every 60 seconds by
+    /// default); reads skip them before then.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_memory::MongoMemoryService;
+    /// use std::time::Duration;
+    ///
+    /// let client = mongodb::Client::with_uri_str("mongodb://localhost:27017").await?;
+    /// let service = MongoMemoryService::new(client, "my_db", None)?
+    ///     .with_default_ttl(Duration::from_secs(30 * 24 * 3600));
+    /// ```
+    pub fn with_default_ttl(mut self, ttl: Duration) -> Self {
+        self.default_ttl = Some(ttl);
+        self
+    }
+
+    /// The document an entry is stored as: `scope` (app, user, session and project) plus
+    /// the entry, stamped with its id and expiry.
+    fn document(
+        &self,
+        scope: &Document,
+        entry: MemoryEntry,
+        embedding: Option<&[f32]>,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<Document> {
+        let entry = crate::expiry::stamp(entry, self.default_ttl, now);
+        let content_json = serde_json::to_value(&entry.content)
+            .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
+        let content_bson = mongodb::bson::to_bson(&content_json)
+            .map_err(|e| adk_core::AdkError::memory(format!("bson conversion failed: {e}")))?;
+        let mut document = scope.clone();
+        document.insert("memory_id", entry.id.unwrap_or_default());
+        document.insert("content", content_bson);
+        document.insert("content_text", crate::text::extract_text(&entry.content));
+        document.insert("author", entry.author);
+        document.insert("timestamp", BsonDateTime::from_millis(entry.timestamp.timestamp_millis()));
+        // A BSON date, so the TTL index deletes the entry once it passes.
+        if let Some(expires_at) = entry.expires_at {
+            document.insert("expires_at", BsonDateTime::from_millis(expires_at.timestamp_millis()));
+        }
+        if let Some(embedding) = embedding {
+            let embedding: Vec<mongodb::bson::Bson> =
+                embedding.iter().map(|&v| mongodb::bson::Bson::Double(v as f64)).collect();
+            document.insert("embedding", embedding);
+        }
+        Ok(document)
     }
 
     /// Registry collection name for tracking applied migration versions.
@@ -68,8 +123,11 @@ impl MongoMemoryService {
     ///
     /// Each entry is `(version, description)`. The actual migration logic is
     /// dispatched by version number in [`run_mongo_memory_step`].
-    const MONGO_MEMORY_MIGRATIONS: &'static [(i64, &'static str)] =
-        &[(1, "create initial indexes"), (2, "add project_id compound index")];
+    const MONGO_MEMORY_MIGRATIONS: &'static [(i64, &'static str)] = &[
+        (1, "create initial indexes"),
+        (2, "add project_id compound index"),
+        (3, "add memory_id index and expires_at TTL index"),
+    ];
 
     /// Run versioned migrations for MongoDB memory storage.
     ///
@@ -230,6 +288,7 @@ async fn run_mongo_memory_step(db: &Database, version: i64) -> Result<()> {
     match version {
         1 => mongo_memory_v1(db).await,
         2 => mongo_memory_v2(db).await,
+        3 => mongo_memory_v3(db).await,
         _ => Err(adk_core::AdkError::memory(format!("unknown migration version: {version}"))),
     }
 }
@@ -297,6 +356,72 @@ async fn mongo_memory_v2(db: &Database) -> Result<()> {
     Ok(())
 }
 
+/// V3: index `memory_id` per user, and expire entries through a TTL index on `expires_at`.
+///
+/// `expireAfterSeconds: 0` makes MongoDB delete a document once its `expires_at` date has
+/// passed; documents without the field never expire.
+async fn mongo_memory_v3(db: &Database) -> Result<()> {
+    let collection = db.collection::<Document>("memory_entries");
+    collection
+        .create_index(
+            IndexModel::builder()
+                .keys(doc! { "app_name": 1, "user_id": 1, "memory_id": 1 })
+                .options(
+                    IndexOptions::builder()
+                        .name("idx_memory_entries_memory_id".to_string())
+                        .build(),
+                )
+                .build(),
+        )
+        .await
+        .map_err(|e| adk_core::AdkError::memory(format!("memory_id index creation failed: {e}")))?;
+    collection
+        .create_index(
+            IndexModel::builder()
+                .keys(doc! { "expires_at": 1 })
+                .options(
+                    IndexOptions::builder()
+                        .name("idx_memory_entries_expires_at_ttl".to_string())
+                        .expire_after(std::time::Duration::ZERO)
+                        .build(),
+                )
+                .build(),
+        )
+        .await
+        .map_err(|e| adk_core::AdkError::memory(format!("TTL index creation failed: {e}")))?;
+    Ok(())
+}
+
+/// The filter that keeps entries live at `now`: no `expires_at`, or one after `now`.
+///
+/// Mirrors `expiry::is_expired`; `$not` also matches documents without the field.
+fn live_filter(now: chrono::DateTime<Utc>) -> Document {
+    doc! { "expires_at": { "$not": { "$lte": BsonDateTime::from_millis(now.timestamp_millis()) } } }
+}
+
+/// A stored document as a memory entry, or `None` when its content is malformed.
+fn document_entry(doc: &Document) -> Option<MemoryEntry> {
+    let content_json: serde_json::Value =
+        mongodb::bson::from_bson(doc.get("content")?.clone()).ok()?;
+    let content: adk_core::Content = serde_json::from_value(content_json).ok()?;
+    let author = doc.get_str("author").ok()?.to_string();
+    let millis = |field: &str| {
+        doc.get_datetime(field)
+            .ok()
+            .and_then(|dt| chrono::DateTime::from_timestamp_millis(dt.timestamp_millis()))
+    };
+    let mut entry = MemoryEntry::new(content, author).with_timestamp(millis("timestamp")?);
+    // Entries written before 3.0 have no memory id; their document id stands in.
+    entry.id = doc
+        .get_str("memory_id")
+        .ok()
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .or_else(|| doc.get_object_id("_id").ok().map(|id| id.to_hex()));
+    entry.expires_at = millis("expires_at");
+    Some(entry)
+}
+
 #[async_trait]
 impl MemoryService for MongoMemoryService {
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, session_id = %session_id, entry_count = entries.len()))]
@@ -329,33 +454,17 @@ impl MemoryService for MongoMemoryService {
             None
         };
 
+        let now = Utc::now();
+        let scope = doc! {
+            "app_name": app_name,
+            "user_id": user_id,
+            "session_id": session_id,
+            "project_id": mongodb::bson::Bson::Null,
+        };
         let mut documents = Vec::with_capacity(entries.len());
-        for (i, entry) in entries.iter().enumerate() {
-            let content_json = serde_json::to_value(&entry.content)
-                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
-            let content_bson = mongodb::bson::to_bson(&content_json)
-                .map_err(|e| adk_core::AdkError::memory(format!("bson conversion failed: {e}")))?;
-
-            let timestamp = BsonDateTime::from_millis(entry.timestamp.timestamp_millis());
-
-            let mut document = doc! {
-                "app_name": app_name,
-                "user_id": user_id,
-                "session_id": session_id,
-                "content": content_bson,
-                "content_text": &texts[i],
-                "author": &entry.author,
-                "timestamp": timestamp,
-                "project_id": mongodb::bson::Bson::Null,
-            };
-
-            if let Some(ref embs) = embeddings {
-                let embedding_vec: Vec<mongodb::bson::Bson> =
-                    embs[i].iter().map(|&v| mongodb::bson::Bson::Double(v as f64)).collect();
-                document.insert("embedding", embedding_vec);
-            }
-
-            documents.push(document);
+        for (i, entry) in entries.into_iter().enumerate() {
+            let embedding = embeddings.as_ref().map(|embs| embs[i].as_slice());
+            documents.push(self.document(&scope, entry, embedding, now)?);
         }
 
         collection
@@ -403,33 +512,17 @@ impl MemoryService for MongoMemoryService {
             None
         };
 
+        let now = Utc::now();
+        let scope = doc! {
+            "app_name": app_name,
+            "user_id": user_id,
+            "session_id": session_id,
+            "project_id": project_id,
+        };
         let mut documents = Vec::with_capacity(entries.len());
-        for (i, entry) in entries.iter().enumerate() {
-            let content_json = serde_json::to_value(&entry.content)
-                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
-            let content_bson = mongodb::bson::to_bson(&content_json)
-                .map_err(|e| adk_core::AdkError::memory(format!("bson conversion failed: {e}")))?;
-
-            let timestamp = BsonDateTime::from_millis(entry.timestamp.timestamp_millis());
-
-            let mut document = doc! {
-                "app_name": app_name,
-                "user_id": user_id,
-                "session_id": session_id,
-                "content": content_bson,
-                "content_text": &texts[i],
-                "author": &entry.author,
-                "timestamp": timestamp,
-                "project_id": project_id,
-            };
-
-            if let Some(ref embs) = embeddings {
-                let embedding_vec: Vec<mongodb::bson::Bson> =
-                    embs[i].iter().map(|&v| mongodb::bson::Bson::Double(v as f64)).collect();
-                document.insert("embedding", embedding_vec);
-            }
-
-            documents.push(document);
+        for (i, entry) in entries.into_iter().enumerate() {
+            let embedding = embeddings.as_ref().map(|embs| embs[i].as_slice());
+            documents.push(self.document(&scope, entry, embedding, now)?);
         }
 
         collection.insert_many(documents).await.map_err(|e| {
@@ -452,33 +545,19 @@ impl MemoryService for MongoMemoryService {
         let collection = self.db.collection::<Document>("memory_entries");
 
         let content_text = crate::text::extract_text(&entry.content);
-        let content_json = serde_json::to_value(&entry.content)
-            .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
-        let content_bson = mongodb::bson::to_bson(&content_json)
-            .map_err(|e| adk_core::AdkError::memory(format!("bson conversion failed: {e}")))?;
-
-        let timestamp = BsonDateTime::from_millis(entry.timestamp.timestamp_millis());
-
-        let mut document = doc! {
-            "app_name": app_name,
-            "user_id": user_id,
-            "content": content_bson,
-            "content_text": &content_text,
-            "author": &entry.author,
-            "timestamp": timestamp,
-            "project_id": project_id,
+        let embedding = match &self.embedding_provider {
+            Some(provider) => {
+                let text_for_embed =
+                    if content_text.is_empty() { " ".to_string() } else { content_text.clone() };
+                let mut embeddings = provider.embed(&[text_for_embed]).await.map_err(|e| {
+                    adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
+                })?;
+                Some(embeddings.swap_remove(0))
+            }
+            None => None,
         };
-
-        if let Some(ref provider) = self.embedding_provider {
-            let text_for_embed =
-                if content_text.is_empty() { " ".to_string() } else { content_text };
-            let embeddings = provider.embed(&[text_for_embed]).await.map_err(|e| {
-                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
-            })?;
-            let embedding_vec: Vec<mongodb::bson::Bson> =
-                embeddings[0].iter().map(|&v| mongodb::bson::Bson::Double(v as f64)).collect();
-            document.insert("embedding", embedding_vec);
-        }
+        let scope = doc! { "app_name": app_name, "user_id": user_id, "project_id": project_id };
+        let document = self.document(&scope, entry, embedding.as_deref(), Utc::now())?;
 
         collection
             .insert_one(document)
@@ -521,6 +600,7 @@ impl MemoryService for MongoMemoryService {
                 }
             }
 
+            let match_filter = doc! { "$and": [match_filter, live_filter(Utc::now())] };
             let pipeline = vec![
                 doc! {
                     "$vectorSearch": {
@@ -583,6 +663,10 @@ impl MemoryService for MongoMemoryService {
                 }
             }
 
+            filter.insert(
+                "expires_at",
+                live_filter(Utc::now()).get("expires_at").cloned().unwrap_or_default(),
+            );
             let mut cursor = collection
                 .find(filter)
                 .sort(doc! { "score": { "$meta": "textScore" } })
@@ -604,28 +688,7 @@ impl MemoryService for MongoMemoryService {
             results
         };
 
-        let memories =
-            docs.iter()
-                .filter_map(|doc| {
-                    let content_bson = doc.get("content")?;
-                    let content_json: serde_json::Value =
-                        mongodb::bson::from_bson(content_bson.clone()).ok()?;
-                    let content: adk_core::Content =
-                        serde_json::from_value(content_json).unwrap_or_else(|_| {
-                            adk_core::Content { role: "user".to_string(), parts: vec![] }
-                        });
-                    let author = doc.get_str("author").unwrap_or("unknown").to_string();
-                    let timestamp = doc
-                        .get_datetime("timestamp")
-                        .ok()
-                        .map(|dt| {
-                            chrono::DateTime::from_timestamp_millis(dt.timestamp_millis())
-                                .unwrap_or_default()
-                        })
-                        .unwrap_or_default();
-                    Some(MemoryEntry { content, author, timestamp })
-                })
-                .collect();
+        let memories = docs.iter().filter_map(document_entry).collect();
 
         Ok(SearchResponse { memories })
     }
@@ -691,23 +754,8 @@ impl MemoryService for MongoMemoryService {
             .map(|document| {
                 let corrupt =
                     |field: &str| adk_core::AdkError::memory(format!("stored {field} is corrupt"));
-                let content = document.get("content").ok_or_else(|| corrupt("content"))?;
-                let content: serde_json::Value =
-                    mongodb::bson::from_bson(content.clone()).map_err(|_| corrupt("content"))?;
-                let timestamp =
-                    document.get_datetime("timestamp").map_err(|_| corrupt("timestamp"))?;
                 Ok(UserMemory {
-                    entry: MemoryEntry {
-                        content: serde_json::from_value(content).map_err(|_| corrupt("content"))?,
-                        author: document
-                            .get_str("author")
-                            .map_err(|_| corrupt("author"))?
-                            .to_string(),
-                        timestamp: chrono::DateTime::from_timestamp_millis(
-                            timestamp.timestamp_millis(),
-                        )
-                        .ok_or_else(|| corrupt("timestamp"))?,
-                    },
+                    entry: document_entry(document).ok_or_else(|| corrupt("entry"))?,
                     session_id: document.get_str("session_id").ok().map(str::to_string),
                     project_id: document.get_str("project_id").ok().map(str::to_string),
                 })
@@ -737,6 +785,37 @@ impl MemoryService for MongoMemoryService {
             .await
             .map_err(|e| adk_core::AdkError::memory(format!("delete_session failed: {e}")))?;
         Ok(())
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
+    async fn delete_memory(&self, app_name: &str, user_id: &str, memory_id: &str) -> Result<u64> {
+        let collection = self.db.collection::<Document>("memory_entries");
+        let mut filter = doc! { "app_name": app_name, "user_id": user_id, "memory_id": memory_id };
+        // An entry written before 3.0 is addressed by its document id.
+        if let Ok(object_id) = mongodb::bson::oid::ObjectId::parse_str(memory_id) {
+            filter = doc! {
+                "app_name": app_name,
+                "user_id": user_id,
+                "$or": [{ "memory_id": memory_id }, { "_id": object_id, "memory_id": { "$exists": false } }],
+            };
+        }
+        let result = collection
+            .delete_many(filter)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("delete_memory failed: {e}")))?;
+        Ok(result.deleted_count)
+    }
+
+    #[instrument(skip_all)]
+    async fn purge_expired(&self) -> Result<u64> {
+        let now = BsonDateTime::from_millis(Utc::now().timestamp_millis());
+        let result = self
+            .db
+            .collection::<Document>("memory_entries")
+            .delete_many(doc! { "expires_at": { "$lte": now } })
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("purge_expired failed: {e}")))?;
+        Ok(result.deleted_count)
     }
 
     #[instrument(skip_all)]

@@ -83,14 +83,9 @@ pub fn is_valid_iso8601(timestamp: &str) -> bool {
 mod tests {
     use super::*;
     use adk_core::Content;
-    use chrono::Utc;
 
     fn make_entry(content: &str, author: &str) -> MemoryEntry {
-        MemoryEntry {
-            content: Content::new("user").with_text(content),
-            author: author.to_string(),
-            timestamp: Utc::now(),
-        }
+        MemoryEntry::new(Content::new("user").with_text(content), author)
     }
 
     #[test]

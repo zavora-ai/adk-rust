@@ -18,6 +18,14 @@
 //! containing `:` cannot spill into the next segment. Identifiers without either
 //! character produce the same keys as before the encoding was introduced.
 //!
+//! # Expiry
+//!
+//! Each entry stores its own `expires_at`, and reads skip expired entries. A list key
+//! expires natively with its latest entry, and stays persistent while it holds an entry
+//! that never expires; [`purge_expired`](MemoryService::purge_expired) removes expired
+//! entries from lists that are still live, and index members whose list is gone. Entries
+//! written before 3.0 carry no id.
+//!
 //! # Example
 //!
 //! ```rust,ignore
@@ -45,9 +53,35 @@ use tracing::instrument;
 pub struct RedisMemoryConfig {
     /// Redis connection URL (e.g. `redis://localhost:6379`).
     pub url: String,
-    /// Optional TTL applied to memory entry keys.
+    /// The default TTL of each entry written without an expiry, measured from the write.
+    /// `None` keeps such entries until they are deleted.
     pub ttl: Option<Duration>,
 }
+
+/// Appends a batch of entries to one list and keeps the list's native expiry at its latest
+/// entry. `ARGV[1]` is the batch's latest expiry in Unix milliseconds, or empty when an entry
+/// of the batch never expires; `ARGV[2..]` are the entries.
+///
+/// A key that held no expiry before (`PTTL` is -1) already holds an entry that never expires,
+/// so it stays persistent.
+const APPEND_SCRIPT: &str = r#"
+local ttl = redis.call('PTTL', KEYS[1])
+for i = 2, #ARGV do
+  redis.call('RPUSH', KEYS[1], ARGV[i])
+end
+if ARGV[1] == '' then
+  redis.call('PERSIST', KEYS[1])
+elseif ttl ~= -1 then
+  local at = tonumber(ARGV[1])
+  if ttl >= 0 then
+    local now = redis.call('TIME')
+    local current = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000) + ttl
+    if current > at then at = current end
+  end
+  redis.call('PEXPIREAT', KEYS[1], at)
+end
+return 1
+"#;
 
 /// Redis key for memory entries: `mem:{app}:{user}:{session}`.
 fn entries_key(app: &str, user: &str, session: &str) -> String {
@@ -103,10 +137,29 @@ fn user_project_indexes_pattern(app: &str, user: &str) -> String {
 /// Serializable wrapper for a memory entry stored in Redis.
 #[derive(Debug, Serialize, Deserialize)]
 struct StoredEntry {
+    /// Absent on entries written before 3.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
     content: adk_core::Content,
     author: String,
     #[serde(with = "chrono::serde::ts_milliseconds")]
     timestamp: chrono::DateTime<chrono::Utc>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "chrono::serde::ts_milliseconds_option"
+    )]
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<StoredEntry> for MemoryEntry {
+    fn from(stored: StoredEntry) -> Self {
+        let mut entry =
+            MemoryEntry::new(stored.content, stored.author).with_timestamp(stored.timestamp);
+        entry.id = stored.id;
+        entry.expires_at = stored.expires_at;
+        entry
+    }
 }
 
 /// Redis-backed memory service.
@@ -131,7 +184,7 @@ struct StoredEntry {
 /// ```
 pub struct RedisMemoryService {
     client: Client,
-    ttl: Option<Duration>,
+    default_ttl: Option<Duration>,
 }
 
 impl RedisMemoryService {
@@ -146,7 +199,104 @@ impl RedisMemoryService {
             .init()
             .await
             .map_err(|e| adk_core::AdkError::memory(format!("redis connection failed: {e}")))?;
-        Ok(Self { client, ttl: config.ttl })
+        Ok(Self { client, default_ttl: config.ttl })
+    }
+
+    /// Expires each entry written without an expiry `ttl` after it is written, replacing
+    /// [`RedisMemoryConfig::ttl`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_memory::{RedisMemoryConfig, RedisMemoryService};
+    /// use std::time::Duration;
+    ///
+    /// let config = RedisMemoryConfig { url: "redis://localhost:6379".into(), ttl: None };
+    /// let service = RedisMemoryService::new(config)
+    ///     .await?
+    ///     .with_default_ttl(Duration::from_secs(30 * 24 * 3600));
+    /// ```
+    pub fn with_default_ttl(mut self, ttl: Duration) -> Self {
+        self.default_ttl = Some(ttl);
+        self
+    }
+
+    /// Appends `entries` to the list `key`, each stamped with its id and expiry, and records
+    /// `member` in the session index `index`.
+    async fn append(
+        &self,
+        key: &str,
+        index: &str,
+        member: &str,
+        entries: Vec<MemoryEntry>,
+    ) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let now = chrono::Utc::now();
+        let mut latest = Some(i64::MIN);
+        let mut args = vec![String::new()];
+        for entry in entries {
+            let entry = crate::expiry::stamp(entry, self.default_ttl, now);
+            latest = match (latest, entry.expires_at) {
+                (Some(latest), Some(at)) => Some(latest.max(at.timestamp_millis())),
+                _ => None,
+            };
+            let stored = StoredEntry {
+                id: entry.id,
+                content: entry.content,
+                author: entry.author,
+                timestamp: entry.timestamp,
+                expires_at: entry.expires_at,
+            };
+            args.push(
+                serde_json::to_string(&stored).map_err(|e| {
+                    adk_core::AdkError::memory(format!("serialization failed: {e}"))
+                })?,
+            );
+        }
+        args[0] = latest.map(|at| at.to_string()).unwrap_or_default();
+        let _: i64 = self
+            .client
+            .eval(APPEND_SCRIPT, vec![key.to_string()], args)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("append failed: {e}")))?;
+        self.client
+            .sadd::<(), _, _>(index, member)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("sadd failed: {e}")))
+    }
+
+    /// Reads the list `key` as raw JSON with each entry parsed; unparseable entries are kept
+    /// raw with `None`.
+    async fn read_list(&self, key: &str) -> Result<Vec<(String, Option<StoredEntry>)>> {
+        let raw_entries: Vec<String> = self
+            .client
+            .lrange(key, 0, -1)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("lrange failed: {e}")))?;
+        Ok(raw_entries
+            .into_iter()
+            .map(|raw| {
+                let stored = serde_json::from_str(&raw).ok();
+                (raw, stored)
+            })
+            .collect())
+    }
+
+    /// Removes one occurrence of each of `raws` from the list `key`, leaving the key's
+    /// expiry as it was, and returns how many were removed.
+    async fn remove_raw(&self, key: &str, raws: &[String]) -> Result<u64> {
+        let mut removed = 0u64;
+        for raw in raws {
+            let count: i64 = self
+                .client
+                .lrem(key, 1, raw.as_str())
+                .await
+                .map_err(|e| adk_core::AdkError::memory(format!("lrem failed: {e}")))?;
+            removed += count as u64;
+        }
+        Ok(removed)
     }
 
     /// Scores the entries of one Redis list key against the query, appending matches.
@@ -157,28 +307,16 @@ impl RedisMemoryService {
         min_score: f32,
         matches: &mut Vec<(f32, MemoryEntry)>,
     ) -> Result<()> {
-        let raw_entries: Vec<String> = self
-            .client
-            .lrange(key, 0, -1)
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("lrange failed: {e}")))?;
-
-        for raw in &raw_entries {
-            let stored: StoredEntry = match serde_json::from_str(raw) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
+        let now = chrono::Utc::now();
+        for (_, stored) in self.read_list(key).await? {
+            let Some(stored) = stored else { continue };
+            if crate::expiry::is_expired(stored.expires_at, now) {
+                continue;
+            }
             let text = crate::text::extract_text(&stored.content);
             let score = crate::text::match_score(query_words, &crate::text::extract_words(&text));
             if score > 0.0 && score >= min_score {
-                matches.push((
-                    score,
-                    MemoryEntry {
-                        content: stored.content,
-                        author: stored.author,
-                        timestamp: stored.timestamp,
-                    },
-                ));
+                matches.push((score, stored.into()));
             }
         }
 
@@ -215,48 +353,8 @@ impl MemoryService for RedisMemoryService {
         session_id: &str,
         entries: Vec<MemoryEntry>,
     ) -> Result<()> {
-        if entries.is_empty() {
-            return Ok(());
-        }
-
         let key = entries_key(app_name, user_id, session_id);
-        let idx = index_key(app_name, user_id);
-
-        let pipeline = self.client.pipeline();
-
-        for entry in &entries {
-            let stored = StoredEntry {
-                content: entry.content.clone(),
-                author: entry.author.clone(),
-                timestamp: entry.timestamp,
-            };
-            let json = serde_json::to_string(&stored)
-                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
-            pipeline
-                .rpush::<(), _, _>(&key, json)
-                .await
-                .map_err(|e| adk_core::AdkError::memory(format!("rpush failed: {e}")))?;
-        }
-
-        // Track this session in the user's index
-        pipeline
-            .sadd::<(), _, _>(&idx, session_id)
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("sadd failed: {e}")))?;
-
-        if let Some(ttl) = self.ttl {
-            pipeline
-                .expire::<(), _>(&key, ttl.as_secs() as i64, None)
-                .await
-                .map_err(|e| adk_core::AdkError::memory(format!("expire failed: {e}")))?;
-        }
-
-        pipeline
-            .all::<()>()
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("pipeline exec failed: {e}")))?;
-
-        Ok(())
+        self.append(&key, &index_key(app_name, user_id), session_id, entries).await
     }
 
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id))]
@@ -318,21 +416,11 @@ impl MemoryService for RedisMemoryService {
                 _ => continue,
             };
             let session = decode_segment(session);
-            let raw_entries: Vec<String> = self
-                .client
-                .lrange(&key, 0, -1)
-                .await
-                .map_err(|e| adk_core::AdkError::memory(format!("lrange failed: {e}")))?;
-            for raw in raw_entries {
-                let stored: StoredEntry = serde_json::from_str(&raw).map_err(|e| {
-                    adk_core::AdkError::memory(format!("stored entry is corrupt: {e}"))
-                })?;
+            for (_, stored) in self.read_list(&key).await? {
+                let stored =
+                    stored.ok_or_else(|| adk_core::AdkError::memory("stored entry is corrupt"))?;
                 memories.push(UserMemory {
-                    entry: MemoryEntry {
-                        content: stored.content,
-                        author: stored.author,
-                        timestamp: stored.timestamp,
-                    },
+                    entry: stored.into(),
                     session_id: (session != "__direct__").then(|| session.clone()),
                     project_id: project_id.clone(),
                 });
@@ -389,6 +477,69 @@ impl MemoryService for RedisMemoryService {
         Ok(())
     }
 
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
+    async fn delete_memory(&self, app_name: &str, user_id: &str, memory_id: &str) -> Result<u64> {
+        let mut removed = 0u64;
+        for key in self.scan_keys(&user_entries_pattern(app_name, user_id)).await? {
+            let matching: Vec<String> = self
+                .read_list(&key)
+                .await?
+                .into_iter()
+                .filter(|(_, stored)| {
+                    stored.as_ref().and_then(|stored| stored.id.as_deref()) == Some(memory_id)
+                })
+                .map(|(raw, _)| raw)
+                .collect();
+            removed += self.remove_raw(&key, &matching).await?;
+        }
+        Ok(removed)
+    }
+
+    #[instrument(skip_all)]
+    async fn purge_expired(&self) -> Result<u64> {
+        let now = chrono::Utc::now();
+        let mut removed = 0u64;
+        for key in self.scan_keys("mem:*").await? {
+            let expired: Vec<String> = self
+                .read_list(&key)
+                .await?
+                .into_iter()
+                .filter(|(_, stored)| {
+                    stored
+                        .as_ref()
+                        .is_some_and(|stored| crate::expiry::is_expired(stored.expires_at, now))
+                })
+                .map(|(raw, _)| raw)
+                .collect();
+            removed += self.remove_raw(&key, &expired).await?;
+        }
+        // An index member whose list expired or emptied names nothing; the list of member
+        // `m` of index `mem_idx:{rest}` is `mem:{rest}:{m}`.
+        for index in self.scan_keys("mem_idx:*").await? {
+            let Some(rest) = index.strip_prefix("mem_idx:") else { continue };
+            let members: Vec<String> = self
+                .client
+                .smembers(&index)
+                .await
+                .map_err(|e| adk_core::AdkError::memory(format!("smembers failed: {e}")))?;
+            for member in members {
+                let list = format!("mem:{rest}:{}", encode_segment(&member));
+                let exists: i64 = self
+                    .client
+                    .exists(&list)
+                    .await
+                    .map_err(|e| adk_core::AdkError::memory(format!("exists failed: {e}")))?;
+                if exists == 0 {
+                    self.client
+                        .srem::<(), _, _>(&index, member.as_str())
+                        .await
+                        .map_err(|e| adk_core::AdkError::memory(format!("srem failed: {e}")))?;
+                }
+            }
+        }
+        Ok(removed)
+    }
+
     #[instrument(skip_all)]
     async fn health_check(&self) -> Result<()> {
         self.client
@@ -412,48 +563,9 @@ impl MemoryService for RedisMemoryService {
         entries: Vec<MemoryEntry>,
     ) -> Result<()> {
         validate_project_id(project_id)?;
-
-        if entries.is_empty() {
-            return Ok(());
-        }
-
         let key = project_entries_key(app_name, user_id, project_id, session_id);
-        let idx = project_index_key(app_name, user_id, project_id);
-
-        let pipeline = self.client.pipeline();
-
-        for entry in &entries {
-            let stored = StoredEntry {
-                content: entry.content.clone(),
-                author: entry.author.clone(),
-                timestamp: entry.timestamp,
-            };
-            let json = serde_json::to_string(&stored)
-                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
-            pipeline
-                .rpush::<(), _, _>(&key, json)
-                .await
-                .map_err(|e| adk_core::AdkError::memory(format!("rpush failed: {e}")))?;
-        }
-
-        pipeline
-            .sadd::<(), _, _>(&idx, session_id)
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("sadd failed: {e}")))?;
-
-        if let Some(ttl) = self.ttl {
-            pipeline
-                .expire::<(), _>(&key, ttl.as_secs() as i64, None)
-                .await
-                .map_err(|e| adk_core::AdkError::memory(format!("expire failed: {e}")))?;
-        }
-
-        pipeline
-            .all::<()>()
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("pipeline exec failed: {e}")))?;
-
-        Ok(())
+        let index = project_index_key(app_name, user_id, project_id);
+        self.append(&key, &index, session_id, entries).await
     }
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
@@ -465,41 +577,9 @@ impl MemoryService for RedisMemoryService {
         entry: MemoryEntry,
     ) -> Result<()> {
         validate_project_id(project_id)?;
-
         let key = project_entries_key(app_name, user_id, project_id, "__direct__");
-        let idx = project_index_key(app_name, user_id, project_id);
-
-        let stored = StoredEntry {
-            content: entry.content.clone(),
-            author: entry.author.clone(),
-            timestamp: entry.timestamp,
-        };
-        let json = serde_json::to_string(&stored)
-            .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
-
-        let pipeline = self.client.pipeline();
-        pipeline
-            .rpush::<(), _, _>(&key, json)
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("rpush failed: {e}")))?;
-        pipeline
-            .sadd::<(), _, _>(&idx, "__direct__")
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("sadd failed: {e}")))?;
-
-        if let Some(ttl) = self.ttl {
-            pipeline
-                .expire::<(), _>(&key, ttl.as_secs() as i64, None)
-                .await
-                .map_err(|e| adk_core::AdkError::memory(format!("expire failed: {e}")))?;
-        }
-
-        pipeline
-            .all::<()>()
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("pipeline exec failed: {e}")))?;
-
-        Ok(())
+        let index = project_index_key(app_name, user_id, project_id);
+        self.append(&key, &index, "__direct__", vec![entry]).await
     }
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
@@ -525,59 +605,33 @@ impl MemoryService for RedisMemoryService {
             .map_err(|e| adk_core::AdkError::memory(format!("smembers failed: {e}")))?;
 
         let mut deleted = 0u64;
-
         for sid in &session_ids {
             let key = project_entries_key(app_name, user_id, project_id, sid);
-            let raw_entries: Vec<String> = self
-                .client
-                .lrange(&key, 0, -1)
-                .await
-                .map_err(|e| adk_core::AdkError::memory(format!("lrange failed: {e}")))?;
-
-            let mut keep = Vec::new();
-            for raw in &raw_entries {
-                let stored: StoredEntry = match serde_json::from_str(raw) {
-                    Ok(s) => s,
-                    Err(_) => {
-                        keep.push(raw.clone());
-                        continue;
-                    }
-                };
-                let text = crate::text::extract_text(&stored.content);
-                let entry_words = crate::text::extract_words(&text);
-                if !entry_words.is_empty() && query_words.iter().any(|w| entry_words.contains(w)) {
-                    deleted += 1;
-                } else {
-                    keep.push(raw.clone());
-                }
+            let matching: Vec<String> = self
+                .read_list(&key)
+                .await?
+                .into_iter()
+                .filter_map(|(raw, stored)| {
+                    let text = crate::text::extract_text(&stored?.content);
+                    let entry_words = crate::text::extract_words(&text);
+                    (!entry_words.is_empty() && query_words.iter().any(|w| entry_words.contains(w)))
+                        .then_some(raw)
+                })
+                .collect();
+            if matching.is_empty() {
+                continue;
             }
-
-            if keep.len() != raw_entries.len() {
-                let pipeline = self.client.pipeline();
-                pipeline
-                    .del::<(), _>(&key)
+            deleted += self.remove_raw(&key, &matching).await?;
+            let remaining: i64 = self
+                .client
+                .llen(&key)
+                .await
+                .map_err(|e| adk_core::AdkError::memory(format!("llen failed: {e}")))?;
+            if remaining == 0 {
+                self.client
+                    .srem::<(), _, _>(&proj_idx, sid.as_str())
                     .await
-                    .map_err(|e| adk_core::AdkError::memory(format!("del failed: {e}")))?;
-                if keep.is_empty() {
-                    pipeline
-                        .srem::<(), _, _>(&proj_idx, sid.as_str())
-                        .await
-                        .map_err(|e| adk_core::AdkError::memory(format!("srem failed: {e}")))?;
-                } else {
-                    for item in &keep {
-                        pipeline.rpush::<(), _, _>(&key, item.as_str()).await.map_err(|e| {
-                            adk_core::AdkError::memory(format!("rpush failed: {e}"))
-                        })?;
-                    }
-                    if let Some(ttl) = self.ttl {
-                        pipeline.expire::<(), _>(&key, ttl.as_secs() as i64, None).await.map_err(
-                            |e| adk_core::AdkError::memory(format!("expire failed: {e}")),
-                        )?;
-                    }
-                }
-                pipeline.all::<()>().await.map_err(|e| {
-                    adk_core::AdkError::memory(format!("pipeline exec failed: {e}"))
-                })?;
+                    .map_err(|e| adk_core::AdkError::memory(format!("srem failed: {e}")))?;
             }
         }
 

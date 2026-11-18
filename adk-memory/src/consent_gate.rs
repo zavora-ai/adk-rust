@@ -13,8 +13,8 @@ use crate::service::{MemoryEntry, MemoryService, SearchRequest, SearchResponse, 
 ///
 /// For a user the [`ConsentGate`] gates — a visitor id by default — without that consent
 /// every add is skipped (the call succeeds and nothing is stored) and a search returns no
-/// memories. A subject being erased cannot add (`subject.erasing`). Deletes, listing, and
-/// health checks pass through, so erasure always reaches stored memories. Users the gate
+/// memories. A subject being erased cannot add (`subject.erasing`). Deletes, purges, listing,
+/// and health checks pass through, so erasure always reaches stored memories. Users the gate
 /// does not gate pass straight through.
 ///
 /// # Example
@@ -32,11 +32,7 @@ use crate::service::{MemoryEntry, MemoryService, SearchRequest, SearchResponse, 
 ///     ConsentGate::new(Arc::new(InMemoryConsentStore::new())),
 /// );
 /// let visitor = VisitorId::generate().to_string();
-/// let entry = MemoryEntry {
-///     content: Content::new("user").with_text("Allergic to peanuts."),
-///     author: "user".to_string(),
-///     timestamp: chrono::Utc::now(),
-/// };
+/// let entry = MemoryEntry::new(Content::new("user").with_text("Allergic to peanuts."), "user");
 /// memory.add_entry("shop", &visitor, entry).await?;
 /// let found = memory
 ///     .search(SearchRequest {
@@ -118,6 +114,14 @@ impl MemoryService for ConsentGatedMemoryService {
 
     async fn delete_session(&self, app_name: &str, user_id: &str, session_id: &str) -> Result<()> {
         self.inner.delete_session(app_name, user_id, session_id).await
+    }
+
+    async fn delete_memory(&self, app_name: &str, user_id: &str, memory_id: &str) -> Result<u64> {
+        self.inner.delete_memory(app_name, user_id, memory_id).await
+    }
+
+    async fn purge_expired(&self) -> Result<u64> {
+        self.inner.purge_expired().await
     }
 
     async fn add_entry(&self, app_name: &str, user_id: &str, entry: MemoryEntry) -> Result<()> {

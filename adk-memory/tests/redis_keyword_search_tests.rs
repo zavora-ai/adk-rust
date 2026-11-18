@@ -16,11 +16,8 @@ use adk_memory::{
 use chrono::{Duration, Utc};
 
 fn entry(text: &str, minutes_ago: i64) -> MemoryEntry {
-    MemoryEntry {
-        content: Content::new("user").with_text(text),
-        author: "user".to_string(),
-        timestamp: Utc::now() - Duration::minutes(minutes_ago),
-    }
+    MemoryEntry::new(Content::new("user").with_text(text), "user")
+        .with_timestamp(Utc::now() - Duration::minutes(minutes_ago))
 }
 
 async fn service() -> RedisMemoryService {

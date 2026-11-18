@@ -13,11 +13,8 @@ use serde_json::{Value, json};
 use crate::common::{APP, Services, USER, Verdict, agent, brief, json_tool, run_turn};
 
 fn entry(text: &str, minutes_ago: i64) -> MemoryEntry {
-    MemoryEntry {
-        content: Content::new("user").with_text(text),
-        author: "user".to_string(),
-        timestamp: Utc::now() - Duration::minutes(minutes_ago),
-    }
+    MemoryEntry::new(Content::new("user").with_text(text), "user")
+        .with_timestamp(Utc::now() - Duration::minutes(minutes_ago))
 }
 
 /// Each `recall` call: the query and the notes it returned.
@@ -151,8 +148,8 @@ pub async fn ranked_top_k() -> anyhow::Result<Verdict> {
 /// SS20: an entry with no words (an image) is stored and listed.
 pub async fn image_only_entry() -> anyhow::Result<Verdict> {
     let service = InMemoryMemoryService::new();
-    let image = MemoryEntry {
-        content: Content {
+    let image = MemoryEntry::new(
+        Content {
             role: "user".to_string(),
             parts: vec![Part::InlineData {
                 mime_type: "image/png".to_string(),
@@ -161,9 +158,8 @@ pub async fn image_only_entry() -> anyhow::Result<Verdict> {
                 annotations: None,
             }],
         },
-        author: "user".to_string(),
-        timestamp: Utc::now(),
-    };
+        "user",
+    );
     service
         .add_session(APP, USER, "s-image", vec![image, entry("Whiteboard photo from the call", 1)])
         .await?;
