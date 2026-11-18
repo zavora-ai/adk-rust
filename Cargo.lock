@@ -615,6 +615,7 @@ dependencies = [
  "adk-gcp",
  "adk-memory",
  "adk-model",
+ "adk-plugin",
  "adk-runner",
  "adk-session",
  "async-trait",
@@ -632,6 +633,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "uuid 1.29.2",
 ]
 

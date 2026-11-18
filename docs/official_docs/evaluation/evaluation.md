@@ -415,6 +415,13 @@ fn metered(judge: Arc<dyn adk_core::Llm>, kill_switch: GovernanceControl) -> Eva
 meters against whichever `ModelCallScope` is current; do not also wrap the judge model in
 `MeteredLlm`, which would meter each call twice.
 
+## Online Evaluation
+
+`adk_eval::online::OnlineEvaluator` applies the reference-free criteria — rubrics, safety,
+hallucination, trajectory efficiency and thread-level conversation metrics — to a seeded sample of
+production runs after they finish, off the request path and under its own budget and kill switch.
+See [Online Evaluation](online-evaluation.md).
+
 ## Integration with cargo test
 
 Use evaluation in standard Rust tests:
