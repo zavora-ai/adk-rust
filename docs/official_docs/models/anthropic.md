@@ -464,6 +464,47 @@ tool answers with a string, or with `{"text": ..., "browser_state": {...}}`, and
 screenshot as inline image data; a tab-management result is the `browser_state` alone, and an
 error result drops it.
 
+### Advisor Tool
+
+Claude's advisor tool (`advisor_20260301`, beta) lets the executor model consult a stronger
+Claude model in the middle of a request. Declare it as a built-in tool on an agent whose model
+is an `AnthropicClient`:
+
+```rust
+use std::sync::Arc;
+
+use adk_agent::LlmAgentBuilder;
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
+use adk_tool::AnthropicAdvisorTool;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let key = std::env::var("ANTHROPIC_API_KEY")?;
+    let executor = AnthropicClient::new(AnthropicConfig::new(key, "claude-haiku-5-5"))?;
+    let _agent = LlmAgentBuilder::new("worker")
+        .instruction("Consult the advisor before you commit to a plan.")
+        .model(Arc::new(executor))
+        .tool(Arc::new(
+            AnthropicAdvisorTool::new("claude-sonnet-5-5").with_max_uses(2).with_max_tokens(2_048),
+        ))
+        .build()?;
+    Ok(())
+}
+```
+
+| Behaviour | Detail |
+|-----------|--------|
+| Beta header | `advisor-tool-2026-03-01` is sent while the request declares the tool or replays an `advisor_tool_result` block |
+| History | The `server_tool_use` and `advisor_tool_result` blocks are replayed verbatim on later turns |
+| Cost | Each `advisor_message` entry of `usage.iterations` is priced at the advisor model's rates and added to `UsageMetadata::cost`, so the run budget and the spend ledger count it; an unpriced advisor model makes the cost unknown |
+| Bound | `max_cost_micro_usd` adds `max_uses` advisor calls, each reading the whole request and writing `max_tokens`; an advisor without `max_uses` cannot be bounded, so a run under a spend or cost cap refuses the request |
+| Governance | A built-in tool: the run's tool policy decides before the request whether it is sent |
+| Pairing | The advisor must be at least as capable as the executor; current advisor models return their advice encrypted |
+
+The run budget's token count covers the executor's tokens; the advisor's tokens reach the
+budget and the ledger through the cost. To read the advice yourself, or to consult a model of
+another provider, use the provider-neutral `AdvisorTool`
+([Advisor tool](../tools/advisor.md)).
+
 ### Token Pricing
 
 ```rust

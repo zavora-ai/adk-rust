@@ -753,12 +753,17 @@ fn extract_retry_hint(e: &adk_anthropic::Error) -> Option<ServerRetryHint> {
 impl Llm for AnthropicClient {
     // The `max_tokens` the client sends, thinking included.
     fn max_cost_micro_usd(&self, request: &adk_core::LlmRequest) -> Option<u64> {
-        crate::pricing::PricingCatalog::standard().max_cost_micro_usd(
+        let output =
+            crate::pricing::request_output_cap(request).unwrap_or(u64::from(self.max_tokens));
+        let executor = crate::pricing::PricingCatalog::standard().max_cost_micro_usd(
             Some("anthropic"),
             self.name(),
             request,
-            Some(crate::pricing::request_output_cap(request).unwrap_or(u64::from(self.max_tokens))),
-        )
+            Some(output),
+        )?;
+        // Advisor calls are billed at the advisor's rates, apart from the executor's usage.
+        let advisor = super::advisor::advisor_cost_bound_micro_usd(request, output)?;
+        Some(executor.saturating_add(advisor))
     }
 
     fn context_window(&self) -> Option<u64> {
@@ -900,12 +905,18 @@ impl Llm for AnthropicClient {
             }
         };
 
-        Ok(crate::usage_tracking::with_priced_usage_tracking(
+        let priced = crate::usage_tracking::with_priced_usage_tracking(
             Box::pin(response_stream),
             usage_span,
             "anthropic",
             &self.model,
-        ))
+        );
+        Ok(Box::pin(priced.map(|response| {
+            response.map(|mut response| {
+                super::advisor::add_advisor_cost(&mut response);
+                response
+            })
+        })))
     }
 }
 

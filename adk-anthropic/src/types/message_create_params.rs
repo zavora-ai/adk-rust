@@ -600,6 +600,38 @@ impl MessageCreateParams {
 
         false
     }
+
+    /// Check if this request requires the advisor tool beta header
+    /// ([`ADVISOR_TOOL_BETA`](crate::types::ADVISOR_TOOL_BETA)).
+    ///
+    /// Returns `true` when the request declares the advisor tool, or replays an
+    /// `advisor_tool_result` block from an earlier turn: the API accepts those blocks only
+    /// under the beta, even after the tool is removed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_anthropic::{MessageCreateParams, ToolUnionParam};
+    ///
+    /// let mut params = MessageCreateParams::default();
+    /// assert!(!params.requires_advisor_beta());
+    /// params.tools = Some(vec![ToolUnionParam::new_advisor_tool("claude-sonnet-5-5")]);
+    /// assert!(params.requires_advisor_beta());
+    /// ```
+    pub fn requires_advisor_beta(&self) -> bool {
+        let declared = self
+            .tools
+            .iter()
+            .flatten()
+            .any(|tool| matches!(tool, ToolUnionParam::Advisor20260301(_)));
+        declared
+            || self.messages.iter().any(|message| match &message.content {
+                MessageParamContent::Array(blocks) => blocks.iter().any(|block| {
+                    matches!(block, ContentBlock::Unknown(raw) if raw["type"] == "advisor_tool_result")
+                }),
+                MessageParamContent::String(_) => false,
+            })
+    }
 }
 
 impl Default for MessageCreateParams {

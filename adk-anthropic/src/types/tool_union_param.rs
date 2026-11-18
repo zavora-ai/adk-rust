@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-    BrowserToolset20260801, ComputerToolVersion, ComputerToolset20260801, ToolBash20241022,
-    ToolBash20250124, ToolComputer20250124, ToolComputer20251124, ToolParam,
+    AdvisorTool20260301, BrowserToolset20260801, ComputerToolVersion, ComputerToolset20260801,
+    ToolBash20241022, ToolBash20250124, ToolComputer20250124, ToolComputer20251124, ToolParam,
     ToolTextEditor20250124, ToolTextEditor20250429, ToolTextEditor20250728, WebFetchTool20250910,
     WebFetchTool20260209, WebSearchTool20250305, WebSearchTool20260209,
 };
@@ -74,6 +74,10 @@ pub enum ToolUnionParam {
     /// The computer use tool, version 20250124 (beta `computer-use-2025-01-24`)
     #[serde(rename = "computer_20250124")]
     Computer20250124(ToolComputer20250124),
+
+    /// The advisor tool (version 20260301, beta `advisor-tool-2026-03-01`)
+    #[serde(rename = "advisor_20260301")]
+    Advisor20260301(AdvisorTool20260301),
 }
 
 impl ToolUnionParam {
@@ -153,7 +157,8 @@ impl ToolUnionParam {
             | Self::WebFetch20250910(_)
             | Self::WebSearch20260209(_)
             | Self::WebFetch20260209(_)
-            | Self::BrowserToolset20260801(_) => None,
+            | Self::BrowserToolset20260801(_)
+            | Self::Advisor20260301(_) => None,
         }
     }
 
@@ -170,6 +175,11 @@ impl ToolUnionParam {
     /// ```
     pub fn beta_header(&self) -> Option<&'static str> {
         self.computer_tool_version().and_then(ComputerToolVersion::beta_header)
+    }
+
+    /// Creates an advisor tool that consults `model`.
+    pub fn new_advisor_tool(model: impl Into<String>) -> Self {
+        Self::Advisor20260301(AdvisorTool20260301::new(model))
     }
 
     /// Check if this tool has strict mode enabled.
@@ -192,7 +202,8 @@ impl ToolUnionParam {
             | Self::ComputerToolset20260801(_)
             | Self::BrowserToolset20260801(_)
             | Self::Computer20251124(_)
-            | Self::Computer20250124(_) => false,
+            | Self::Computer20250124(_)
+            | Self::Advisor20260301(_) => false,
         }
     }
 }

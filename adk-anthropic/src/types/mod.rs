@@ -1,3 +1,4 @@
+mod advisor_tool_20260301;
 mod auto_cache_control;
 mod base64_image_source;
 mod base64_pdf_source;
@@ -92,6 +93,7 @@ mod web_search_tool_result_block_content;
 mod web_search_tool_result_error;
 
 // Exports
+pub use advisor_tool_20260301::{ADVISOR_TOOL_BETA, AdvisorTool20260301};
 pub use auto_cache_control::AutoCacheControl;
 pub use base64_image_source::{Base64ImageSource, ImageMediaType};
 pub use base64_pdf_source::Base64PdfSource;

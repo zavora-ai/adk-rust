@@ -30,6 +30,7 @@ This project is an **unofficial** community-maintained library. It is not affili
 - **Fast mode** — `speed: "fast"` (`SpeedMode::Fast`) on Claude Opus 5.5, Fable 5.2 and Mythos 5.2; research preview on Opus 5 and Opus 4.8
 - **Refusals** — `Message::stop_details` carries the category and explanation of a `refusal` stop, streamed and unary
 - **Request customization** — caller-selected beta headers, bearer auth, API-version overrides, and exact per-request headers
+- **Advisor tool** — `AdvisorTool20260301` (`ToolUnionParam::Advisor20260301`) declares `advisor_20260301` (beta); the client sends `advisor-tool-2026-03-01` while a request declares it or replays an `advisor_tool_result` block
 - **Server-side fallback** — typed default or explicit safety-refusal routing with fallback-aware responses and SSE events
 - **Batches API** — create, get, results, cancel, delete, list
 - **Files API** — upload, get, delete, list on `Anthropic`; `FilesClient` (`files` feature) adds `upload_file_from_path` and `download_file`, which returns files created by skills or the code execution tool

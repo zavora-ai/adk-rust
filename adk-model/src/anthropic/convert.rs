@@ -402,6 +402,9 @@ pub fn from_anthropic_message(
             | ContentBlock::TextEditorCodeExecutionToolResult(_) => {
                 parts.extend(server_tool_part(block));
             }
+            // The advisor's result is advice for the executor, kept for replay by
+            // `history::preserve`; its cost is in `usage.iterations`.
+            ContentBlock::Unknown(raw) if raw["type"] == "advisor_tool_result" => {}
             // No ADK part represents it; `history::preserve` keeps it for replay.
             ContentBlock::Unknown(raw) => {
                 tracing::warn!(
