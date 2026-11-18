@@ -1448,4 +1448,35 @@ mod tests {
         let loaded = dc.load("t1").await.unwrap().unwrap();
         assert_eq!(loaded.state, states[5]);
     }
+
+    #[tokio::test]
+    async fn delta_checkpointer_prune_keeps_an_open_pause_and_its_base() {
+        let dc = DeltaCheckpointer::new(
+            MemoryCheckpointer::new(),
+            DeltaConfig { full_snapshot_interval: 3 },
+        );
+        let mut saved = Vec::new();
+        for step in 0..7usize {
+            let mut state = State::new();
+            state.insert("count".to_string(), serde_json::json!(step));
+            let mut checkpoint =
+                Checkpoint::new("t1", state, step, vec![]).with_version(step as u64 + 1);
+            if step == 6 {
+                // The newest lists the pause at step 4, a delta over the snapshot at step 3.
+                let pause: &Checkpoint = &saved[4];
+                checkpoint = checkpoint.with_metadata(
+                    crate::record::OPEN_PAUSES_METADATA_KEY,
+                    serde_json::json!([pause.checkpoint_id]),
+                );
+            }
+            dc.save(&checkpoint).await.unwrap();
+            saved.push(checkpoint);
+        }
+
+        let removed =
+            dc.prune("t1", &crate::checkpoint::RetentionPolicy::keep_last(1)).await.unwrap();
+        assert_eq!(removed, 3, "everything before the pause's base snapshot goes");
+        let pause = dc.load_by_id(&saved[4].checkpoint_id).await.unwrap().unwrap();
+        assert_eq!(pause.state, saved[4].state, "the open pause still reconstructs");
+    }
 }

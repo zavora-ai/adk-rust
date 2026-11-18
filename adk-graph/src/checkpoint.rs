@@ -15,7 +15,7 @@
 //! | Monotonic versions | `save` stores a checkpoint only when its version is at least 1 and greater than every version stored for the thread; otherwise it fails with [`GraphError::CheckpointConflict`]. Of concurrent saves of one version, exactly one succeeds |
 //! | Unique IDs | A checkpoint ID is stored once; saving a second checkpoint with a stored ID fails |
 //! | Thread isolation | `delete` and `prune` touch only the named thread |
-//! | Retention | `prune` removes what a [`RetentionPolicy`] selects and never the newest checkpoint |
+//! | Retention | `prune` removes what a [`RetentionPolicy`] selects, and never a checkpoint a resume still needs ([`needed_to_resume`]) or the policy pins |
 //! | Fidelity | A loaded checkpoint equals the saved one, with `created_at` to the microsecond |
 //!
 //! The version rule is what keeps two writers from interleaving. A writer continues a
@@ -25,7 +25,7 @@
 use crate::error::{GraphError, Result};
 use crate::state::Checkpoint;
 use async_trait::async_trait;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -34,8 +34,15 @@ use tokio::sync::RwLock;
 /// A long-running thread accumulates one checkpoint per super-step. Without a
 /// policy that grows without bound, which costs storage and slows a `list`.
 ///
-/// The newest checkpoint is never removed, whatever the policy says: it is the
-/// one a resume loads, so discarding it would end the thread.
+/// Whatever the limits say, a policy never selects a checkpoint a resume still
+/// needs ([`needed_to_resume`]) or one it pins:
+///
+/// | Kept | Why |
+/// |------|-----|
+/// | The newest checkpoint | A resume without a checkpoint ID loads it |
+/// | Each pause no run has resumed | A caller holds its ID and resumes it with [`ExecutionConfig::with_resume_from`](crate::node::ExecutionConfig::with_resume_from) |
+/// | Each effect-log entry | A governed node's call is answered from it instead of running again |
+/// | Each ID in [`pinned`](Self::pinned) | The caller asked for it |
 ///
 /// # Example
 ///
@@ -48,11 +55,14 @@ use tokio::sync::RwLock;
 /// # let _ = policy;
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RetentionPolicy {
     /// Keep at most this many checkpoints per thread, newest first.
     pub max_per_thread: Option<usize>,
     /// Remove checkpoints older than this.
     pub max_age: Option<std::time::Duration>,
+    /// Checkpoint IDs kept whatever the limits say.
+    pub pinned: BTreeSet<String>,
 }
 
 impl RetentionPolicy {
@@ -60,12 +70,12 @@ impl RetentionPolicy {
     ///
     /// A count of zero is raised to one, because the newest is always kept.
     pub fn keep_last(count: usize) -> Self {
-        Self { max_per_thread: Some(count.max(1)), max_age: None }
+        Self { max_per_thread: Some(count.max(1)), ..Self::default() }
     }
 
     /// Removes checkpoints older than `age`.
     pub fn max_age(age: std::time::Duration) -> Self {
-        Self { max_per_thread: None, max_age: Some(age) }
+        Self { max_age: Some(age), ..Self::default() }
     }
 
     /// Adds an age limit to a count limit.
@@ -80,20 +90,57 @@ impl RetentionPolicy {
         self
     }
 
+    /// Keeps these checkpoints whatever the limits say.
+    ///
+    /// A store that hides checkpoint metadata from the store it wraps, as an encrypting
+    /// one does, pins what [`needed_to_resume`] finds in its own view before delegating.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::checkpoint::RetentionPolicy;
+    ///
+    /// let policy = RetentionPolicy::keep_last(1).pinning(["audited-cp"]);
+    /// assert!(policy.pinned.contains("audited-cp"));
+    /// ```
+    pub fn pinning<I, S>(mut self, checkpoint_ids: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.pinned.extend(checkpoint_ids.into_iter().map(Into::into));
+        self
+    }
+
     /// Whether this policy would remove anything.
     pub fn is_unlimited(&self) -> bool {
         self.max_per_thread.is_none() && self.max_age.is_none()
     }
 
-    /// Selects the checkpoint ids this policy discards, newest always kept.
+    /// Selects the checkpoint IDs this policy discards from one thread's checkpoints.
     ///
-    /// Shared by every backend so they cannot disagree about what to keep.
+    /// Shared by every backend so they cannot disagree about what to keep. Nothing in
+    /// [`needed_to_resume`] or [`pinned`](Self::pinned) is selected.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::checkpoint::RetentionPolicy;
+    /// use adk_graph::state::{Checkpoint, State};
+    ///
+    /// let thread: Vec<Checkpoint> = (1..=3)
+    ///     .map(|version| Checkpoint::new("t1", State::new(), 0, vec![]).with_version(version))
+    ///     .collect();
+    /// let expired = RetentionPolicy::keep_last(1).expired(&thread);
+    /// assert_eq!(expired, vec![thread[1].checkpoint_id.clone(), thread[0].checkpoint_id.clone()]);
+    /// ```
     pub fn expired(&self, checkpoints: &[Checkpoint]) -> Vec<String> {
         if self.is_unlimited() || checkpoints.len() <= 1 {
             return Vec::new();
         }
+        let needed = needed_to_resume(checkpoints);
         let mut ordered: Vec<&Checkpoint> = checkpoints.iter().collect();
-        // Newest first, so the one a resume loads is at index 0.
+        // Newest first, so the count limit counts from the one a resume loads.
         ordered.sort_by_key(|checkpoint| std::cmp::Reverse(checkpoint.version));
 
         let cutoff = self.max_age.and_then(|age| {
@@ -104,14 +151,65 @@ impl RetentionPolicy {
             .iter()
             .enumerate()
             .filter(|(index, checkpoint)| {
-                // Index 0 is the newest and is never discarded.
-                *index > 0
+                !needed.contains(&checkpoint.checkpoint_id)
+                    && !self.pinned.contains(&checkpoint.checkpoint_id)
                     && (self.max_per_thread.is_some_and(|max| *index >= max)
                         || cutoff.is_some_and(|cutoff| checkpoint.created_at < cutoff))
             })
             .map(|(_, checkpoint)| checkpoint.checkpoint_id.clone())
             .collect()
     }
+}
+
+/// The IDs of one thread's checkpoints that a resume still needs, which no
+/// [`RetentionPolicy`] removes.
+///
+/// | Checkpoint | Needed because |
+/// |------------|----------------|
+/// | The newest, by version | A resume without a checkpoint ID loads it |
+/// | Each one the newest lists in [`OPEN_PAUSES_METADATA_KEY`] | A run paused there and no run has resumed it, so a caller can still resume it by ID |
+/// | Each one carrying [`EFFECT_METADATA_KEY`] | An effect-log entry answers a governed node's call, so a fork or a retry does not run it again |
+///
+/// A checkpoint whose pause has been resumed is not needed: the run that resumed it
+/// continues from its own checkpoints. Checkpoints written before the open-pause list
+/// existed protect only the newest.
+///
+/// # Example
+///
+/// ```
+/// use adk_graph::checkpoint::needed_to_resume;
+/// use adk_graph::record::OPEN_PAUSES_METADATA_KEY;
+/// use adk_graph::state::{Checkpoint, State};
+/// use serde_json::json;
+///
+/// let paused = Checkpoint::new("t1", State::new(), 1, vec!["approve".into()]);
+/// let branch = Checkpoint::new("t1", State::new(), 2, vec![])
+///     .with_version(2)
+///     .with_metadata(OPEN_PAUSES_METADATA_KEY, json!([paused.checkpoint_id]));
+/// let needed = needed_to_resume(&[paused.clone(), branch.clone()]);
+/// assert!(needed.contains(&paused.checkpoint_id) && needed.contains(&branch.checkpoint_id));
+/// ```
+///
+/// [`OPEN_PAUSES_METADATA_KEY`]: crate::record::OPEN_PAUSES_METADATA_KEY
+/// [`EFFECT_METADATA_KEY`]: crate::governed::EFFECT_METADATA_KEY
+pub fn needed_to_resume(checkpoints: &[Checkpoint]) -> BTreeSet<String> {
+    let mut needed = BTreeSet::new();
+    let Some(newest) = checkpoints.iter().max_by_key(|checkpoint| checkpoint.version) else {
+        return needed;
+    };
+    needed.insert(newest.checkpoint_id.clone());
+    // A malformed list protects nothing extra rather than blocking every prune; the
+    // newest, which a resume loads, is kept regardless.
+    needed.extend(newest.open_pauses().unwrap_or_default());
+    needed.extend(
+        checkpoints
+            .iter()
+            .filter(|checkpoint| {
+                checkpoint.metadata.contains_key(crate::governed::EFFECT_METADATA_KEY)
+            })
+            .map(|checkpoint| checkpoint.checkpoint_id.clone()),
+    );
+    needed
 }
 
 /// When a graph run writes the checkpoint of each completed super-step.
@@ -261,12 +359,20 @@ pub trait Checkpointer: Send + Sync {
         Ok(checkpoints)
     }
 
-    /// Deletes every checkpoint of a thread.
+    /// Deletes every checkpoint of a thread, its open pauses included.
+    ///
+    /// Deleting a thread that holds no checkpoints is a no-op. The thread's versions
+    /// start afresh afterwards.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the backend cannot be written.
     async fn delete(&self, thread_id: &str) -> Result<()>;
 
-    /// Removes the checkpoints a retention policy discards, keeping the newest.
+    /// Removes the checkpoints a retention policy discards from one thread.
     ///
-    /// Returns how many were removed.
+    /// Backends select with [`RetentionPolicy::expired`], so nothing a resume still
+    /// needs ([`needed_to_resume`]) is removed. Returns how many were removed.
     ///
     /// # Errors
     ///

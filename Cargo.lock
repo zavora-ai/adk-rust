@@ -691,6 +691,7 @@ dependencies = [
  "adk-agent",
  "adk-core",
  "adk-graph",
+ "adk-model",
  "adk-rust-macros",
  "adk-tool",
  "async-stream",

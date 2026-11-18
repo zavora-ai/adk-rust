@@ -591,7 +591,8 @@ pub fn entrypoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     cancel_token.clone(),
                     None,
                 )
-                .with_resume_values(execution_config.resume_values);
+                .with_resume_values(execution_config.resume_values)
+                .with_resumed_from(execution_config.resume_from.clone());
 
                 // Validate initial state against schema (if configured)
                 ctx.validate_state().map_err(|e| adk_graph::error::GraphError::Other(e.to_string()))?;

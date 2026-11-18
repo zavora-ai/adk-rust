@@ -156,3 +156,45 @@ async fn suspension_and_type_mismatch_are_distinguishable_variants() {
     };
     assert!(matches!(direct, FunctionalError::Suspended { .. }));
 }
+
+#[tokio::test]
+async fn an_unanswered_interrupt_survives_retention_until_a_run_resumes_it() {
+    use adk_graph::checkpoint::RetentionPolicy;
+    use adk_graph::state::Checkpoint;
+
+    let store = Arc::new(MemoryCheckpointer::new());
+    let thread = "retained";
+    let run = |resumed_from: Option<String>| {
+        let (event_tx, _rx) = tokio::sync::broadcast::channel(64);
+        TaskContext::new(
+            thread.to_string(),
+            State::new(),
+            store.clone() as Arc<dyn Checkpointer>,
+            event_tx,
+            Arc::new(tokio::sync::RwLock::new(adk_graph::functional::ExecutionLog::default())),
+            tokio_util::sync::CancellationToken::new(),
+            None,
+        )
+        .with_resumed_from(resumed_from)
+    };
+
+    let first = run(None);
+    first.interrupt::<Approval>("approve the refund").await.expect_err("suspends");
+    let paused = store.load(thread).await.unwrap().unwrap().checkpoint_id;
+    // A parallel task of the same run finishes after the interrupt was written.
+    first.save_checkpoint(Checkpoint::new(thread, State::new(), 1, vec![])).await.unwrap();
+
+    store.prune(thread, &RetentionPolicy::keep_last(1)).await.unwrap();
+    assert!(
+        store.load_by_id(&paused).await.unwrap().is_some(),
+        "no run has resumed the interrupt, so the sweep keeps its checkpoint"
+    );
+
+    let resumed = run(Some(paused.clone()));
+    resumed.save_checkpoint(Checkpoint::new(thread, State::new(), 2, vec![])).await.unwrap();
+    store.prune(thread, &RetentionPolicy::keep_last(1)).await.unwrap();
+    assert!(
+        store.load_by_id(&paused).await.unwrap().is_none(),
+        "a run resumed it, so the next sweep lets it go"
+    );
+}

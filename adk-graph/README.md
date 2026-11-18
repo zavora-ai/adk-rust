@@ -29,7 +29,7 @@ Graph-based workflow orchestration for Rust Agent Development Kit (ADK-Rust) age
 - **Reliability**: per-node retry with backoff and jitter that never exceeds `max_delay`, a concurrency bound, per-node timeouts, graph-wide `NodeDefaults`, and `with_node_error_handler` to recover once a retry budget is spent. A failure no handler recovers stops the step: queued nodes do not start and sibling retries stop waiting
 - **Invoking a node directly**: `ctx.run_node_with` runs a node the graph has no edge to, sized from state, and records it so a resume does not pay for it twice; concurrent calls under one run id run the child once
 - **As a tool**: `NodeTool` exposes a graph or a single node through the `Tool` trait, so an `LlmAgent` can call a whole graph
-- **Bounded growth**: `RetentionPolicy` limits how many checkpoints a thread keeps, by count or age
+- **Bounded growth**: `RetentionPolicy` limits how many checkpoints a thread keeps, by count or age, after every save or on demand with `Checkpointer::prune`. It never removes what a resume still needs — the newest checkpoint, each pause no run has resumed, each effect-log entry — or a checkpoint it pins; `Checkpointer::delete` removes a whole thread. Every backend runs the same conformance case
 - **Run records**: every checkpoint carries its run, the steps finished since the previous one (each node's start, duration, status, written keys and attempt) and a fork's lineage, so an observer reads a run's history from checkpoints alone; `CompiledGraph::shape` reports the graph's nodes, edges and entry nodes
 - **Fork with edits** (feature: `time-travel`): `TimeTravelHandle::fork` branches a new thread from a checkpoint with channels overwritten, keeps waiting joins, and records the fork's lineage; the source thread is never written
 - **Governed nodes**: `with_governed_node` puts a node's call on the governed path — approval, edits, the kill switch and the action ledger — so it runs at most once per call in its lineage, forks included; a run without an action ledger, or a graph without a checkpointer, does not run it
@@ -545,7 +545,7 @@ fn harden(graph: CompiledGraph) -> CompiledGraph {
 | Retry when no policy is attached | one attempt |
 | `RetryPolicy::default()` | ten attempts; 1s initial delay doubling to a 60s cap, with full jitter — the nine sleeps average about 151s in total |
 | Concurrency | the whole frontier |
-| Checkpoints kept | every one, until a retention policy is set |
+| Checkpoints kept | every one, until a retention policy is set; a policy keeps the newest, open pauses and effect-log entries |
 | Durability | `Durability::Sync`: each super-step's checkpoint is written before the next starts |
 
 An interrupt is never retried and never reaches an error handler: a pause is not a
