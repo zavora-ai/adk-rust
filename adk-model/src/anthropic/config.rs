@@ -193,6 +193,12 @@ pub struct AnthropicConfig {
     /// models that support mid-conversation tool changes.
     #[serde(default)]
     pub inline_tool_changes: bool,
+
+    /// Whether requests continue a message thread the API keeps (beta
+    /// `message-threads-2026-08-12`), so each sends only the messages since the previous
+    /// response. Threads are not ZDR eligible.
+    #[serde(default)]
+    pub message_threads: bool,
 }
 
 impl std::fmt::Debug for AnthropicConfig {
@@ -218,6 +224,7 @@ impl std::fmt::Debug for AnthropicConfig {
             .field("api_version", &self.api_version)
             .field("tool_search", &self.tool_search)
             .field("inline_tool_changes", &self.inline_tool_changes)
+            .field("message_threads", &self.message_threads)
             .finish()
     }
 }
@@ -249,6 +256,7 @@ impl Default for AnthropicConfig {
             api_version: None,
             tool_search: None,
             inline_tool_changes: false,
+            message_threads: false,
         }
     }
 }
@@ -468,6 +476,29 @@ impl AnthropicConfig {
     /// ```
     pub fn with_inline_tool_changes(mut self, enabled: bool) -> Self {
         self.inline_tool_changes = enabled;
+        self
+    }
+
+    /// Continues a message thread the API keeps for each conversation, so a request sends only
+    /// the messages since the previous response: smaller requests and a steadier time to first
+    /// token in long tool loops, at the same price.
+    ///
+    /// The session stays the source of truth: a request continues its thread only when the
+    /// conversation it sends starts with exactly what the thread holds, and creates a new one
+    /// otherwise. A conversation that carries a compaction is sent without a thread, and a
+    /// thread the API cannot continue is replaced by sending the whole conversation. Threads
+    /// are not ZDR eligible.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_model::anthropic::AnthropicConfig;
+    ///
+    /// let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-5-5").with_message_threads(true);
+    /// assert!(config.message_threads);
+    /// ```
+    pub fn with_message_threads(mut self, enabled: bool) -> Self {
+        self.message_threads = enabled;
         self
     }
 }

@@ -89,7 +89,6 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 /// Upper bound on establishing a connection, so a long request timeout does not
 /// also let an unreachable host hold a request for minutes.
 const MAX_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
-const STRUCTURED_OUTPUTS_BETA: &str = "structured-outputs-2025-11-13";
 const SERVER_FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 /// Opt-in named when a base URL given in code is rejected for plain HTTP.
 const CODE_INSECURE_HTTP_OPT_IN: &str =
@@ -1037,26 +1036,11 @@ impl Anthropic {
         if streaming {
             headers.insert(header::ACCEPT, HeaderValue::from_static("text/event-stream"));
         }
-        if params.requires_structured_outputs_beta() {
-            Self::append_beta_header(&mut headers, STRUCTURED_OUTPUTS_BETA)?;
-        }
-        if params.context_management.is_some() {
-            Self::append_beta_header(&mut headers, "context-management-2025-06-27")?;
-        }
-        if params.speed.is_some() {
-            Self::append_beta_header(&mut headers, "fast-mode-2026-02-01")?;
-        }
-        for beta in params.tool_beta_headers() {
+        for beta in params.required_betas() {
             Self::append_beta_header(&mut headers, beta)?;
         }
-        if params.requires_advisor_beta() {
-            Self::append_beta_header(&mut headers, crate::types::ADVISOR_TOOL_BETA)?;
-        }
-        if params.requires_compaction_beta() {
-            Self::append_beta_header(&mut headers, crate::types::COMPACTION_BETA)?;
-        }
-        if params.requires_inline_tools_beta() {
-            Self::append_beta_header(&mut headers, crate::types::INLINE_TOOLS_BETA)?;
+        for beta in &params.betas {
+            Self::append_beta_header(&mut headers, beta)?;
         }
         for beta in extra_betas {
             Self::append_beta_header(&mut headers, beta)?;

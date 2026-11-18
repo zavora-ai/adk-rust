@@ -4,9 +4,13 @@ use crate::types::{
     CacheControlEphemeral, CitationsConfig, CompactionParam, Content, ContentBlock,
     ContentBlockSourceContent, ContextManagement, DocumentSource, EffortLevel, ImageBlock,
     ImageSource, MessageParam, MessageParamContent, Metadata, Model, OutputConfig, OutputFormat,
-    SkillRef, SpeedMode, SystemPrompt, TextBlock, ThinkingConfig, ToolChoice,
+    SkillRef, SpeedMode, SystemPrompt, TextBlock, ThinkingConfig, ThreadParam, ToolChoice,
     ToolResultBlockContent, ToolUnionParam,
 };
+
+/// The beta header a request with structured outputs (an output format or a strict tool)
+/// sends.
+pub const STRUCTURED_OUTPUTS_BETA: &str = "structured-outputs-2025-11-13";
 
 /// Security limits for DoS prevention
 const MAX_MESSAGE_COUNT: usize = 1000;
@@ -122,6 +126,16 @@ pub struct MessageCreateParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compaction: Option<CompactionParam>,
 
+    /// Keeps the conversation on the API for a short time, so a later request sends only the
+    /// new messages. Requires beta header `message-threads-2026-08-12`, which the client adds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread: Option<ThreadParam>,
+
+    /// Beta headers to send beyond those the request's features require
+    /// ([`required_betas`](Self::required_betas)). Sent only as headers, never in the body.
+    #[serde(skip)]
+    pub betas: Vec<String>,
+
     /// Geographic routing for data residency control (e.g. "US", "EU").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inference_geo: Option<String>,
@@ -197,6 +211,8 @@ impl MessageCreateParams {
 
             context_management: None,
             compaction: None,
+            thread: None,
+            betas: Vec::new(),
             inference_geo: None,
             service_tier: None,
             container: None,
@@ -230,6 +246,8 @@ impl MessageCreateParams {
 
             context_management: None,
             compaction: None,
+            thread: None,
+            betas: Vec::new(),
             inference_geo: None,
             service_tier: None,
             container: None,
@@ -655,6 +673,51 @@ impl MessageCreateParams {
     /// params.compaction = Some(CompactionParam::summarize());
     /// assert!(params.requires_compaction_beta());
     /// ```
+    /// The beta headers the request's features require: structured outputs, context
+    /// management, fast mode, compaction, tool changes and threads. The client sends them with
+    /// [`betas`](Self::betas).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_anthropic::{KnownModel, MessageCreateParams, ThreadParam};
+    ///
+    /// let mut params = MessageCreateParams::simple("Hello", KnownModel::ClaudeSonnet46);
+    /// assert!(params.required_betas().is_empty());
+    /// params.thread = Some(ThreadParam::Create);
+    /// assert_eq!(params.required_betas(), ["message-threads-2026-08-12"]);
+    /// ```
+    pub fn required_betas(&self) -> Vec<&'static str> {
+        let mut betas = Vec::new();
+        if self.requires_structured_outputs_beta() {
+            betas.push(crate::types::STRUCTURED_OUTPUTS_BETA);
+        }
+        if self.context_management.is_some() {
+            betas.push("context-management-2025-06-27");
+        }
+        if self.speed.is_some() {
+            betas.push("fast-mode-2026-02-01");
+        }
+        for beta in self.tool_beta_headers() {
+            if !betas.contains(&beta) {
+                betas.push(beta);
+            }
+        }
+        if self.requires_advisor_beta() {
+            betas.push(crate::types::ADVISOR_TOOL_BETA);
+        }
+        if self.requires_compaction_beta() {
+            betas.push(crate::types::COMPACTION_BETA);
+        }
+        if self.requires_inline_tools_beta() {
+            betas.push(crate::types::INLINE_TOOLS_BETA);
+        }
+        if self.thread.is_some() {
+            betas.push(crate::types::MESSAGE_THREADS_BETA);
+        }
+        betas
+    }
+
     /// Whether the request needs the `inline-tools-2026-09-15` beta: it carries a tool change,
     /// or a compaction block that records tool changes, which the API applies only with it.
     ///
@@ -723,6 +786,8 @@ impl Default for MessageCreateParams {
 
             context_management: None,
             compaction: None,
+            thread: None,
+            betas: Vec::new(),
             inference_geo: None,
             service_tier: None,
             container: None,

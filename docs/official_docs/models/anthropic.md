@@ -379,6 +379,37 @@ fn build(api_key: String) -> Result<AnthropicClient, adk_core::AdkError> {
 reported as `usage.cache_creation_input_tokens_1h`, at the 1-hour rate and the remainder at
 the 5-minute rate.
 
+### Message Threads
+
+With `with_message_threads(true)`, the API keeps each conversation for a short time (beta
+`message-threads-2026-08-12`, added by the client), so a request sends only the messages since
+the previous response. Requests stay small and time to first token steadier as a tool loop grows,
+at the same price.
+
+```rust
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
+
+fn build(api_key: String) -> Result<AnthropicClient, adk_core::AdkError> {
+    AnthropicClient::new(
+        AnthropicConfig::new(api_key, "claude-sonnet-5-5").with_message_threads(true),
+    )
+}
+```
+
+| Rule | Behaviour |
+|------|-----------|
+| Source of truth | The agent's session. A request continues its thread only when the conversation it sends starts with exactly what the thread holds — the messages it was sent and the reply as the client renders it from the agent's history — and its `system`, `tools`, thinking, output config, cache control and beta set are unchanged; otherwise it creates a new thread with the whole conversation |
+| Refused thread | A continue or create request the API refuses (an expired thread, one continued elsewhere, a request a thread cannot hold) is sent again without a thread; a conversation whose create request is refused is sent without one from then on |
+| Compaction | A compaction request, and a conversation that carries a compaction block, are sent without a thread: threads cannot hold one |
+| Lifetime | A thread not used for five minutes is replaced by a new one |
+| Data retention | Message threads are not ZDR eligible |
+
+| Ledger audit with Claude Haiku 5.5 (9 requests over two turns) | Messages sent | Body |
+|---|---|---|
+| First request (creates the thread) | 1 | 978 bytes |
+| Later tool-loop requests (continue) | 1 each | about 2,100 bytes each |
+| First request of the second turn (continue) | 1 | 327 bytes; 13,463 bytes without a thread |
+
 ### On-Demand Compaction
 
 Claude summarizes a conversation when a request sets `compaction`, and returns one signed
