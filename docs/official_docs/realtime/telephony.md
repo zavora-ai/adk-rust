@@ -7,6 +7,10 @@ path.
 | Provider | Feature | Inbound | Transfer | Hang up | DTMF | Outbound |
 |----------|---------|---------|----------|---------|------|----------|
 | OpenAI Realtime SIP | `openai-sip` | `realtime.call.incoming` webhook, accept / reject | SIP REFER | yes | not documented by OpenAI | not in this API |
+| LiveKit SIP | `livekit-sip` | inbound trunk + dispatch rule; `participant_joined` webhook | `TransferSIPParticipant` | `RemoveParticipant` | while dialling (extension tones) | `CreateSIPParticipant` |
+
+With LiveKit, the caller is a participant in a LiveKit room, and the LiveKit bridge (feature
+`livekit`) joins the room with any realtime model — OpenAI Realtime, Gemini Live, Vertex Live.
 
 ## How a call flows
 
@@ -20,9 +24,11 @@ path.
 ## Call-control tools
 
 The `telephony` feature (implied by each provider feature) provides the call controls as
-`adk_core::Tool`s. Under a `RealtimeAgent` each call goes through
-`adk_core::authorize_tool_call` — the kill switch, the `ToolPolicy`, confirmation — then the
-run's action ledger for the non-idempotent ones, and the run's tool-call budget.
+`adk_core::Tool`s. Under a `RealtimeAgent`, or as an `adk_tool` of an
+`IntegratedRealtimeRunner`, each call goes through `adk_core::authorize_tool_call` — the kill
+switch, the `ToolPolicy`, confirmation — then the run's action ledger for the non-idempotent
+ones, and the run's tool-call budget. A `RealtimeRunner` native handler gets the governed path
+but neither the ledger nor the budget, so register the call tools as ADK tools.
 
 | Tool | Name the model sees | Effect | What it does |
 |------|---------------------|--------|--------------|
@@ -216,6 +222,128 @@ OpenAI's Realtime SIP flow documents no outbound calling and no DTMF. Outbound S
 DTMF exist on OpenAI's GPT-Live API (`/v1/live/sessions`), whose session protocol
 (`gpt-live-1`, delegation) `adk-realtime` does not implement.
 
+## LiveKit SIP
+
+```toml
+[dependencies]
+adk-realtime = { version = "3.0.0", features = ["livekit-sip", "integration"] }
+adk-core = "3.0.0"
+```
+
+`livekit-sip` uses LiveKit's server API only (`livekit-api`), not the WebRTC stack; add
+`livekit` for the bridge that carries the call's audio.
+
+### Setup
+
+1. **Route the number to LiveKit.** In your SIP provider, send inbound calls to your LiveKit
+   SIP URI, `sip:<subdomain>.sip.livekit.cloud`. LiveKit Cloud shows it on the **Project
+   settings** page; `lk project list --json` prints the `ProjectId` (`p_<subdomain>`).
+2. **Create an inbound trunk** for the number, in E.164:
+   `LiveKitSip::create_inbound_trunk("front desk", vec!["+15105550100".into()], options)`.
+3. **Create a dispatch rule** that puts each caller in a new room:
+   `LiveKitSip::create_dispatch_rule("call-", options)` with `options.trunk_ids` set to the
+   trunk's ID (every inbound trunk when empty).
+4. **Add a webhook.** LiveKit Cloud: **Settings → Webhooks → Create new webhook**, with your
+   URL and a signing API key. Self-hosted: the `webhook` section of the server config, with
+   `api_key` and `urls`. Deliveries are `application/webhook+json`, signed with a JWT in the
+   `Authorization` header whose `sha256` claim is the body's hash.
+5. **For outbound calls, create an outbound trunk** with your provider's trunk domain and
+   numbers: `LiveKitSip::create_outbound_trunk("outbound", "<trunk domain>", numbers, options)`.
+
+The rest of the SIP admin API (list, update, delete) is `LiveKitSip::sip()`, `livekit-api`'s
+`SIPClient`.
+
+### Taking a call
+
+`LiveKitWebhookVerifier` verifies the token and the body hash, and returns
+`LiveKitWebhookEvent::IncomingCall` for a `participant_joined` whose participant is an inbound
+SIP participant (kind `SIP`, a `sip.ruleID`). The call carries the room, the participant
+identity, and LiveKit's `sip.callID`, `sip.phoneNumber`, `sip.trunkPhoneNumber`, `sip.trunkID`
+and `sip.ruleID` attributes. LiveKit has connected the caller by then, so `answer` returns the
+caller's `LiveKitSipCall`; `decline` removes the caller, which hangs up.
+
+```rust,no_run
+use std::sync::Arc;
+
+use adk_core::{DeclarativePolicy, GovernanceControl, RunConfig};
+use adk_realtime::integration::IntegratedRealtimeRunner;
+use adk_realtime::model::BoxedModel;
+use adk_realtime::telephony::livekit::{LiveKitSip, LiveKitWebhookEvent, LiveKitWebhookVerifier};
+use adk_realtime::telephony::{
+    CallAnswerer, CallFreezeGuard, CallTarget, EndCallTool, TransferCallTool, hang_up_on_freeze,
+};
+use adk_realtime::RealtimeConfig;
+use adk_session::SessionService;
+
+/// Builds the runner for a call `body`/`authorization` announced, on `model` — any realtime
+/// provider — with a kill switch that also hangs up the call.
+async fn take_call(
+    body: &str,
+    authorization: &str,
+    model: BoxedModel,
+    sessions: Arc<dyn SessionService>,
+    control: GovernanceControl,
+) -> Result<Option<(IntegratedRealtimeRunner, CallFreezeGuard)>, Box<dyn std::error::Error>> {
+    let key = std::env::var("LIVEKIT_API_KEY")?;
+    let secret = std::env::var("LIVEKIT_API_SECRET")?;
+    let LiveKitWebhookEvent::IncomingCall(call) =
+        LiveKitWebhookVerifier::new(&key, &secret).verify(body, authorization)?
+    else {
+        return Ok(None);
+    };
+    let livekit = LiveKitSip::new(&std::env::var("LIVEKIT_URL")?, &key, &secret);
+    let handle = livekit.answer(&call, &RealtimeConfig::default()).await?;
+
+    let policy = DeclarativePolicy::builder()
+        .allow("end_call")
+        .require_approval("transfer_call", "a person approves transfers")
+        .build();
+    let runner = IntegratedRealtimeRunner::builder()
+        .model(model)
+        .identity("front-desk", "caller", &call.call_id)
+        .session_service(sessions)
+        .adk_tool(Arc::new(
+            TransferCallTool::new(handle.clone())
+                .destination("billing", CallTarget::phone("+14155550100")?),
+        ))
+        .adk_tool(Arc::new(EndCallTool::new(handle.clone())))
+        .tool_governance(
+            RunConfig::builder().tool_policy(Arc::new(policy)).governance(control.clone()).build(),
+        )
+        .build()?;
+    Ok(Some((runner, hang_up_on_freeze(handle, [control]))))
+}
+```
+
+Then join the call's room with the LiveKit bridge (feature `livekit`) and feed the caller's
+audio to the runner, as the `livekit_gemini_bridge` example does with `bridge_gemini_input`.
+
+### Placing a call
+
+`LiveKitSip::dialer(trunk_id)` is an `OutboundDialer`: `CreateSIPParticipant` on the outbound
+trunk, waiting until the callee answers, into the request's `room` attribute (or
+`with_room`). A busy or unanswered callee is a `RealtimeError::ServerError` whose message
+carries the SIP status. Tones for an extension go in the request's `dtmf` attribute (`0`–`9`,
+`*`, `#`, and `w` for a half-second pause). Give a model the dialler only through
+`PlaceCallTool`, with named contacts and a call limit:
+
+```rust
+use std::sync::Arc;
+
+use adk_realtime::telephony::livekit::{LiveKitSip, ROOM_ATTRIBUTE};
+use adk_realtime::telephony::{CallTarget, PlaceCallTool};
+
+fn paging_tool(livekit: &LiveKitSip) -> adk_realtime::Result<PlaceCallTool> {
+    Ok(PlaceCallTool::new(Arc::new(livekit.dialer("ST_outbound")))
+        .contact("on-call engineer", CallTarget::phone("+14155550199")?)
+        .attribute(ROOM_ATTRIBUTE, "incident-4101")
+        .max_calls(1))
+}
+```
+
+In-call DTMF needs a participant connected to the room (LiveKit's `publishDtmf`), which the
+server API does not offer, so `LiveKitSipCall` reports DTMF unsupported.
+
 ## Verifying
 
 The contract tests run against the documented payloads without an OpenAI account:
@@ -232,6 +360,19 @@ cargo nextest run -p adk-realtime --features openai-sip,scripted --test telephon
 | `the_session_attaches_to_the_call_without_a_model_or_audio_format` | The WebSocket joins `?call_id=` with no `model`, and its `session.update` has no audio format |
 | `an_approved_transfer_refers_the_call_once_and_is_ledgered` | A simulated call: signed webhook, accept, held transfer, approval, one REFER, one ledger record |
 | `a_freeze_hangs_up_the_call_and_refuses_the_transfer` | A freeze refuses the transfer and hangs up the call |
+
+```bash
+cargo nextest run -p adk-realtime --features livekit-sip,scripted --test telephony_livekit_sip_tests
+```
+
+| Test | Proves |
+|------|--------|
+| `dialling_creates_a_sip_participant_and_waits_for_the_answer` | `CreateSIPParticipant` carries the trunk, number, room, identity, DTMF and `wait_until_answered`, under a `sip.call` grant |
+| `a_busy_callee_is_an_error_carrying_the_sip_status` | A Twirp error's `sip_status_code` reaches the caller |
+| `transfer_refers_the_caller_and_hang_up_removes_them` | `TransferSIPParticipant` and `RemoveParticipant` name the room and the caller, under room-admin and `sip.call` grants |
+| `trunks_and_dispatch_rules_are_provisioned` | The inbound trunk and an individual dispatch rule with a room prefix |
+| `an_inbound_sip_participant_is_an_incoming_call`, `a_tampered_or_foreign_webhook_is_rejected` | Signed `participant_joined` webhooks, and refusals |
+| `an_approved_transfer_refers_the_livekit_caller_once`, `a_freeze_removes_the_livekit_caller`, `place_call_dials_through_the_livekit_trunk` | The governed path on a LiveKit call |
 
 ## See also
 
