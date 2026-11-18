@@ -386,11 +386,10 @@ async fn validate_memory_service_add_delete(passed: &mut u32, failed: &mut u32) 
     let service = InMemoryMemoryService::new();
 
     // add_entry
-    let entry = adk_memory::MemoryEntry {
-        content: Content::new("user").with_text("Tokyo is the capital of Japan"),
-        author: "user".to_string(),
-        timestamp: chrono::Utc::now(),
-    };
+    let entry = adk_memory::MemoryEntry::new(
+        Content::new("user").with_text("Tokyo is the capital of Japan"),
+        "user",
+    );
     match service.add_entry("app", "user1", entry).await {
         Ok(()) => { *passed += 1; println!("  ✓ add_entry succeeds"); }
         Err(e) => { *failed += 1; println!("  ✗ add_entry — {e}"); }

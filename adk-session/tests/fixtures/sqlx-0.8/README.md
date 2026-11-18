@@ -140,13 +140,9 @@ async fn write_memory(service: &dyn MemoryService) {
             APP,
             USER,
             SESSION,
-            vec![MemoryEntry {
-                content: Content::new("user").with_text("O'Brien prefers the harbour at high tide"),
-                author: "user".to_string(),
-                timestamp: chrono::DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+            vec![MemoryEntry::new(Content::new("user").with_text("O'Brien prefers the harbour at high tide"), "user").with_timestamp(chrono::DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
                     .unwrap()
-                    .into(),
-            }],
+                    .into())],
         )
         .await
         .expect("add memory");

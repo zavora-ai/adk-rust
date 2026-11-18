@@ -5,7 +5,6 @@
 
 use adk_core::Content;
 use adk_memory::{InMemoryMemoryService, MemoryEntry, MemoryService, SearchRequest};
-use chrono::Utc;
 use proptest::prelude::*;
 
 /// Fixed vocabulary for generating entry text.
@@ -32,11 +31,7 @@ fn arb_entries(count: usize) -> impl Strategy<Value = Vec<(String, u8)>> {
 
 /// Helper to create a MemoryEntry from text.
 fn make_entry(text: &str) -> MemoryEntry {
-    MemoryEntry {
-        content: Content::new("user").with_text(text),
-        author: "test-author".to_string(),
-        timestamp: Utc::now(),
-    }
+    MemoryEntry::new(Content::new("user").with_text(text), "test-author")
 }
 
 /// Helper to count search results for a given scope.

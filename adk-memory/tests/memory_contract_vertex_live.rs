@@ -32,12 +32,10 @@ async fn live_memory_bank_round_trip() {
             app_name,
             &user_id,
             "live-session",
-            vec![MemoryEntry {
-                content: Content::new("user")
-                    .with_text("My favourite programming language is Rust."),
-                author: "user".to_string(),
-                timestamp: Utc::now(),
-            }],
+            vec![MemoryEntry::new(
+                Content::new("user").with_text("My favourite programming language is Rust."),
+                "user",
+            )],
         )
         .await
         .expect("memories:generate succeeds");

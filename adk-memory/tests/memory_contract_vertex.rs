@@ -11,7 +11,9 @@ use adk_core::Content;
 use adk_memory::{
     MemoryEntry, MemoryService, SearchRequest, VertexAiMemoryBankService, VertexAiMemoryConfig,
 };
-use axum::extract::{Path, State};
+use axum::extract::{Path, RawQuery, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use chrono::{TimeZone, Utc};
@@ -36,6 +38,12 @@ struct MockState {
     retrieve_responses: Vec<Value>,
     /// When set, the generate operation completes with this error.
     operation_error: Option<Value>,
+    /// When set, the finished generate operation carries this `response`.
+    generate_response: Option<Value>,
+    /// Memories `GET memories/{id}` returns, by id; any other id is 404.
+    memories: Vec<(String, Value)>,
+    /// `(memory id, query string, body)` of each `PATCH memories/{id}`.
+    patches: Vec<(String, String, Value)>,
 }
 
 type SharedState = Arc<Mutex<MockState>>;
@@ -83,6 +91,9 @@ async fn start_mock(state: SharedState) -> String {
                 if let Some(error) = &state.operation_error {
                     operation["error"] = error.clone();
                 }
+                if let Some(response) = &state.generate_response {
+                    operation["response"] = response.clone();
+                }
                 Json(operation)
             }),
         )
@@ -93,7 +104,25 @@ async fn start_mock(state: SharedState) -> String {
                 state.deleted_memories.push(memory);
                 // Delete completes synchronously: done with no error.
                 Json(json!({ "name": operation_name(), "done": true }))
-            }),
+            })
+            .get(|State(state): State<SharedState>, Path(memory): Path<String>| async move {
+                let state = state.lock().await;
+                match state.memories.iter().find(|(id, _)| *id == memory) {
+                    Some((_, body)) => Json(body.clone()).into_response(),
+                    None => (StatusCode::NOT_FOUND, Json(json!({ "error": { "code": 404 } })))
+                        .into_response(),
+                }
+            })
+            .patch(
+                |State(state): State<SharedState>,
+                 Path(memory): Path<String>,
+                 RawQuery(query): RawQuery,
+                 Json(body): Json<Value>| async move {
+                    let mut state = state.lock().await;
+                    state.patches.push((memory, query.unwrap_or_default(), body));
+                    Json(json!({ "name": operation_name(), "done": true }))
+                },
+            ),
         )
         .with_state(state);
 
@@ -114,11 +143,8 @@ async fn build_service(endpoint: &str) -> VertexAiMemoryBankService {
 }
 
 fn entry(text: &str) -> MemoryEntry {
-    MemoryEntry {
-        content: Content::new("user").with_text(text),
-        author: "user".to_string(),
-        timestamp: Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap(),
-    }
+    MemoryEntry::new(Content::new("user").with_text(text), "user")
+        .with_timestamp(Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap())
 }
 
 #[tokio::test]
@@ -365,4 +391,142 @@ async fn adapter_exposes_the_backend_as_core_memory() {
         serde_json::to_value(&results[0].content).unwrap(),
         json!({ "role": "model", "parts": [{ "text": "User likes tea" }] }),
     );
+}
+
+#[tokio::test]
+async fn search_skips_expired_memories_and_returns_ids_and_expiry() {
+    let state = SharedState::default();
+    state.lock().await.retrieve_responses.push(json!({
+        "retrievedMemories": [
+            { "memory": { "name": memory_name("m-old"), "fact": "Parked on level 3",
+                          "expireTime": "2020-01-01T00:00:00Z" } },
+            { "memory": { "name": memory_name("m-new"), "fact": "Parked on level 5",
+                          "expireTime": "2999-01-01T00:00:00.250Z" } },
+            { "memory": { "name": memory_name("m-kept"), "fact": "Drives a blue car" } },
+        ]
+    }));
+    let endpoint = start_mock(state.clone()).await;
+    let service = build_service(&endpoint).await;
+
+    let response = service
+        .search(SearchRequest {
+            query: "where did I park".to_string(),
+            user_id: USER.to_string(),
+            app_name: APP.to_string(),
+            limit: None,
+            min_score: None,
+            project_id: None,
+        })
+        .await
+        .unwrap();
+
+    let found: Vec<(Option<String>, Option<chrono::DateTime<Utc>>)> =
+        response.memories.into_iter().map(|memory| (memory.id, memory.expires_at)).collect();
+    assert_eq!(
+        found,
+        [
+            (
+                Some(memory_name("m-new")),
+                Some(
+                    Utc.with_ymd_and_hms(2999, 1, 1, 0, 0, 0).unwrap()
+                        + chrono::Duration::milliseconds(250)
+                ),
+            ),
+            (Some(memory_name("m-kept")), None),
+        ],
+        "the expired memory is skipped; the others carry their resource name and expiry"
+    );
+}
+
+#[tokio::test]
+async fn a_default_ttl_sets_the_expire_time_of_each_generated_memory() {
+    let state = SharedState::default();
+    state.lock().await.generate_response = Some(json!({
+        "generatedMemories": [
+            { "memory": { "name": memory_name("m-1") }, "action": "CREATED" },
+            { "memory": { "name": memory_name("m-2") }, "action": "UPDATED" },
+            { "memory": { "name": memory_name("m-3") }, "action": "DELETED" },
+        ]
+    }));
+    let endpoint = start_mock(state.clone()).await;
+    let service =
+        build_service(&endpoint).await.with_default_ttl(std::time::Duration::from_secs(3600));
+
+    let before = Utc::now();
+    service.add_session(APP, USER, "s-1", vec![entry("I parked on level 5")]).await.unwrap();
+    let after = Utc::now();
+
+    let captured = state.lock().await;
+    let patched: Vec<(&str, &str)> =
+        captured.patches.iter().map(|(id, query, _)| (id.as_str(), query.as_str())).collect();
+    assert_eq!(
+        patched,
+        [("m-1", "updateMask=expireTime"), ("m-2", "updateMask=expireTime")],
+        "created and updated memories are patched; a deleted one is not"
+    );
+    let expire_time = chrono::DateTime::parse_from_rfc3339(
+        captured.patches[0].2["expireTime"].as_str().expect("expireTime"),
+    )
+    .unwrap()
+    .with_timezone(&Utc);
+    assert!(
+        expire_time >= before + chrono::Duration::seconds(3600) - chrono::Duration::milliseconds(1)
+            && expire_time <= after + chrono::Duration::seconds(3600),
+        "the expiry is an hour after the write, got {expire_time}"
+    );
+}
+
+#[tokio::test]
+async fn entries_with_different_expiries_generate_separately() {
+    let state = SharedState::default();
+    state.lock().await.generate_response = Some(json!({
+        "generatedMemories": [{ "memory": { "name": memory_name("m-1") }, "action": "CREATED" }]
+    }));
+    let endpoint = start_mock(state.clone()).await;
+    let service = build_service(&endpoint).await;
+    let at = Utc.with_ymd_and_hms(2999, 6, 1, 0, 0, 0).unwrap();
+
+    service
+        .add_session(
+            APP,
+            USER,
+            "s-1",
+            vec![entry("I parked on level 5").with_expires_at(at), entry("I like tea")],
+        )
+        .await
+        .unwrap();
+
+    let captured = state.lock().await;
+    assert_eq!(captured.generate_bodies.len(), 2, "one generation per distinct expiry");
+    assert_eq!(
+        captured.patches.iter().map(|(_, _, body)| body.clone()).collect::<Vec<_>>(),
+        [json!({ "expireTime": "2999-06-01T00:00:00.000Z" })],
+        "only the generation from the expiring entry is patched"
+    );
+}
+
+#[tokio::test]
+async fn delete_memory_deletes_only_a_memory_of_the_callers_scope() {
+    let state = SharedState::default();
+    {
+        let mut lock = state.lock().await;
+        lock.memories.push((
+            "m-mine".to_string(),
+            json!({ "name": memory_name("m-mine"), "scope": { "app_name": APP, "user_id": USER } }),
+        ));
+        lock.memories.push((
+            "m-theirs".to_string(),
+            json!({ "name": memory_name("m-theirs"), "scope": { "app_name": APP, "user_id": "u-2" } }),
+        ));
+    }
+    let endpoint = start_mock(state.clone()).await;
+    let service = build_service(&endpoint).await;
+
+    assert_eq!(service.delete_memory(APP, USER, &memory_name("m-mine")).await.unwrap(), 1);
+    assert_eq!(service.delete_memory(APP, USER, &memory_name("m-theirs")).await.unwrap(), 0);
+    assert_eq!(service.delete_memory(APP, USER, &memory_name("m-gone")).await.unwrap(), 0);
+    assert_eq!(service.delete_memory(APP, USER, "not-a-resource-name").await.unwrap(), 0);
+    assert_eq!(service.purge_expired().await.unwrap(), 0, "Memory Bank expires memories itself");
+
+    assert_eq!(state.lock().await.deleted_memories, ["m-mine"]);
 }

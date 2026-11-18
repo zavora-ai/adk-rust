@@ -898,6 +898,7 @@ version = "3.0.0"
 dependencies = [
  "adk-core",
  "adk-gcp",
+ "adk-memory",
  "async-trait",
  "axum",
  "chrono",

@@ -983,11 +983,7 @@ impl Inner {
                 if self.config.store_to_memory
                     && let Some(ref memory_service) = self.memory_service
                 {
-                    let entry = adk_memory::MemoryEntry {
-                        content,
-                        author: "assistant".to_string(),
-                        timestamp: chrono::Utc::now(),
-                    };
+                    let entry = adk_memory::MemoryEntry::new(content, "assistant");
                     if let Err(e) = memory_service
                         .add_session(
                             &self.identity.app_name,

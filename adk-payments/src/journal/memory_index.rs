@@ -34,13 +34,11 @@ impl PaymentMemoryIndex {
             identity.session_id.as_ref(),
             summary.transaction_id.as_str()
         );
-        let entry = MemoryEntry {
-            content: redact_payment_content(
-                &Content::new("system").with_text(summary.transcript_text()),
-            ),
-            author: "adk-payments".to_string(),
-            timestamp: summary.updated_at,
-        };
+        let entry = MemoryEntry::new(
+            redact_payment_content(&Content::new("system").with_text(summary.transcript_text())),
+            "adk-payments",
+        )
+        .with_timestamp(summary.updated_at);
 
         self.memory_service
             .add_session(

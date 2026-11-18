@@ -17,7 +17,6 @@
 
 use adk_core::{Content, Part};
 use adk_memory::{MemoryEntry, MemoryService, SearchRequest};
-use chrono::Utc;
 
 const APP: &str = "upgrade_app";
 const USER: &str = "upgrade_user";
@@ -47,12 +46,27 @@ async fn search(service: &dyn MemoryService, query: &str) -> Vec<String> {
 /// Finds the 2.3.0 entry, adds one, and deletes the 2.3.0 session.
 async fn assert_upgraded(service: &dyn MemoryService) {
     assert_eq!(search(service, "harbour").await, ["O'Brien prefers the harbour at high tide"]);
+    let legacy = service
+        .search(SearchRequest {
+            query: "harbour".to_string(),
+            user_id: USER.to_string(),
+            app_name: APP.to_string(),
+            limit: Some(10),
+            min_score: None,
+            project_id: None,
+        })
+        .await
+        .expect("search")
+        .memories;
+    assert!(
+        legacy[0].id.as_ref().is_some_and(|id| !id.is_empty()) && legacy[0].expires_at.is_none(),
+        "a 2.3.0 entry gets an id and never expires"
+    );
 
-    let entry = MemoryEntry {
-        content: Content::new("user").with_text("The harbour master logs every tide"),
-        author: "user".to_string(),
-        timestamp: Utc::now(),
-    };
+    let entry = MemoryEntry::new(
+        Content::new("user").with_text("The harbour master logs every tide"),
+        "user",
+    );
     service.add_session(APP, USER, "after_upgrade", vec![entry]).await.expect("add entry");
     assert_eq!(search(service, "harbour").await.len(), 2);
 
@@ -78,7 +92,7 @@ async fn a_2_3_sqlite_database_upgrades() {
     let service = SqliteMemoryService::new(&url).await.expect("open");
     service.migrate().await.expect("migrate");
     service.migrate().await.expect("migrate is idempotent");
-    assert_eq!(service.schema_version().await.expect("schema version"), 2);
+    assert_eq!(service.schema_version().await.expect("schema version"), 3);
     assert_upgraded(&service).await;
 
     let mut conn = SqliteConnection::connect(&url).await.expect("connect");
@@ -87,7 +101,7 @@ async fn a_2_3_sqlite_database_upgrades() {
             .fetch_all(&mut conn)
             .await
             .expect("read registry");
-    assert_eq!(registry, [1, 2]);
+    assert_eq!(registry, [1, 2, 3]);
     conn.close().await.expect("close");
     for suffix in ["", "-wal", "-shm", "-journal"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
@@ -129,14 +143,14 @@ async fn a_2_3_postgres_database_upgrades() {
     let service = PostgresMemoryService::from_pool(pool.clone(), None);
     service.migrate().await.expect("migrate");
     service.migrate().await.expect("migrate is idempotent");
-    assert_eq!(service.schema_version().await.expect("schema version"), 2);
+    assert_eq!(service.schema_version().await.expect("schema version"), 3);
     assert_upgraded(&service).await;
     let registry: Vec<i64> =
         sqlx::query_scalar("SELECT version FROM _adk_memory_migrations ORDER BY version")
             .fetch_all(&pool)
             .await
             .expect("read registry");
-    assert_eq!(registry, [1, 2]);
+    assert_eq!(registry, [1, 2, 3]);
 
     pool.close().await;
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP DATABASE {database} WITH (FORCE)")))

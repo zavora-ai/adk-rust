@@ -24,6 +24,7 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Row, SqlitePool};
 use std::path::Path;
 use std::str::FromStr;
+use std::time::Duration;
 use tracing::instrument;
 
 /// The session id entries added without a session are stored under.
@@ -102,6 +103,7 @@ fn fts5_match_query(query: &str) -> Option<String> {
 /// ```
 pub struct SqliteMemoryService {
     pool: SqlitePool,
+    default_ttl: Option<Duration>,
 }
 
 impl SqliteMemoryService {
@@ -117,12 +119,71 @@ impl SqliteMemoryService {
         let pool = SqlitePool::connect_with(options)
             .await
             .map_err(|e| adk_core::AdkError::memory(format!("sqlite connection failed: {e}")))?;
-        Ok(Self { pool })
+        Ok(Self { pool, default_ttl: None })
     }
 
     /// Create a memory service from an existing connection pool.
     pub fn from_pool(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self { pool, default_ttl: None }
+    }
+
+    /// Expires each entry written without an expiry `ttl` after it is written.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_memory::SqliteMemoryService;
+    /// use std::time::Duration;
+    ///
+    /// let service = SqliteMemoryService::new("sqlite:memory.db")
+    ///     .await?
+    ///     .with_default_ttl(Duration::from_secs(30 * 24 * 3600));
+    /// ```
+    pub fn with_default_ttl(mut self, ttl: Duration) -> Self {
+        self.default_ttl = Some(ttl);
+        self
+    }
+
+    /// Inserts `entries` in one transaction, each stamped with its id and expiry.
+    async fn insert(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+        project_id: Option<&str>,
+        entries: Vec<MemoryEntry>,
+    ) -> Result<()> {
+        let now = Utc::now();
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
+        for entry in entries {
+            let entry = crate::expiry::stamp(entry, self.default_ttl, now);
+            let content_json = serde_json::to_string(&entry.content)
+                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
+            sqlx::query(
+                "INSERT INTO memory_entries \
+                 (app_name, user_id, session_id, content, content_text, author, timestamp, \
+                  project_id, memory_id, expires_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(app_name)
+            .bind(user_id)
+            .bind(session_id)
+            .bind(&content_json)
+            .bind(crate::text::extract_text(&entry.content))
+            .bind(&entry.author)
+            .bind(entry.timestamp.to_rfc3339())
+            .bind(project_id)
+            .bind(&entry.id)
+            .bind(entry.expires_at.map(|at| at.timestamp_millis()))
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
+        }
+        tx.commit().await.map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))
     }
 
     /// The registry table used to track applied migration versions.
@@ -165,6 +226,16 @@ END;",
             "\
 ALTER TABLE memory_entries ADD COLUMN project_id TEXT;\
 CREATE INDEX IF NOT EXISTS idx_memory_project_id ON memory_entries(project_id);",
+        ),
+        (
+            3,
+            "add memory_id and expires_at columns",
+            "\
+ALTER TABLE memory_entries ADD COLUMN memory_id TEXT;\
+ALTER TABLE memory_entries ADD COLUMN expires_at INTEGER;\
+UPDATE memory_entries SET memory_id = lower(hex(randomblob(16))) WHERE memory_id IS NULL;\
+CREATE INDEX IF NOT EXISTS idx_memory_memory_id ON memory_entries(app_name, user_id, memory_id);\
+CREATE INDEX IF NOT EXISTS idx_memory_expires_at ON memory_entries(expires_at);",
         ),
     ];
 
@@ -245,10 +316,14 @@ CREATE INDEX IF NOT EXISTS idx_memory_project_id ON memory_entries(project_id);"
 
             let user_id = entry.user_id.as_deref().unwrap_or("__import__");
 
+            let expires_at = self
+                .default_ttl
+                .map(|ttl| crate::expiry::expiry_after(Utc::now(), ttl).timestamp_millis());
             sqlx::query(
                 "INSERT INTO memory_entries \
-                 (app_name, user_id, session_id, content, content_text, author, timestamp, project_id) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
+                 (app_name, user_id, session_id, content, content_text, author, timestamp, \
+                  project_id, memory_id, expires_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
             )
             .bind(app_name)
             .bind(user_id)
@@ -257,6 +332,8 @@ CREATE INDEX IF NOT EXISTS idx_memory_project_id ON memory_entries(project_id);"
             .bind(&content_text)
             .bind(&entry.author)
             .bind(&timestamp_str)
+            .bind(crate::expiry::new_memory_id())
+            .bind(expires_at)
             .execute(&pool)
             .await
             .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
@@ -278,35 +355,7 @@ impl MemoryService for SqliteMemoryService {
         session_id: &str,
         entries: Vec<MemoryEntry>,
     ) -> Result<()> {
-        let pool = self.pool.clone();
-        if entries.is_empty() {
-            return Ok(());
-        }
-
-        for entry in &entries {
-            let content_json = serde_json::to_string(&entry.content)
-                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
-            let content_text = crate::text::extract_text(&entry.content);
-            let timestamp_str = entry.timestamp.to_rfc3339();
-
-            sqlx::query(
-                "INSERT INTO memory_entries \
-                 (app_name, user_id, session_id, content, content_text, author, timestamp, project_id) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
-            )
-            .bind(app_name)
-            .bind(user_id)
-            .bind(session_id)
-            .bind(&content_json)
-            .bind(&content_text)
-            .bind(&entry.author)
-            .bind(&timestamp_str)
-            .execute(&pool)
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
-        }
-
-        Ok(())
+        self.insert(app_name, user_id, session_id, None, entries).await
     }
 
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id))]
@@ -317,15 +366,18 @@ impl MemoryService for SqliteMemoryService {
             return Ok(SearchResponse { memories: Vec::new() });
         };
 
+        // Mirrors `expiry::is_expired`: an entry is live while `expires_at > now`.
+        let now = Utc::now().timestamp_millis();
         let rows = if let Some(ref project_id) = req.project_id {
             sqlx::query(
                 r#"
-                SELECT m.content, m.author, m.timestamp, f.rank
+                SELECT m.memory_id, m.content, m.author, m.timestamp, m.expires_at, f.rank
                 FROM memory_entries_fts f
                 JOIN memory_entries m ON m.id = f.rowid
                 WHERE memory_entries_fts MATCH ?
                   AND m.app_name = ? AND m.user_id = ?
                   AND (m.project_id IS NULL OR m.project_id = ?)
+                  AND (m.expires_at IS NULL OR m.expires_at > ?)
                 ORDER BY f.rank
                 LIMIT ?
                 "#,
@@ -334,6 +386,7 @@ impl MemoryService for SqliteMemoryService {
             .bind(&req.app_name)
             .bind(&req.user_id)
             .bind(project_id)
+            .bind(now)
             .bind(limit)
             .fetch_all(&pool)
             .await
@@ -341,12 +394,13 @@ impl MemoryService for SqliteMemoryService {
         } else {
             sqlx::query(
                 r#"
-                SELECT m.content, m.author, m.timestamp, f.rank
+                SELECT m.memory_id, m.content, m.author, m.timestamp, m.expires_at, f.rank
                 FROM memory_entries_fts f
                 JOIN memory_entries m ON m.id = f.rowid
                 WHERE memory_entries_fts MATCH ?
                   AND m.app_name = ? AND m.user_id = ?
                   AND m.project_id IS NULL
+                  AND (m.expires_at IS NULL OR m.expires_at > ?)
                 ORDER BY f.rank
                 LIMIT ?
                 "#,
@@ -354,6 +408,7 @@ impl MemoryService for SqliteMemoryService {
             .bind(&match_query)
             .bind(&req.app_name)
             .bind(&req.user_id)
+            .bind(now)
             .bind(limit)
             .fetch_all(&pool)
             .await
@@ -374,7 +429,15 @@ impl MemoryService for SqliteMemoryService {
                 let timestamp = chrono::DateTime::parse_from_rfc3339(&timestamp_str)
                     .map(|dt| dt.with_timezone(&chrono::Utc))
                     .unwrap_or_default();
-                MemoryEntry { content, author, timestamp }
+                MemoryEntry {
+                    id: row.get("memory_id"),
+                    content,
+                    author,
+                    timestamp,
+                    expires_at: row
+                        .get::<Option<i64>, _>("expires_at")
+                        .and_then(chrono::DateTime::from_timestamp_millis),
+                }
             })
             .collect();
 
@@ -396,8 +459,8 @@ impl MemoryService for SqliteMemoryService {
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
     async fn export_user(&self, app_name: &str, user_id: &str) -> Result<Vec<UserMemory>> {
         let rows = sqlx::query(
-            "SELECT session_id, project_id, content, author, timestamp FROM memory_entries \
-             WHERE app_name = ? AND user_id = ? ORDER BY timestamp, id",
+            "SELECT session_id, project_id, memory_id, content, author, timestamp, expires_at \
+             FROM memory_entries WHERE app_name = ? AND user_id = ? ORDER BY timestamp, id",
         )
         .bind(app_name)
         .bind(user_id)
@@ -411,6 +474,10 @@ impl MemoryService for SqliteMemoryService {
                 let session_id: String = row.get("session_id");
                 Ok(UserMemory {
                     entry: MemoryEntry {
+                        id: row.get("memory_id"),
+                        expires_at: row
+                            .get::<Option<i64>, _>("expires_at")
+                            .and_then(chrono::DateTime::from_timestamp_millis),
                         content: serde_json::from_str(&content).map_err(|e| {
                             adk_core::AdkError::memory(format!("stored content is corrupt: {e}"))
                         })?,
@@ -447,29 +514,7 @@ impl MemoryService for SqliteMemoryService {
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
     async fn add_entry(&self, app_name: &str, user_id: &str, entry: MemoryEntry) -> Result<()> {
-        let pool = self.pool.clone();
-        let content_json = serde_json::to_string(&entry.content)
-            .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
-        let content_text = crate::text::extract_text(&entry.content);
-        let timestamp_str = entry.timestamp.to_rfc3339();
-
-        sqlx::query(
-            "INSERT INTO memory_entries \
-             (app_name, user_id, session_id, content, content_text, author, timestamp, project_id) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
-        )
-        .bind(app_name)
-        .bind(user_id)
-        .bind(DIRECT_SESSION)
-        .bind(&content_json)
-        .bind(&content_text)
-        .bind(&entry.author)
-        .bind(&timestamp_str)
-        .execute(&pool)
-        .await
-        .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
-
-        Ok(())
+        self.insert(app_name, user_id, DIRECT_SESSION, None, vec![entry]).await
     }
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
@@ -497,6 +542,30 @@ impl MemoryService for SqliteMemoryService {
         Ok(result.rows_affected())
     }
 
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
+    async fn delete_memory(&self, app_name: &str, user_id: &str, memory_id: &str) -> Result<u64> {
+        let result = sqlx::query(
+            "DELETE FROM memory_entries WHERE app_name = ? AND user_id = ? AND memory_id = ?",
+        )
+        .bind(app_name)
+        .bind(user_id)
+        .bind(memory_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| adk_core::AdkError::memory(format!("delete_memory failed: {e}")))?;
+        Ok(result.rows_affected())
+    }
+
+    #[instrument(skip_all)]
+    async fn purge_expired(&self) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM memory_entries WHERE expires_at <= ?")
+            .bind(Utc::now().timestamp_millis())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("purge_expired failed: {e}")))?;
+        Ok(result.rows_affected())
+    }
+
     #[instrument(skip_all)]
     async fn health_check(&self) -> Result<()> {
         let pool = self.pool.clone();
@@ -521,36 +590,7 @@ impl MemoryService for SqliteMemoryService {
         entries: Vec<MemoryEntry>,
     ) -> Result<()> {
         validate_project_id(project_id)?;
-        let pool = self.pool.clone();
-        if entries.is_empty() {
-            return Ok(());
-        }
-
-        for entry in &entries {
-            let content_json = serde_json::to_string(&entry.content)
-                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
-            let content_text = crate::text::extract_text(&entry.content);
-            let timestamp_str = entry.timestamp.to_rfc3339();
-
-            sqlx::query(
-                "INSERT INTO memory_entries \
-                 (app_name, user_id, session_id, content, content_text, author, timestamp, project_id) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            )
-            .bind(app_name)
-            .bind(user_id)
-            .bind(session_id)
-            .bind(&content_json)
-            .bind(&content_text)
-            .bind(&entry.author)
-            .bind(&timestamp_str)
-            .bind(project_id)
-            .execute(&pool)
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
-        }
-
-        Ok(())
+        self.insert(app_name, user_id, session_id, Some(project_id), entries).await
     }
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
@@ -562,30 +602,7 @@ impl MemoryService for SqliteMemoryService {
         entry: MemoryEntry,
     ) -> Result<()> {
         validate_project_id(project_id)?;
-        let pool = self.pool.clone();
-        let content_json = serde_json::to_string(&entry.content)
-            .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
-        let content_text = crate::text::extract_text(&entry.content);
-        let timestamp_str = entry.timestamp.to_rfc3339();
-
-        sqlx::query(
-            "INSERT INTO memory_entries \
-             (app_name, user_id, session_id, content, content_text, author, timestamp, project_id) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(app_name)
-        .bind(user_id)
-        .bind(DIRECT_SESSION)
-        .bind(&content_json)
-        .bind(&content_text)
-        .bind(&entry.author)
-        .bind(&timestamp_str)
-        .bind(project_id)
-        .execute(&pool)
-        .await
-        .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
-
-        Ok(())
+        self.insert(app_name, user_id, DIRECT_SESSION, Some(project_id), vec![entry]).await
     }
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
@@ -657,11 +674,7 @@ mod tests {
         service.migrate().await.expect("migrate");
         let entries = texts
             .iter()
-            .map(|text| MemoryEntry {
-                content: Content::new("user").with_text(*text),
-                author: "user".to_string(),
-                timestamp: Utc::now(),
-            })
+            .map(|text| MemoryEntry::new(Content::new("user").with_text(*text), "user"))
             .collect();
         service.add_session(APP, USER, "s1", entries).await.expect("add_session");
         service
@@ -777,11 +790,10 @@ mod tests {
     #[tokio::test]
     async fn test_delete_entries_in_project_accepts_ordinary_text() {
         let service = service_with(&[]).await;
-        let entry = MemoryEntry {
-            content: Content::new("user").with_text("what's the project's deadline?"),
-            author: "user".to_string(),
-            timestamp: Utc::now(),
-        };
+        let entry = MemoryEntry::new(
+            Content::new("user").with_text("what's the project's deadline?"),
+            "user",
+        );
         service.add_entry_to_project(APP, USER, "proj", entry).await.unwrap();
 
         let deleted =

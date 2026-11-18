@@ -238,25 +238,23 @@ async fn run_llm_agent_demo() -> anyhow::Result<()> {
         .add_entry(
             "demo",
             "user1",
-            MemoryEntry {
-                content: Content::new("user").with_text(
+            MemoryEntry::new(
+                Content::new("user").with_text(
                     "Rust is a systems programming language focused on safety and performance",
                 ),
-                author: "encyclopedia".into(),
-                timestamp: chrono::Utc::now(),
-            },
+                "encyclopedia",
+            ),
         )
         .await?;
     memory
         .add_entry(
             "demo",
             "user1",
-            MemoryEntry {
-                content: Content::new("user")
+            MemoryEntry::new(
+                Content::new("user")
                     .with_text("The Rust borrow checker prevents data races at compile time"),
-                author: "tutorial".into(),
-                timestamp: chrono::Utc::now(),
-            },
+                "tutorial",
+            ),
         )
         .await?;
     println!("  ✓ SQLite memory seeded with 2 entries");

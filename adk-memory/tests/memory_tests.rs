@@ -1,22 +1,19 @@
 use adk_core::{Content, Part};
 use adk_memory::*;
-use chrono::Utc;
 
 #[tokio::test]
 async fn test_add_and_search() {
     let service = InMemoryMemoryService::new();
 
     let entries = vec![
-        MemoryEntry {
-            content: Content::new("assistant").with_text("The weather is sunny today"),
-            author: "assistant".to_string(),
-            timestamp: Utc::now(),
-        },
-        MemoryEntry {
-            content: Content::new("assistant").with_text("I like programming in Rust"),
-            author: "assistant".to_string(),
-            timestamp: Utc::now(),
-        },
+        MemoryEntry::new(
+            Content::new("assistant").with_text("The weather is sunny today"),
+            "assistant",
+        ),
+        MemoryEntry::new(
+            Content::new("assistant").with_text("I like programming in Rust"),
+            "assistant",
+        ),
     ];
 
     service.add_session("app1", "user1", "session1", entries).await.unwrap();
@@ -43,11 +40,10 @@ async fn test_add_and_search() {
 async fn test_search_no_results() {
     let service = InMemoryMemoryService::new();
 
-    let entries = vec![MemoryEntry {
-        content: Content::new("assistant").with_text("The weather is sunny"),
-        author: "assistant".to_string(),
-        timestamp: Utc::now(),
-    }];
+    let entries = vec![MemoryEntry::new(
+        Content::new("assistant").with_text("The weather is sunny"),
+        "assistant",
+    )];
 
     service.add_session("app1", "user1", "session1", entries).await.unwrap();
 
@@ -75,11 +71,10 @@ async fn test_multiple_sessions() {
             "app1",
             "user1",
             "session1",
-            vec![MemoryEntry {
-                content: Content::new("assistant").with_text("First session content"),
-                author: "assistant".to_string(),
-                timestamp: Utc::now(),
-            }],
+            vec![MemoryEntry::new(
+                Content::new("assistant").with_text("First session content"),
+                "assistant",
+            )],
         )
         .await
         .unwrap();
@@ -89,11 +84,10 @@ async fn test_multiple_sessions() {
             "app1",
             "user1",
             "session2",
-            vec![MemoryEntry {
-                content: Content::new("assistant").with_text("Second session content"),
-                author: "assistant".to_string(),
-                timestamp: Utc::now(),
-            }],
+            vec![MemoryEntry::new(
+                Content::new("assistant").with_text("Second session content"),
+                "assistant",
+            )],
         )
         .await
         .unwrap();
@@ -122,11 +116,7 @@ async fn test_user_isolation() {
             "app1",
             "user1",
             "session1",
-            vec![MemoryEntry {
-                content: Content::new("assistant").with_text("User1 data"),
-                author: "assistant".to_string(),
-                timestamp: Utc::now(),
-            }],
+            vec![MemoryEntry::new(Content::new("assistant").with_text("User1 data"), "assistant")],
         )
         .await
         .unwrap();
@@ -136,11 +126,7 @@ async fn test_user_isolation() {
             "app1",
             "user2",
             "session1",
-            vec![MemoryEntry {
-                content: Content::new("assistant").with_text("User2 data"),
-                author: "assistant".to_string(),
-                timestamp: Utc::now(),
-            }],
+            vec![MemoryEntry::new(Content::new("assistant").with_text("User2 data"), "assistant")],
         )
         .await
         .unwrap();
@@ -167,11 +153,7 @@ async fn test_user_isolation() {
 async fn test_empty_content_filtered() {
     let service = InMemoryMemoryService::new();
 
-    let entries = vec![MemoryEntry {
-        content: Content::new("assistant"),
-        author: "assistant".to_string(),
-        timestamp: Utc::now(),
-    }];
+    let entries = vec![MemoryEntry::new(Content::new("assistant"), "assistant")];
 
     service.add_session("app1", "user1", "session1", entries).await.unwrap();
 
@@ -224,11 +206,10 @@ async fn test_adapter_without_project_preserves_behavior() {
             "app1",
             "user1",
             "session1",
-            vec![MemoryEntry {
-                content: Content::new("assistant").with_text("global memory data"),
-                author: "assistant".to_string(),
-                timestamp: Utc::now(),
-            }],
+            vec![MemoryEntry::new(
+                Content::new("assistant").with_text("global memory data"),
+                "assistant",
+            )],
         )
         .await
         .unwrap();

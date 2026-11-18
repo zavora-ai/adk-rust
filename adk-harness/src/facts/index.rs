@@ -263,10 +263,10 @@ impl FactIndex for LocalFactIndex {
 /// vector search on PostgreSQL (pgvector), MongoDB and Neo4j, Vertex AI Memory Bank, FTS5
 /// keyword search on SQLite, Redis.
 ///
-/// Each fact is a `MemoryEntry` whose `author` is `adk-harness:fact:<id>`, in the fact's
-/// project (user-wide facts are global entries), whose first text part is the fact text
-/// and whose second is the fact id, so `delete_entries_in_project` with the id removes
-/// exactly that entry. Search results map back to facts through the author. The backend
+/// Each fact is a `MemoryEntry` whose id is the fact id and whose `author` is
+/// `adk-harness:fact:<id>`, in the fact's project (user-wide facts are global entries), with
+/// the fact text and the fact id as its text parts, so `delete_memory` with the id removes
+/// exactly that entry on every backend. Search results map back to facts through the author. The backend
 /// returns its hits best first without scores; the index passes its
 /// [`min_score`](Self::with_min_score) to the backend and reports scores falling from 1.0
 /// by rank, all above 0.5, so recall keeps the backend's order.
@@ -303,17 +303,16 @@ impl MemoryServiceIndex {
     }
 
     fn entry(fact: &MemoryFact) -> MemoryEntry {
-        MemoryEntry {
-            content: Content {
-                role: "user".to_string(),
-                parts: vec![
-                    Part::Text { text: fact.text.clone() },
-                    Part::Text { text: fact.id.clone() },
-                ],
-            },
-            author: format!("{FACT_AUTHOR_PREFIX}{}", fact.id),
-            timestamp: fact.valid_from,
-        }
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![
+                Part::Text { text: fact.text.clone() },
+                Part::Text { text: fact.id.clone() },
+            ],
+        };
+        MemoryEntry::new(content, format!("{FACT_AUTHOR_PREFIX}{}", fact.id))
+            .with_id(fact.id.clone())
+            .with_timestamp(fact.valid_from)
     }
 }
 
@@ -331,13 +330,7 @@ impl FactIndex for MemoryServiceIndex {
     }
 
     async fn remove(&self, fact: &MemoryFact) -> Result<()> {
-        let (app, user) = (&fact.scope.app, &fact.scope.user);
-        match &fact.scope.project {
-            Some(project) => {
-                self.service.delete_entries_in_project(app, user, project, &fact.id).await?
-            }
-            None => self.service.delete_entries(app, user, &fact.id).await?,
-        };
+        self.service.delete_memory(&fact.scope.app, &fact.scope.user, &fact.id).await?;
         Ok(())
     }
 

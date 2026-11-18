@@ -233,7 +233,6 @@ mod tests {
     use super::*;
     use adk_core::{Content, EventActions, ReadonlyContext};
     use adk_memory::{InMemoryMemoryService, MemoryEntry};
-    use chrono::Utc;
     use std::sync::Mutex;
 
     struct MockToolContext {
@@ -332,11 +331,10 @@ mod tests {
     async fn test_execute_with_explicit_query() {
         let service = Arc::new(InMemoryMemoryService::new());
 
-        let entry = MemoryEntry {
-            content: Content::new("user").with_text("Paris is the capital of France"),
-            author: "user".to_string(),
-            timestamp: Utc::now(),
-        };
+        let entry = MemoryEntry::new(
+            Content::new("user").with_text("Paris is the capital of France"),
+            "user",
+        );
         service.add_session("test-app", "user-1", "session-1", vec![entry]).await.unwrap();
 
         let tool = PreloadMemoryTool::builder().memory_service(service).build().unwrap();
@@ -352,11 +350,8 @@ mod tests {
     async fn test_execute_uses_user_content_as_fallback() {
         let service = Arc::new(InMemoryMemoryService::new());
 
-        let entry = MemoryEntry {
-            content: Content::new("user").with_text("I like Rust programming"),
-            author: "user".to_string(),
-            timestamp: Utc::now(),
-        };
+        let entry =
+            MemoryEntry::new(Content::new("user").with_text("I like Rust programming"), "user");
         service.add_session("test-app", "user-1", "session-1", vec![entry]).await.unwrap();
 
         let tool = PreloadMemoryTool::builder().memory_service(service).build().unwrap();
@@ -372,11 +367,10 @@ mod tests {
     async fn test_before_model_callback() {
         let service = Arc::new(InMemoryMemoryService::new());
 
-        let entry = MemoryEntry {
-            content: Content::new("user").with_text("The user prefers dark mode"),
-            author: "assistant".to_string(),
-            timestamp: Utc::now(),
-        };
+        let entry = MemoryEntry::new(
+            Content::new("user").with_text("The user prefers dark mode"),
+            "assistant",
+        );
         service.add_session("test-app", "user-1", "session-1", vec![entry]).await.unwrap();
 
         let tool = PreloadMemoryTool::builder().memory_service(service).build().unwrap();

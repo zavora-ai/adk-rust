@@ -19,7 +19,6 @@ use adk_realtime::integration::{IntegratedRealtimeRunnerBuilder, IntegrationConf
 use adk_realtime::model::{BoxedModel, RealtimeModel};
 use adk_realtime::session::BoxedSession;
 use async_trait::async_trait;
-use chrono::Utc;
 
 // ─── Mock RealtimeModel ──────────────────────────────────────────────────────
 
@@ -106,16 +105,14 @@ impl MemoryService for TrackingMemoryService {
 async fn test_memory_injection_enabled_queries_memory_on_connect() {
     // Pre-populate memory entries
     let entries = vec![
-        MemoryEntry {
-            content: Content::new("model").with_text("User prefers concise answers"),
-            author: "assistant".to_string(),
-            timestamp: Utc::now(),
-        },
-        MemoryEntry {
-            content: Content::new("model").with_text("User is working on a Rust project"),
-            author: "assistant".to_string(),
-            timestamp: Utc::now(),
-        },
+        MemoryEntry::new(
+            Content::new("model").with_text("User prefers concise answers"),
+            "assistant",
+        ),
+        MemoryEntry::new(
+            Content::new("model").with_text("User is working on a Rust project"),
+            "assistant",
+        ),
     ];
 
     let memory_service = Arc::new(TrackingMemoryService::new(entries));
@@ -149,11 +146,8 @@ async fn test_memory_injection_enabled_queries_memory_on_connect() {
 
 #[tokio::test]
 async fn test_memory_injection_disabled_does_not_query_memory_on_connect() {
-    let entries = vec![MemoryEntry {
-        content: Content::new("model").with_text("Some stored context"),
-        author: "assistant".to_string(),
-        timestamp: Utc::now(),
-    }];
+    let entries =
+        vec![MemoryEntry::new(Content::new("model").with_text("Some stored context"), "assistant")];
 
     let memory_service = Arc::new(TrackingMemoryService::new(entries));
 
@@ -211,11 +205,10 @@ async fn test_memory_injection_with_no_memory_service_configured() {
 
 #[tokio::test]
 async fn recalled_memory_reaches_the_system_instruction() {
-    let entries = vec![MemoryEntry {
-        content: Content::new("model").with_text("User prefers concise answers"),
-        author: "assistant".to_string(),
-        timestamp: Utc::now(),
-    }];
+    let entries = vec![MemoryEntry::new(
+        Content::new("model").with_text("User prefers concise answers"),
+        "assistant",
+    )];
     let memory_service = Arc::new(TrackingMemoryService::new(entries));
 
     let runner = IntegratedRealtimeRunnerBuilder::new()
@@ -249,11 +242,10 @@ async fn recalled_memory_reaches_the_system_instruction() {
 
 #[tokio::test]
 async fn nothing_is_injected_when_memory_injection_is_disabled() {
-    let entries = vec![MemoryEntry {
-        content: Content::new("model").with_text("User prefers concise answers"),
-        author: "assistant".to_string(),
-        timestamp: Utc::now(),
-    }];
+    let entries = vec![MemoryEntry::new(
+        Content::new("model").with_text("User prefers concise answers"),
+        "assistant",
+    )];
     let memory_service = Arc::new(TrackingMemoryService::new(entries));
 
     let runner = IntegratedRealtimeRunnerBuilder::new()
@@ -283,10 +275,11 @@ async fn nothing_is_injected_when_memory_injection_is_disabled() {
 async fn the_injection_bound_is_respected() {
     // More entries than the bound allows; the instruction must carry at most the bound.
     let entries: Vec<MemoryEntry> = (0..10)
-        .map(|index| MemoryEntry {
-            content: Content::new("model").with_text(format!("fact number {index}")),
-            author: "assistant".to_string(),
-            timestamp: Utc::now(),
+        .map(|index| {
+            MemoryEntry::new(
+                Content::new("model").with_text(format!("fact number {index}")),
+                "assistant",
+            )
         })
         .collect();
     let memory_service = Arc::new(TrackingMemoryService::new(entries));

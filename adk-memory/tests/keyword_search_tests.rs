@@ -5,11 +5,8 @@ use adk_memory::*;
 use chrono::{Duration, Utc};
 
 fn entry(text: &str, minutes_ago: i64) -> MemoryEntry {
-    MemoryEntry {
-        content: Content::new("user").with_text(text),
-        author: "user".to_string(),
-        timestamp: Utc::now() - Duration::minutes(minutes_ago),
-    }
+    MemoryEntry::new(Content::new("user").with_text(text), "user")
+        .with_timestamp(Utc::now() - Duration::minutes(minutes_ago))
 }
 
 fn request(query: &str, limit: Option<usize>, min_score: Option<f32>) -> SearchRequest {
@@ -125,8 +122,8 @@ async fn min_score_keeps_entries_matching_that_share_of_the_query() {
 #[tokio::test]
 async fn entries_without_words_are_kept() {
     let service = InMemoryMemoryService::new();
-    let image = MemoryEntry {
-        content: Content {
+    let image = MemoryEntry::new(
+        Content {
             role: "user".to_string(),
             parts: vec![Part::InlineData {
                 mime_type: "image/png".to_string(),
@@ -135,9 +132,8 @@ async fn entries_without_words_are_kept() {
                 annotations: None,
             }],
         },
-        author: "user".to_string(),
-        timestamp: Utc::now(),
-    };
+        "user",
+    );
     service
         .add_session("app", "u1", "s1", vec![image.clone(), entry("photo of the whiteboard", 1)])
         .await

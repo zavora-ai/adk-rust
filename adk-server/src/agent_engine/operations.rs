@@ -484,10 +484,9 @@ pub(crate) async fn handle_add_session_to_memory(
         .all()
         .into_iter()
         .filter_map(|event| {
-            event.llm_response.content.clone().map(|content| adk_memory::MemoryEntry {
-                content,
-                author: event.author.clone(),
-                timestamp: event.timestamp,
+            event.llm_response.content.clone().map(|content| {
+                adk_memory::MemoryEntry::new(content, event.author.clone())
+                    .with_timestamp(event.timestamp)
             })
         })
         .collect();

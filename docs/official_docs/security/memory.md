@@ -24,11 +24,7 @@ use adk_memory::MemoryEntry;
 use adk_core::Content;
 use chrono::Utc;
 
-let entry = MemoryEntry {
-    content: Content::new("user").with_text("I prefer dark mode"),
-    author: "user".to_string(),
-    timestamp: Utc::now(),
-};
+let entry = MemoryEntry::new(Content::new("user").with_text("I prefer dark mode"), "user");
 ```
 
 ### MemoryService Trait
@@ -89,16 +85,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Store memories from a session
     let entries = vec![
-        MemoryEntry {
-            content: Content::new("user").with_text("I like Rust programming"),
-            author: "user".to_string(),
-            timestamp: Utc::now(),
-        },
-        MemoryEntry {
-            content: Content::new("assistant").with_text("Rust is great for systems programming"),
-            author: "assistant".to_string(),
-            timestamp: Utc::now(),
-        },
+        MemoryEntry::new(Content::new("user").with_text("I like Rust programming"), "user"),
+        MemoryEntry::new(Content::new("assistant").with_text("Rust is great for systems programming"), "assistant"),
     ];
 
     memory.add_session("my_app", "user-123", "session-1", entries).await?;
@@ -169,11 +157,7 @@ use chrono::Utc;
 
 let service = InMemoryMemoryService::new();
 
-let entry = MemoryEntry {
-    content: Content::new("user").with_text("Project uses microservices"),
-    author: "user".to_string(),
-    timestamp: Utc::now(),
-};
+let entry = MemoryEntry::new(Content::new("user").with_text("Project uses microservices"), "user");
 
 // Global entry (no project scope)
 service.add_session("app", "user-1", "sess-1", vec![entry.clone()]).await?;

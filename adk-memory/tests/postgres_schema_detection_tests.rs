@@ -69,7 +69,7 @@ async fn postgres_schema_migrate_ignores_tables_in_other_schemas() {
     // Either the migration ran in the target schema, or it failed before recording
     // anything; it never takes the other schema's table as its baseline.
     match migrated {
-        Ok(()) => assert_eq!((version.ok(), table_in_target), (Some(2), true)),
+        Ok(()) => assert_eq!((version.ok(), table_in_target), (Some(3), true)),
         Err(error) => assert_eq!(
             (version.ok(), table_in_target),
             (Some(0), false),

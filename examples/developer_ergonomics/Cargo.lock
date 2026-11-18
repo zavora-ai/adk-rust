@@ -234,7 +234,9 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

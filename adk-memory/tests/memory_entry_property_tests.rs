@@ -92,8 +92,9 @@ fn arb_timestamp() -> impl Strategy<Value = DateTime<Utc>> {
 
 /// Generate a valid MemoryEntry.
 fn arb_memory_entry() -> impl Strategy<Value = MemoryEntry> {
-    (arb_content(), arb_author(), arb_timestamp())
-        .prop_map(|(content, author, timestamp)| MemoryEntry { content, author, timestamp })
+    (arb_content(), arb_author(), arb_timestamp()).prop_map(|(content, author, timestamp)| {
+        MemoryEntry::new(content, author).with_timestamp(timestamp)
+    })
 }
 
 /// Helper: serialize a MemoryEntry to a JSON Value (mirroring PostgresMemoryService).
@@ -110,7 +111,7 @@ fn deserialize_entry(value: &serde_json::Value) -> MemoryEntry {
     let content: Content = serde_json::from_value(value["content"].clone()).unwrap();
     let author: String = serde_json::from_value(value["author"].clone()).unwrap();
     let timestamp: DateTime<Utc> = serde_json::from_value(value["timestamp"].clone()).unwrap();
-    MemoryEntry { content, author, timestamp }
+    MemoryEntry::new(content, author).with_timestamp(timestamp)
 }
 
 /// Compare two Parts for equality.

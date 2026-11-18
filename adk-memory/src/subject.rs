@@ -29,11 +29,7 @@ use crate::service::MemoryService;
 /// # #[tokio::main(flavor = "current_thread")]
 /// # async fn main() -> adk_core::Result<()> {
 /// let service = Arc::new(InMemoryMemoryService::new());
-/// let entry = MemoryEntry {
-///     content: Content::new("user").with_text("Hometown: Nairobi."),
-///     author: "user".to_string(),
-///     timestamp: chrono::Utc::now(),
-/// };
+/// let entry = MemoryEntry::new(Content::new("user").with_text("Hometown: Nairobi."), "user");
 /// service.add_session("shop", "alice", "s1", vec![entry]).await?;
 ///
 /// let memory = MemorySubjectData::new(service);

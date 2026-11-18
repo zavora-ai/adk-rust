@@ -21,11 +21,7 @@
 //! # #[tokio::main(flavor = "current_thread")]
 //! # async fn main() -> adk_core::Result<()> {
 //! let service = InMemoryMemoryService::new();
-//! let entry = MemoryEntry {
-//!     content: Content::new("user").with_text("Hometown: Nairobi."),
-//!     author: "user".to_string(),
-//!     timestamp: chrono::Utc::now(),
-//! };
+//! let entry = MemoryEntry::new(Content::new("user").with_text("Hometown: Nairobi."), "user");
 //! service.add_session("app", "user", "session", vec![entry]).await?;
 //!
 //! let found = service
@@ -81,9 +77,15 @@
 //! - Versioned schema migrations
 //! - `delete_user` and `export_user` across all projects, and [`MemorySubjectData`] for
 //!   `adk_core::subject::SubjectRights`
+//! - Expiry on every backend: a per-entry expiry or a per-service default TTL, enforced on
+//!   read, purged by [`MemoryService::purge_expired`] (see [`expiry`]), and
+//!   [`MemoryService::delete_memory`] by id
 
 pub mod adapter;
+#[cfg(feature = "conformance")]
+pub mod conformance;
 pub mod consent_gate;
+pub mod expiry;
 pub mod inmemory;
 pub mod migration;
 pub mod service;

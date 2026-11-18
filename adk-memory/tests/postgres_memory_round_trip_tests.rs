@@ -21,7 +21,6 @@ use adk_core::{Content, Part};
 use adk_memory::{
     EmbeddingProvider, MemoryEntry, MemoryService, PostgresMemoryService, SearchRequest,
 };
-use chrono::Utc;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{Connection, PgConnection, PgPool};
 
@@ -109,11 +108,7 @@ impl Scratch {
 }
 
 fn entry(text: &str) -> MemoryEntry {
-    MemoryEntry {
-        content: Content::new("user").with_text(text),
-        author: "user".to_string(),
-        timestamp: Utc::now(),
-    }
+    MemoryEntry::new(Content::new("user").with_text(text), "user")
 }
 
 fn texts(memories: &[MemoryEntry]) -> Vec<String> {
@@ -151,7 +146,7 @@ async fn assert_round_trip(dimensions: usize) {
     );
     service.migrate().await.expect("migrate");
     service.migrate().await.expect("migrate is idempotent");
-    assert_eq!(service.schema_version().await.expect("schema version"), 2);
+    assert_eq!(service.schema_version().await.expect("schema version"), 3);
 
     service
         .add_session(

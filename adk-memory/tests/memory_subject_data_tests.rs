@@ -18,11 +18,7 @@ use adk_memory::{MemoryEntry, MemoryService, MemorySubjectData, SearchRequest};
 const PROJECT: &str = "conformance-project";
 
 fn entry(text: &str) -> MemoryEntry {
-    MemoryEntry {
-        content: Content::new("user").with_text(text),
-        author: "user".to_string(),
-        timestamp: chrono::Utc::now(),
-    }
+    MemoryEntry::new(Content::new("user").with_text(text), "user")
 }
 
 struct Harness(Arc<dyn MemoryService>);

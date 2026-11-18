@@ -165,7 +165,6 @@ mod tests {
     use super::*;
     use adk_core::{Content, EventActions, ReadonlyContext};
     use adk_memory::{InMemoryMemoryService, MemoryEntry};
-    use chrono::Utc;
     use std::sync::Mutex;
 
     struct MockToolContext {
@@ -259,11 +258,10 @@ mod tests {
         let service = Arc::new(InMemoryMemoryService::new());
 
         // Add a memory entry
-        let entry = MemoryEntry {
-            content: Content::new("user").with_text("The capital of France is Paris"),
-            author: "user".to_string(),
-            timestamp: Utc::now(),
-        };
+        let entry = MemoryEntry::new(
+            Content::new("user").with_text("The capital of France is Paris"),
+            "user",
+        );
         service.add_session("test-app", "user-1", "session-1", vec![entry]).await.unwrap();
 
         let tool = LoadMemoryTool::builder().memory_service(service).build().unwrap();
