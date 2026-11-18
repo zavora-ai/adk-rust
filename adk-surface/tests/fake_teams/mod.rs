@@ -92,13 +92,8 @@ struct Activities(Arc<Shared>);
 
 impl Respond for Activities {
     fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
-        let segments: Vec<String> = request
-            .url
-            .path_segments()
-            .into_iter()
-            .flatten()
-            .map(percent_decode)
-            .collect();
+        let segments: Vec<String> =
+            request.url.path_segments().into_iter().flatten().map(percent_decode).collect();
         // teams / v3 / conversations / {id} / activities [/ {reply}]
         let conversation = segments.get(3).cloned().unwrap_or_default();
         let reply_to = segments.get(5).cloned();
