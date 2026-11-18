@@ -785,7 +785,24 @@ Under a `GraphAgent`, the turn fails with that error: a rate-limited model is st
 message. An agent node inside a subgraph is named by its path, such as
 `drafting.writer`.
 
+#### What the node writes
 
+Without mappers, the node's input is the last `messages` entry, or else the `input`
+channel, and its output is a `messages` update with one entry per response the agent
+completes:
+
+```json
+[{"role": "assistant", "content": "Your refund is approved."}]
+```
+
+A streamed response arrives as partial chunks followed by one non-partial event that
+carries its complete content. The default output mapper reads the non-partial events,
+as the runner persists them, so a streamed and an unstreamed run write the same entry
+and the next node's input is the whole reply, not its last chunk.
+
+A custom output mapper receives every event the agent yielded, streamed chunks and
+tool progress included. Skip the events whose `llm_response.partial` is set to read
+each response once, whole:
 
 ```rust
 let node = AgentNode::new(llm_agent)
@@ -797,7 +814,7 @@ let node = AgentNode::new(llm_agent)
     .with_output_mapper(|events| {
         // Transform agent events to state updates
         let mut updates = std::collections::HashMap::new();
-        for event in events {
+        for event in events.iter().filter(|event| !event.llm_response.partial) {
             if let Some(content) = event.content() {
                 let text: String = content.parts.iter()
                     .filter_map(|p| p.text())

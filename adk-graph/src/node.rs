@@ -920,6 +920,10 @@ pub struct AgentNode {
 
 impl AgentNode {
     /// Create a new agent node
+    ///
+    /// Without mappers, the agent's input is the last `messages` entry, or else the
+    /// `input` channel, and its output is a `messages` update with one entry per
+    /// response it completes, whole whether the model streamed it or not.
     pub fn new(agent: Arc<dyn adk_core::Agent>) -> Self {
         let name = agent.name().to_string();
         Self {
@@ -941,6 +945,11 @@ impl AgentNode {
     }
 
     /// Set custom output mapper
+    ///
+    /// The mapper receives every event the agent yielded, in order: a streamed
+    /// response's partial chunks, then the non-partial event that carries its complete
+    /// content. Skip the events whose `llm_response.partial` is set to read each
+    /// response once, whole.
     pub fn with_output_mapper<F>(mut self, mapper: F) -> Self
     where
         F: Fn(&[adk_core::Event]) -> HashMap<String, Value> + Send + Sync + 'static,
@@ -1003,31 +1012,40 @@ fn default_input_mapper(state: &State) -> adk_core::Content {
     adk_core::Content::new("user")
 }
 
-/// Default output mapper - extracts text content to "messages"
+/// Default output mapper - one "messages" entry per response the agent completes.
+///
+/// A streamed response is partial chunks followed by one non-partial event carrying
+/// its complete content, so only non-partial events are read, as the runner persists
+/// them. As there, a non-partial event without content takes the chunks streamed
+/// under its id.
 fn default_output_mapper(events: &[adk_core::Event]) -> HashMap<String, Value> {
-    let mut updates = HashMap::new();
-
-    // Collect text from events
+    let text_of = |content: &adk_core::Content| -> String {
+        content.parts.iter().filter_map(adk_core::Part::text).collect()
+    };
+    let mut streamed: HashMap<(&str, &str), String> = HashMap::new();
     let mut messages = Vec::new();
-    let mut text_deltas = adk_core::EventTextDeltas::default();
     for event in events {
-        let event = text_deltas.push(event);
-        if let Some(content) = event.content() {
-            let text = content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
-
-            if !text.is_empty() {
-                messages.push(serde_json::json!({
-                    "role": "assistant",
-                    "content": text
-                }));
+        let key = (event.invocation_id.as_str(), event.id.as_str());
+        if event.llm_response.partial {
+            if let Some(content) = event.content() {
+                streamed.entry(key).or_default().push_str(&text_of(content));
             }
+            continue;
+        }
+        let chunks = streamed.remove(&key);
+        let text = match event.content() {
+            Some(content) => text_of(content),
+            None => chunks.unwrap_or_default(),
+        };
+        if !text.is_empty() {
+            messages.push(serde_json::json!({"role": "assistant", "content": text}));
         }
     }
 
+    let mut updates = HashMap::new();
     if !messages.is_empty() {
-        updates.insert("messages".to_string(), serde_json::json!(messages));
+        updates.insert("messages".to_string(), Value::Array(messages));
     }
-
     updates
 }
 
@@ -1571,24 +1589,66 @@ mod tests {
     }
 
     #[test]
-    fn default_output_mapper_does_not_repeat_a_complete_snapshot() {
-        let mut partial = adk_core::Event::new("invocation");
-        partial.llm_response.partial = true;
-        partial.set_content(adk_core::Content::new("model").with_text("Hello"));
-        let mut terminal = partial.clone();
-        terminal.llm_response.partial = false;
-        terminal.llm_response.provider_metadata =
+    fn default_output_mapper_writes_each_complete_response_once() {
+        let event = |id: &str, text: Option<&str>, partial: bool| {
+            let mut event = adk_core::Event::with_id(id, "invocation");
+            event.llm_response.partial = partial;
+            if let Some(text) = text {
+                event.set_content(adk_core::Content::new("model").with_text(text));
+            }
+            event
+        };
+        let chunk = |id: &str, text: &str| event(id, Some(text), true);
+        let mut complete = event("r1", Some("Hello world."), false);
+        complete.llm_response.provider_metadata =
             Some(serde_json::json!({"content_complete": true}));
-        terminal.set_content(adk_core::Content::new("model").with_text("Hello world"));
+        let mut preamble = event("r1", Some("Let me check."), false);
+        preamble.llm_response.content.as_mut().unwrap().parts.push(adk_core::Part::FunctionCall {
+            name: "lookup".to_string(),
+            args: serde_json::json!({}),
+            id: Some("call-1".to_string()),
+            thought_signature: None,
+        });
+        let cases = [
+            // A streamed response ends with one event carrying its complete content.
+            vec![chunk("r1", "Hello"), chunk("r1", " world"), chunk("r1", "."), complete],
+            // An ending without content carries the chunks streamed under its id.
+            vec![chunk("r1", "Hello"), chunk("r1", " world."), event("r1", None, false)],
+            // A response beside a tool call, tool progress, then the answer.
+            vec![
+                chunk("r1", "Let me check."),
+                preamble,
+                adk_core::Event::tool_progress("invocation", "agent", "call-1", "stdout", "log\n"),
+                chunk("r2", "Done"),
+                event("r2", Some("Done."), false),
+            ],
+            // A remote agent streams each chunk under an id of its own, then joins them.
+            vec![
+                chunk("a", "Hello"),
+                chunk("b", " world."),
+                event("c", Some("Hello world."), false),
+            ],
+        ];
 
-        let updates = default_output_mapper(&[partial, terminal]);
+        let written: Vec<_> =
+            cases.iter().map(|events| default_output_mapper(events).remove("messages")).collect();
 
+        let assistant = |texts: &[&str]| {
+            Some(serde_json::json!(
+                texts
+                    .iter()
+                    .map(|text| serde_json::json!({"role": "assistant", "content": text}))
+                    .collect::<Vec<_>>()
+            ))
+        };
         assert_eq!(
-            updates.get("messages"),
-            Some(&serde_json::json!([
-                {"role": "assistant", "content": "Hello"},
-                {"role": "assistant", "content": " world"},
-            ]))
+            written,
+            vec![
+                assistant(&["Hello world."]),
+                assistant(&["Hello world."]),
+                assistant(&["Let me check.", "Done."]),
+                assistant(&["Hello world."]),
+            ]
         );
     }
 
