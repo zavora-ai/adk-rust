@@ -14,6 +14,7 @@
 //! | `workspace-docker`| DockerClient (implies `workspace`)       |
 //! | `remote-e2b`      | `remote::E2bClient`, E2B microVMs (implies `workspace`) |
 //! | `remote-daytona`  | `remote::DaytonaClient`, Daytona sandboxes (implies `workspace`) |
+//! | `remote-modal`    | `remote::ModalClient`, Modal Sandboxes (implies `workspace`) |
 
 // Sub-modules will be added by subsequent tasks:
 pub mod client; // Task 1.11: SandboxClient trait
@@ -24,7 +25,7 @@ pub mod local_unix; // Task 3.1: LocalUnixClient
 pub mod manifest; // Task 1.3: Manifest, ManifestEntry
 pub mod path_safety; // Task 1.7: validate_relative_path
 mod release;
-#[cfg(any(feature = "remote-e2b", feature = "remote-daytona"))]
+#[cfg(any(feature = "remote-e2b", feature = "remote-daytona", feature = "remote-modal"))]
 pub mod remote;
 pub mod session; // Task 1.12: SandboxSession trait
 mod session_backend;

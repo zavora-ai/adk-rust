@@ -46,7 +46,8 @@ sandbox = ["dep:adk-sandbox", "adk-sandbox/sandbox-native", "adk-sandbox/egress-
 # Container isolation for the shell.
 docker = ["sandbox", "adk-sandbox/workspace-docker"]
 # The remote shell: `bash` in an environment any `adk_sandbox::workspace::SandboxClient`
-# provides, such as adk-sandbox's E2B (`remote-e2b`) and Daytona (`remote-daytona`) clients.
+# provides, such as adk-sandbox's E2B (`remote-e2b`), Daytona (`remote-daytona`) and Modal
+# (`remote-modal`) clients.
 remote-shell = ["sandbox", "adk-sandbox/workspace"]
 # Spans, spend and the loop guard (spec 3.1 §7.13).
 observe = []
@@ -227,8 +228,8 @@ tracing-subscriber = { workspace = true, features = ["registry"] }
 # The managed form's replay to an `adk-enterprise` client over a local HTTP surface, and
 # the Agent Engine dispatch served locally (spec 3.1 §7.18, H9).
 adk-enterprise = { path = "../adk-enterprise" }
-# The live remote-shell and sandbox-tool runs in E2B and Daytona.
-adk-sandbox = { path = "../adk-sandbox", features = ["remote-e2b", "remote-daytona"] }
+# The live remote-shell and sandbox-tool runs in E2B, Daytona and Modal.
+adk-sandbox = { path = "../adk-sandbox", features = ["remote-e2b", "remote-daytona", "remote-modal"] }
 axum = "0.8"
 reqwest = { workspace = true }
 

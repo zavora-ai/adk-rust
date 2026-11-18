@@ -404,10 +404,11 @@
 # `DockerClient` and its host-config and bind-mount tests: no workspace member enables
 # `workspace-docker`; the tests that need a Docker daemon are ignored.
 6 adk-sandbox workspace-docker
-# The remote providers: each client alone, with its wiremock contract tests; the live tests
-# are ignored until the provider's key is set.
+# The remote providers: each client alone, with its contract tests (wiremock for E2B and
+# Daytona, a tonic mock for Modal); the live tests are ignored until the provider's key is set.
 6 adk-sandbox remote-e2b
 6 adk-sandbox remote-daytona
+6 adk-sandbox remote-modal
 # AWP 2.0 JSON Schemas (spec 3.5 §7.2): the drift test against awp-types/schemas/2.0/ runs only here.
 6 awp-types json-schema
 # adk-awp without `awp-v1`: the 2.0 edge alone, with the 1.x routes compiled out.

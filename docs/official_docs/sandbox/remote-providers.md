@@ -1,6 +1,6 @@
 # Remote Sandbox Providers
 
-`adk-sandbox` runs agent commands in microVMs that a provider hosts, behind the same
+`adk-sandbox` runs agent commands in microVMs and containers that a provider hosts, behind the same
 `SandboxClient` interface as the local and Docker clients. The harness shell, `SandboxTool`
 and the `adk-code` executors take any client, so a remote provider is a configuration choice,
 not a different code path.
@@ -9,12 +9,9 @@ not a different code path.
 |----------|---------|-----------|-----|
 | [E2B](https://e2b.dev) | `remote-e2b` | Firecracker microVM | REST control plane ([OpenAPI](https://github.com/e2b-dev/E2B/blob/main/spec/openapi.yml)) plus the in-VM `envd` daemon: files over HTTP ([envd.yaml](https://github.com/e2b-dev/E2B/blob/main/spec/envd/envd.yaml)), processes over the [Connect protocol](https://connectrpc.com/docs/protocol/) ([process.proto](https://github.com/e2b-dev/E2B/blob/main/spec/envd/process/process.proto)) |
 | [Daytona](https://www.daytona.io) | `remote-daytona` | Container or Linux VM, per sandbox class | REST control plane ([OpenAPI](https://www.daytona.io/docs/openapi.json)) plus the toolbox API ([OpenAPI](https://www.daytona.io/docs/toolbox-openapi.json)) at `{toolboxProxyUrl}/{sandboxId}` |
+| [Modal](https://modal.com/docs/guide/sandboxes) | `remote-modal` | gVisor container | gRPC control plane at `api.modal.com` plus each sandbox's task command router, over `tonic` ([`modal_proto`](https://github.com/modal-labs/modal-client/tree/main/modal_proto)) |
 | `LocalUnixClient` | `workspace` | None: a process in a host directory | Local |
 | `DockerClient` | `workspace-docker` | Container | Local Docker daemon |
-
-> **Note:** Modal is not supported. Its only API is gRPC, spoken by its Python, JavaScript and
-> Go SDKs (`modal_proto/api.proto`, with commands routed through a per-sandbox command
-> router); there is no REST surface to build a client against without a gRPC stack.
 
 ## The interface
 
@@ -76,7 +73,8 @@ async fn main() -> Result<(), SandboxError> {
 ```
 
 Daytona is the same with `DaytonaClient::new(DaytonaConfig::from_env()?)` and feature
-`remote-daytona`.
+`remote-daytona`; Modal with `ModalClient::new(ModalConfig::from_env()?)` and feature
+`remote-modal`.
 
 ## Configuration
 
@@ -124,6 +122,51 @@ Daytona is the same with `DaytonaClient::new(DaytonaConfig::from_env()?)` and fe
 | `pause`, `snapshot`, `stop` | `POST /sandbox/{id}/pause` (sandbox classes that support it), `POST /sandbox/{id}/snapshot`, `DELETE /sandbox/{id}` |
 | `resume` | `POST /sandbox` with the snapshot name |
 
+### Modal
+
+Modal's API is gRPC only; its SDKs speak it to `api.modal.com`. `ModalClient` speaks the same
+protocol through `tonic`, from the subset of Modal's published protobuf definitions it needs,
+vendored in `adk-sandbox/proto/modal/` (from
+[`modal-labs/modal-client`](https://github.com/modal-labs/modal-client), Apache-2.0) with the
+generated Rust code committed, so a build needs no `protoc`. Modal states that direct use of the
+gRPC API carries no compatibility guarantee; the client follows the requests its current Go and
+JavaScript SDKs send.
+
+| `ModalConfig` | Default | Meaning |
+|---------------|---------|---------|
+| `new(token_id, token_secret)`, `from_env()` | — | A Modal token (`ak-…`, `as-…`); `from_env` reads `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`, and `MODAL_ENVIRONMENT` and `MODAL_SERVER_URL` when set |
+| `with_app_name`, `with_environment` | `adk-sandbox`, the token's default | The app sandboxes belong to, created on first use, and its environment |
+| `with_image`, `with_image_command` | `python:3.13-slim` plus `git` and `patch` | The registry image Modal builds once and caches; `with_image` replaces the default and its additions, `with_image_command` appends a Dockerfile command |
+| `with_image_id` | none | An image Modal already built, such as a snapshot; nothing is built |
+| `with_timeout` | 15 minutes | `timeout_secs`: Modal terminates the sandbox after this whatever this process does (at most 24 hours) |
+| `with_idle_timeout` | none | `idle_timeout_secs`: Modal terminates an idle sandbox after this |
+| `with_network_blocked` | `false` | `NetworkAccess::BLOCKED`; `true` reports `network_blocked` |
+| `with_command_timeout`, `with_start_timeout` | 120 seconds, 300 seconds | A command's default timeout; how long `provision` waits for the image build and for scheduling |
+| `with_cpu`, `with_memory_mib` | Modal's defaults | Resources each sandbox requests |
+| `with_env`, `with_tag`, `with_name_prefix` | empty, empty, unnamed | Variables every command starts with, tags the sandbox list filters on, and names `{prefix}-{12 hex digits}` |
+| `with_workdir`, `with_snapshot_ttl` | `/root`, 30 days | The workspace root; how long Modal keeps a filesystem snapshot |
+| `with_server_url` | `https://api.modal.com` | A test server |
+
+| Operation | Modal RPC |
+|-----------|-----------|
+| `provision` | `AppGetOrCreate` and `ImageGetOrCreate`, with `ImageJoinStreaming` while the image builds (once per client); `SandboxCreateV2`, whose answer names the task and its command router; then the manifest through the router |
+| `start` on another process's sandbox | `SandboxGetTaskIdV2` and `SandboxGetCommandRouterAccess`; the V1 RPCs for a V1 sandbox id |
+| `exec` | router `TaskExecStart` with `timeout_secs`, after which Modal kills the command, and the variables as an inline secret source; `TaskExecStdioRead` for stdout and stderr, `TaskExecWait` for the exit |
+| `read_file`, `write_file` | `cat` through the router, the content over stdin and stdout |
+| `snapshot`, `resume` | router `TaskSnapshotFilesystem`, an image; `resume` creates a sandbox from it |
+| `stop` | `SandboxTerminateV2` |
+| `pause` | Not supported: `SandboxError::Unsupported` |
+| `ModalClient::running_sandboxes()` | `SandboxListV2` and `SandboxList`: the ids running in the app, for cleanup |
+
+| Credential | Goes to |
+|------------|---------|
+| Token id and secret, and the auth token `AuthTokenGet` issues for them | The control plane only, as `x-modal-token-id`, `x-modal-token-secret` and `x-modal-auth-token` |
+| The sandbox's router JWT | That sandbox's command router only, as `authorization: Bearer`; a router URL that is not `https` is refused |
+
+The client identifies itself as Modal's SDKs do, with `x-modal-client-type` `CLIENT_TYPE_LIBMODAL`
+and `x-modal-libmodal-version` `adk-sandbox/<version>`. Modal reports a command it killed at its
+timeout as exit code 137 or a signal; `exec` returns that as `timed_out` with exit code `-1`.
+
 ## Bounds and cleanup
 
 | Bound | Behaviour |
@@ -132,15 +175,18 @@ Daytona is the same with `DaytonaClient::new(DaytonaConfig::from_env()?)` and fe
 | `stop` | Destroys the environment; snapshots taken from it remain |
 | Dropped client | Destroys every environment the client created and did not stop; environments it only attached to are left alone |
 | Cancelled call | `SessionBackend` and the harness shell destroy the environment of a call dropped mid-command, since nothing else would end the command |
-| Requests | Each HTTP call has a deadline: a command's timeout plus 30 seconds (`COMMAND_GRACE`); 60 seconds (`REQUEST_TIMEOUT`) for the rest, up to five times that for an E2B snapshot |
+| Requests | Each HTTP or gRPC call has a deadline: a command's timeout plus 30 seconds (`COMMAND_GRACE`); 60 seconds (`REQUEST_TIMEOUT`) for the rest, up to five times that for an E2B snapshot and twice that for a Modal snapshot |
 | Output | stdout and stderr are capped at 1 MiB each with a truncation notice; a file is capped at 100 MiB (`MAX_FILE_BYTES`) |
-| Credentials | Keys go only to the configured origin, redirects are not followed, and keys never appear in `Debug` output or errors |
+| Credentials | Keys go only to the configured origin, redirects are not followed, and keys never appear in `Debug` output or errors; Modal's router gets only its sandbox's JWT |
 
 Provider errors are `SandboxError::Remote { provider, operation, status, message }`, which
 converts to an `AdkError` with code `code.sandbox_remote`, the provider and the upstream
 status, and a category from the status: 401 `Unauthorized`, 403 `Forbidden`, 404 `NotFound`,
 408 and 504 `Timeout`, 409 `Conflict`, 429 `RateLimited`, other 4xx `InvalidInput`, 5xx and
-transport failures `Unavailable`.
+transport failures `Unavailable`. Modal answers with gRPC status codes, which take their HTTP
+equivalents (the `google.rpc.Code` mapping: `UNAUTHENTICATED` 401, `PERMISSION_DENIED` 403,
+`NOT_FOUND` 404, `RESOURCE_EXHAUSTED` 429, `DEADLINE_EXCEEDED` 504, `UNAVAILABLE` 503), with the
+code's name at the start of `message`.
 
 ## The harness shell
 
@@ -245,9 +291,13 @@ The contract tests replay each provider's documented request and response shapes
 local server; each fixture cites the document it follows:
 
 ```bash
-cargo nextest run -p adk-sandbox --features remote-e2b,remote-daytona \
-  -E 'binary(remote_e2b_contract_tests) | binary(remote_daytona_contract_tests)'
+cargo nextest run -p adk-sandbox --features remote-e2b,remote-daytona,remote-modal \
+  -E 'binary(remote_e2b_contract_tests) | binary(remote_daytona_contract_tests) | binary(remote_modal_contract_tests)'
 ```
+
+Modal's contract tests run against a local gRPC server generated from the same vendored
+protobuf definitions as the client but compiled apart from it (`adk-sandbox/tests/modal_mock/`),
+so every call crosses the real wire encoding.
 
 The live tests are `#[ignore]`d and need the provider's key in the environment or the
 workspace `.env`:
@@ -256,6 +306,19 @@ workspace `.env`:
 |----------|----------|---------|
 | E2B | `E2B_API_KEY` | `cargo nextest run -p adk-sandbox --features remote-e2b --run-ignored only -E 'test(live_e2b_round_trip)'` |
 | Daytona | `DAYTONA_API_KEY` | `cargo nextest run -p adk-sandbox --features remote-daytona --run-ignored only -E 'test(live_daytona_round_trip)'` |
+| Modal | `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET` | `cargo nextest run -p adk-sandbox --features remote-modal --run-ignored only -E 'test(live_modal_round_trip)'` |
+
+### Regenerating the Modal protocol code
+
+The vendored `.proto` files keep every upstream name and field number. After changing them,
+regenerate the committed code (needs `protoc`):
+
+```bash
+cargo run --manifest-path adk-sandbox/proto/modal/codegen/Cargo.toml
+```
+
+It writes the client code to `adk-sandbox/src/workspace/remote/modal/proto/` and the contract
+tests' mock server to `adk-sandbox/tests/modal_mock/`.
 
 ## Writing a provider
 
@@ -263,4 +326,5 @@ Implement `SandboxClient` and `SandboxSession` for the provider, override `exec`
 provider runs commands with its own environment and deadline, report `provider()` and
 `capabilities()` truthfully, create environments with a provider-side lifetime, and destroy
 the ones the client created when it drops. `LocalUnixClient` is the reference for path
-handling, and the E2B and Daytona clients for the remote concerns above.
+handling, the E2B and Daytona clients for the remote concerns above over HTTP, and the Modal
+client for a gRPC API.

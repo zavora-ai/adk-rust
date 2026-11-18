@@ -1,6 +1,6 @@
 //! The remote shell (feature `remote-shell`): `bash` in an environment a
-//! [`SandboxClient`] provides off this host — an E2B or Daytona microVM, or any other
-//! client.
+//! [`SandboxClient`] provides off this host — an E2B or Daytona microVM, a Modal Sandbox, or
+//! any other client.
 //!
 //! One environment per (app, user, session), provisioned from the manifest on the session's
 //! first command, kept across runs and destroyed when idle, on a freeze, a timeout or a

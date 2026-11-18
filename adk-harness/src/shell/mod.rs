@@ -81,7 +81,7 @@ pub enum ShellIsolation {
     #[cfg(feature = "docker")]
     Container(ContainerConfig),
     /// An environment per session from a [`SandboxClient`](adk_sandbox::workspace::SandboxClient)
-    /// off this host — an E2B or Daytona microVM — with its own filesystem.
+    /// off this host — an E2B or Daytona microVM or a Modal Sandbox — with its own filesystem.
     #[cfg(feature = "remote-shell")]
     Remote(RemoteShellConfig),
 }

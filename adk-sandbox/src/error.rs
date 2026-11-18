@@ -154,11 +154,12 @@ pub enum SandboxError {
     #[cfg(feature = "workspace")]
     #[error("{provider} {operation} failed{}: {message}", status.map(|s| format!(" with HTTP {s}")).unwrap_or_default())]
     Remote {
-        /// The provider name, such as `e2b` or `daytona`.
+        /// The provider name, such as `e2b`, `daytona` or `modal`.
         provider: String,
         /// The operation that failed, such as `create sandbox`.
         operation: String,
-        /// The HTTP status the provider answered with; `None` when no response arrived.
+        /// The HTTP status the provider answered with, or for a gRPC provider such as Modal the
+        /// HTTP equivalent of its status code; `None` when no response arrived.
         status: Option<u16>,
         /// The provider's message, cut to a bounded length.
         message: String,

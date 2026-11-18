@@ -49,6 +49,7 @@
 //! | `workspace-docker` | `DockerClient` (implies `workspace`) | ❌ |
 //! | `remote-e2b` | `E2bClient`, a `SandboxClient` over E2B Firecracker microVMs (implies `workspace`) | ❌ |
 //! | `remote-daytona` | `DaytonaClient`, a `SandboxClient` over Daytona sandboxes (implies `workspace`) | ❌ |
+//! | `remote-modal` | `ModalClient`, a `SandboxClient` over Modal Sandboxes, gRPC through `tonic` (implies `workspace`) | ❌ |
 //!
 //! [`SandboxError`] is `#[non_exhaustive]`; its workspace variants exist only with the
 //! `workspace` feature.
@@ -111,6 +112,9 @@ pub use workspace::remote::{E2bClient, E2bConfig};
 
 #[cfg(feature = "remote-daytona")]
 pub use workspace::remote::{DaytonaClient, DaytonaConfig};
+
+#[cfg(feature = "remote-modal")]
+pub use workspace::remote::{ModalClient, ModalConfig};
 
 #[cfg(feature = "workspace-docker")]
 pub use workspace::{DockerClient, DockerSession};

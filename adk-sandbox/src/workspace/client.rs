@@ -3,8 +3,8 @@
 //! The [`SandboxClient`] trait abstracts sandbox provisioning, session
 //! management, and snapshot/resume capabilities. Implementations manage
 //! the underlying sandbox infrastructure: local directories, Docker
-//! containers, or remote microVMs (E2B with `remote-e2b`, Daytona with
-//! `remote-daytona`).
+//! containers, or remote environments (E2B with `remote-e2b`, Daytona with
+//! `remote-daytona`, Modal with `remote-modal`).
 //!
 //! # Lifecycle
 //!
@@ -118,7 +118,7 @@ pub trait SandboxClient: Send + Sync {
     /// does not reference a valid snapshot.
     async fn resume(&self, snapshot_id: &SnapshotId) -> Result<SessionHandle, SandboxError>;
 
-    /// The provider's name, such as `local`, `docker`, `e2b` or `daytona`, as audit records
+    /// The provider's name, such as `local`, `docker`, `e2b`, `daytona` or `modal`, as audit records
     /// and errors name it. The default is `custom`.
     fn provider(&self) -> &str {
         "custom"

@@ -6,6 +6,7 @@
 
 # Cargo.lock for excluded crates
 adk-mistralrs/Cargo.lock
+adk-sandbox/proto/modal/codegen/Cargo.lock
 
 # Generated output files
 /output/
