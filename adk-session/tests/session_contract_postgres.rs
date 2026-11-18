@@ -51,7 +51,13 @@ async fn test_postgres_integrity_contract() {
     common::integrity_contract::assert_event_order_contract(&service, &app).await;
     common::integrity_contract::assert_nul_round_trip_contract(&service, &app).await;
     common::integrity_contract::assert_list_order_contract(&service, &app).await;
-    common::integrity_contract::assert_rewind_unsupported(&service, &app).await;
+    common::integrity_contract::assert_rewind_contract(&service, &app).await;
+}
+
+#[tokio::test]
+#[ignore = "requires a PostgreSQL server at DATABASE_URL"]
+async fn test_postgres_history_contract() {
+    common::history_contract::assert_history_contract(&service().await, &run_app("history")).await;
 }
 
 #[tokio::test]

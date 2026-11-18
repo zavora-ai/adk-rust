@@ -504,6 +504,11 @@ async fn encrypted_session_rewind_contract() {
     common::integrity_contract::assert_rewind_contract(&encrypted_in_memory(), APP).await;
 }
 
+#[tokio::test]
+async fn encrypted_session_history_contract() {
+    common::history_contract::assert_history_contract(&encrypted_in_memory(), APP).await;
+}
+
 /// Key-rotation events are stored in the inner service but hidden from callers, so they do not
 /// count as rewind steps.
 #[tokio::test]
