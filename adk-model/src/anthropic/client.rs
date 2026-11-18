@@ -719,12 +719,13 @@ fn record_thread(
     id: &str,
     response: &adk_core::LlmResponse,
     prompt_caching: bool,
+    forms: super::toolsets::ToolsetForms,
 ) {
     if response.error_code.is_some() {
         return;
     }
     let Some(content) = &response.content else { return };
-    if let Ok(reply) = convert::content_to_message(content, prompt_caching) {
+    if let Ok(reply) = convert::content_to_message(content, prompt_caching, forms) {
         threads.record(plan, id, reply);
     }
 }
@@ -1072,7 +1073,7 @@ impl Llm for AnthropicClient {
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .clone()
                     {
-                        record_thread(threads, plan, &id, &response, anthropic_config.prompt_caching);
+                        record_thread(threads, plan, &id, &response, anthropic_config.prompt_caching, forms);
                     }
                     yield response;
                 }
@@ -1138,7 +1139,7 @@ impl Llm for AnthropicClient {
 
                 let response = convert::from_anthropic_message(&message, forms).0;
                 if let (Some(threads), Some(plan)) = (&threads, plan) {
-                    record_thread(threads, &plan, &message.id, &response, anthropic_config.prompt_caching);
+                    record_thread(threads, &plan, &message.id, &response, anthropic_config.prompt_caching, forms);
                 }
                 yield response;
             }
