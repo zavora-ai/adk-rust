@@ -32,6 +32,11 @@ pub enum MessageRole {
 
     /// Assistant role.
     Assistant,
+
+    /// A mid-conversation system message: an operator instruction, or a tool change
+    /// ([`ToolAdditionBlock`](crate::ToolAdditionBlock), [`ToolRemovalBlock`](crate::ToolRemovalBlock)),
+    /// that applies from its position on. It follows a user turn and is never first.
+    System,
 }
 
 impl MessageParam {

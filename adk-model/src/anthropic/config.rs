@@ -186,6 +186,13 @@ pub struct AnthropicConfig {
     /// When `None`, all available tools are loaded.
     #[serde(skip)]
     pub tool_search: Option<ToolSearchConfig>,
+
+    /// Whether a conversation keeps the `tools` array it started with and sends later tool
+    /// changes as `tool_addition` / `tool_removal` blocks (beta `inline-tools-2026-09-15`), so a
+    /// tool added mid-conversation does not miss the prompt cache. Applies to the Claude API
+    /// models that support mid-conversation tool changes.
+    #[serde(default)]
+    pub inline_tool_changes: bool,
 }
 
 impl std::fmt::Debug for AnthropicConfig {
@@ -210,6 +217,7 @@ impl std::fmt::Debug for AnthropicConfig {
             .field("beta_features", &self.beta_features)
             .field("api_version", &self.api_version)
             .field("tool_search", &self.tool_search)
+            .field("inline_tool_changes", &self.inline_tool_changes)
             .finish()
     }
 }
@@ -240,6 +248,7 @@ impl Default for AnthropicConfig {
             beta_features: Vec::new(),
             api_version: None,
             tool_search: None,
+            inline_tool_changes: false,
         }
     }
 }
@@ -439,6 +448,26 @@ impl AnthropicConfig {
     /// ```
     pub fn with_tool_search(mut self, config: ToolSearchConfig) -> Self {
         self.tool_search = Some(config);
+        self
+    }
+
+    /// Sends tools added, redefined or removed mid-conversation as inline tool changes, so the
+    /// conversation's `tools` array, and the cached prefix it opens, stays as first sent.
+    ///
+    /// The client remembers each conversation's tools in memory for an hour; a conversation it
+    /// does not remember, or whose history changed, sends its tools as they are.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_model::anthropic::AnthropicConfig;
+    ///
+    /// let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-5-5")
+    ///     .with_inline_tool_changes(true);
+    /// assert!(config.inline_tool_changes);
+    /// ```
+    pub fn with_inline_tool_changes(mut self, enabled: bool) -> Self {
+        self.inline_tool_changes = enabled;
         self
     }
 }

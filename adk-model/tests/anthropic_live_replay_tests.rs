@@ -175,3 +175,96 @@ async fn live_web_search_streams_before_the_answer() {
         "the complete message carries the same call: {complete:?}"
     );
 }
+
+/// One request of a conversation: its tools, and the prompt cache it read and wrote.
+async fn cached_turn(
+    client: &AnthropicClient,
+    contents: &[Content],
+    tools: &[&str],
+) -> (Content, i32, i32) {
+    let mut request = LlmRequest::new("ignored", contents.to_vec());
+    for name in tools {
+        let (description, property) = match *name {
+            "get_weather" => ("Get the current weather for a city.", "city"),
+            _ => ("Search flights between two cities on a date.", "route"),
+        };
+        request.tools.insert(
+            name.to_string(),
+            json!({
+                "description": description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {property: {"type": "string"}},
+                    "required": [property]
+                }
+            }),
+        );
+    }
+    let responses: Vec<LlmResponse> = client
+        .generate_content(request, false)
+        .await
+        .expect("request accepted")
+        .try_collect()
+        .await
+        .expect("response parsed");
+    let response = responses.into_iter().last().expect("a response");
+    let usage = response.usage_metadata.expect("usage");
+    (
+        response.content.expect("turn content"),
+        usage.cache_read_input_token_count.unwrap_or(0),
+        usage.cache_creation_input_token_count.unwrap_or(0),
+    )
+}
+
+#[tokio::test]
+#[ignore = "calls the Anthropic API; requires ANTHROPIC_API_KEY"]
+async fn live_a_tool_added_mid_conversation_keeps_the_prompt_cache() {
+    let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") else { return };
+    // A long, unique system prompt: past every model's minimum cacheable prefix, and in no
+    // other run's cache.
+    let nonce =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let policy = "Travel desk policy: confirm the city, the dates and the budget before any \
+                  booking; prefer direct routes; never book without the traveller's approval. "
+        .repeat(120);
+    println!("mode | request | tools | cache read | cache written");
+    let mut read_after_addition = Vec::new();
+    for inline in [false, true] {
+        let client = AnthropicClient::new(
+            AnthropicConfig::new(api_key.clone(), "claude-haiku-5-5")
+                .with_inline_tool_changes(inline),
+        )
+        .unwrap();
+        let mode = if inline { "inline" } else { "tools array" };
+        let system = Content::new("system").with_text(format!("Run {nonce}-{inline}. {policy}"));
+        let mut history =
+            vec![system, Content::new("user").with_text("What can you do? One sentence.")];
+        let (reply, read, written) = cached_turn(&client, &history, &["get_weather"]).await;
+        println!("{mode} | 1 | get_weather | {read} | {written}");
+        history.push(reply);
+        // Flight search becomes available, as an MCP server's tool would mid-session.
+        history.push(Content::new("user").with_text("Flight search is now available. Reply OK."));
+        let (reply, read, written) =
+            cached_turn(&client, &history, &["get_weather", "find_flights"]).await;
+        println!("{mode} | 2 | get_weather, find_flights | {read} | {written}");
+        read_after_addition.push(read);
+        history.push(reply);
+        history.push(
+            Content::new("user").with_text("Search flights from Lisbon to Paris for tomorrow."),
+        );
+        let (reply, read, written) =
+            cached_turn(&client, &history, &["get_weather", "find_flights"]).await;
+        let called: Vec<&str> = reply
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                Part::FunctionCall { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        println!("{mode} | 3 | get_weather, find_flights | {read} | {written} | calls {called:?}");
+        assert_eq!(called, ["find_flights"], "{mode}: the added tool is offered");
+    }
+    assert_eq!(read_after_addition[0], 0, "a changed tools array misses the whole cache");
+    assert!(read_after_addition[1] > 0, "an inline tool change keeps the cached prefix");
+}

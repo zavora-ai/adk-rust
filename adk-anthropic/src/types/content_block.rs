@@ -5,8 +5,8 @@ use crate::types::unknown::tagged_with_unknown;
 use crate::types::{
     CodeExecutionResultBlock, CodeExecutionToolResultBlock, CompactionBlock, DocumentBlock,
     ImageBlock, ProgrammaticToolUseBlock, RedactedThinkingBlock, ServerToolUseBlock, TextBlock,
-    ThinkingBlock, ToolResultBlock, ToolUseBlock, WebFetchToolResultBlock,
-    WebSearchToolResultBlock,
+    ThinkingBlock, ToolAdditionBlock, ToolRemovalBlock, ToolResultBlock, ToolUseBlock,
+    WebFetchToolResultBlock, WebSearchToolResultBlock,
 };
 
 /// A block of content in a message.
@@ -82,6 +82,16 @@ pub enum ContentBlock {
     #[serde(rename = "compaction")]
     Compaction(CompactionBlock),
 
+    /// Offers a tool from its position in a mid-conversation system message on
+    /// (beta `inline-tools-2026-09-15`).
+    #[serde(rename = "tool_addition")]
+    ToolAddition(ToolAdditionBlock),
+
+    /// Withdraws a tool from its position in a mid-conversation system message on
+    /// (beta `inline-tools-2026-09-15`).
+    #[serde(rename = "tool_removal")]
+    ToolRemoval(ToolRemovalBlock),
+
     /// A block type this client does not know, kept as the raw JSON the API
     /// sent, `type` field included. It serializes back to that JSON unchanged.
     #[serde(skip)]
@@ -108,6 +118,8 @@ tagged_with_unknown!(
         "bash_code_execution_tool_result",
         "text_editor_code_execution_tool_result",
         "compaction",
+        "tool_addition",
+        "tool_removal",
     ]
 );
 

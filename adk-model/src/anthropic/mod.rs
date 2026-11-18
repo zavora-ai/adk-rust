@@ -95,6 +95,7 @@ mod request;
 pub mod schema_adapter;
 mod streaming;
 mod token_count;
+mod tool_changes;
 mod toolsets;
 
 pub use client::AnthropicClient;

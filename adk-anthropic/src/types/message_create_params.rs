@@ -655,6 +655,40 @@ impl MessageCreateParams {
     /// params.compaction = Some(CompactionParam::summarize());
     /// assert!(params.requires_compaction_beta());
     /// ```
+    /// Whether the request needs the `inline-tools-2026-09-15` beta: it carries a tool change,
+    /// or a compaction block that records tool changes, which the API applies only with it.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_anthropic::{
+    ///     ContentBlock, KnownModel, MessageCreateParams, MessageParam, MessageRole,
+    ///     ToolChangeTarget, ToolRemovalBlock,
+    /// };
+    ///
+    /// let mut params = MessageCreateParams::simple("Hello", KnownModel::ClaudeSonnet46);
+    /// assert!(!params.requires_inline_tools_beta());
+    /// params.messages.push(MessageParam::new_with_blocks(
+    ///     vec![ContentBlock::ToolRemoval(ToolRemovalBlock {
+    ///         tool: ToolChangeTarget::reference("get_weather"),
+    ///     })],
+    ///     MessageRole::System,
+    /// ));
+    /// assert!(params.requires_inline_tools_beta());
+    /// ```
+    pub fn requires_inline_tools_beta(&self) -> bool {
+        self.messages.iter().any(|message| match &message.content {
+            MessageParamContent::Array(blocks) => blocks.iter().any(|block| match block {
+                ContentBlock::ToolAddition(_) | ContentBlock::ToolRemoval(_) => true,
+                ContentBlock::Compaction(compaction) => {
+                    compaction.extra.contains_key("tool_changes")
+                }
+                _ => false,
+            }),
+            MessageParamContent::String(_) => false,
+        })
+    }
+
     pub fn requires_compaction_beta(&self) -> bool {
         self.compaction.is_some()
             || self.messages.iter().any(|message| match &message.content {
@@ -758,6 +792,11 @@ impl ContentSize {
             },
             ContentBlock::Thinking(thinking) => self.text += thinking.thinking.len(),
             ContentBlock::Compaction(compaction) => self.text += compaction.content.len(),
+            ContentBlock::ToolAddition(addition) => {
+                self.text +=
+                    json_text_len(&serde_json::to_value(&addition.tool).unwrap_or_default())
+            }
+            ContentBlock::ToolRemoval(_) => {}
             ContentBlock::CodeExecutionResult(result) => self.text += result.output.len(),
             // Server-generated blocks replayed verbatim; the API produced them within its limits.
             ContentBlock::WebSearchToolResult(_)
