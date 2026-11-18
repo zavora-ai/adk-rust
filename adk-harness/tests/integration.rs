@@ -66,6 +66,7 @@ mod plan_graph_tests;
 mod policy_table_tests;
 mod posture_tests;
 mod prompt_turn_tests;
+mod remote_shell_tests;
 mod requested_call_tests;
 mod review_board_tests;
 mod rule_hit_tests;

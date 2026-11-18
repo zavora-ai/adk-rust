@@ -19,7 +19,7 @@ adk-core = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["process", "time", "io-util", "fs", "rt"] }
+tokio = { workspace = true, features = ["process", "time", "io-util", "fs", "rt", "sync", "macros"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tempfile = "3.10"
@@ -36,6 +36,10 @@ tar = { version = "0.4", optional = true }
 bollard = { version = "0.18", optional = true }
 uuid = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
+
+# Optional dependencies for the remote providers
+reqwest = { workspace = true, optional = true }
+base64 = { version = "0.22", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -68,6 +72,12 @@ egress-proxy = ["dep:chrono", "adk-core/egress-dns", "tokio/net", "tokio/macros"
 workspace = ["dep:tar", "dep:uuid"]
 workspace-docker = ["workspace", "dep:bollard", "dep:futures"]
 
+# Remote sandbox providers behind `SandboxClient`, one feature each.
+# E2B: Firecracker microVMs over the REST control plane and the in-VM envd daemon.
+remote-e2b = ["workspace", "dep:reqwest", "dep:futures", "dep:base64"]
+# Daytona: sandboxes over the REST control plane and the toolbox API.
+remote-daytona = ["workspace", "dep:reqwest", "dep:futures"]
+
 # OS-level sandbox enforcers
 sandbox-macos = []       # Seatbelt via sandbox-exec (no extra deps)
 sandbox-linux = []       # Bubblewrap via bwrap binary (no extra deps)
@@ -83,6 +93,7 @@ sandbox-native = ["sandbox-macos", "sandbox-linux", "sandbox-windows"]
 
 [dev-dependencies]
 proptest = "1.4"
+wiremock = "0.6"
 tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
 
 # Document every feature-gated API on docs.rs.

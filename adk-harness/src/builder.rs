@@ -1000,14 +1000,21 @@ impl HarnessAgentBuilder {
     /// Where `bash` runs (default host, spec 3.1 §7.9).
     ///
     /// Unless [`allow_unsandboxed_retry`](Self::allow_unsandboxed_retry) was called, the
-    /// unsandboxed retry is on for the host and the OS sandbox and off for a container.
+    /// unsandboxed retry is on for the host and the OS sandbox and off for a container and
+    /// a remote sandbox.
     pub fn shell(mut self, isolation: ShellIsolation) -> Self {
-        #[cfg(feature = "docker")]
-        let container = matches!(isolation, ShellIsolation::Container(_));
-        #[cfg(not(feature = "docker"))]
-        let container = false;
+        #[cfg(any(feature = "docker", feature = "remote-shell"))]
+        let pooled = match &isolation {
+            #[cfg(feature = "docker")]
+            ShellIsolation::Container(_) => true,
+            #[cfg(feature = "remote-shell")]
+            ShellIsolation::Remote(_) => true,
+            _ => false,
+        };
+        #[cfg(not(any(feature = "docker", feature = "remote-shell")))]
+        let pooled = false;
         if !self.retry_explicit {
-            self.shell.allow_unsandboxed_retry = !container;
+            self.shell.allow_unsandboxed_retry = !pooled;
         }
         self.shell.isolation = isolation;
         self
@@ -2037,15 +2044,16 @@ impl HarnessAgentBuilder {
         if let Some(gate) = &file_gate {
             tools = tools.into_iter().map(|tool| gate.wrap(tool)).collect();
         }
-        // The container shell (spec 3.1 §7.9 "Container"): its containers close with the
-        // toolset.
-        // Shell credentials reach `bash` through a launcher layer, which the container shell
-        // does not have; refusing beats commands that silently run without them.
-        #[cfg(all(feature = "docker", feature = "auth"))]
-        if shell.container.is_some() && !self.identity.shell_credentials.is_empty() {
+        // The container and remote shells (spec 3.1 §7.9 "Container"): their environments
+        // close with the toolset.
+        // Shell credentials reach `bash` through a launcher layer, which these shells do not
+        // have; refusing beats commands that silently run without them.
+        #[cfg(all(any(feature = "docker", feature = "remote-shell"), feature = "auth"))]
+        if shell.pooled.is_some() && !self.identity.shell_credentials.is_empty() {
             return Err(AdkError::config(
-                "shell credentials cannot be delivered to the container shell yet; use the host \
-                 shell or the OS sandbox with shell_credential (spec 3.1 §7.14)",
+                "shell credentials cannot be delivered to the container shell or the remote \
+                 shell yet; use the host shell or the OS sandbox with shell_credential (spec \
+                 3.1 §7.14)",
             ));
         }
         // The personal preset's shell never retries on the host (spec 3.3 §10 H1), and a shell
@@ -2059,14 +2067,27 @@ impl HarnessAgentBuilder {
         let egress_policy = false;
         let allow_unsandboxed_retry =
             self.shell.allow_unsandboxed_retry && !self.isolated_shell_only && !egress_policy;
-        #[cfg(feature = "docker")]
-        let container_pool = match &shell.container {
-            Some(config) if self.shell_enabled && workspace.bash_allowed() => {
-                let bash = crate::shell::ContainerBashTool::new(
-                    workspace.clone(),
-                    config.clone(),
-                    ledger.clone(),
-                )
+        #[cfg(any(feature = "docker", feature = "remote-shell"))]
+        let container_pool = match &shell.pooled {
+            Some(source) if self.shell_enabled && workspace.bash_allowed() => {
+                let bash = match source {
+                    #[cfg(feature = "docker")]
+                    crate::shell::PoolSource::Container(config) => {
+                        crate::shell::ContainerBashTool::new(
+                            workspace.clone(),
+                            config.clone(),
+                            ledger.clone(),
+                        )
+                    }
+                    #[cfg(feature = "remote-shell")]
+                    crate::shell::PoolSource::Remote(config) => {
+                        crate::shell::ContainerBashTool::remote(
+                            workspace.clone(),
+                            config.clone(),
+                            ledger.clone(),
+                        )
+                    }
+                }
                 .allow_unsandboxed_retry(allow_unsandboxed_retry)
                 .with_file_gate(file_gate.clone())
                 .with_outputs(shells.outputs().clone());
@@ -2076,9 +2097,9 @@ impl HarnessAgentBuilder {
             }
             _ => None,
         };
-        #[cfg(feature = "docker")]
+        #[cfg(any(feature = "docker", feature = "remote-shell"))]
         let container_shell = container_pool.is_some();
-        #[cfg(not(feature = "docker"))]
+        #[cfg(not(any(feature = "docker", feature = "remote-shell")))]
         let container_shell = false;
         // The personal preset never offers a host shell (spec 3.3 §10 H1).
         let isolated_shell = matches!(status, IsolationStatus::OsSandbox { .. });
@@ -2379,7 +2400,7 @@ impl HarnessAgentBuilder {
         // Under a kernel, each run's tool calls write their ledger rows (spec 3.2 §7.10).
         #[cfg(all(feature = "kernel", feature = "observe"))]
         run_trails.attach_ledger(self.kernel_ledger.clone(), &toolset.all_tools());
-        #[cfg(feature = "docker")]
+        #[cfg(any(feature = "docker", feature = "remote-shell"))]
         if let Some(pool) = container_pool {
             toolset = toolset.with_containers(pool);
         }
@@ -2862,9 +2883,10 @@ impl HarnessAgentBuilder {
             Some(launcher) => Arc::new(launcher),
             None => check_launcher,
         };
-        // The container shell has no launcher; a check never falls back to the host (I24).
-        #[cfg(feature = "docker")]
-        let check_launcher: Arc<dyn adk_devtools::CommandLauncher> = match shell.container {
+        // The container and remote shells have no launcher; a check never falls back to the
+        // host (I24).
+        #[cfg(any(feature = "docker", feature = "remote-shell"))]
+        let check_launcher: Arc<dyn adk_devtools::CommandLauncher> = match shell.pooled {
             Some(_) => Arc::new(crate::shell::ContainerCheckRefusal),
             None => check_launcher,
         };
@@ -3083,7 +3105,7 @@ fn build_hook_runner(
     }
     // A hook runs through the shell's launcher (spec 3.1 §9.2 I54); the container shell has
     // none, and running `inherit` hooks on the host instead would escape the isolation.
-    if matches!(status, IsolationStatus::Container { .. })
+    if matches!(status, IsolationStatus::Container { .. } | IsolationStatus::Remote { .. })
         && set.hooks.iter().any(|hook| hook.isolation == crate::hooks::HookIsolation::Inherit)
     {
         return Err(AdkError::new(

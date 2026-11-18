@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-    ToolBash20241022, ToolBash20250124, ToolParam, ToolTextEditor20250124, ToolTextEditor20250429,
-    ToolTextEditor20250728, WebFetchTool20250910, WebFetchTool20260209, WebSearchTool20250305,
-    WebSearchTool20260209,
+    AdvisorTool20260301, BrowserToolset20260801, ComputerToolVersion, ComputerToolset20260801,
+    ToolBash20241022, ToolBash20250124, ToolComputer20250124, ToolComputer20251124, ToolParam,
+    ToolTextEditor20250124, ToolTextEditor20250429, ToolTextEditor20250728, WebFetchTool20250910,
+    WebFetchTool20260209, WebSearchTool20250305, WebSearchTool20260209,
 };
 
 /// Union type for different tool parameter types.
@@ -57,6 +58,26 @@ pub enum ToolUnionParam {
     /// A web fetch tool with dynamic filtering (version 20260209)
     #[serde(rename = "web_fetch_20260209")]
     WebFetch20260209(WebFetchTool20260209),
+
+    /// The computer use toolset (GA, no beta header)
+    #[serde(rename = "computer_toolset_20260801")]
+    ComputerToolset20260801(ComputerToolset20260801),
+
+    /// The browser use toolset (GA, no beta header)
+    #[serde(rename = "browser_toolset_20260801")]
+    BrowserToolset20260801(BrowserToolset20260801),
+
+    /// The computer use tool, version 20251124 (beta `computer-use-2025-11-24`)
+    #[serde(rename = "computer_20251124")]
+    Computer20251124(ToolComputer20251124),
+
+    /// The computer use tool, version 20250124 (beta `computer-use-2025-01-24`)
+    #[serde(rename = "computer_20250124")]
+    Computer20250124(ToolComputer20250124),
+
+    /// The advisor tool (version 20260301, beta `advisor-tool-2026-03-01`)
+    #[serde(rename = "advisor_20260301")]
+    Advisor20260301(AdvisorTool20260301),
 }
 
 impl ToolUnionParam {
@@ -110,6 +131,57 @@ impl ToolUnionParam {
         Self::WebFetch20260209(WebFetchTool20260209::new())
     }
 
+    /// Creates the computer use toolset with every member at its default.
+    pub fn new_computer_toolset() -> Self {
+        Self::ComputerToolset20260801(ComputerToolset20260801::new())
+    }
+
+    /// Creates the browser use toolset with every member at its default.
+    pub fn new_browser_toolset() -> Self {
+        Self::BrowserToolset20260801(BrowserToolset20260801::new())
+    }
+
+    /// The computer use version this entry declares, if it is a computer use tool.
+    pub fn computer_tool_version(&self) -> Option<ComputerToolVersion> {
+        match self {
+            Self::ComputerToolset20260801(_) => Some(ComputerToolVersion::Toolset20260801),
+            Self::Computer20251124(_) => Some(ComputerToolVersion::Computer20251124),
+            Self::Computer20250124(_) => Some(ComputerToolVersion::Computer20250124),
+            Self::CustomTool(_)
+            | Self::Bash20241022(_)
+            | Self::Bash20250124(_)
+            | Self::TextEditor20250124(_)
+            | Self::TextEditor20250429(_)
+            | Self::TextEditor20250728(_)
+            | Self::WebSearch20250305(_)
+            | Self::WebFetch20250910(_)
+            | Self::WebSearch20260209(_)
+            | Self::WebFetch20260209(_)
+            | Self::BrowserToolset20260801(_)
+            | Self::Advisor20260301(_) => None,
+        }
+    }
+
+    /// The beta header this tool requires, if any.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_anthropic::{ToolComputer20251124, ToolUnionParam};
+    ///
+    /// let legacy = ToolUnionParam::Computer20251124(ToolComputer20251124::new(1024, 768));
+    /// assert_eq!(legacy.beta_header(), Some("computer-use-2025-11-24"));
+    /// assert_eq!(ToolUnionParam::new_computer_toolset().beta_header(), None);
+    /// ```
+    pub fn beta_header(&self) -> Option<&'static str> {
+        self.computer_tool_version().and_then(ComputerToolVersion::beta_header)
+    }
+
+    /// Creates an advisor tool that consults `model`.
+    pub fn new_advisor_tool(model: impl Into<String>) -> Self {
+        Self::Advisor20260301(AdvisorTool20260301::new(model))
+    }
+
     /// Check if this tool has strict mode enabled.
     ///
     /// Only custom tools can have strict mode enabled. All other tool types
@@ -126,7 +198,12 @@ impl ToolUnionParam {
             | Self::WebSearch20250305(_)
             | Self::WebFetch20250910(_)
             | Self::WebSearch20260209(_)
-            | Self::WebFetch20260209(_) => false,
+            | Self::WebFetch20260209(_)
+            | Self::ComputerToolset20260801(_)
+            | Self::BrowserToolset20260801(_)
+            | Self::Computer20251124(_)
+            | Self::Computer20250124(_)
+            | Self::Advisor20260301(_) => false,
         }
     }
 }
@@ -407,5 +484,62 @@ mod tests {
             to_value(ToolUnionParam::new_web_fetch_tool()).unwrap()["type"],
             "web_fetch_20250910"
         );
+    }
+
+    #[test]
+    fn computer_toolset_round_trips_the_documented_entry() {
+        let documented = json!({
+            "type": "computer_toolset_20260801",
+            "configs": { "zoom": { "enabled": false } },
+            "cache_control": { "type": "ephemeral" }
+        });
+        let tool: ToolUnionParam = serde_json::from_value(documented.clone()).unwrap();
+        assert!(
+            matches!(&tool, ToolUnionParam::ComputerToolset20260801(set) if !set.is_enabled(crate::types::ComputerMember::Zoom))
+        );
+        assert_eq!(to_value(&tool).unwrap(), documented);
+        assert!(!tool.is_strict());
+    }
+
+    #[test]
+    fn browser_toolset_round_trips_the_documented_entry() {
+        let documented = json!({
+            "type": "browser_toolset_20260801",
+            "configs": {
+                "read_console": { "enabled": true },
+                "left_mouse_down": { "enabled": false },
+                "left_mouse_up": { "enabled": false },
+                "hold_key": { "enabled": false }
+            }
+        });
+        let tool: ToolUnionParam = serde_json::from_value(documented.clone()).unwrap();
+        assert_eq!(to_value(&tool).unwrap(), documented);
+        assert_eq!(
+            to_value(ToolUnionParam::new_browser_toolset()).unwrap(),
+            json!({ "type": "browser_toolset_20260801" })
+        );
+    }
+
+    #[test]
+    fn earlier_computer_versions_round_trip_the_documented_entry() {
+        let documented = json!({
+            "type": "computer_20251124",
+            "name": "computer",
+            "display_width_px": 1024,
+            "display_height_px": 768,
+            "display_number": 1
+        });
+        let tool: ToolUnionParam = serde_json::from_value(documented.clone()).unwrap();
+        assert_eq!(tool.beta_header(), Some("computer-use-2025-11-24"));
+        assert_eq!(to_value(&tool).unwrap(), documented);
+
+        let older: ToolUnionParam = serde_json::from_value(json!({
+            "type": "computer_20250124",
+            "name": "computer",
+            "display_width_px": 1280,
+            "display_height_px": 800
+        }))
+        .unwrap();
+        assert_eq!(older.beta_header(), Some("computer-use-2025-01-24"));
     }
 }

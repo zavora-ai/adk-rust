@@ -20,12 +20,51 @@ pub struct ToolUseBlock {
     /// Create a cache control breakpoint at this content block.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_control: Option<CacheControlEphemeral>,
+
+    /// The client toolset the call belongs to (`computer` or `browser`), with `name`
+    /// naming the member. `None` for every other tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolset_name: Option<String>,
 }
 
 impl ToolUseBlock {
     /// Creates a new ToolUseBlock with the specified id, name, and input.
     pub fn new<S1: Into<String>, S2: Into<String>>(id: S1, name: S2, input: Value) -> Self {
-        Self { id: id.into(), name: name.into(), input, cache_control: None }
+        Self { id: id.into(), name: name.into(), input, cache_control: None, toolset_name: None }
+    }
+
+    /// A call to `member` of the client toolset `toolset`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_anthropic::{COMPUTER_TOOLSET, ToolUseBlock};
+    /// use serde_json::json;
+    ///
+    /// let block = ToolUseBlock::member("toolu_1", COMPUTER_TOOLSET, "left_click", json!({ "coordinate": [5, 9] }));
+    /// assert_eq!(
+    ///     serde_json::to_value(&block).unwrap(),
+    ///     json!({
+    ///         "id": "toolu_1",
+    ///         "name": "left_click",
+    ///         "toolset_name": "computer",
+    ///         "input": { "coordinate": [5, 9] }
+    ///     })
+    /// );
+    /// ```
+    pub fn member(
+        id: impl Into<String>,
+        toolset: impl Into<String>,
+        member: impl Into<String>,
+        input: Value,
+    ) -> Self {
+        Self::new(id, member, input).with_toolset_name(toolset)
+    }
+
+    /// Marks the call as a member of the client toolset `toolset`.
+    pub fn with_toolset_name(mut self, toolset: impl Into<String>) -> Self {
+        self.toolset_name = Some(toolset.into());
+        self
     }
 
     /// Add a cache control to this tool use block.

@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::types::{ImageBlock, TextBlock};
+use crate::types::{BrowserStateBlock, ImageBlock, TextBlock};
 
-/// A content type that can be either a text block or an image block.
+/// An item of a tool result's content: text, an image, or browser use tab state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Content {
@@ -13,6 +13,10 @@ pub enum Content {
     /// An image block content.
     #[serde(rename = "image")]
     Image(ImageBlock),
+
+    /// Tab state on a browser use member result.
+    #[serde(rename = "browser_state")]
+    BrowserState(BrowserStateBlock),
 }
 
 impl From<TextBlock> for Content {
@@ -24,6 +28,12 @@ impl From<TextBlock> for Content {
 impl From<ImageBlock> for Content {
     fn from(image_block: ImageBlock) -> Self {
         Content::Image(image_block)
+    }
+}
+
+impl From<BrowserStateBlock> for Content {
+    fn from(state: BrowserStateBlock) -> Self {
+        Content::BrowserState(state)
     }
 }
 

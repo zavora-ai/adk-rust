@@ -4,7 +4,136 @@
 //! used across the sandbox-agent harness.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::time::Duration;
+
+/// A command for [`SandboxSession::exec`](crate::workspace::SandboxSession::exec): the
+/// shell text plus its working directory, timeout and environment.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_sandbox::workspace::CommandRequest;
+/// use std::time::Duration;
+///
+/// let request = CommandRequest::new("cargo test")
+///     .working_dir("crates/core")
+///     .timeout(Duration::from_secs(120))
+///     .env("RUST_LOG", "debug");
+/// assert_eq!(request.env["RUST_LOG"], "debug");
+/// assert_eq!(request.timeout, Some(Duration::from_secs(120)));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CommandRequest {
+    /// The shell command to run.
+    pub command: String,
+    /// Working directory relative to the workspace root; `None` runs in the root.
+    pub working_dir: Option<String>,
+    /// Longest the command may run; `None` uses the session's own command timeout.
+    pub timeout: Option<Duration>,
+    /// Variables set for this command only, on top of the session's environment.
+    pub env: BTreeMap<String, String>,
+}
+
+impl CommandRequest {
+    /// A request for `command` in the workspace root, with the session's timeout and no
+    /// extra environment.
+    pub fn new(command: impl Into<String>) -> Self {
+        Self { command: command.into(), working_dir: None, timeout: None, env: BTreeMap::new() }
+    }
+
+    /// Runs the command in `dir`, relative to the workspace root.
+    #[must_use]
+    pub fn working_dir(mut self, dir: impl Into<String>) -> Self {
+        self.working_dir = Some(dir.into());
+        self
+    }
+
+    /// Ends the command after `timeout`.
+    #[must_use]
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    /// Sets `key` to `value` for this command.
+    #[must_use]
+    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env.insert(key.into(), value.into());
+        self
+    }
+}
+
+/// What a [`SandboxClient`](crate::workspace::SandboxClient) supports beyond provision,
+/// start, exec and stop.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_sandbox::workspace::ClientCapabilities;
+/// use std::time::Duration;
+///
+/// let caps = ClientCapabilities::default()
+///     .with_snapshot(true)
+///     .with_remote(true)
+///     .with_network_blocked(true)
+///     .with_max_lifetime(Duration::from_secs(900));
+/// assert!(caps.snapshot && caps.remote && caps.network_blocked && !caps.pause);
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ClientCapabilities {
+    /// `snapshot` and `resume` work.
+    pub snapshot: bool,
+    /// `pause` suspends an environment that a later `start` resumes.
+    pub pause: bool,
+    /// Environments run off this host, so a command cannot reach the host's files.
+    pub remote: bool,
+    /// The client's configuration keeps environments off the network.
+    pub network_blocked: bool,
+    /// The provider destroys an environment on its own once this long has passed, even
+    /// when the process that created it dies; `None` when nothing outside this process
+    /// bounds the lifetime.
+    pub max_lifetime: Option<Duration>,
+}
+
+impl ClientCapabilities {
+    /// Sets [`snapshot`](Self::snapshot).
+    #[must_use]
+    pub fn with_snapshot(mut self, yes: bool) -> Self {
+        self.snapshot = yes;
+        self
+    }
+
+    /// Sets [`pause`](Self::pause).
+    #[must_use]
+    pub fn with_pause(mut self, yes: bool) -> Self {
+        self.pause = yes;
+        self
+    }
+
+    /// Sets [`remote`](Self::remote).
+    #[must_use]
+    pub fn with_remote(mut self, yes: bool) -> Self {
+        self.remote = yes;
+        self
+    }
+
+    /// Sets [`network_blocked`](Self::network_blocked).
+    #[must_use]
+    pub fn with_network_blocked(mut self, yes: bool) -> Self {
+        self.network_blocked = yes;
+        self
+    }
+
+    /// Sets [`max_lifetime`](Self::max_lifetime).
+    #[must_use]
+    pub fn with_max_lifetime(mut self, lifetime: Duration) -> Self {
+        self.max_lifetime = Some(lifetime);
+        self
+    }
+}
 
 /// Opaque handle to a provisioned sandbox session.
 ///

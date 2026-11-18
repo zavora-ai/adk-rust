@@ -11,10 +11,10 @@
 //!
 //! | Control | Behaviour |
 //! |---------|-----------|
-//! | Environment | Cleared, then only `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TMPDIR`, and `TERM` are passed through, so host credentials in other variables never reach the command |
+//! | Environment | Cleared, then only `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TMPDIR`, and `TERM` are passed through, so host credentials in other variables never reach the command; `CommandRequest::env` adds variables for one `exec` |
 //! | Output | stdout and stderr are read while the command runs and capped at 1 MiB each; the excess is drained and a truncation notice appended |
 //! | Stdin | Connected to `/dev/null` |
-//! | Lifetime | Each command runs in its own process group, which is killed on timeout and again when the command exits, so background jobs do not outlive it |
+//! | Lifetime | Each command runs in its own process group, which is killed on timeout (`CommandRequest::timeout`, else the session's) and again when the command exits, so background jobs do not outlive it |
 //! | File operations | `read_file`, `write_file`, `list_dir`, `apply_patch` headers, and the working directory resolve inside the workspace, following symlinks only within it; a hard-linked file is replaced on write, not truncated |
 
 use std::collections::HashMap;
@@ -27,8 +27,10 @@ use tokio::sync::RwLock;
 use super::client::SandboxClient;
 use super::manifest::{Manifest, ManifestEntry};
 use super::path_safety::{patch_target_paths, resolve_in_root, write_in_root};
-use super::session::SandboxSession;
-use super::types::{DirEntry, EntryType, ExecOutput, SessionHandle, SnapshotId};
+use super::session::{SandboxSession, validate_env_name};
+use super::types::{
+    ClientCapabilities, CommandRequest, DirEntry, EntryType, ExecOutput, SessionHandle, SnapshotId,
+};
 use crate::SandboxError;
 use crate::child_io::{collect_output, note_truncation, truncate_utf8};
 
@@ -139,17 +141,27 @@ impl SandboxSession for LocalUnixSession {
         command: &str,
         working_dir: Option<&str>,
     ) -> Result<ExecOutput, SandboxError> {
-        let cwd = match working_dir {
+        let mut request = CommandRequest::new(command);
+        request.working_dir = working_dir.map(str::to_string);
+        self.exec(request).await
+    }
+
+    async fn exec(&self, request: CommandRequest) -> Result<ExecOutput, SandboxError> {
+        let cwd = match request.working_dir.as_deref() {
             Some(dir) => resolve_in_root(&self.workspace_dir, dir)?,
             None => self.workspace_dir.clone(),
         };
 
         let mut cmd = tokio::process::Command::new("sh");
-        cmd.arg("-c").arg(command).current_dir(&cwd).env_clear();
+        cmd.arg("-c").arg(&request.command).current_dir(&cwd).env_clear();
         for key in INHERITED_ENV_KEYS {
             if let Some(value) = std::env::var_os(key) {
                 cmd.env(key, value);
             }
+        }
+        for (key, value) in &request.env {
+            validate_env_name(key)?;
+            cmd.env(key, value);
         }
         cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
@@ -170,7 +182,8 @@ impl SandboxSession for LocalUnixSession {
         // The pipes are drained while the command runs. Reading them only after `wait`
         // deadlocked any command that wrote more than a pipe buffer, which then surfaced as a
         // timeout.
-        let captured = collect_output(child, None, self.command_timeout, MAX_OUTPUT_BYTES)
+        let timeout = request.timeout.unwrap_or(self.command_timeout);
+        let captured = collect_output(child, None, timeout, MAX_OUTPUT_BYTES)
             .await
             .map_err(|e| SandboxError::ExecutionFailed(format!("command execution failed: {e}")))?;
         let duration = start.elapsed();
@@ -540,6 +553,14 @@ impl SandboxClient for LocalUnixClient {
         sessions.insert(session_id, workspace_path);
 
         Ok(handle)
+    }
+
+    fn provider(&self) -> &str {
+        "local"
+    }
+
+    fn capabilities(&self) -> ClientCapabilities {
+        ClientCapabilities::default().with_snapshot(true)
     }
 }
 
