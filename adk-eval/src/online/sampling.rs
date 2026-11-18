@@ -286,7 +286,8 @@ impl RunTrace {
         self
     }
 
-    /// Sets the whole session's conversation, for thread-level criteria.
+    /// Sets the whole session's conversation, for thread-level criteria. Without one, they
+    /// score the run's own user message and answer.
     pub fn with_thread(mut self, thread: Vec<Content>) -> Self {
         self.thread = thread;
         self

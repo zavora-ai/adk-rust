@@ -108,8 +108,9 @@ evaluator starts.
 
 The judges see the user message and the tool results the run received (each cut to 2,000
 characters), so an answer that repeats a tool result is not mistaken for a hallucination.
-Thread-level criteria score the session's conversation history as it stands when the run ends;
-their goal is the session's first user message. A criterion the judge cannot score — no text
+Thread-level criteria score the session's conversation history as it stands when the run ends —
+for a [submitted](#runs-that-do-not-go-through-a-runner-plugin) `RunTrace` without
+`with_thread`, the run's own user message and answer; their goal is the first user message. A criterion the judge cannot score — no text
 answer, an unparseable reply — fails, as it does offline.
 
 ## Budget and Kill Switch
