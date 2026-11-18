@@ -36,6 +36,7 @@ Graph-based workflow orchestration for Rust Agent Development Kit (ADK-Rust) age
 - **Strictness, opt-in**: `with_strict_channels` fails the run when a node writes a channel the schema does not declare
 - **Streaming**: Five stream modes (values, updates, messages, custom, debug)
 - **ADK Integration**: `before_agent_callback` and `after_agent_callback` on `GraphAgentBuilder`; a `GraphAgent` runs under any `Runner`
+- **YAML and JSON workflows** (feature: `yaml`): `WorkflowDefinition` reads a workflow file — agent and LLM nodes, `set`, function, action and interrupt nodes, conditional routes over a safe condition language, interrupts and checkpointing — validates it with each issue's path, line and column, and builds it against a `WorkflowRegistry`; `schemas/workflow.schema.json` gives editors completion, and `adk-rust graph run` runs a file. See [YAML Workflows](../docs/official_docs/agents/graph-workflows-yaml.md)
 - **Functional API** (feature: `functional`): Write workflows as async functions with automatic checkpointing
 - **Typed State Reducers**: ReducedValue, UntrackedValue, MessagesValue containers
 - **State Schema Validation**: Type-level validation at workflow boundaries
@@ -771,7 +772,8 @@ No feature is enabled by default.
 | `action-http`, `action-rss`, `action-trigger` | HTTP and notification nodes, RSS feeds, cron/webhook trigger runtime |
 | `action-db`, `action-email` | Placeholders only — see [Action Nodes](#action-nodes) |
 | `action-full` | `action`, `action-trigger`, `action-http`, `action-db`, `action-email`, `action-rss` |
-| `full` | `sqlite` and `action-full` |
+| `yaml` | `definition`: workflows from YAML or JSON files, their validation and JSON Schema (implies `action`) |
+| `full` | `sqlite`, `action-full` and `yaml` |
 
 Through the `adk-rust` umbrella, its `action` feature enables this crate's `action`, `action-db`,
 and `action-email`, and its `action-http` feature enables `action-http` and `action-rss`.

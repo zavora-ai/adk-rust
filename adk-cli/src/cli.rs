@@ -1428,6 +1428,46 @@ pub enum AuditCommands {
 
 #[derive(Subcommand, Clone)]
 pub enum GraphCommands {
+    /// Run a YAML or JSON workflow file; a pause asks for its answer on stdin, or with a
+    /// SQLite store prints the command that resumes it
+    Run {
+        /// Workflow file (`.yaml`, `.yml` or `.json`)
+        file: std::path::PathBuf,
+
+        /// The run's input, written to the `input` state key
+        #[arg(long)]
+        input: Option<String>,
+
+        /// Initial state, as a JSON object
+        #[arg(long, value_name = "JSON")]
+        state: Option<String>,
+
+        /// Thread identifier; reuse it with --resume to continue a paused run
+        #[arg(long, default_value = "workflow")]
+        thread: String,
+
+        /// Resume the paused thread with this answer, as JSON (a bare word is a string)
+        #[arg(long, value_name = "JSON")]
+        resume: Option<String>,
+
+        /// The paused node the answer is for; defaults to the thread's only pending node
+        #[arg(long, requires = "resume")]
+        node: Option<String>,
+
+        /// Path to a SQLite checkpoint database, in place of the workflow's store
+        #[arg(long)]
+        db: Option<String>,
+    },
+
+    /// Check a workflow file and print every issue with its line and column
+    Validate {
+        /// Workflow file (`.yaml`, `.yml` or `.json`)
+        file: std::path::PathBuf,
+    },
+
+    /// Print the JSON Schema of the workflow format, for editor completion
+    Schema,
+
     /// List a thread's runs, each step's node records and a fork's lineage
     Steps {
         /// Thread identifier to inspect

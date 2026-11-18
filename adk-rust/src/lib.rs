@@ -60,7 +60,7 @@
 //! adk-rust = { version = "3.0.0", features = ["enterprise"] }
 //!
 //! # Full — enterprise + audio, code, sandbox, code-tools, the website, and the
-//! # graph-functional, graph-node-cache, graph-delta, and graph-time-travel capabilities
+//! # graph-functional, graph-node-cache, graph-delta, graph-time-travel, and graph-yaml capabilities
 //! adk-rust = { version = "3.0.0", features = ["full"] }
 //!
 //! # Custom — pick exactly what you need
@@ -466,7 +466,7 @@
 //! | `autonomy` | An agent that runs unattended: the harness and its kernel, durable and background runs, cron and webhook wake-ups, the approvals service, SQLite stores, signed audit | enterprise |
 //! | `code`, `sandbox`, `code-tools` | Code execution and sandboxed execution | full |
 //! | `audio` | Audio processing | full |
-//! | `graph-functional`, `graph-node-cache`, `graph-delta`, `graph-time-travel` | Graph capabilities | full |
+//! | `graph-functional`, `graph-node-cache`, `graph-delta`, `graph-time-travel`, `graph-yaml` | Graph capabilities | full |
 //! | `harness` | The governed, durable harness agent (`adk-harness`) | enterprise |
 //! | `harness-kernel` | The agent kernel, the harness's always-on form (`adk-kernel`) | enterprise |
 //! | `website` | The AWP website product (`adk-website`, `adk-site`) | full |

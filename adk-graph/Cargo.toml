@@ -60,6 +60,11 @@ regex = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 tokio-cron-scheduler = { version = "0.15", optional = true }
 
+# Optional YAML/JSON workflow definitions
+adk-agent = { workspace = true, optional = true }
+schemars = { version = "1.0", optional = true }
+serde-saphyr = { workspace = true, optional = true }
+
 [features]
 default = []
 sqlite = ["dep:sqlx", "sqlx/sqlite"]
@@ -87,7 +92,11 @@ action-email = ["action"]
 action-rss = ["action-http"]
 action-full = ["action", "action-trigger", "action-http", "action-db", "action-email", "action-rss"]
 
-full = ["sqlite", "action-full"]
+# Graph workflows defined in YAML or JSON (`definition` module): agent and LLM nodes, action
+# nodes, conditional routing, interrupts, checkpointing, and the format's JSON Schema
+yaml = ["action", "dep:adk-agent", "dep:schemars", "dep:serde-saphyr"]
+
+full = ["sqlite", "action-full", "yaml"]
 
 [dev-dependencies]
 # Path-only self dependency, so the crate's own tests run the conformance suite.
@@ -101,8 +110,9 @@ adk-action = { path = "../adk-action" }
 adk-tool = { path = "../adk-tool" }
 # For composing SequentialAgent/ParallelAgent/LoopAgent as graph nodes.
 adk-agent = { path = "../adk-agent" }
-# `anthropic` for the live retention run on Anthropic.
+# `anthropic` for the live retention run and the live YAML workflow test.
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic"] }
+dotenvy = "0.15"
 # For exercising the `#[entrypoint]`/`#[task]` expansion against this crate.
 adk-rust-macros = { path = "../adk-rust-macros" }
 

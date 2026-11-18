@@ -393,7 +393,7 @@ Four tiered presets control which crates are compiled:
 - `minimal` **(default)** — agents, models, gemini, runner, sessions.
 - `standard` — minimal + openai, anthropic, anthropic-client, tools, memory, telemetry, skills, graph, auth, server, eval, guardrail, plugin, artifacts, computer-use.
 - `enterprise` — standard + realtime, browser, rag, payments, awp, autonomy (harness, harness-kernel, background runs, cron, webhook ingress, approvals, SQLite stores, signed audit).
-- `full` — enterprise + audio, code, sandbox, code-tools, graph-functional, graph-node-cache, graph-delta, graph-time-travel, website. Everything that needs no external infrastructure.
+- `full` — enterprise + audio, code, sandbox, code-tools, graph-functional, graph-node-cache, graph-delta, graph-time-travel, graph-yaml, website. Everything that needs no external infrastructure.
 
 Every other feature composes with any tier (`features = ["minimal", "audio"]`).
 `adk-rust/Cargo.toml` lists each one with what it forwards to; production backends

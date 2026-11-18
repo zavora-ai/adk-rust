@@ -74,4 +74,6 @@ mod tool_confirmation_graph_tests;
 mod trio_composition_tests;
 mod typed_interrupt_tests;
 mod upgrade_from_sqlx_0_8;
+mod workflow_definition_live_tests;
+mod workflow_definition_tests;
 mod workflow_schema_property_tests;

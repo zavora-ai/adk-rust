@@ -12,6 +12,8 @@ GraphAgent allows you to define workflows as directed graphs with nodes and edge
 - **State Management**: Typed state with reducers (overwrite, append, sum, custom)
 - **Checkpointing**: Persistent state for fault tolerance and human-in-the-loop
 - **Streaming**: Multiple stream modes (values, updates, messages, custom, debug)
+- **Workflow files**: the same graph declared in YAML or JSON and built against a registry — see
+  [YAML Workflows](./graph-workflows-yaml.md)
 
 The `adk-graph` crate provides LangGraph-style workflow orchestration for building complex, stateful agent workflows. It brings graph-based workflow capabilities to the ADK-Rust ecosystem while maintaining full compatibility with ADK's agent system.
 

@@ -177,7 +177,7 @@ adk-rust memory       Long-term memory facts (list/show/forget/accept/undo/expor
 adk-rust store        The encrypted store: key status and rotation (`encrypted`)
 adk-rust pair         Pair a phone or terminal with a code (list/revoke; `accept` a chat account's code)
 adk-rust skills       Skill tooling (list/validate/match)
-adk-rust graph        Graph checkpoint inspection (steps/replay/fork/resume)
+adk-rust graph        YAML/JSON workflows (run/validate/schema) and checkpoint inspection (steps/replay/fork/resume)
 adk-rust audit        Signed audit log tools (verify/keygen; export with `audit-sql`)
 adk-rust deploy       Deployment commands
 adk-rust registry     Agent Registry registration and search (`vertex-agent-registry`)
