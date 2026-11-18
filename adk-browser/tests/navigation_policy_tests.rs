@@ -12,10 +12,12 @@
 //! None of these tests needs a WebDriver server: a refused URL is rejected before the
 //! session starts, and the session points at an unreachable address.
 
+use adk_browser::tools::URL_NOT_IN_CONTEXT_CODE;
 use adk_browser::{
     BrowserConfig, BrowserProfile, BrowserSession, BrowserToolset, DEFAULT_ALLOWED_SCHEMES,
     FileUploadTool, NavigateTool, NewTabTool, NewWindowTool,
 };
+use adk_core::egress::UrlSources;
 use adk_core::{
     CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, Result, Tool, ToolContext,
 };
@@ -373,4 +375,47 @@ async fn upload_inside_the_roots_reaches_the_browser() {
     // The call fails only because the WebDriver is unreachable.
     let message = upload_error(&tool, &file).await;
     assert!(!message.contains("upload root"), "an allowed file was refused: {message}");
+}
+
+// ── The exfiltration rule: only URLs the conversation holds ───────────
+
+/// Runs `tool` in a turn whose user message is `said` and returns its error code and message.
+async fn error_after(tool: &dyn Tool, said: &str, url: &str) -> (String, String) {
+    let ctx: Arc<dyn ToolContext> =
+        Arc::new(TestCtx { content: Content::new("user").with_text(said) });
+    let error = tool.execute(ctx, json!({ "url": url })).await.expect_err("the call must fail");
+    (error.code.to_string(), error.to_string())
+}
+
+#[tokio::test]
+async fn with_url_provenance_a_composed_url_is_refused_before_the_browser_starts() {
+    let session = offline_session();
+    let toolset = BrowserToolset::new(session.clone()).with_url_provenance(UrlSources::default());
+    let tools = toolset.all_tools();
+    for name in ["browser_navigate", "browser_new_tab", "browser_new_window"] {
+        let Some(tool) = tools.iter().find(|tool| tool.name() == name) else { continue };
+        let (code, message) = error_after(
+            tool.as_ref(),
+            "read https://example.com/docs",
+            "https://example.com/docs?k=c2VjcmV0",
+        )
+        .await;
+        assert_eq!(code, URL_NOT_IN_CONTEXT_CODE, "{name}: {message}");
+        assert!(!message.contains("c2VjcmV0"), "the refusal never echoes the URL: {message}");
+    }
+    assert!(!session.is_active().await, "a refused URL must not start the browser");
+
+    // The URL the user gave passes the rule; the call fails only on the unreachable driver.
+    let navigate =
+        NavigateTool::new(offline_session()).with_url_provenance(Some(UrlSources::default()));
+    let (code, message) =
+        error_after(&navigate, "read https://example.com/docs", "https://example.com/docs").await;
+    assert_ne!(code, URL_NOT_IN_CONTEXT_CODE, "{message}");
+}
+
+#[tokio::test]
+async fn without_url_provenance_navigation_is_unchanged() {
+    let (code, message) =
+        error_after(&NavigateTool::new(offline_session()), "", "https://example.com/?k=v").await;
+    assert_ne!(code, URL_NOT_IN_CONTEXT_CODE, "{message}");
 }

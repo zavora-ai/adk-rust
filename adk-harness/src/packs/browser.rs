@@ -23,7 +23,10 @@ use serde_json::{Value, json};
 use crate::audit::HarnessAudit;
 use crate::fsutil::hex_digest;
 use crate::policy::ToolKind;
-use crate::web::{Fetcher, WebConfig, has_secret, host_allowlisted, screen, untrusted_block};
+use crate::web::{
+    FetchRefusal, Fetcher, WebConfig, has_secret, host_allowlisted, screen, untrusted_block,
+};
+use adk_core::egress::ContextUrls;
 
 /// Observation tools, class `Read` (spec 3.1 §7.24).
 ///
@@ -290,8 +293,12 @@ impl BrowserPack {
     }
 
     /// The governed tools, under the harness's web configuration.
-    pub(crate) fn into_runtime(self, web: WebConfig) -> BrowserRuntime {
-        let shared = Arc::new(Shared { fetcher: Fetcher::new(web.clone()), web });
+    pub(crate) fn into_runtime(
+        self,
+        web: WebConfig,
+        modes: (Arc<dyn crate::mode::ModeStore>, crate::mode::HarnessMode),
+    ) -> BrowserRuntime {
+        let shared = Arc::new(Shared { fetcher: Fetcher::new(web.clone()), web, modes });
         let toolset = BrowserToolset::with_profile(self.session.clone(), self.profile)
             .with_private_network_access(self.allow_private_network);
         let tools = toolset
@@ -318,6 +325,7 @@ pub(crate) struct BrowserRuntime {
 struct Shared {
     web: WebConfig,
     fetcher: Fetcher,
+    modes: (Arc<dyn crate::mode::ModeStore>, crate::mode::HarnessMode),
 }
 
 /// How the wrapper treats a tool (spec 3.1 §7.24).
@@ -418,9 +426,26 @@ impl GovernedBrowserTool {
         let url = args.get("url").and_then(Value::as_str).unwrap_or_default().to_string();
         let url_digest = hex_digest(url.as_bytes());
         // The composed-URL checks of §7.20 before the browser moves (I46, I48): the policy
-        // already hard-denied a private literal, and the toolset refuses private addresses
-        // and other schemes itself, so this is the length, budget and secret screen.
-        let parsed = match self.shared.fetcher.check_url(&url) {
+        // already hard-denied a private literal and a host outside the fetch filter, and the
+        // toolset refuses private addresses and other schemes itself, so this is the
+        // exfiltration rule, then the length, budget and secret screen.
+        let applies = crate::web::provenance_applies(
+            self.shared.web.url_provenance,
+            Some(&self.shared.modes),
+            ctx.as_ref(),
+        )
+        .await;
+        let checked = if applies
+            && !ContextUrls::from_tool_context(ctx.as_ref(), &self.shared.web.url_sources)
+                .contains(&url)
+        {
+            Err(FetchRefusal::NotInContext)
+        } else {
+            self.shared.fetcher.check_url(&url).and_then(|parsed| {
+                self.shared.fetcher.check_domain(&parsed, false).map(|()| parsed)
+            })
+        };
+        let parsed = match checked {
             Ok(parsed) => parsed,
             Err(refusal) => {
                 if let Some(audit) = &audit {

@@ -244,6 +244,8 @@ pub struct ToolClassRegistry {
     classes: BTreeMap<String, ToolKind>,
     /// Hosts the web tools reach without approval (spec 3.1 §7.20).
     web_allowlist: Vec<String>,
+    /// The fetch filter: hosts outside it are denied whatever the mode or rules.
+    fetch_domains: Option<crate::web::SearchDomains>,
     /// Classes of tools that publishers the harness does not own declare through a
     /// trusted manifest (spec 3.2 §7.7).
     origin_classes: Vec<Arc<dyn OriginClasses>>,
@@ -371,6 +373,31 @@ impl ToolClassRegistry {
     /// The hosts the web tools reach without approval.
     pub fn web_allowlist(&self) -> &[String] {
         &self.web_allowlist
+    }
+
+    /// Sets the fetch filter ([`WebConfig::fetch_domains`](crate::web::WebConfig)): a web
+    /// call whose `url` names a host outside it is denied before anyone is asked, in every
+    /// mode and under every standing rule.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_harness::ToolClassRegistry;
+    /// use adk_harness::web::SearchDomains;
+    ///
+    /// let registry = ToolClassRegistry::harness_defaults("harness")
+    ///     .with_fetch_domains(Some(SearchDomains::Blocked(vec!["pastebin.com".into()])));
+    /// assert!(registry.fetch_domains().is_some());
+    /// ```
+    #[must_use]
+    pub fn with_fetch_domains(mut self, filter: Option<crate::web::SearchDomains>) -> Self {
+        self.fetch_domains = filter;
+        self
+    }
+
+    /// The fetch filter, if one is set.
+    pub fn fetch_domains(&self) -> Option<&crate::web::SearchDomains> {
+        self.fetch_domains.as_ref()
     }
 
     /// Whether the web call `tool` with `args` names an allowlisted host: `web_search` by
@@ -1166,6 +1193,18 @@ impl HarnessPolicy {
             return Some(format!(
                 "harness.web.private_target: '{}' is a private or local target the harness never fetches",
                 crate::web::url_host(url).unwrap_or_default()
+            ));
+        }
+        // The fetch filter is a ceiling: no approval or standing rule widens it.
+        if matches!(kind, ToolKind::Web { .. })
+            && let Some(filter) = self.inner.registry.fetch_domains()
+            && let Some(url) = request.args.get("url").and_then(Value::as_str)
+            && let Some(host) = crate::web::url_host(url)
+            && !filter.permits(&host)
+        {
+            return Some(format!(
+                "harness.web.domain_not_allowed: '{host}' is outside the harness's fetch filter \
+                 ({filter}), which no approval widens"
             ));
         }
         None

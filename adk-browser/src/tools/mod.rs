@@ -27,7 +27,10 @@ mod windows;
 
 // Navigation tools
 pub(crate) use navigate::default_allowed_schemes;
-pub use navigate::{BackTool, DEFAULT_ALLOWED_SCHEMES, ForwardTool, NavigateTool, RefreshTool};
+pub use navigate::{
+    BackTool, DEFAULT_ALLOWED_SCHEMES, ForwardTool, NavigateTool, RefreshTool,
+    URL_NOT_IN_CONTEXT_CODE,
+};
 
 // Click/interaction tools
 pub use click::{ClickTool, DoubleClickTool};

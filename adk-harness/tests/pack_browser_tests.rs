@@ -441,6 +441,54 @@ async fn a_composed_url_carrying_a_secret_is_refused_before_the_browser_moves() 
 }
 
 #[tokio::test]
+async fn unattended_a_url_the_model_composed_is_refused_before_the_browser_moves() {
+    // Auto mode, allowlisted host: the policy allows the call; the exfiltration rule refuses
+    // it, since the URL appears only in the model's call.
+    let fixture = fixture(
+        vec![
+            call("browser_navigate", json!({ "url": format!("https://{ALLOWED}/?d=c2VjcmV0") })),
+            done(),
+        ],
+        |b| b.web(web()).pack_browser(BrowserPack::default()).mode(HarnessMode::Auto),
+    )
+    .await;
+    let events = fixture.send(&format!("Open https://{ALLOWED}/ and read it.")).await;
+    let response = response_of(&events, "browser_navigate");
+    assert!(
+        response["error"].as_str().unwrap_or_default().contains("harness.web.url_not_in_context"),
+        "{response}"
+    );
+    let navigated = records(&fixture, BROWSER_AUDIT_NAVIGATED);
+    assert_eq!(navigated.len(), 1, "{navigated:?}");
+    assert_eq!(navigated[0]["refusal"], "notInContext");
+    assert!(navigated[0].get("host").is_none(), "{navigated:?}");
+}
+
+#[tokio::test]
+async fn the_fetch_filter_denies_a_navigation_in_every_mode() {
+    for mode in HarnessMode::ALL {
+        let fixture = fixture(Vec::new(), |b| {
+            b.mode(mode)
+                .web(WebConfig {
+                    fetch_domains: Some(adk_harness::web::SearchDomains::Blocked(vec![
+                        "example.com".into(),
+                    ])),
+                    ..web()
+                })
+                .pack_browser(BrowserPack::default())
+        })
+        .await;
+        let policy = fixture.harness.agent().runtime().policy();
+        let decision =
+            decide(policy, "browser_navigate", json!({ "url": "https://www.example.com/" })).await;
+        assert!(
+            matches!(&decision, PolicyDecision::Deny { reason } if reason.contains("domain_not_allowed")),
+            "{mode:?}: {decision:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_run_wide_approval_for_an_action_is_kept_but_a_rule_is_only_for_the_coordinator() {
     // Actions are waivable externals (spec 3.1 §7.24): a `tool_approvals` entry naming one
     // survives `configure_run`, unlike a payment's.

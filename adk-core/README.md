@@ -416,7 +416,7 @@ Every run has an acting agent. `AgentId`, `AgentPrincipal`, and `ActingContext` 
 
 ## Network Egress
 
-`egress::EgressPolicy` is a host, port and CIDR allowlist with a pure `decide()`, intersected by `narrow()` so lower layers only tighten an operator's ceiling; cloud metadata endpoints are always refused and non-public addresses need an explicit CIDR rule or `with_private_networks()`. `egress::classify` is the one address classifier the workspace shares. `egress::GuardedClient` (feature `egress-client`) checks every request URL, every resolved address and every redirect hop, ignores proxy settings, and fails to build rather than fall back to an unguarded client; its `get` and `post` return a reqwest 0.13 `RequestBuilder`. See [Network Egress Policy](../docs/official_docs/security/egress.md).
+`egress::EgressPolicy` is a host, port and CIDR allowlist with a pure `decide()`, intersected by `narrow()` so lower layers only tighten an operator's ceiling; cloud metadata endpoints are always refused and non-public addresses need an explicit CIDR rule or `with_private_networks()`. `egress::classify` is the one address classifier the workspace shares. `egress::ContextUrls` collects the URLs a conversation's user messages and tool results hold, so a fetch tool can refuse a URL the model composed to carry data out. `egress::GuardedClient` (feature `egress-client`) checks every request URL, every resolved address and every redirect hop, ignores proxy settings, and fails to build rather than fall back to an unguarded client; its `get` and `post` return a reqwest 0.13 `RequestBuilder`. See [Network Egress Policy](../docs/official_docs/security/egress.md).
 
 ## Run Budgets and Spend
 

@@ -249,6 +249,13 @@ fn main() {
 the session's model. Read [Model Reviewer](../security/tool-authorization.md#model-reviewer)
 for its prompt-injection risk before you rely on it.
 
+In Auto mode `web_fetch` and browser navigation also fetch only URLs that already appeared in
+the conversation, in a user message or a tool result, so a page the agent reads cannot have
+it carry data out in a URL it composed; a refused call is audited as `notInContext`. Set
+`WebConfig::url_provenance` to `Always` to apply the rule in every mode, and
+`WebConfig::fetch_domains` for hosts no approval may widen. Read
+[URL provenance](../harness/web-and-mcp.md#url-provenance).
+
 ## 5. Let it wake itself
 
 The template's trigger starts a run each weekday at 09:00 UTC:
