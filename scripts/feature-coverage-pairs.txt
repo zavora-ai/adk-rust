@@ -128,6 +128,8 @@
 3 adk-server a2a-v1
 # Signed inbound webhooks: `POST /hooks/{name}` and its idempotent run-store enqueue.
 3 adk-server webhook-ingress,background
+# Google push triggers: Pub/Sub and Eventarc deliveries verified by Google OIDC tokens.
+3 adk-server google-triggers,background
 # The AWP 2.0 agent edge (spec 3.5 §7.9): tiers, the governed path over HTTP, A2A and MCP,
 # held calls and the public partition.
 3 adk-server awp

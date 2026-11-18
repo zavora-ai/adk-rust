@@ -27,6 +27,26 @@ impl GoogleProvider {
         }
     }
 
+    /// Reads Google's signing keys through `cache` instead of a cache of
+    /// `https://www.googleapis.com/oauth2/v3/certs`: a mirror, a cache shared with other
+    /// validators, or a test key set.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_auth::sso::{GoogleProvider, JwksCache};
+    ///
+    /// let provider = GoogleProvider::new("https://push.example.com/triggers/pubsub/orders")
+    ///     .with_jwks_cache(JwksCache::new("http://127.0.0.1:8080/certs"));
+    /// assert_eq!(provider.client_id(), "https://push.example.com/triggers/pubsub/orders");
+    /// ```
+    #[cfg(feature = "sso")]
+    #[must_use]
+    pub fn with_jwks_cache(mut self, cache: JwksCache) -> Self {
+        self.jwks_cache = Arc::new(cache);
+        self
+    }
+
     /// Get the client ID.
     pub fn client_id(&self) -> &str {
         &self.client_id
@@ -73,13 +93,12 @@ mod tests {
     use super::GoogleProvider;
     use crate::sso::JwksCache;
     use crate::sso::test_issuer::{TestIssuer, assert_requires_iss_and_aud};
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn tokens_need_the_iss_and_aud_claims() {
         let issuer = TestIssuer::start().await;
-        let mut provider = GoogleProvider::new("client-id");
-        provider.jwks_cache = Arc::new(JwksCache::new(issuer.jwks_uri()));
+        let provider =
+            GoogleProvider::new("client-id").with_jwks_cache(JwksCache::new(issuer.jwks_uri()));
 
         assert_requires_iss_and_aud(&provider, "https://accounts.google.com", "client-id").await;
     }

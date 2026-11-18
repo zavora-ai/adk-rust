@@ -81,6 +81,9 @@ openai-webhooks = ["dep:hmac", "dep:sha2", "dep:hex"]
 webhook-ingress = ["adk-core/webhooks", "dep:hmac", "dep:sha2", "dep:hex"]
 # Enable background run endpoints and cron job management
 background = ["adk-core/cron"]
+# Google Pub/Sub push and Eventarc trigger endpoints (`POST /triggers/{pubsub,eventarc}/{name}`)
+# that verify Google-signed OIDC tokens and enqueue durable runs
+google-triggers = ["dep:adk-auth"]
 # Approval inbox endpoints, the approval ticker, and the signed approval webhook notifier
 approvals = ["adk-core/webhook-delivery"]
 # Agents served over MCP: each call a durable run followed as an MCP task, held calls asked as
@@ -141,6 +144,8 @@ tempfile = "3"
 tokio-test = "0.4"
 # The edge's chat socket tests (`awp`).
 tokio-tungstenite = "0.29"
+# The RS256 signer the Google push trigger tests mint OIDC tokens with (`google-triggers`).
+adk-auth = { path = "../adk-auth", features = ["agent-federation"] }
 # The MCP client of the agent-over-MCP tests (`mcp`), and the live run's `.env`.
 adk-tool = { path = "../adk-tool", features = ["mcp-server", "http-transport"] }
 dotenvy = "0.15"

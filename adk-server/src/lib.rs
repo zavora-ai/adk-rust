@@ -67,6 +67,9 @@ pub mod webhooks;
 #[cfg(feature = "background")]
 pub mod background;
 
+#[cfg(feature = "google-triggers")]
+pub mod google_triggers;
+
 #[cfg(feature = "approvals")]
 pub mod approvals;
 

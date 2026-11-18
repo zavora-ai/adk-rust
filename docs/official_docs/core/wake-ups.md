@@ -10,6 +10,7 @@ Outbound, `WebhookDelivery` sends signed notifications with retries and a dead-l
 |-----------|-----------|-----------------|
 | Signing and verification | `webhook::{WebhookSigner, WebhookVerifier}` | `adk-core` (`webhooks`) |
 | Inbound webhooks | `POST /hooks/{name}` — `WebhookIngress`, `WebhookHook` | `adk-server` (`webhook-ingress`) |
+| Google push triggers | `POST /triggers/{pubsub,eventarc}/{name}` — `GooglePushIngress`, `PushTrigger`, `GoogleOidcVerifier` | `adk-server` (`google-triggers`) |
 | Inbound queues | `QueueSource`, `QueueIngress`, `InMemoryQueueSource` | `adk-core` |
 | Outbound webhooks | `webhook_delivery::WebhookDelivery` | `adk-core` (`webhook-delivery`) |
 | AWP event subscriptions | `InMemoryEventSubscriptionService` delivers through `WebhookDelivery` | `adk-awp` |
@@ -172,6 +173,127 @@ Neither forge signs a timestamp: a redelivery under the same id returns the exis
 a consumer deduplicates by what the delivery carries, as `adk-website`'s content repository
 does by commit ([Publishing from Git](../deployment/website-repository.md)).
 
+## Google Pub/Sub and Eventarc triggers
+
+A Pub/Sub push subscription or an Eventarc trigger delivers to an HTTPS endpoint with a
+Google-signed OIDC token. Enable `google-triggers` on `adk-server` and register triggers with
+`ServerBuilder::with_google_push`:
+
+```toml
+[dependencies]
+adk-server = { version = "3.0.0", features = ["google-triggers", "background"] }
+```
+
+```rust
+use std::sync::Arc;
+
+use adk_core::run_store::{DurableRunStore, InMemoryRunStore};
+use adk_runner::Runner;
+use adk_server::background::BackgroundState;
+use adk_server::google_triggers::{GoogleOidcVerifier, GooglePushIngress, PushTrigger};
+use adk_server::{ServerBuilder, ServerConfig};
+
+fn app(config: ServerConfig, runner: Arc<Runner>) -> anyhow::Result<axum::Router> {
+    let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+    // The audience is the push endpoint URL, unless the subscription sets a custom one.
+    let orders = GoogleOidcVerifier::new(
+        "https://agents.example.com/triggers/pubsub/orders",
+        ["orders-push@shop-prod.iam.gserviceaccount.com"],
+    )?;
+    let uploads = GoogleOidcVerifier::new(
+        "https://agents.example.com/triggers/eventarc/uploads",
+        ["eventarc-trigger@shop-prod.iam.gserviceaccount.com"],
+    )?;
+    let ingress = GooglePushIngress::new(runs.clone())
+        .with_trigger(PushTrigger::pubsub("orders", orders, "shop", "order_agent"))
+        .with_trigger(PushTrigger::eventarc("uploads", uploads, "shop", "order_agent"));
+    Ok(ServerBuilder::new(config)
+        .with_background_runs(
+            BackgroundState::new().with_run_store(runs).with_agent("order_agent", runner),
+        )
+        .with_google_push(ingress)
+        .build())
+}
+```
+
+On Google Cloud, create the push subscription with authentication:
+
+```bash
+gcloud pubsub subscriptions create orders-push \
+  --topic=orders \
+  --push-endpoint=https://agents.example.com/triggers/pubsub/orders \
+  --push-auth-service-account=orders-push@shop-prod.iam.gserviceaccount.com
+```
+
+The routes are mounted at the root, outside `/api`, with no auth middleware: the token is the
+authentication. They are host-checked like every route, so add the service's hostname to
+`SecurityConfig::allowed_hosts`.
+
+### Verifying the token
+
+| Check | Refusal |
+|-------|---------|
+| `Authorization: Bearer <token>` present | `401` |
+| RS256 signature by a key in Google's JWK set (`https://www.googleapis.com/oauth2/v3/certs`), fetched once and cached for an hour | `401` |
+| Issuer `https://accounts.google.com` or `accounts.google.com`; `exp` and `nbf` with a minute of leeway | `401` |
+| Audience equal to the trigger's | `401` |
+| `email` in the trigger's allowlist and `email_verified` | `403` |
+
+Any Google account can mint an ID token for any audience, so the audience alone admits
+anyone: `GoogleOidcVerifier::new` refuses an empty allowlist. The reason for a refusal is
+logged, never returned. `GoogleOidcVerifier::with_jwks_cache` reads the keys from another
+`JwksCache`, such as a mirror.
+
+### Acknowledgement
+
+Pub/Sub and Eventarc take a `2xx` as an acknowledgement and redeliver anything else, so a
+delivery is acknowledged only once its run is durably enqueued:
+
+| Step | Refusal | Status |
+|------|---------|--------|
+| Look up the trigger by kind and name | Unknown, or a trigger of the other kind | `404` |
+| Verify the token | See above | `401` or `403` |
+| Check the kill switch | Frozen, or a replicated control that is stale | `503` with `Retry-After`; the source redelivers |
+| Decode the delivery | Not a Pub/Sub push body; a CloudEvent without `id`, `source` or `type` | `400` |
+| Map it to a run | The mapper refuses | `422` |
+| Enqueue with the idempotency key below | Run store unreachable | `503` with `Retry-After` |
+| | `OnConflict::Reject` and an unfinished run holds the concurrency key | `409` with `blockingRunId` |
+
+| Source | Idempotency key | Unique because |
+|--------|-----------------|----------------|
+| Pub/Sub | `pubsub:{trigger}:{subscription}:{messageId}` | A message id is unique within its topic, and a subscription reads one topic |
+| Eventarc | `eventarc:{trigger}:{source}:{id}` | A CloudEvent id is unique within its source |
+
+A new run answers `202 Accepted` with `{"runId", "state", "duplicate": false, "key"}`. A
+redelivery answers `200 OK` with the same run and `"duplicate": true`, so the agent runs once
+however often Pub/Sub delivers, until the run store prunes the run.
+
+### Deliveries
+
+| Route | Body |
+|-------|------|
+| `POST /triggers/pubsub/{name}` | The wrapped push body: `{"message": {"data", "attributes", "messageId", "publishTime"}, "subscription"}`. A subscription with payload unwrapping is not supported |
+| `POST /triggers/eventarc/{name}` | A CloudEvent in binary mode (`ce-id`, `ce-source`, `ce-type`, optional `ce-subject` and `ce-time`; the body is the data) or structured mode (`Content-Type: application/cloudevents+json`, `data` or `data_base64`). A `google.cloud.pubsub.topic.v1.messagePublished` event's Pub/Sub message is unwrapped |
+
+The data becomes JSON when it parses as JSON, else UTF-8 text, else `{"base64": ...}`.
+
+### The run
+
+| Field | Default | Builder |
+|-------|---------|---------|
+| Queue | `default` | `with_queue` |
+| App and target | Required | `PushTrigger::pubsub(name, verifier, app_name, target)`, `PushTrigger::eventarc(..)` |
+| User | `pubsub:{name}` or `eventarc:{name}` | `with_user_id` |
+| Input | `{"text": <notice>, "pushEvent": <event>}` | — |
+| Attempts | `NewRun::DEFAULT_MAX_ATTEMPTS` | `with_max_attempts` |
+| Everything | — | `with_mapper(Fn(&PushDelivery) -> Result<NewRun>)`; the idempotency key is still the delivery's |
+
+The notice tells the agent where the event came from and carries the event — id, scope,
+type, attributes, data and the verified sender — as one line of JSON between `<<<push-event`
+and `push-event>>>`, marked as data the agent takes no instructions from. The run acts for its
+user as a service, not as an authenticated user: the verified service account is the sender
+of an event, not a person, so standing rules and Auto stay inert for it.
+
 ## Queue wake-ups
 
 A `QueueSource` is a pull-based, at-least-once message source: `pull` leases a batch, and each
@@ -246,6 +368,10 @@ broker in CI, so adapters are separate optional crates rather than features of `
 | Freeze written by another replica | `503` once this replica's mirror reads it (within the poll interval) | Nothing pulled | The worker claims nothing |
 | Too much pending work | `429` past `max_pending` | Pulls shrink, then stop, at `max_pending` | — |
 | Run budget, spend ledger, tool policy | — | — | Applied by the runner that executes the run |
+
+Google push triggers answer a frozen or stale kill switch with `503` as the webhook ingress
+does; they have no pending-run cap, so bound a subscription's throughput on Pub/Sub's side
+(flow control, or a `with_concurrency_key` mapper with `OnConflict::Enqueue`).
 
 A wake-up adds no execution path of its own: the worker that claims the run executes it with
 the runner's `RunConfig`, so budgets, spend caps, tool policy, and approvals apply exactly as

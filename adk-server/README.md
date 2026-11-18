@@ -44,6 +44,7 @@ No feature is enabled by default.
 | `a2a-interceptors` | Built-in A2A interceptors (auth, rate limit, audit) |
 | `background` | Durable background runs (`/api/runs`), cron jobs (`/api/cron`), `DurableWorker`, and `DurableScheduler` |
 | `webhook-ingress` | `ServerBuilder::with_webhook_ingress`: signed `POST /hooks/{name}` deliveries that enqueue durable runs, with Standard Webhooks or a forge's push signature (`WebhookHook::forge`: GitHub, GitLab) |
+| `google-triggers` | `ServerBuilder::with_google_push`: Google Pub/Sub push (`POST /triggers/pubsub/{name}`) and Eventarc CloudEvents (`POST /triggers/eventarc/{name}`) that verify Google-signed OIDC tokens (issuer, audience, service-account allowlist, cached JWKS) and enqueue one durable run per message id |
 | `approvals` | `ServerBuilder::with_approval_service`: the `/api/approvals` inbox, `spawn_approval_ticker`, and `WebhookApprovalNotifier` |
 | `mcp` | `mcp::McpAgentHost`: agents served over MCP (stdio and Streamable HTTP), each call a durable run followed as an MCP task, held calls asked as elicitations and decided through the approval inbox; `RequestContextCallers` for the server's identity layer (implies `background`; experimental; [Serve an agent over MCP](../docs/official_docs/mcp/agent-server.md)) |
 | `openai-webhooks` | `OpenAIWebhookHandler` for OpenAI background-task completion events |
@@ -213,6 +214,7 @@ fn app(config: ServerConfig) -> Router {
 | `.enable_governance_endpoints()` | Mount the kill-switch admin endpoints |
 | `.with_background_runs(state)` / `.with_cron_jobs(state)` | Mount `/api/runs` and `/api/cron` (`background`) |
 | `.with_webhook_ingress(ingress)` | Mount `POST /hooks/{name}` (`webhook-ingress`) |
+| `.with_google_push(ingress)` | Mount `POST /triggers/{pubsub,eventarc}/{name}` (`google-triggers`) |
 | `.with_approval_service(service)` | Mount `/api/approvals` (`approvals`) |
 | `.with_agent_engine(true)` | Mount the Agent Engine dispatch routes (`agent-engine`) |
 | `.build()` | Build the `axum::Router` |
