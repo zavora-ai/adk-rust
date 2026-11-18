@@ -27,6 +27,23 @@ const WIDTH = 640;
 const HEIGHT = 240;
 const PAD = { left: 52, right: 16, top: 12, bottom: 34 };
 const MAX_X_LABELS = 12;
+/** The average width of an axis label's character at its 11px size. */
+const LABEL_CHAR_WIDTH = 6.4;
+
+/**
+ * `labels` fitted to the room between them: a label wider than the gap to its neighbours is
+ * cut with an ellipsis, and keeps its whole text for the hover title.
+ */
+export function fitLabels(labels: { at: number; text: string }[], room: number): { at: number; text: string; full: string }[] {
+  const gaps = labels.slice(1).map((label, index) => label.at - labels[index].at);
+  const gap = Math.min(room, ...gaps.filter((value) => value > 0));
+  const chars = Math.max(3, Math.floor(gap / LABEL_CHAR_WIDTH) - 1);
+  return labels.map((label) => ({
+    at: label.at,
+    full: label.text,
+    text: [...label.text].length > chars ? `${[...label.text].slice(0, chars - 1).join("").trimEnd()}…` : label.text,
+  }));
+}
 
 const colour = (index: number) => `var(--chart-${(index % 8) + 1})`;
 
@@ -98,7 +115,7 @@ function Axes({ chart, summary }: { chart: DrawnChart; summary: string }) {
       ? PAD.left + band * index + band / 2
       : PAD.left + ((value - xLow) / (xHigh - xLow || 1)) * plotW;
 
-  const xLabels: { at: number; text: string }[] = category
+  const placed: { at: number; text: string }[] = category
     ? category
         .map((label, index) => ({ at: x(0, index), text: label }))
         .filter((_, index, all) => all.length <= MAX_X_LABELS || index % Math.ceil(all.length / MAX_X_LABELS) === 0)
@@ -107,6 +124,7 @@ function Axes({ chart, summary }: { chart: DrawnChart; summary: string }) {
       : niceTicks(xLow, xHigh)
           .filter((tick) => tick >= xLow && tick <= xHigh)
           .map((tick) => ({ at: x(tick, 0), text: compact(tick) }));
+  const xLabels = fitLabels(placed, plotW);
 
   const groups = chart.series.length;
   const barWidth = (band * 0.72) / Math.max(groups, 1);
@@ -122,6 +140,7 @@ function Axes({ chart, summary }: { chart: DrawnChart; summary: string }) {
       ))}
       {xLabels.map((label, index) => (
         <text key={`x${index}`} className="drawn-chart-tick" x={label.at} y={HEIGHT - PAD.bottom + 18} textAnchor="middle">
+          {label.text !== label.full && <title>{visible(label.full)}</title>}
           {visible(label.text)}
         </text>
       ))}

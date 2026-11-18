@@ -1,6 +1,10 @@
-use std::{collections::HashMap, fs, path::Path};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fs,
+    path::Path,
+};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{DeployError, DeployResult};
 
@@ -42,6 +46,12 @@ pub struct DeploymentManifest {
     pub interaction: Option<InteractionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<SourceInfo>,
+    /// Per-target settings, one `[targets.<name>]` table for each deploy target.
+    ///
+    /// Each target reads its own table with [`DeploymentManifest::target_config`], so the
+    /// manifest stays provider-neutral and a target compiled out of the build ignores its table.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub targets: BTreeMap<String, serde_json::Value>,
 }
 
 impl DeploymentManifest {
@@ -85,6 +95,53 @@ impl DeploymentManifest {
         self.validate()?;
         toml::to_string_pretty(self)
             .map_err(|error| DeployError::ManifestParse { message: error.to_string() })
+    }
+
+    /// Reads the `[targets.<name>]` table into a target's configuration type.
+    ///
+    /// Returns the type's default when the manifest has no table for `name`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeployError::InvalidManifest`] when the table does not match the target's
+    /// configuration, such as a misspelled key.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_deploy::DeploymentManifest;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Debug, Default, Deserialize, PartialEq)]
+    /// #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    /// struct Settings {
+    ///     namespace: Option<String>,
+    /// }
+    ///
+    /// let manifest: DeploymentManifest = toml::from_str(
+    ///     r#"
+    ///     [agent]
+    ///     name = "demo"
+    ///     binary = "demo"
+    ///
+    ///     [targets.container]
+    ///     namespace = "agents"
+    ///     "#,
+    /// )
+    /// .unwrap();
+    /// let settings: Settings = manifest.target_config("container").unwrap();
+    /// assert_eq!(settings.namespace.as_deref(), Some("agents"));
+    /// assert_eq!(manifest.target_config::<Settings>("other").unwrap(), Settings::default());
+    /// ```
+    pub fn target_config<T: DeserializeOwned + Default>(&self, name: &str) -> DeployResult<T> {
+        match self.targets.get(name) {
+            None => Ok(T::default()),
+            Some(table) => serde_json::from_value(table.clone()).map_err(|error| {
+                DeployError::InvalidManifest {
+                    message: format!("[targets.{name}] is invalid: {error}"),
+                }
+            }),
+        }
     }
 
     /// Validate manifest semantics before build or push.
@@ -208,6 +265,7 @@ impl Default for DeploymentManifest {
             skills: None,
             interaction: None,
             source: None,
+            targets: BTreeMap::new(),
         }
     }
 }

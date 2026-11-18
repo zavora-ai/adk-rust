@@ -26,6 +26,10 @@ This crate provides 46 browser automation tools (44 enabled by default) as ADK `
 
 `BrowserToolset` implements the `adk_core::Toolset` trait, so it integrates directly with `LlmAgentBuilder::toolset()`.
 
+### Claude's browser use and computer use toolsets
+
+`BrowserUseToolset` offers the members of Claude's `browser_toolset_20260801` (`browser.navigate`, `browser.read_page`, `browser.left_click`, tab management with `browser_state`) over the same `BrowserSession` and navigation policy. `WebDriverComputer` implements `adk_core::ComputerActuator` over the viewport, so `adk_computer_use::ComputerUseToolset` can drive it. Every action runs on the governed tool path; see [Governed Computer Use and Browser Use](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/computer-use/toolsets.md).
+
 ## Security Defaults
 
 | Default | Opt out |

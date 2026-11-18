@@ -107,7 +107,7 @@ The following crates are not part of the main workspace and are not covered by t
 | Crate | Reason |
 |-------|--------|
 | `adk-studio` | Retired in favour of `adk-surface`'s [workflow observer](docs/official_docs/surfaces/workflow.md); [repository](https://github.com/zavora-ai/adk-studio). |
-| `adk-ui` | Retired; its 2.2.0 release on crates.io serves ADK-Rust 2 only. Agent-drawn UI is `adk-surface`'s `genui` feature. |
+| `adk-ui` | Separate repository. 3.x adds extension catalogs (charts, metrics, pages, scenes) to `adk-surface`'s `genui`, which keeps drawing, provenance and approvals; 2.2.x serves ADK-Rust 2 only. |
 
 ## Deprecation Policy
 

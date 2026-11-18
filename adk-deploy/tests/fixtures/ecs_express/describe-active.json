@@ -1,0 +1,33 @@
+{
+  "service": {
+    "activeConfigurations": [
+      {
+        "cpu": "512",
+        "cpuArchitecture": "X86_64",
+        "createdAt": 1794960000.0,
+        "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+        "healthCheckPath": "/api/health",
+        "ingressPaths": [
+          { "accessType": "PUBLIC", "endpoint": "support-desk-a1b2c3.ecs.us-east-1.on.aws" }
+        ],
+        "memory": "1024",
+        "primaryContainer": {
+          "containerPort": 8080,
+          "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/support-desk:1.4.0"
+        },
+        "scalingTarget": {
+          "autoScalingMetric": "AVERAGE_CPU",
+          "autoScalingTargetValue": 65,
+          "maxTaskCount": 6,
+          "minTaskCount": 2
+        },
+        "serviceRevisionArn": "arn:aws:ecs:us-east-1:123456789012:service-revision/default/support-desk/1"
+      }
+    ],
+    "cluster": "arn:aws:ecs:us-east-1:123456789012:cluster/default",
+    "currentDeployment": "arn:aws:ecs:us-east-1:123456789012:service-deployment/default/support-desk/a1b2",
+    "serviceArn": "arn:aws:ecs:us-east-1:123456789012:service/default/support-desk",
+    "serviceName": "support-desk",
+    "status": { "statusCode": "ACTIVE" }
+  }
+}

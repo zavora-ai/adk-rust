@@ -59,8 +59,8 @@ use adk_core::{
     AdkError, AfterAgentCallback, AfterToolCallback, Agent, AgentInteractionMode,
     BeforeAgentCallback, BeforeToolCallback, CallbackContext, Content, Event, EventActions,
     EventStream, GlobalInstructionProvider, InstructionProvider, InvocationContext, MemoryEntry,
-    Part, ReadonlyContext, Result, Tool, ToolCallbackContext, ToolContext, ToolResultStatus,
-    Toolset,
+    Part, ReadonlyContext, Result, RunConfig, Tool, ToolCallbackContext, ToolContext,
+    ToolResultStatus, Toolset,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -953,6 +953,14 @@ impl Agent for RealtimeAgent {
                         let Some(tool) = resolved_tools.iter().find(|t| t.name() == held.name).cloned() else {
                             continue;
                         };
+                        // A resumed call counts against the run's budget as a new one does.
+                        if let Some(tracker) = ctx.run_config().budget_tracker.as_ref()
+                            && let Err(exceeded) = tracker.begin_tool_calls(1)
+                        {
+                            yield Err(exceeded.into());
+                            let _ = session.close().await;
+                            return;
+                        }
                         let outcome = match dispatch_tool(
                             &ctx,
                             &tool,
@@ -1327,6 +1335,29 @@ impl Agent for RealtimeAgent {
                                         return;
                                     }
                                     continue;
+                                }
+
+                                // ===== RUN BUDGET: TOOL CALLS =====
+                                // A call the run's budget cannot fit is answered as not run, and
+                                // the run ends with the budget error, as `LlmAgent` ends it.
+                                if let Some(tracker) = ctx.run_config().budget_tracker.as_ref()
+                                    && let Err(exceeded) = tracker.begin_tool_calls(1)
+                                {
+                                    let outcome = ToolDispatch::answer(
+                                        serde_json::json!({ "error": format!("not run: {exceeded}") }),
+                                        ToolResultStatus::NotRun,
+                                        Some(AdkError::from(exceeded.clone())),
+                                    );
+                                    let mut budget_event = Event::new(&invocation_id);
+                                    budget_event.author = agent_name.clone();
+                                    budget_event.llm_response.content = Some(Content {
+                                        role: "function".to_string(),
+                                        parts: vec![outcome.part(&name, &call_id)],
+                                    });
+                                    yield Ok(budget_event);
+                                    yield Err(exceeded.into());
+                                    let _ = session.close().await;
+                                    return;
                                 }
 
                                 // Execute tool through the governed path.
@@ -1832,47 +1863,119 @@ async fn dispatch_tool(
             let gate = adk_core::ToolGate::for_context(ctx.as_ref());
             let mut call = adk_core::GovernedCall::for_tool(tool.as_ref(), call_id, args)
                 .requiring_confirmation(ctx.requires_tool_confirmation(&name));
+            // A resumed call runs under a later invocation, so it is ledgered under its held
+            // call's identity, as `LlmAgent` ledgers it.
+            let ledger_key = match &resumes {
+                Some(held) => adk_core::held_call_ledger_key(
+                    ctx.app_name(),
+                    ctx.user_id(),
+                    ctx.session_id(),
+                    call_id,
+                    &held.fingerprint(),
+                ),
+                None => tool_ctx.idempotency_key(),
+            };
             if let Some(held) = resumes {
                 call = call.resuming(held);
             }
             match adk_core::authorize_tool_call(&gate, call).await? {
                 adk_core::ToolAuthorization::Execute { args, confirmation: decision } => {
                     confirmation = decision;
-                    executed = true;
-                    let timeout = policy.timeout;
-                    let execution = adk_core::ModelCallScope::within_tool(
-                        tool_ctx.as_ref(),
-                        tool.execute(tool_ctx.clone(), args),
-                    );
-                    match tokio::time::timeout(timeout, execution).await {
-                        Ok(Ok(value)) => value,
-                        Ok(Err(e)) => {
-                            log_failure(&e, "execute");
-                            let response = adk_core::tool_error_response(
-                                &name,
-                                &e,
-                                policy.expose_error_messages,
-                            );
-                            status = Some(ToolResultStatus::of_tool_error(&e));
-                            cause = Some(e);
-                            response
+                    let effect = tool.effect();
+                    // A non-idempotent call executes at most once per idempotency key: a
+                    // record that exists answers it, and a ledger that cannot be read or
+                    // written fails it closed.
+                    match adk_core::begin_ledgered_call(
+                        ctx.run_config(),
+                        ctx.as_ref(),
+                        effect,
+                        ledger_key,
+                        &name,
+                        &args,
+                    )
+                    .await?
+                    {
+                        Err(recorded) => {
+                            run_after_tool_callbacks = false;
+                            status = Some(recorded.status);
+                            cause = recorded.cause;
+                            recorded.response
                         }
-                        Err(_) => {
-                            let message = format!("Tool '{name}' timed out after {timeout:?}");
-                            // A timed-out call was dropped mid-flight, as in `LlmAgent`.
-                            outcome_unknown = tool.effect() == adk_core::ToolEffect::NonIdempotent;
-                            status = Some(if outcome_unknown {
-                                ToolResultStatus::OutcomeUnknown
-                            } else {
-                                ToolResultStatus::Failed
-                            });
-                            cause = Some(AdkError::new(
-                                adk_core::ErrorComponent::Tool,
-                                adk_core::ErrorCategory::Timeout,
-                                "tool.timeout",
-                                message.clone(),
-                            ));
-                            serde_json::json!({ "error": message })
+                        Ok(ledgered) => {
+                            // The kill switch again, after the ledger write, which can take
+                            // long enough for a freeze to arrive. The begun record is completed
+                            // as not run, and the freeze ends the session as it does at
+                            // authorization.
+                            if let Err(refusal) = ctx.run_config().check_governance() {
+                                let text = adk_core::not_run_text(&refusal);
+                                if let Some(ledgered) = ledgered {
+                                    ledgered.complete(&name, None, &text).await;
+                                }
+                                return Err(refusal);
+                            }
+                            executed = true;
+                            let timeout = policy.timeout;
+                            let execution = adk_core::ModelCallScope::within_tool(
+                                tool_ctx.as_ref(),
+                                tool.execute(tool_ctx.clone(), args.clone()),
+                            );
+                            match tokio::time::timeout(timeout, execution).await {
+                                Ok(Ok(value)) => {
+                                    if let Some(ledgered) = ledgered {
+                                        ledgered.complete(&name, Some(&value), "").await;
+                                    }
+                                    value
+                                }
+                                Ok(Err(e)) => {
+                                    log_failure(&e, "execute");
+                                    let response = adk_core::tool_error_response(
+                                        &name,
+                                        &e,
+                                        policy.expose_error_messages,
+                                    );
+                                    if let Some(ledgered) = ledgered {
+                                        ledgered.complete(&name, None, &response.to_string()).await;
+                                    }
+                                    status = Some(ToolResultStatus::of_tool_error(&e));
+                                    cause = Some(e);
+                                    response
+                                }
+                                Err(_) => {
+                                    let message =
+                                        format!("Tool '{name}' timed out after {timeout:?}");
+                                    // A timed-out call was dropped mid-flight, as in `LlmAgent`;
+                                    // its begun record stays open, so a replay reports it as
+                                    // unknown instead of running it again.
+                                    outcome_unknown = effect == adk_core::ToolEffect::NonIdempotent;
+                                    status = Some(if outcome_unknown {
+                                        ToolResultStatus::OutcomeUnknown
+                                    } else {
+                                        ToolResultStatus::Failed
+                                    });
+                                    cause = Some(AdkError::new(
+                                        adk_core::ErrorComponent::Tool,
+                                        adk_core::ErrorCategory::Timeout,
+                                        "tool.timeout",
+                                        message.clone(),
+                                    ));
+                                    if outcome_unknown {
+                                        adk_core::record_outcome_unknown(
+                                            ctx.run_config(),
+                                            ctx.as_ref(),
+                                            &name,
+                                            &args,
+                                            "interrupted",
+                                        )
+                                        .await?;
+                                        adk_core::interrupted_call_response(&message)
+                                    } else {
+                                        if let Some(ledgered) = ledgered {
+                                            ledgered.complete(&name, None, &message).await;
+                                        }
+                                        serde_json::json!({ "error": message })
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -2128,6 +2231,12 @@ impl ToolContext for RealtimeToolContext {
     /// genuinely absent.
     async fn get_secret(&self, name: &str) -> Result<Option<String>> {
         self.parent_ctx.get_secret(name).await
+    }
+
+    /// The run's configuration, so a tool reads its egress policy and budget as it does in
+    /// the standard loop.
+    fn run_config(&self) -> Option<&RunConfig> {
+        Some(self.parent_ctx.run_config())
     }
 }
 
@@ -2437,12 +2546,15 @@ mod tool_safety_tests {
         }
     }
 
+    /// A tool that declares no effect is treated as non-idempotent, so a timeout may have
+    /// taken effect and is answered as an unknown outcome, as `LlmAgent` answers it.
     #[tokio::test]
-    async fn a_tool_that_outlives_its_timeout_is_answered_with_an_error() {
+    async fn a_tool_that_outlives_its_timeout_is_answered_as_an_unknown_outcome() {
         let tool: Arc<dyn Tool> = Arc::new(SlowTool);
         let outcome =
             dispatch_with(RunConfig::default(), &tool, "{}", vec![], vec![]).await.unwrap();
-        assert!(outcome.result["error"].as_str().unwrap_or_default().contains("timed out"));
+        assert!(adk_core::is_outcome_unknown(&outcome.result), "{}", outcome.result);
+        assert!(outcome.result["detail"].as_str().unwrap_or_default().contains("timed out"));
     }
 
     /// A runner plugin that refuses every tool.
@@ -2892,19 +3004,21 @@ mod tool_safety_tests {
         /// timed out may have taken effect.
         #[tokio::test(start_paused = true)]
         async fn a_timeout_is_an_unknown_outcome_only_for_a_non_idempotent_tool() {
-            for (effect, expected) in
-                [(ToolEffect::NonIdempotent, "outcome_unknown"), (ToolEffect::Idempotent, "failed")]
-            {
+            let message = "Tool 'slow' timed out after 50ms";
+            for (effect, expected, response) in [
+                (
+                    ToolEffect::NonIdempotent,
+                    "outcome_unknown",
+                    adk_core::interrupted_call_response(message),
+                ),
+                (ToolEffect::Idempotent, "failed", serde_json::json!({ "error": message })),
+            ] {
                 let tool: Arc<dyn Tool> = Arc::new(Hangs { effect, store: None });
                 let outcome =
                     dispatch_with(RunConfig::default(), &tool, "{}", vec![], vec![]).await.unwrap();
                 assert_eq!(
                     outcome.part("slow", "call-1"),
-                    part(
-                        "slow",
-                        serde_json::json!({ "error": "Tool 'slow' timed out after 50ms" }),
-                        caused(expected, "tool.timeout", "timeout"),
-                    ),
+                    part("slow", response, caused(expected, "tool.timeout", "timeout")),
                     "{effect:?}"
                 );
             }
@@ -2927,7 +3041,7 @@ mod tool_safety_tests {
                 outcome.part("slow", "call-1"),
                 part(
                     "slow",
-                    serde_json::json!({ "error": "Tool 'slow' timed out after 50ms" }),
+                    adk_core::interrupted_call_response("Tool 'slow' timed out after 50ms"),
                     caused("outcome_unknown", "tool.timeout", "timeout"),
                 )
             );

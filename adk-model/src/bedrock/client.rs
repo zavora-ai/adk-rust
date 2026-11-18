@@ -238,7 +238,8 @@ impl Llm for BedrockClient {
                 "bedrock takes no reasoning effort from this client; the request's effort is ignored"
             );
         }
-        let usage_span = adk_telemetry::llm_generate_span("bedrock", &self.model_id, stream);
+        let usage_span =
+            crate::telemetry::inference_span("bedrock", &self.model_id, stream, &request);
         let bedrock_input = adk_request_to_bedrock(
             &request.contents,
             &request.tools,

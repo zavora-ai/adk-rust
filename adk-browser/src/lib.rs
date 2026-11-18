@@ -163,6 +163,8 @@
 //!           (ChromeDriver, etc.)
 //! ```
 
+mod browser_use;
+mod computer;
 mod config;
 mod escape;
 pub mod frames;
@@ -170,8 +172,13 @@ mod pool;
 mod session;
 pub mod tools;
 mod toolset;
+mod viewport;
 
 // Re-export main types
+pub use browser_use::{
+    BROWSER_BATCH_HALT_TEXT, BROWSER_TOOLSET, BrowserUseMember, BrowserUseToolset,
+};
+pub use computer::WebDriverComputer;
 pub use config::{BrowserConfig, BrowserType};
 pub use escape::escape_js_string;
 pub use frames::{Frame, FrameFeed, MIN_FRAME_INTERVAL};

@@ -1,0 +1,19 @@
+{
+  "service": {
+    "activeConfigurations": [
+      {
+        "cpu": "512",
+        "createdAt": 1794960000.0,
+        "healthCheckPath": "/api/health",
+        "ingressPaths": [],
+        "memory": "1024",
+        "serviceRevisionArn": "arn:aws:ecs:us-east-1:123456789012:service-revision/default/support-desk/1"
+      }
+    ],
+    "cluster": "arn:aws:ecs:us-east-1:123456789012:cluster/default",
+    "currentDeployment": "arn:aws:ecs:us-east-1:123456789012:service-deployment/default/support-desk/a1b2",
+    "serviceArn": "arn:aws:ecs:us-east-1:123456789012:service/default/support-desk",
+    "serviceName": "support-desk",
+    "status": { "statusCode": "ACTIVE", "statusReason": "Provisioning load balancer" }
+  }
+}

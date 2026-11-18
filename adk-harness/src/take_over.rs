@@ -1347,6 +1347,10 @@ impl Tool for ScopedTool {
     fn is_concurrency_safe(&self) -> bool {
         self.inner.is_concurrency_safe()
     }
+
+    fn batch_group(&self) -> Option<adk_core::BatchGroup> {
+        self.inner.batch_group()
+    }
     fn is_agent_delegation(&self) -> bool {
         self.inner.is_agent_delegation()
     }

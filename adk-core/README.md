@@ -20,6 +20,7 @@ Core traits and types for ADK-Rust agents, tools, sessions, and events.
 - **`Session` / `State`** — conversation context
 - **`AdkError`** — the structured error envelope
 - **Governance** — `ToolPolicy`, `authorize_tool_call`, `GovernanceControl`, approvals, run budgets, and the spend ledger
+- **Computer actuation** — `ComputerActuator`, `ComputerAction`, `Screenshot`: the provider-neutral trait computer use tools act through, and `Tool::batch_group` for calls that run in order and stop at the first failure
 - **Durable runtime contracts** — `LeaseStore`, `DurableRunStore`, `ScheduleStore`, `GovernanceStateStore`, `ActionLedger`, `ApprovalStore`, `SpendLedger`, `AuditLogStore`
 
 The crate contains no model provider client.

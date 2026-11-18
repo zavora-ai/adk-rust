@@ -293,7 +293,7 @@ adk-rag/           Retrieval-augmented generation pipelines and vector store bac
 adk-action/        Action node types and variable interpolation for adk-graph
 adk-enterprise/    HTTP/SSE client for the ADK-Rust Enterprise Managed Agent Service
 adk-managed/       Provider-neutral managed agent runtime with durable, parked turns
-adk-deploy/        Deployment manifests, bundling, and the Agent Engine client (`gcp`)
+adk-deploy/        Deployment manifests, bundling, deploy targets: container, Agent Engine (`gcp`), ECS (`aws`)
 adk-payments/      Agentic commerce (ACP, AP2) and the owner-funded wallet (`wallet`)
 cargo-adk/         `cargo adk`: project templates, builds, eval runs, deployment
 adk-mistralrs/     In-process local inference via mistral.rs 0.8; GPU features opt-in
@@ -315,9 +315,10 @@ adk-studio/      Retired in favour of adk-surface's workflow observer
                  (docs/official_docs/surfaces/workflow.md).
                  Repo: https://github.com/zavora-ai/adk-studio
 
-adk-ui/          Retired, for ADK-Rust 2 only (spec 3.3 decision 11): agent-drawn UI is
-                 adk-surface's `genui` feature. Do not add code to it or depend on it.
-                 Repo: https://github.com/zavora-ai/adk-ui
+adk-ui/          Extension catalogs for genui (spec 3.3 decision 11, amended): charts,
+                 metrics, pages and scenes on `Catalog::extend`. It owns no render tool,
+                 protocol, provenance or approval path; no crate here depends on it.
+                 2.x is for ADK-Rust 2 only. Repo: https://github.com/zavora-ai/adk-ui
                  UI protocol constants stay in adk-server/src/ui_protocol.rs for the
                  deprecated `adk_ui` profile and the /api/ui bridge.
 ```

@@ -1,0 +1,58 @@
+# A production-shaped manifest: external Postgres sessions, secrets by reference, bearer auth,
+# telemetry, and container target settings.
+[agent]
+name = "support-desk"
+binary = "support-desk"
+version = "1.4.0"
+
+[build]
+profile = "release"
+features = ["anthropic"]
+assets = ["prompts"]
+
+[scaling]
+minInstances = 2
+maxInstances = 6
+targetCpuPercent = 65
+
+[health]
+path = "/api/health"
+intervalSecs = 10
+timeoutSecs = 3
+failureThreshold = 3
+
+[[services]]
+name = "sessions"
+kind = "postgres"
+mode = "external"
+secretRef = "DATABASE_URL"
+
+[[secrets]]
+key = "DATABASE_URL"
+
+[[secrets]]
+key = "ANTHROPIC_API_KEY"
+
+[[secrets]]
+key = "ADK_API_TOKEN"
+
+[env]
+RUST_LOG = "info"
+ANTHROPIC_API_KEY = { secretRef = "ANTHROPIC_API_KEY" }
+ADK_API_TOKEN = { secretRef = "ADK_API_TOKEN" }
+
+[auth]
+mode = "bearer"
+requiredScopes = ["agent:invoke"]
+
+[telemetry]
+otlpEndpoint = "http://otel-collector:4317"
+serviceName = "support-desk"
+
+[targets.container]
+image = "ghcr.io/acme/support-desk:1.4.0"
+allowedHosts = ["support.example.com"]
+ingress = "public"
+namespace = "agents"
+cpu = "500m"
+memory = "512Mi"

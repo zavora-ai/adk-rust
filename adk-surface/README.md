@@ -34,7 +34,7 @@ with `default-features = false` to leave it out.
 | `genui` | Agent-drawn UI: forms, cards, tables and screens an agent draws in a thread (A2UI v0.9.1 on the `forms` 1.0 catalog), checked so they never contain approval controls; a form's Send asks the drawing agent for the call, held for the person; charts; extension catalogs that add another crate's display-only components under their own id, registered with `SurfaceEngineBuilder::with_catalog` (spec 3.3 §6.1, §7.4 rule 5) | `genui::DrawToolset`, `genui::Validator`, `genui::Catalog::extend`, `web::genui::router` |
 | `genui-apps` | Apps from MCP servers in a thread, implies `genui` and `web`: framed sandboxed on their own origin, blocked when they show a decision's words or reach this computer, and their tool calls held for the person; also the React package `@zavora-ai/adk-surface-react` in `react/` (spec 3.3 §6.1) | `genui::McpAppsHost`, `web::genui::apps_router`, `web::genui::refuse_apps_origin` |
 
-`genui` replaces the retired `adk-ui` crate, and `workflow` the retired `adk-studio` app.
+`genui` replaces `adk-ui` 2, and `workflow` the retired `adk-studio` app. `adk-ui` 3 builds on `genui`: it adds charts, metrics, pages and scenes as extension catalogs ([Agent-Drawn UI](../docs/official_docs/surfaces/genui.md#extension-catalogs)).
 
 ## Sources
 

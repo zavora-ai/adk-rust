@@ -1,6 +1,6 @@
 # @zavora-ai/adk-surface-react
 
-The renderer of [adk-surface](../README.md)'s web home for agent-drawn UI (spec 3.3 §6.1 `genui`), as a React package. It replaces `@zavora-ai/adk-ui-react`.
+The renderer of [adk-surface](../README.md)'s web home for agent-drawn UI (spec 3.3 §6.1 `genui`), as a React package. It replaces `@zavora-ai/adk-ui-react` 2; `@zavora-ai/adk-ui-react` 3 adds renderers for adk-ui's extension catalogs to its `DrawnView`.
 
 | Export | What it draws |
 |---|---|
