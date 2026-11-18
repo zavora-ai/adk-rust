@@ -98,6 +98,8 @@ mod guardrail;
 mod manifest;
 mod media;
 mod redact;
+#[cfg(any(feature = "onnx", feature = "onnx-dynamic"))]
+pub mod onnx;
 mod runtime;
 mod sent;
 mod toolset;
