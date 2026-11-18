@@ -58,7 +58,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 /// How long the console waits for a person to answer an approval prompt when the run
 /// configuration keeps [`DEFAULT_TOOL_CONFIRMATION_TIMEOUT`] (spec 3.1 §8.1).
@@ -111,7 +111,9 @@ pub enum ThinkingDisplayMode {
 /// Controls how serve mode initializes telemetry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TelemetryConfig {
-    /// Use the in-memory ADK span exporter for debug endpoints.
+    /// Use the in-memory ADK span exporter for debug endpoints: the one
+    /// `adk_telemetry::init_with_adk_exporter` installed, or a new one. A process whose global
+    /// subscriber is another keeps it, and serve mode runs without the exporter.
     AdkExporter { service_name: String },
     /// Export telemetry to an OTLP collector.
     Otlp { service_name: String, endpoint: String },
@@ -813,8 +815,14 @@ impl Launcher {
             TelemetryConfig::AdkExporter { service_name } => {
                 match adk_telemetry::init_with_adk_exporter(service_name) {
                     Ok(exporter) => Some(exporter),
-                    Err(e) => {
-                        warn!("failed to initialize telemetry: {e}");
+                    // The only failure: the process already has a global subscriber, such as
+                    // the application's own, which is its choice and stays.
+                    Err(error) => {
+                        debug!(
+                            error = %error,
+                            "telemetry left to the process's tracing subscriber; the debug API \
+                             records no spans"
+                        );
                         None
                     }
                 }
@@ -1899,6 +1907,86 @@ mod tests {
 
         let answered = app.oneshot(request("localhost:8080")).await.unwrap();
         assert_eq!(answered.status(), StatusCode::OK);
+    }
+
+    /// The telemetry status of the agent details the web home's developer panel reads.
+    async fn telemetry_status(app: Router) -> serde_json::Value {
+        let request = Request::builder()
+            .uri("/api/ui/agents/launcher_test_agent")
+            .header("host", "localhost:8080")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let details: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        details["services"]["telemetryStatus"].clone()
+    }
+
+    /// Closes one runtime span through the process's global subscriber.
+    fn record_runtime_span() {
+        tracing::info_span!("agent.execute", gcp.vertex.agent.event_id = "evt-1").in_scope(|| {});
+    }
+
+    // nextest runs each test in its own process, so each telemetry test below installs the
+    // process's global subscriber its own way.
+
+    #[tokio::test]
+    async fn serve_mode_records_spans_when_the_launcher_owns_telemetry() {
+        let app = Launcher::new(Arc::new(TestAgent)).build_app().unwrap();
+        assert_eq!(telemetry_status(app.clone()).await, "configured");
+
+        record_runtime_span();
+
+        assert_eq!(telemetry_status(app).await, "collecting");
+    }
+
+    /// The scaffolds of `cargo adk new --template harness|autonomous` start this way.
+    #[tokio::test]
+    async fn serve_mode_reuses_the_exporter_the_application_initialized() {
+        adk_telemetry::init_with_adk_exporter("app").unwrap();
+        let app = Launcher::new(Arc::new(TestAgent)).build_app().unwrap();
+
+        record_runtime_span();
+
+        assert_eq!(telemetry_status(app).await, "collecting");
+    }
+
+    /// The level and target of every event logged.
+    #[derive(Clone, Default)]
+    struct Logged(Arc<std::sync::Mutex<Vec<(tracing::Level, String)>>>);
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Logged {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let metadata = event.metadata();
+            self.0.lock().unwrap().push((*metadata.level(), metadata.target().to_string()));
+        }
+    }
+
+    #[tokio::test]
+    async fn serve_mode_keeps_an_application_subscriber_without_a_warning() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+        use tracing_subscriber::util::SubscriberInitExt as _;
+
+        let logged = Logged::default();
+        tracing_subscriber::registry().with(logged.clone()).try_init().unwrap();
+
+        let app = Launcher::new(Arc::new(TestAgent)).build_app().unwrap();
+
+        assert_eq!(telemetry_status(app).await, "disabled");
+        let launcher: Vec<_> = logged
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, target)| target == "adk_cli::launcher")
+            .map(|(level, _)| *level)
+            .collect();
+        assert_eq!(launcher, vec![tracing::Level::DEBUG]);
     }
 
     #[test]

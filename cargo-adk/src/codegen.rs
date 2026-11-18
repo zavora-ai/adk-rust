@@ -130,6 +130,12 @@ pub fn generate_cargo_toml(manifest: &CompositionManifest, project_name: &str) -
     } else {
         ""
     };
+    // A project on the `cli` launcher logs through ADK telemetry (see `generate_main_rs`).
+    let subscriber = if launcher_owns_telemetry(manifest) {
+        ""
+    } else {
+        "tracing-subscriber = { version = \"0.3\", features = [\"env-filter\"] }\n"
+    };
 
     let mut output = format!(
         r#"{header}[package]
@@ -142,8 +148,7 @@ adk-rust = {{ version = "{ADK_VERSION}", default-features = false, features = [{
 tokio = {{ version = "1", features = ["full"] }}
 dotenvy = "0.15"
 tracing = "0.1"
-tracing-subscriber = {{ version = "0.3", features = ["env-filter"] }}
-anyhow = "1"
+{subscriber}anyhow = "1"
 "#
     );
 
@@ -162,6 +167,16 @@ anyhow = "1"
     }
 
     output
+}
+
+/// Whether the project runs on the `cli` launcher, whose serve mode records runtime spans
+/// for the web home's developer panel through the ADK span exporter.
+///
+/// The exporter needs to be the process's global subscriber, so such a project initializes
+/// ADK telemetry first instead of installing a `tracing_subscriber`; the launcher then
+/// reuses the exporter instead of failing to install it next to the project's subscriber.
+fn launcher_owns_telemetry(manifest: &CompositionManifest) -> bool {
+    manifest.feature_set.contains("cli")
 }
 
 /// Fallback agent construction used when a template has no (or placeholder)
@@ -324,7 +339,13 @@ pub fn generate_main_rs_with_registry(
     let has_telemetry = manifest.addons.iter().any(|a| a == "telemetry");
 
     // Build tracing subscriber init
-    let tracing_init = if has_telemetry {
+    let tracing_init = if launcher_owns_telemetry(manifest) {
+        format!(
+            r#"    // RUST_LOG filters the log. The exporter also keeps runtime spans for the web home's
+    // developer panel, which `cargo run -- up` serves; the launcher reuses it.
+    adk_rust::telemetry::init_with_adk_exporter("{project_name}")?;"#
+        )
+    } else if has_telemetry {
         r#"    tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_target(true)
@@ -558,7 +579,7 @@ mod tests {
         assert!(toml.contains("\"gemini\""));
         assert!(toml.contains("tokio"));
         assert!(toml.contains("dotenvy"));
-        assert!(toml.contains("tracing"));
+        assert!(toml.contains("tracing-subscriber"));
         assert!(toml.contains("anyhow"));
     }
 
@@ -922,16 +943,20 @@ mod tests {
             ".with_session_service(sessions)",
             "`cargo run -- up` runs it as the agent kernel",
             "GeminiModel::new(&api_key, \"gemini-3.8-flash\")?",
+            "adk_rust::telemetry::init_with_adk_exporter(\"demo\")?;",
         ] {
             assert!(main_rs.contains(expected), "missing `{expected}` in:\n{main_rs}");
         }
         // The launcher is the console and the server; nothing else runs the agent.
         assert!(!main_rs.contains("Launcher::new(agent)"), "{main_rs}");
+        // A subscriber of the project's own would keep the launcher's span exporter out.
+        assert!(!main_rs.contains("tracing_subscriber"), "{main_rs}");
 
         let cargo_toml = file("Cargo.toml");
         for feature in ["\"minimal\"", "\"autonomy\"", "\"cli\"", "\"gemini\""] {
             assert!(cargo_toml.contains(feature), "missing {feature} in:\n{cargo_toml}");
         }
+        assert!(!cargo_toml.contains("tracing-subscriber"), "{cargo_toml}");
         // `autonomy` brings the SQLite stores and `Workspace` through `adk-rust`.
         assert!(!cargo_toml.contains("adk-session ="), "{cargo_toml}");
         assert!(!cargo_toml.contains("adk-devtools ="), "{cargo_toml}");
@@ -969,17 +994,20 @@ mod tests {
             "\"ops-agent\",",
             ".with_home(\".adk\")",
             "AnthropicClient::new(",
+            "adk_rust::telemetry::init_with_adk_exporter(\"ops-agent\")?;",
         ] {
             assert!(main_rs.contains(expected), "missing `{expected}` in:\n{main_rs}");
         }
         // The launcher runs the agent; no generic console or server is added.
         assert!(!main_rs.contains("Launcher::new(agent)"), "{main_rs}");
         assert!(!main_rs.contains("{name}"), "{main_rs}");
+        assert!(!main_rs.contains("tracing_subscriber"), "{main_rs}");
 
         let cargo_toml = file("Cargo.toml");
         for feature in ["\"minimal\"", "\"autonomy\"", "\"cli\"", "\"anthropic\""] {
             assert!(cargo_toml.contains(feature), "missing {feature} in:\n{cargo_toml}");
         }
+        assert!(!cargo_toml.contains("tracing-subscriber"), "{cargo_toml}");
         assert_eq!(cargo_toml.matches("adk-").count(), 1, "one ADK dependency:\n{cargo_toml}");
         assert!(file("src/publish.rs").contains("\"ops-agent-publish-{}\""));
         assert!(file("src/audit.rs").contains("--log-id ops-agent"));

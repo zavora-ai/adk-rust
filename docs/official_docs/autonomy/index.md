@@ -68,7 +68,7 @@ adk-rust = { version = "3.0.0", default-features = false, features = ["anthropic
 
 | File | Purpose |
 |---|---|
-| `src/main.rs` | The stores, the agent, the weekday trigger and the launcher |
+| `src/main.rs` | Logging, the stores, the agent, the weekday trigger and the launcher |
 | `src/publish.rs` | `publish_status`, the one side effect, and its test |
 | `src/audit.rs` | The signed audit log and its key |
 | `.adk/harness.toml` | `sandbox = true`; it can only tighten `src/main.rs` |
@@ -113,6 +113,11 @@ HarnessLauncher::new(harness)
 
 `HarnessLauncher::run` gives the binary its commands: `chat` (the default REPL), `serve`, `up`
 and `goal`.
+
+Before anything else, `src/main.rs` initializes ADK telemetry with
+`adk_rust::telemetry::init_with_adk_exporter`: `RUST_LOG` filters the log, and the in-process
+span exporter keeps each run's spans for the web home's developer panel. The launcher reuses that
+exporter when `up` or `serve` starts the server.
 
 ## 2. Start the agent kernel
 

@@ -75,7 +75,7 @@ use super::layering::Layering;
 use super::seccomp;
 use super::{
     AccessMode, AllowedPath, NetworkAccess, NetworkSupport, ProxyListener, SandboxEnforcer,
-    SandboxPolicy, WrappedCommand,
+    SandboxPolicy, WrappedCommand, canonicalize_paths,
 };
 use crate::error::SandboxError;
 
@@ -706,31 +706,6 @@ fn holds_socket(path: &std::path::Path, budget: &mut usize) -> bool {
         }
     }
     false
-}
-
-fn canonicalize_paths(paths: &[AllowedPath]) -> Result<Vec<AllowedPath>, SandboxError> {
-    let mut result = Vec::with_capacity(paths.len());
-
-    for entry in paths {
-        let canonical = std::fs::canonicalize(&entry.path).map_err(|e| {
-            SandboxError::PolicyViolation(format!(
-                "failed to canonicalize allowed path '{}': {e}",
-                entry.path.display()
-            ))
-        })?;
-
-        if canonical != entry.path {
-            tracing::warn!(
-                original = %entry.path.display(),
-                resolved = %canonical.display(),
-                "allowed path resolved to a different location (possible symlink)"
-            );
-        }
-
-        result.push(AllowedPath { path: canonical, mode: entry.mode });
-    }
-
-    Ok(result)
 }
 
 // ---------------------------------------------------------------------------
