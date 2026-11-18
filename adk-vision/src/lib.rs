@@ -20,8 +20,8 @@
 //! | Feature | Contents |
 //! |---------|----------|
 //! | (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor` |
-//! | `fetch` | [`ModelFetcher`]: Hugging Face downloads by revision, SHA-256 checked before load, `HF_HUB_OFFLINE` honoured |
-//! | `conformance` | [`conformance`]: the suite every backend runs, and its test macros |
+//! | `fetch` | `ModelFetcher`: Hugging Face downloads by revision, SHA-256 checked before load, `HF_HUB_OFFLINE` honoured |
+//! | `conformance` | `conformance`: the suite every backend runs, and its test macros |
 //!
 //! Backends — `ort`, OCR, mistral.rs, the cloud providers, Meta `sam-3.1`, NVIDIA NIM — are
 //! features added by the workstreams that bring them.

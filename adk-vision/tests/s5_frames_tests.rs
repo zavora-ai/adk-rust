@@ -176,3 +176,20 @@ fn quantisation_alone_would_miss_without_the_frame() {
     let as_pixels = BBox::new(raw[1], raw[0], raw[3], raw[2]);
     assert!((as_pixels.x1 - target.x1).abs() > 100.0);
 }
+
+#[test]
+fn the_documented_crop_example_maps_back_to_the_screenshot() {
+    // docs/official_docs/vision/index.md, "Coordinate Frames".
+    let chain = TransformChain::new(3024, 1964)
+        .then(Transform::Crop { x: 1900, y: 1160, width: 220, height: 120 })
+        .unwrap();
+    let gemini = CoordFrame::Normalized { scale: 1000, order: AxisOrder::Yx };
+    let normalizer =
+        RegionNormalizer::new(Digest::of(b"screenshot"), chain, gemini, BackendId::new("gemini"));
+    let raw = RawRegion::boxed(gemini.box_from_raw([167.0, 91.0, 833.0, 909.0]), "save", 0.9);
+    let b = normalizer.region(raw).unwrap().unwrap().shape.bbox().unwrap();
+    assert!((b.x0 - 1920.0).abs() < 1.0 && (b.y0 - 1180.0).abs() < 1.0, "{b:?}");
+    assert!((b.x1 - 2100.0).abs() < 1.0 && (b.y1 - 1260.0).abs() < 1.0, "{b:?}");
+    let screen = ScreenSpace::new("built-in", [0.0, 0.0], 2.0);
+    assert_eq!(screen.to_points([2010.0, 1220.0]), [1005.0, 610.0]);
+}
