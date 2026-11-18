@@ -39,10 +39,15 @@ A standing rule may cover a web call. The prompt for a host outside the allowlis
 host, path and query separately, names the class, and offers one rule: `DomainIn` on the
 exact host the call named, never a wildcard the person did not type.
 
+A call whose `url` names a host outside `fetch_domains` is denied in every mode before the
+table is read, as `harness.web.domain_not_allowed`; no approval or standing rule widens the
+filter.
+
 ### Configuration
 
 ```rust
 use std::sync::Arc;
+use adk_harness::web::UrlProvenance;
 use adk_harness::{HarnessAgent, SearchDomains, WebConfig};
 
 let harness = HarnessAgent::builder("harness")
@@ -50,6 +55,8 @@ let harness = HarnessAgent::builder("harness")
     .workspace(adk_devtools::Workspace::new("."))
     .web(WebConfig {
         allowed_domains: vec!["docs.rs".into(), "*.rust-lang.org".into()],
+        fetch_domains: Some(SearchDomains::Blocked(vec!["pastebin.com".into()])),
+        url_provenance: UrlProvenance::Always,
         search_domains: Some(SearchDomains::Blocked(vec!["pinterest.com".into()])),
         ..WebConfig::default()
     })
@@ -59,6 +66,9 @@ let harness = HarnessAgent::builder("harness")
 | `WebConfig` field | Default | Meaning |
 |---|---|---|
 | `allowed_domains` | empty | Hosts `web_fetch` and the browser pack's navigation reach without approval: exact hosts or `*.example.com`, the `DomainIn` grammar. Never forwarded to a search |
+| `fetch_domains` | `None`: every domain | The fetch filter: `SearchDomains::Allowed(..)` (only these) or `SearchDomains::Blocked(..)` (never these), each entry covering the domain and its subdomains; applies to the URL and every redirect hop; no approval widens it |
+| `url_provenance` | `UrlProvenance::Unattended` | When a fetched URL must already appear in the conversation; see [URL provenance](#url-provenance) |
+| `url_sources` | user messages and every tool result except `bash` and `shell_output` | Which parts of the conversation count for `url_provenance` (`adk_core::egress::UrlSources`) |
 | `search_domains` | `None`: every domain | The search filter (spec 3.1 §7.32): `SearchDomains::Allowed(..)` or `SearchDomains::Blocked(..)`, each entry covering the domain and its subdomains; see [Search scope](#search-scope) |
 | `max_bytes` | 1 MiB | Read on the wire; 64 KiB of text are delivered, the rest cut with a marker |
 | `max_url_len` | 2,048 | Longest URL sent |
@@ -74,11 +84,62 @@ let harness = HarnessAgent::builder("harness")
 |---|---|
 | `GET` only, no body, no credentials | The harness's own `reqwest` client: no cookie store, no proxy from the environment, no credential from the broker; a new client per request |
 | Resolution | The URL parses under the `DomainIn` grammar (no user information, backslashes, percent-encoded hosts or characters outside `[a-z0-9.-]`); the host resolves before connecting, and a loopback, link-local, private, IPv4-mapped or `.local`/`.internal` address is refused as `harness.web.private_target`; a literal of those kinds is hard-denied by the policy before the tool runs |
-| Redirects | Followed by the tool: each target is parsed, resolved and re-classified; a redirect off the host, to a host outside the allowlist, is returned as `redirect_to` for a new call; a redirect to a private target is refused |
-| Content | `text/html` becomes text (scripts, styles and hidden elements dropped, links kept as `[text](url)`); `text/*` and `application/json` pass; `application/pdf` is a stub naming the bytes and digest; any other type is refused with its mime type |
+| Redirects | Followed by the tool: each target is parsed, resolved and re-classified; a redirect off the host, to a host outside the allowlist, is returned as `redirect_to` for a new call; a redirect to a private target, or to a host outside `fetch_domains`, is refused |
+| Content | `text/html` becomes text (scripts, styles and hidden elements dropped; with `as: "markdown"`, links kept as `[text](url)` with relative links written as absolute URLs); `text/*` and `application/json` pass; `application/pdf` is a stub naming the bytes and digest; any other type is refused with its mime type |
 | Delivery | `{ url, final_url, status, content_type, sha256, bytes, truncated, screening, content }` with `content` inside `<untrusted-content source="web" url="…" sha256="…">` and the closing tag neutralized inside |
 | Screening | Injection patterns (imperatives addressed to the agent, tool-call syntax, role markers) label the line `[screened: injection-pattern]`; secret patterns are replaced by `[redacted: secret-pattern]`; both before the result is stored, and recorded as `harness.web.screened`. The result's `screening` says what happened: `clean` (screened, nothing found), `labelled`, `redacted`, `labelled, redacted`, or `not_screened` for content that is not screened, such as a PDF stub; `web_search` and the browser pack's results carry the same field |
-| Exfiltration | A URL over `max_url_len`, whose query or fragment matches a secret pattern or carries more than 256 bytes outside the path, is refused before any request; so is a query over `max_query_len` or matching a secret pattern; the record carries a digest, never the value |
+| Exfiltration | A URL over `max_url_len`, whose query or fragment matches a secret pattern or carries more than 256 bytes outside the path, is refused before any request; so is a query over `max_query_len` or matching a secret pattern; under [URL provenance](#url-provenance), so is a URL the conversation does not hold; the record carries a digest, never the value |
+
+### URL provenance
+
+A model that has read untrusted text can be told to put data it holds into a URL and fetch
+it: a query string, a path segment or a host name carries the data out. Under
+`url_provenance`, `web_fetch` and the browser pack's navigation take a URL only when it
+already appeared in the conversation: in a user message or a tool result, exactly as
+written there. A URL found only in what the model wrote is refused with
+`harness.web.url_not_in_context` before the URL is parsed further or its host resolved.
+
+| `UrlProvenance` | The rule applies |
+|---|---|
+| `Off` | Never |
+| `Unattended` (default) | In Auto mode, where no person sees a call before it runs: edits run unasked, a held web call may be answered by the auto reviewer (a model), and kernel partitions and goals run unwatched |
+| `Always` | In every mode, as Anthropic's server-side `web_fetch` applies it |
+
+In Ask, Plan and Read-only modes every fetch outside `allowed_domains` waits for a person who
+sees the URL, so `Unattended` leaves those modes as they were; an allowlisted host still
+receives a composed URL there without asking, which `Always` closes. The mode is read from
+the session's mode store at each call, and the rule applies when the store cannot be read.
+
+| Source (`url_sources`) | Counts |
+|---|---|
+| User-role text, file references and embedded resources | Yes (`user_input`) |
+| Tool results, by tool name | Every one except `bash` and `shell_output` by default (`tool_results`: `All`, `None`, `Only(..)` or `Except(..)`) |
+| The provider's built-in search and fetch results | Under `All` and `Except(..)` |
+| Model text, thinking and tool calls, and the system instruction | Never |
+
+| Matching | Rule |
+|---|---|
+| Normalization | Scheme and host lowercased, the default port dropped, an empty path written `/`, dot segments resolved, and the fragment, which never leaves the client, removed |
+| Query and path | Compared exactly: a URL with data appended to its query or path is a different URL |
+| Bare hosts | In user text, `docs.rs/serde` admits `https://docs.rs/serde` and `http://docs.rs/serde` |
+| Links on a fetched page | Written as absolute URLs in `as: "markdown"`, so a link the page gives is fetchable as written |
+| Redirects | Chosen by the server, so each hop passes `fetch_domains`, the private-target check and the egress policy, not the rule; a redirect to another host comes back as `redirect_to`, a tool result, so the next call may fetch it |
+
+The refusal is recorded as `harness.web.fetched` with `phase: "refused"`,
+`refusal: "notInContext"` and the URL's digest only, since any part of a composed URL,
+its host included, may carry the data; a host refused by `fetch_domains` is recorded with
+`refusal: "domainNotAllowed"`, the host, and whether a redirect led to it.
+
+| Limit | Mitigation |
+|---|---|
+| A tool that echoes model text launders a URL: a shell that prints what a command built, a file the model wrote and read back | The shell's results are not sources by default; `ToolResultSources::Only` naming `web_search` and `web_fetch` is the strictest reading |
+| The choice of which admitted URL to fetch, and in what order, is a channel | `max_fetches_per_turn` bounds it |
+| A call held for approval in Auto mode is put to the approver before the tool applies the rule | The tool description tells the model the rule, so such a call is rare; the refusal follows the approval |
+
+`adk_core::egress::ContextUrls` is the same rule for any tool: `ContextUrls::from_tool_context`
+collects a call's conversation under a `UrlSources`, and `contains` decides a URL.
+`adk-browser`'s `BrowserToolset::with_url_provenance` applies it to `browser_navigate`,
+`browser_new_tab` and `browser_new_window` outside the harness.
 
 ### Web search
 

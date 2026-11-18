@@ -147,6 +147,7 @@ pub fn isolation_label(status: &IsolationStatus) -> String {
         IsolationStatus::Host => "host".to_string(),
         IsolationStatus::OsSandbox { enforcer } => format!("os_sandbox:{enforcer}"),
         IsolationStatus::Container { image } => format!("container:{image}"),
+        IsolationStatus::Remote { provider, .. } => format!("remote:{provider}"),
         IsolationStatus::Degraded { requested, .. } => format!("degraded:{requested}"),
     }
 }

@@ -1,3 +1,4 @@
+use crate::history::{HistoryOutcome, ImportSessionRequest, RewriteHistoryRequest, SessionHistory};
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
     ListRequest, Session, SessionService, State,
@@ -1640,6 +1641,57 @@ impl SessionService for VertexAiSessionService {
         self.remember_session_scope(session_id, app_name, req.identity.user_id.as_ref()).await;
 
         Ok(())
+    }
+
+    /// The Session API keeps `app:` and `user:` keys in the session, so the history's state is
+    /// every key, and it records no creation state.
+    async fn history(&self, identity: &adk_core::identity::AdkIdentity) -> Result<SessionHistory> {
+        let session = self.get_for_identity(identity).await?;
+        Ok(SessionHistory::without_shared_tiers(
+            session.events().all(),
+            session.state().all(),
+            None,
+        ))
+    }
+
+    /// The Session API lists events but cannot delete them, so a session cannot be rewound or
+    /// edited in place; fork it at the event instead.
+    async fn rewrite_history(&self, _req: RewriteHistoryRequest) -> Result<HistoryOutcome> {
+        Err(crate::service::history_unsupported(
+            "rewrite history",
+            "the Vertex AI Session API cannot delete events; fork the session at the event \
+             instead",
+        ))
+    }
+
+    /// Creates the session with `initial_state` and appends each event; the Session API
+    /// applies their state deltas, so the session's state is `initial_state` plus the deltas,
+    /// which is `state` for a fork. A failed append deletes the partial session.
+    async fn import_session(&self, req: ImportSessionRequest) -> Result<Box<dyn Session>> {
+        let identity = req.identity;
+        self.create(CreateRequest {
+            app_name: identity.app_name.as_ref().to_string(),
+            user_id: identity.user_id.as_ref().to_string(),
+            session_id: Some(identity.session_id.as_ref().to_string()),
+            state: req.initial_state,
+        })
+        .await?;
+        for event in req.events {
+            let appended = self
+                .append_event_for_identity(AppendEventRequest { identity: identity.clone(), event })
+                .await;
+            if let Err(error) = appended {
+                if let Err(cleanup) = self.delete_for_identity(&identity).await {
+                    tracing::warn!(
+                        session.id = %identity.session_id,
+                        error = %cleanup,
+                        "could not delete a partially imported session"
+                    );
+                }
+                return Err(error);
+            }
+        }
+        self.get_for_identity(&identity).await
     }
 }
 

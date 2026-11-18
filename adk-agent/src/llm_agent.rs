@@ -2608,6 +2608,16 @@ fn callback_tool_response(
     Content { role: "function".to_string(), parts: vec![response] }
 }
 
+/// Whether a call ran and returned its result: not held, refused, skipped, failed, of
+/// unknown outcome, or withheld.
+fn completed(result: &ToolExecutionResult) -> bool {
+    result.pending.is_none()
+        && result.content.parts.iter().all(|part| {
+            part.tool_result_status()
+                .is_none_or(|status| matches!(status, ToolResultStatus::Succeeded))
+        })
+}
+
 #[derive(Clone, Copy)]
 enum ToolDispatchMode {
     Sequential,
@@ -2656,6 +2666,9 @@ struct ToolExecutor<'a> {
     expose_tool_error_messages: bool,
     /// Set when an approval fails, so calls still waiting for theirs stop waiting.
     approval_failed: tokio::sync::watch::Sender<bool>,
+    /// The ordered batches ([`Tool::batch_group`]) a call in this dispatch did not complete;
+    /// their later calls are answered with the halt text instead of running.
+    halted_batches: std::sync::Mutex<std::collections::HashSet<String>>,
     #[cfg(feature = "enhanced-plugins")]
     enhanced_plugin_manager: &'a Option<Arc<EnhancedPluginManager>>,
 }
@@ -2667,6 +2680,15 @@ impl ToolExecutor<'_> {
         strategy: ToolDispatchMode,
         fc_parts: Vec<PendingToolCall>,
     ) -> Result<Vec<ToolExecutionResult>> {
+        // An ordered batch runs in the model's order, so no strategy may overlap its calls.
+        let strategy = match strategy {
+            ToolDispatchMode::Parallel
+                if fc_parts.iter().any(|call| self.batch_of(&call.name).is_some()) =>
+            {
+                ToolDispatchMode::Sequential
+            }
+            other => other,
+        };
         let results: Vec<ToolExecutionResult> = match strategy {
             ToolDispatchMode::Sequential => {
                 let mut results = Vec::with_capacity(fc_parts.len());
@@ -2738,9 +2760,11 @@ impl ToolExecutor<'_> {
                 // call runs alone, in the model's order, so it starts only after every call
                 // listed before it has finished.
                 let is_concurrent = |call: &PendingToolCall| {
-                    self.tool_map
-                        .get(&call.name)
-                        .is_some_and(|tool| tool.is_read_only() && tool.is_concurrency_safe())
+                    self.tool_map.get(&call.name).is_some_and(|tool| {
+                        tool.is_read_only()
+                            && tool.is_concurrency_safe()
+                            && tool.batch_group().is_none()
+                    })
                 };
                 let mut all_results = Vec::with_capacity(fc_parts.len());
                 let mut calls = fc_parts.into_iter().peekable();
@@ -2786,7 +2810,26 @@ impl ToolExecutor<'_> {
             .requested_call
             .as_ref()
             .filter(|requested| requested.function_call_id == call.function_call_id);
-        let mut result = self.execute_inner(call).await?;
+        let batch = self.batch_of(&call.name);
+        let halted = batch.as_ref().is_some_and(|batch| {
+            self.halted_batches
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(batch.name.as_ref())
+        });
+        let mut result = match &batch {
+            Some(batch) if halted => self.halted_call(call, batch).await?,
+            _ => self.execute_inner(call).await?,
+        };
+        // A call of an ordered batch that did not complete stops the rest of the batch.
+        if let Some(batch) = &batch
+            && !completed(&result)
+        {
+            self.halted_batches
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(batch.name.to_string());
+        }
         // Tool guardrails see the result the model is about to be sent, after every after-tool
         // stage. A held call's pending response is not a result.
         if let Some((name, args)) = screened_call
@@ -2832,6 +2875,38 @@ impl ToolExecutor<'_> {
         // Runner commits each result while other calls are still awaiting approval.
         let _ = self.progress_tx.send(event).await;
         Ok(result)
+    }
+
+    /// The ordered batch a call to `name` belongs to.
+    fn batch_of(&self, name: &str) -> Option<adk_core::BatchGroup> {
+        self.tool_map.get(name).and_then(|tool| tool.batch_group())
+    }
+
+    /// Answers a call of a halted batch with the batch's halt text, without running it.
+    async fn halted_call(
+        &self,
+        call: PendingToolCall,
+        batch: &adk_core::BatchGroup,
+    ) -> Result<ToolExecutionResult> {
+        self.record_short_circuit(&call.name, &call.function_call_id, &call.args, "batch_halt")
+            .await?;
+        let mut part = Part::FunctionResponse {
+            function_response: FunctionResponseData::new(
+                call.name,
+                serde_json::Value::String(batch.halt_text.to_string()),
+            ),
+            id: call.id,
+            annotations: None,
+        };
+        part.set_tool_result_status(ToolResultStatus::NotRun, None);
+        Ok(ToolExecutionResult {
+            index: call.index,
+            content: Content { role: "function".to_string(), parts: vec![part] },
+            actions: EventActions::default(),
+            escalate_or_skip: false,
+            pending: None,
+            executed: false,
+        })
     }
 
     /// The text logged for an error message, see [`traced_message`].
@@ -4081,6 +4156,7 @@ impl Agent for LlmAgent {
                     tool_timeout,
                     expose_tool_error_messages,
                     approval_failed: tokio::sync::watch::channel(false).0,
+                    halted_batches: Default::default(),
                     #[cfg(feature = "enhanced-plugins")]
                     enhanced_plugin_manager: &enhanced_plugin_manager,
                 };
@@ -4226,6 +4302,7 @@ impl Agent for LlmAgent {
                     tool_timeout,
                     expose_tool_error_messages,
                     approval_failed: tokio::sync::watch::channel(false).0,
+                    halted_batches: Default::default(),
                     #[cfg(feature = "enhanced-plugins")]
                     enhanced_plugin_manager: &enhanced_plugin_manager,
                 };
@@ -5461,6 +5538,7 @@ impl Agent for LlmAgent {
                         tool_timeout,
                         expose_tool_error_messages,
                         approval_failed: tokio::sync::watch::channel(false).0,
+                        halted_batches: Default::default(),
                         #[cfg(feature = "enhanced-plugins")]
                         enhanced_plugin_manager: &enhanced_plugin_manager,
                     };

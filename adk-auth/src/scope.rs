@@ -82,6 +82,11 @@ macro_rules! impl_scoped_tool {
                 ($inner).egress(args)
             }
 
+            fn batch_group(&self) -> Option<adk_core::BatchGroup> {
+                let $self_ident = self;
+                ($inner).batch_group()
+            }
+
             fn annotations(&self) -> Option<&Value> {
                 let $self_ident = self;
                 ($inner).annotations()
@@ -182,6 +187,11 @@ macro_rules! impl_scoped_tool {
             fn egress(&self, args: &Value) -> adk_core::egress::ToolEgress {
                 let $self_ident = self;
                 ($inner).egress(args)
+            }
+
+            fn batch_group(&self) -> Option<adk_core::BatchGroup> {
+                let $self_ident = self;
+                ($inner).batch_group()
             }
 
             fn annotations(&self) -> Option<&Value> {

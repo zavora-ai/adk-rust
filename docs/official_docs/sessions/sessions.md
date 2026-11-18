@@ -67,7 +67,11 @@ pub trait SessionService: Send + Sync {
     /// Append an event to a session
     async fn append_event(&self, session_id: &str, event: Event) -> Result<()>;
 
-    /// Rewind a session to an event, or by a number of events (default: Unsupported)
+    /// Read, rewrite, and import history; fork, rewind, and rewind_steps build on these
+    async fn history(&self, identity: &AdkIdentity) -> Result<SessionHistory>;
+    async fn rewrite_history(&self, req: RewriteHistoryRequest) -> Result<HistoryOutcome>;
+    async fn import_session(&self, req: ImportSessionRequest) -> Result<Box<dyn Session>>;
+    async fn fork(&self, req: ForkRequest) -> Result<HistoryOutcome>;
     async fn rewind(&self, identity: &AdkIdentity, target_event_id: &str) -> Result<Box<dyn Session>>;
     async fn rewind_steps(&self, identity: &AdkIdentity, steps: usize) -> Result<Box<dyn Session>>;
 }
@@ -86,7 +90,8 @@ The trait also has identity-addressed methods (`get_for_identity`, `append_event
 | `append_event`, `append_event_for_identity` to a missing session | Fails with `session.not_found` |
 | Event order | Timestamp order; events with equal timestamps keep their append order |
 | `list` | Most recently updated first; equal update times by session ID, descending, so `offset`/`limit` pages are stable |
-| `rewind`, `rewind_steps` | Change only the session the identity names, and rebuild its state from the state it was created with plus the remaining events' deltas; app and user state are not rewound |
+| `rewind`, `rewind_steps`, `rewrite_history` | Change only the session the identity names, and rebuild its state from the state it was created with plus the remaining events' deltas; app and user state are not rewound. See [Fork, Rewind, and Edit History](history.md) |
+| `fork` | Creates a session of the same app and user with the source's events up to an event and the state there; the source does not change |
 | `delete_all_sessions(app, user)` | Erases every session of the user in the app with its events, and the user's `user:` tier, also when no session is left; the `app:` tier, the user's data in other apps and other users' data stay; a repeated call succeeds |
 
 `delete_all_sessions` is the call that erases a user's session data: no other method removes
@@ -109,8 +114,10 @@ Strings containing U+0000 in event content and state read back unchanged. Postgr
 them in an escaped form, since `JSONB` cannot hold U+0000; strings without U+0000 are stored as
 they are.
 
-Rewind is implemented by `InMemorySessionService`, `SqliteSessionService`, and
-`EncryptedSession` over either; the other backends return `session.rewind.unsupported`.
+Every backend forks, and every backend except Vertex AI rewinds and edits history in place;
+the Vertex AI Session API cannot delete events, so it returns `session.history.unsupported` and
+a fork takes the place of a rewind. [Fork, Rewind, and Edit History](history.md) covers the
+operations, their rules, and each backend.
 
 ```rust
 use adk_core::identity::{AdkIdentity, AppName, SessionId, UserId};

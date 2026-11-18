@@ -37,6 +37,11 @@ pub struct ToolResultBlock {
     /// contains error information rather than successful output.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
+
+    /// The client toolset of the call this answers (`computer` or `browser`). A result for
+    /// a toolset member must echo it, and a result for any other call must not carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolset_name: Option<String>,
 }
 
 /// The content of a tool result block, which can be either a string or an array of content items.
@@ -65,7 +70,35 @@ impl From<&str> for ToolResultBlockContent {
 impl ToolResultBlock {
     /// Create a new `ToolResultBlock` with the given tool use ID.
     pub fn new(tool_use_id: String) -> Self {
-        Self { tool_use_id, cache_control: None, content: None, is_error: None }
+        Self { tool_use_id, cache_control: None, content: None, is_error: None, toolset_name: None }
+    }
+
+    /// Echoes the client toolset (`computer` or `browser`) of the member call this answers.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_anthropic::{BROWSER_BATCH_HALT_TEXT, BROWSER_TOOLSET, ToolResultBlock};
+    /// use serde_json::json;
+    ///
+    /// let skipped = ToolResultBlock::new("toolu_2".into())
+    ///     .with_toolset_name(BROWSER_TOOLSET)
+    ///     .with_string_content(BROWSER_BATCH_HALT_TEXT.into())
+    ///     .with_error(true);
+    /// assert_eq!(
+    ///     serde_json::to_value(&skipped).unwrap(),
+    ///     json!({
+    ///         "type": "tool_result",
+    ///         "tool_use_id": "toolu_2",
+    ///         "toolset_name": "browser",
+    ///         "is_error": true,
+    ///         "content": "Not executed: an earlier action in this turn failed."
+    ///     })
+    /// );
+    /// ```
+    pub fn with_toolset_name(mut self, toolset: impl Into<String>) -> Self {
+        self.toolset_name = Some(toolset.into());
+        self
     }
 
     /// Add a cache control to this tool result block.

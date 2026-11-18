@@ -50,7 +50,23 @@ async fn firestore_session_integrity_contract() {
     common::integrity_contract::assert_event_order_contract(&service, &app).await;
     common::integrity_contract::assert_nul_round_trip_contract(&service, &app).await;
     common::integrity_contract::assert_list_order_contract(&service, &app).await;
-    common::integrity_contract::assert_rewind_unsupported(&service, &app).await;
+    common::integrity_contract::assert_rewind_contract_scoped(
+        &service,
+        &app,
+        common::integrity_contract::IdScope::PerApp,
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires the Firestore emulator at FIRESTORE_EMULATOR_HOST"]
+async fn firestore_session_history_contract() {
+    common::history_contract::assert_history_contract_scoped(
+        &service().await,
+        &run_app("history"),
+        common::history_contract::IdScope::PerApp,
+    )
+    .await;
 }
 
 #[tokio::test]

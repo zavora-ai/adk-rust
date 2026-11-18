@@ -19,7 +19,7 @@
 //! | [`TodoList`], [`WriteTodosTool`], [`UpdateTodoTool`] | §7.6 |
 //! | [`InstructionsConfig`], [`ProjectInstructions`], [`WorkspaceTrustStore`] | §7.7 |
 //! | `SkillsConfig` (feature `skills`) | §7.8 |
-//! | [`ShellIsolation`], [`HarnessBashTool`], [`ShellLedger`]; `ContainerBashTool`, `ContainerConfig` (feature `docker`) | §7.9 |
+//! | [`ShellIsolation`], [`HarnessBashTool`], [`ShellLedger`]; `ContainerBashTool`, `ContainerConfig` (feature `docker`); `RemoteShellConfig`, the remote sandbox shell over any `SandboxClient` (feature `remote-shell`) | §7.9 |
 //! | `SpendReport`, `LoopGuard`, `harness.*` span attributes (feature `observe`) | §7.13 |
 //! | `RbacMap`, `ShellCredential`, `EphemeralAuditLog` (feature `auth`) | §7.14 |
 //! | `MemoryConfig`, `FileMemory`, `memory_*` tools (feature `memory`) | §7.15 |
@@ -32,7 +32,7 @@
 //! | [`coding::CodingAgent`] | §7.19 |
 //! | [`Preset`], [`personal::PersonalAgent`], [`personal::PersonalWorkspace`], [`personal::PersonalSettings`] | spec 3.3 §10 H1 |
 //! | [`take_over::TakeOver`], [`take_over::TakeOverRequest`], [`take_over::TakeOverAnswer`] | spec 3.3 §8.2, §10 H2 |
-//! | [`WebConfig`], [`SearchProvider`], [`ProviderWebTools`], [`WebSearchPath`], `web_fetch`, `web_search`, `SearxngSearch`, `DeepSeekSearch` (feature `web`) | §7.20 |
+//! | [`WebConfig`], [`UrlProvenance`], [`SearchProvider`], [`ProviderWebTools`], [`WebSearchPath`], `web_fetch`, `web_search`, `SearxngSearch`, `DeepSeekSearch` (feature `web`) | §7.20 |
 //! | [`McpInteractionConfig`], `HarnessElicitationHandler`, `HarnessSamplingHandler`, `mcp_*_resource` (feature `mcp`) | §7.21 |
 //! | [`EffortPolicy`], [`Effort`] | §7.23 |
 //! | `encrypted::{StoreKeySource, StoreKeyring, StoreEnvelope, StoreRotation}` (feature `encrypted`) | §7.12 |
@@ -283,6 +283,10 @@ pub use read_records::PostgresReadRecords;
 pub use read_records::RedisReadRecords;
 #[cfg(feature = "sqlite")]
 pub use read_records::SqliteReadRecords;
+#[cfg(any(feature = "docker", feature = "remote-shell"))]
+pub use shell::ContainerBashTool;
+#[cfg(feature = "remote-shell")]
+pub use shell::RemoteShellConfig;
 #[cfg(feature = "sqlite")]
 pub use shell::SqliteShellLedger;
 #[cfg(feature = "sqlite")]
@@ -294,7 +298,7 @@ pub use shell::{
     ShellPidRecord, ShellPidRegistry, ShellStatus, ShellSupervisor, reap_orphaned_shells,
 };
 #[cfg(feature = "docker")]
-pub use shell::{ContainerBashTool, ContainerConfig, DEFAULT_CONTAINER_IMAGE};
+pub use shell::{ContainerConfig, DEFAULT_CONTAINER_IMAGE};
 pub use shell::{
     InMemoryShellLedger, IsolationStatus, SANDBOX_UNAVAILABLE_CODE, ShellConfig, ShellIsolation,
     ShellLedger, ShellLedgerEntry,
@@ -326,4 +330,6 @@ pub use toolset::HarnessToolset;
 pub use web::WebSearchPath;
 #[cfg(feature = "web")]
 pub use web::{DeepSeekSearch, SearxngSearch};
-pub use web::{ProviderWebTools, SearchDomains, SearchHit, SearchProvider, WebConfig};
+pub use web::{
+    ProviderWebTools, SearchDomains, SearchHit, SearchProvider, UrlProvenance, WebConfig,
+};

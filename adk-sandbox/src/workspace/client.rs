@@ -2,24 +2,26 @@
 //!
 //! The [`SandboxClient`] trait abstracts sandbox provisioning, session
 //! management, and snapshot/resume capabilities. Implementations manage
-//! the underlying sandbox infrastructure (local directories or Docker
-//! containers).
+//! the underlying sandbox infrastructure: local directories, Docker
+//! containers, or remote microVMs (E2B with `remote-e2b`, Daytona with
+//! `remote-daytona`).
 //!
 //! # Lifecycle
 //!
 //! ```text
-//! provision(manifest) → SessionHandle
-//!     start(handle) → Box<dyn SandboxSession>
-//!         ... operations ...
+//! provision(manifest) → SessionHandle           create
+//!     start(handle) → Box<dyn SandboxSession>   attach (resumes a paused environment)
+//!         ... exec, read_file, write_file, upload, download ...
 //!         snapshot(handle) → SnapshotId
-//!     stop(handle)
-//! resume(snapshot_id) → SessionHandle
+//!         pause(handle)                          where capabilities().pause
+//!     stop(handle)                               destroy
+//! resume(snapshot_id) → SessionHandle            create from a snapshot
 //! ```
 
 use async_trait::async_trait;
 
 use super::session::SandboxSession;
-use super::types::{SessionHandle, SnapshotId};
+use super::types::{ClientCapabilities, SessionHandle, SnapshotId};
 use crate::error::SandboxError;
 use crate::workspace::manifest::Manifest;
 
@@ -72,13 +74,18 @@ pub trait SandboxClient: Send + Sync {
     ///
     /// Returns `SandboxError::SessionNotFound` if the handle does not
     /// reference a valid provisioned session.
+    ///
+    /// Starting a handle another process provisioned attaches to that environment, for a
+    /// client that can look it up by id (the remote providers can; `SessionHandle::new`
+    /// with the provider's sandbox id builds the handle).
     async fn start(&self, handle: &SessionHandle) -> Result<Box<dyn SandboxSession>, SandboxError>;
 
     /// Stops a running session, releasing associated resources.
     ///
     /// After stopping, the session handle is no longer valid for
     /// `start` operations. Any running child processes associated
-    /// with the session are terminated.
+    /// with the session are terminated. A remote provider's environment is destroyed, so
+    /// it costs nothing further; snapshots taken from it remain.
     ///
     /// # Errors
     ///
@@ -110,6 +117,33 @@ pub trait SandboxClient: Send + Sync {
     /// Returns `SandboxError::SnapshotNotFound` if the snapshot ID
     /// does not reference a valid snapshot.
     async fn resume(&self, snapshot_id: &SnapshotId) -> Result<SessionHandle, SandboxError>;
+
+    /// The provider's name, such as `local`, `docker`, `e2b` or `daytona`, as audit records
+    /// and errors name it. The default is `custom`.
+    fn provider(&self) -> &str {
+        "custom"
+    }
+
+    /// What the client supports beyond provision, start, exec and stop. The default
+    /// claims nothing.
+    fn capabilities(&self) -> ClientCapabilities {
+        ClientCapabilities::default()
+    }
+
+    /// Suspends the environment so it stops costing compute; [`start`](Self::start)
+    /// resumes it with its filesystem and, where the provider keeps it, its memory.
+    ///
+    /// # Errors
+    ///
+    /// The default returns `SandboxError::Unsupported`; a client whose
+    /// [`capabilities`](Self::capabilities) report `pause` overrides it.
+    async fn pause(&self, handle: &SessionHandle) -> Result<(), SandboxError> {
+        let _ = handle;
+        Err(SandboxError::Unsupported {
+            provider: self.provider().to_string(),
+            operation: "pause".to_string(),
+        })
+    }
 }
 
 impl std::fmt::Debug for dyn SandboxClient {

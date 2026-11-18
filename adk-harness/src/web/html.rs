@@ -67,6 +67,52 @@ const BLOCK: &[&str] = &[
 /// assert!(!text.contains("secret"));
 /// ```
 pub fn html_to_text(html: &str, shape: TextShape) -> String {
+    convert(html, shape, None)
+}
+
+/// [`html_to_text`] for a page fetched from `base`: each relative link is written as the
+/// absolute URL it resolves to, so a link the page gives is a URL the conversation holds
+/// ([`UrlProvenance`](super::UrlProvenance)).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_harness::web::{ParsedUrl, TextShape, html_to_text_at};
+///
+/// let base = ParsedUrl::parse("https://docs.example/guide/intro").unwrap();
+/// let html = r#"<a href="/v2">v2</a> <a href="setup?os=mac">setup</a> <a href="mailto:a@b.example">mail</a>"#;
+/// assert_eq!(
+///     html_to_text_at(html, TextShape::Markdown, &base),
+///     "[v2](https://docs.example/v2) [setup](https://docs.example/guide/setup?os=mac) \
+///      [mail](mailto:a@b.example)"
+/// );
+/// ```
+pub fn html_to_text_at(html: &str, shape: TextShape, base: &super::ParsedUrl) -> String {
+    convert(html, shape, Some(base))
+}
+
+/// `href` as an absolute URL against `base`; a link with a scheme, a fragment-only link, or
+/// one that does not resolve stays as written.
+fn resolve_href(href: String, base: Option<&super::ParsedUrl>) -> String {
+    let Some(base) = base else { return href };
+    let trimmed = href.trim();
+    let has_scheme = trimmed.split_once(':').is_some_and(|(scheme, _)| {
+        scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    });
+    if trimmed.is_empty() || trimmed.starts_with('#') || has_scheme {
+        return href;
+    }
+    if let Some(query) = trimmed.strip_prefix('?') {
+        let mut url = base.clone();
+        url.query = Some(query.to_string());
+        url.fragment = None;
+        return url.as_string();
+    }
+    base.join(trimmed).map_or(href, |url| url.as_string())
+}
+
+fn convert(html: &str, shape: TextShape, base: Option<&super::ParsedUrl>) -> String {
     let mut out = String::with_capacity(html.len() / 2);
     let mut rest = html;
     // Element names whose content is being dropped, with the depth of same-name nesting.
@@ -136,7 +182,7 @@ pub fn html_to_text(html: &str, shape: TextShape) -> String {
                     push_text(&mut out, "", &mut pending_space);
                     flush_space(&mut out, &mut pending_space);
                     out.push('[');
-                    link = Some((href, out.len()));
+                    link = Some((resolve_href(href, base), out.len()));
                 }
             }
             "a" if closing => {
