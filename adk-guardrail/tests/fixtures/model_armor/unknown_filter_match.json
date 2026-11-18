@@ -1,0 +1,15 @@
+{
+  "sanitizationResult": {
+    "filterMatchState": "MATCH_FOUND",
+    "invocationResult": "SUCCESS",
+    "filterResults": {
+      "future_filter": {
+        "futureFilterResult": {
+          "executionState": "EXECUTION_SUCCESS",
+          "matchState": "MATCH_FOUND",
+          "newField": 3
+        }
+      }
+    }
+  }
+}

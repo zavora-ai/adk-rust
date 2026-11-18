@@ -1,0 +1,46 @@
+{
+  "sanitizationResult": {
+    "filterMatchState": "NO_MATCH_FOUND",
+    "invocationResult": "SUCCESS",
+    "filterResults": {
+      "csam": {
+        "csamFilterFilterResult": {
+          "executionState": "EXECUTION_SUCCESS",
+          "matchState": "NO_MATCH_FOUND"
+        }
+      },
+      "malicious_uris": {
+        "maliciousUriFilterResult": {
+          "executionState": "EXECUTION_SUCCESS",
+          "matchState": "NO_MATCH_FOUND"
+        }
+      },
+      "rai": {
+        "raiFilterResult": {
+          "executionState": "EXECUTION_SUCCESS",
+          "matchState": "NO_MATCH_FOUND",
+          "raiFilterTypeResults": {
+            "sexually_explicit": { "matchState": "NO_MATCH_FOUND" },
+            "hate_speech": { "matchState": "NO_MATCH_FOUND" },
+            "harassment": { "matchState": "NO_MATCH_FOUND" },
+            "dangerous": { "matchState": "NO_MATCH_FOUND" }
+          }
+        }
+      },
+      "pi_and_jailbreak": {
+        "piAndJailbreakFilterResult": {
+          "executionState": "EXECUTION_SUCCESS",
+          "matchState": "NO_MATCH_FOUND"
+        }
+      },
+      "sdp": {
+        "sdpFilterResult": {
+          "inspectResult": {
+            "executionState": "EXECUTION_SUCCESS",
+            "matchState": "NO_MATCH_FOUND"
+          }
+        }
+      }
+    }
+  }
+}

@@ -30,11 +30,20 @@ tracing = { workspace = true }
 # Optional: JSON Schema validation
 jsonschema = { workspace = true, optional = true }
 
+# Optional: Google Cloud Model Armor
+adk-gcp = { workspace = true, optional = true }
+google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
+reqwest = { workspace = true, optional = true }
+
 [features]
 default = ["schema"]
 schema = ["dep:jsonschema"]
+# Model Armor guardrails for user input, model output, and tool results
+model-armor = ["dep:adk-gcp", "dep:google-cloud-auth", "dep:reqwest"]
 
 [dev-dependencies]
 tempfile = "3"
+# Mock Model Armor endpoint for the contract tests.
+wiremock = "0.6"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing-subscriber = { workspace = true }

@@ -19,8 +19,14 @@ Guardrails validate and transform agent inputs and outputs to ensure safety, com
 adk-guardrail = "3.0.0"
 ```
 
-The `schema` feature, on by default, provides `SchemaValidator`; build with
-`default-features = false` to leave out the `jsonschema` dependency.
+| Feature | Default | Enables |
+|---------|---------|---------|
+| `schema` | yes | `SchemaValidator`, through the `jsonschema` dependency |
+| `model-armor` | no | [Model Armor](#model-armor) guardrails for input, output and tool results (`adk-gcp`, `google-cloud-auth`) |
+
+Build with `default-features = false` to leave out the `jsonschema` dependency. Through the
+`adk-rust` umbrella, `gcp-model-armor` turns on `model-armor`, and `gemini-agent-platform`
+includes it.
 
 ## Core Concepts
 
@@ -557,6 +563,88 @@ turn is then screened by the output guardrails as well.
 
 A `ToolGuardrailSet` is also an `adk_core::ToolResultScreen`, which is how the realtime runtimes
 take it (`tool_result_screen`); see [Tools in Realtime Sessions](../realtime/tools.md#screening-tool-results).
+
+## Model Armor
+
+[Google Cloud Model Armor](https://cloud.google.com/security-command-center/docs/model-armor-overview)
+screens text against a template of filters: prompt injection and jailbreak, Responsible AI
+categories, Sensitive Data Protection, malicious URIs and CSAM. With the `model-armor` feature,
+`ModelArmor` binds one template and hands out a guardrail for each place a guardrail runs:
+
+| Guardrail | Agent set | Model Armor method |
+|-----------|-----------|--------------------|
+| `armor.prompt_guardrail()` | `input_guardrails` | `sanitizeUserPrompt` |
+| `armor.response_guardrail()` | `output_guardrails` | `sanitizeModelResponse` |
+| `armor.tool_result_guardrail()` | `tool_guardrails` | `sanitizeUserPrompt` |
+
+A tool result becomes input to the model, so it is screened as a prompt, where prompt-injection
+detection applies.
+
+```rust
+use adk_agent::LlmAgentBuilder;
+use adk_guardrail::model_armor::{FailMode, ModelArmor};
+use adk_guardrail::{GuardrailSet, ToolGuardrailSet};
+
+// model: Arc<dyn Llm>, fetch_page: Arc<dyn Tool>
+
+let armor = ModelArmor::builder("projects/my-project/locations/us-central1/templates/agent-screen")
+    .fail_mode(FailMode::Closed)
+    .build()?;
+
+let agent = LlmAgentBuilder::new("assistant")
+    .model(model)
+    .tool(fetch_page)
+    .input_guardrails(GuardrailSet::new().with(armor.prompt_guardrail()))
+    .output_guardrails(GuardrailSet::new().with(armor.response_guardrail()))
+    .tool_guardrails(ToolGuardrailSet::new().with(armor.tool_result_guardrail()))
+    .build()?;
+```
+
+The template must be its full resource name. Requests go to the template's regional endpoint,
+`https://modelarmor.{location}.rep.googleapis.com/v1/...`, with Application Default Credentials
+and a 15-second timeout.
+
+| Builder method | Default | Sets |
+|----------------|---------|------|
+| `fail_mode(FailMode)` | `FailMode::Closed` | What happens to content Model Armor could not screen |
+| `severity(Severity)` | `Severity::High` | The severity of a match; a CSAM match is always `Critical` |
+| `name(..)` | `"model_armor"` | The guardrail name that blocks and warnings report |
+| `endpoint(..)` | the regional endpoint | Another HTTPS origin, or HTTP to a loopback host for tests |
+| `credentials(Credentials)` | Application Default Credentials | Explicit `google-cloud-auth` credentials |
+| `request_timeout(Duration)` | 15 s | The per-request timeout |
+
+### What a screening decides
+
+| Model Armor reports | Content guardrail | Tool result guardrail |
+|---------------------|-------------------|-----------------------|
+| `NO_MATCH_FOUND`, invocation `SUCCESS` | `Pass` | Delivered |
+| A match | `Fail` at the configured severity, naming each matching filter | Withheld, with the same reason |
+| Only a Sensitive Data Protection match, with a de-identification | `Transform` to the de-identified text | Revised to the de-identified result, parsed back to JSON when it still parses |
+| A failed call, or invocation `PARTIAL` or `FAILURE` without a match | `FailMode::Closed`: `Fail` at the configured severity. `FailMode::Open`: `Fail` at `Low` | `Closed`: withheld. `Open`: delivered, and the failure is logged |
+
+A match from a filter this release does not know still blocks; it is reported as `unknown`.
+Content with no text is not sent.
+
+### Where the decision is recorded
+
+Model Armor decisions are recorded where every guardrail decision is:
+
+- **A block** is the structured `guardrail.input_blocked` or `guardrail.output_blocked` error.
+  `details.metadata["failures"]` carries the reason, which names the template and each matching
+  filter with its category, confidence and info types, for example
+  `Model Armor template projects/p/locations/us-central1/templates/t matched: pi_and_jailbreak (HIGH)`.
+  The reason never quotes the content.
+- **A fail-open pass** is a `Low` failure: an output event records it under
+  `adk.guardrail.warnings`, and an input screening logs it.
+- **A withheld tool result** is the `result_withheld` response the model and the session see.
+- **Every screening** is logged at `info` with the template, method, invocation result and
+  matching filters, and every failed call at `warn` with its error code.
+
+The runner screens a user message before saving it, and the agent screens it again, so each user
+message costs two `sanitizeUserPrompt` calls. Size the template's quota for it.
+
+The raw methods, `armor.sanitize_user_prompt(text)` and `armor.sanitize_model_response(text)`,
+return the parsed `SanitizationResult` for callers that decide for themselves.
 
 ## Input Guardrails and the Session
 
