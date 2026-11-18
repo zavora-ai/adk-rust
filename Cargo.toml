@@ -85,6 +85,9 @@ members = [
 
     # The prebuilt AWP website: kinds, team, onboarding, jobs (spec 3.5 Part C)
     "adk-website",
+
+    # Local-first perception: media, regions, manifests, traits, runtime (spec 3.7)
+    "adk-vision",
 ]
 exclude = [
     # Extracted to standalone repo: https://github.com/zavora-ai/adk-studio
@@ -251,3 +254,4 @@ adk-awp = { path = "adk-awp", version = "3.0.0" }
 adk-acp = { path = "adk-acp", version = "3.0.0" }
 adk-site = { path = "adk-site", version = "3.0.0" }
 adk-website = { path = "adk-website", version = "3.0.0" }
+adk-vision = { path = "adk-vision", version = "3.0.0" }

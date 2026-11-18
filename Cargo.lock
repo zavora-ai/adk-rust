@@ -1538,6 +1538,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-vision"
+version = "3.0.0"
+dependencies = [
+ "adk-artifact",
+ "adk-core",
+ "adk-vision",
+ "async-trait",
+ "chrono",
+ "hex",
+ "hf-hub 0.5.0",
+ "image",
+ "jsonschema",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "toml 0.8.23",
+ "tracing",
+ "ureq 3.5.2",
+ "uuid 1.29.2",
+]
+
+[[package]]
 name = "adk-website"
 version = "3.0.0"
 dependencies = [
