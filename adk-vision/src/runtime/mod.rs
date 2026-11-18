@@ -489,7 +489,9 @@ impl VisionRuntime {
         // X2: chain `.with_units(units.clone())` once adk-core's `UsageCall::with_units` is on
         // main, so `RunBudget::max_units` refuses the call over a per-unit cap before its
         // request (spec 3.7 S7).
-        let call = UsageCall::new(vendor, model).with_max_cost_micro_usd(cost.unwrap_or(0));
+        let call = UsageCall::new(vendor, model)
+            .with_max_cost_micro_usd(cost.unwrap_or(0))
+            .with_units(units.clone());
         let failure: Arc<Mutex<Option<VisionError>>> = Arc::new(Mutex::new(None));
         let stash = Arc::clone(&failure);
         let cancel = cx.cancellation().clone();

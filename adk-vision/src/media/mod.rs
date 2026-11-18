@@ -19,45 +19,7 @@ pub use store::{MediaScope, MediaStore};
 
 use crate::digest::Digest;
 
-/// Where an artifact lives in the `ArtifactService`: app, user, session, file name and the
-/// exact version.
-///
-/// The same shape and wire form as the `adk_core::ArtifactLocator` that approval evidence
-/// uses (spec 3.7 X4); this crate re-exports that type once it is on main.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub struct ArtifactLocator {
-    /// Application namespace.
-    pub app_name: String,
-    /// Owning user.
-    pub user_id: String,
-    /// Session the artifact belongs to.
-    pub session_id: String,
-    /// Artifact file name.
-    pub file_name: String,
-    /// Artifact version.
-    pub version: i64,
-}
-
-impl ArtifactLocator {
-    /// The locator of `version` of `file_name` in the given session.
-    pub fn new(
-        app_name: impl Into<String>,
-        user_id: impl Into<String>,
-        session_id: impl Into<String>,
-        file_name: impl Into<String>,
-        version: i64,
-    ) -> Self {
-        Self {
-            app_name: app_name.into(),
-            user_id: user_id.into(),
-            session_id: session_id.into(),
-            file_name: file_name.into(),
-            version,
-        }
-    }
-}
+pub use adk_core::ArtifactLocator;
 
 /// An artifact's locator as a URI, `artifact://<app>/<user>/<session>/<file>#<version>`, the
 /// form image parts carry in their `uri`.
