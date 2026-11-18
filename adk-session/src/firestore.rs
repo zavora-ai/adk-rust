@@ -685,7 +685,7 @@ impl FirestoreStore {
                 .one(&commit.session_id)
                 .await
                 .map_err(|e| firestore_error("query failed", e))?;
-            if !commit.guard.holds(current.as_ref(), &commit) {
+            if !commit.guard.holds(current.as_ref(), commit) {
                 return Ok(false);
             }
 
