@@ -225,6 +225,8 @@ tracing-subscriber = { workspace = true, features = ["registry"] }
 # The managed form's replay to an `adk-enterprise` client over a local HTTP surface, and
 # the Agent Engine dispatch served locally (spec 3.1 §7.18, H9).
 adk-enterprise = { path = "../adk-enterprise" }
+# The live remote-shell and sandbox-tool runs in E2B and Daytona.
+adk-sandbox = { path = "../adk-sandbox", features = ["remote-e2b", "remote-daytona"] }
 axum = "0.8"
 reqwest = { workspace = true }
 

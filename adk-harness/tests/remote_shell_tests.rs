@@ -570,6 +570,24 @@ fn live_model() -> (String, Arc<dyn adk_core::Llm>) {
     (name, Arc::new(model))
 }
 
+fn live_e2b_client() -> adk_sandbox::workspace::remote::E2bClient {
+    let env = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.env");
+    let _ = dotenvy::from_path_override(&env);
+    let config = adk_sandbox::workspace::remote::E2bConfig::from_env()
+        .expect("E2B_API_KEY")
+        .with_timeout(Duration::from_secs(300));
+    adk_sandbox::workspace::remote::E2bClient::new(config).unwrap()
+}
+
+fn live_daytona_client() -> adk_sandbox::workspace::remote::DaytonaClient {
+    let env = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.env");
+    let _ = dotenvy::from_path_override(&env);
+    let config = adk_sandbox::workspace::remote::DaytonaConfig::from_env()
+        .expect("DAYTONA_API_KEY")
+        .with_ttl(Duration::from_secs(600));
+    adk_sandbox::workspace::remote::DaytonaClient::new(config).unwrap()
+}
+
 const SALES: &[u8] = b"region,amount\nnorth,1200.50\nsouth,830.25\neast,410.00\nwest,1559.25\n";
 
 /// The harness shell through `ShellIsolation::Remote` over the process-backed client: the
@@ -578,14 +596,37 @@ const SALES: &[u8] = b"region,amount\nnorth,1200.50\nsouth,830.25\neast,410.00\n
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "live: needs ANTHROPIC_API_KEY in the workspace .env"]
 async fn live_remote_shell_runs_the_models_commands_in_the_environment() {
-    let (name, model) = live_model();
-    let dir = tempfile::tempdir().unwrap();
     let base = tempfile::tempdir().unwrap();
     let client =
         Arc::new(LocalUnixClient::new(Some(base.path().join("ws")), base.path().join("snap")));
-    let config = RemoteShellConfig::new(client.clone()).with_manifest(Manifest::new(vec![
-        ManifestEntry::File { path: "sales.csv".into(), content: SALES.to_vec() },
-    ]));
+    live_remote_shell_sums_the_seeded_file(client.clone(), "local").await;
+    assert!(client.sessions.read().await.is_empty(), "close released the environment");
+}
+
+/// The same run in an E2B microVM.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: needs ANTHROPIC_API_KEY and E2B_API_KEY in the workspace .env"]
+async fn live_remote_shell_runs_the_models_commands_in_an_e2b_microvm() {
+    let client = Arc::new(live_e2b_client());
+    live_remote_shell_sums_the_seeded_file(client, "e2b").await;
+}
+
+/// The same run in a Daytona sandbox.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: needs ANTHROPIC_API_KEY and DAYTONA_API_KEY in the workspace .env"]
+async fn live_remote_shell_runs_the_models_commands_in_a_daytona_sandbox() {
+    let client = Arc::new(live_daytona_client());
+    live_remote_shell_sums_the_seeded_file(client, "daytona").await;
+}
+
+async fn live_remote_shell_sums_the_seeded_file(client: Arc<dyn SandboxClient>, provider: &str) {
+    let (name, model) = live_model();
+    let dir = tempfile::tempdir().unwrap();
+    let config =
+        RemoteShellConfig::new(client).with_manifest(Manifest::new(vec![ManifestEntry::File {
+            path: "sales.csv".into(),
+            content: SALES.to_vec(),
+        }]));
     let agent = Arc::new(
         adk_harness::HarnessAgent::builder("harness")
             .model(model)
@@ -648,11 +689,10 @@ async fn live_remote_shell_runs_the_models_commands_in_the_environment() {
     }
     println!("reply: {reply}");
     assert!(!begins.is_empty(), "the model never ran bash");
-    assert!(begins.iter().all(|r| r.ext["enforcer"] == "remote" && r.ext["provider"] == "local"));
+    assert!(begins.iter().all(|r| r.ext["enforcer"] == "remote" && r.ext["provider"] == provider));
     assert!(reply.replace(',', "").contains("4000"), "the total is 4000.00: {reply}");
     assert!(!dir.path().join("sales.csv").exists(), "the file lives only in the environment");
     harness.close().await;
-    assert!(client.sessions.read().await.is_empty(), "close released the environment");
 }
 
 /// An `LlmAgent` with `SandboxTool` over `SessionBackend`: the call goes through the governed
@@ -660,11 +700,30 @@ async fn live_remote_shell_runs_the_models_commands_in_the_environment() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "live: needs ANTHROPIC_API_KEY in the workspace .env"]
 async fn live_sandbox_tool_runs_code_through_a_session_backend() {
-    let (name, model) = live_model();
     let base = tempfile::tempdir().unwrap();
     let client =
         Arc::new(LocalUnixClient::new(Some(base.path().join("ws")), base.path().join("snap")));
-    let backend = Arc::new(adk_sandbox::workspace::SessionBackend::new(client.clone()));
+    live_sandbox_tool_sums_squares(client.clone()).await;
+    assert!(client.sessions.read().await.is_empty());
+}
+
+/// The same run in an E2B microVM.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: needs ANTHROPIC_API_KEY and E2B_API_KEY in the workspace .env"]
+async fn live_sandbox_tool_runs_code_in_an_e2b_microvm() {
+    live_sandbox_tool_sums_squares(Arc::new(live_e2b_client())).await;
+}
+
+/// The same run in a Daytona sandbox.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: needs ANTHROPIC_API_KEY and DAYTONA_API_KEY in the workspace .env"]
+async fn live_sandbox_tool_runs_code_in_a_daytona_sandbox() {
+    live_sandbox_tool_sums_squares(Arc::new(live_daytona_client())).await;
+}
+
+async fn live_sandbox_tool_sums_squares(client: Arc<dyn SandboxClient>) {
+    let (name, model) = live_model();
+    let backend = Arc::new(adk_sandbox::workspace::SessionBackend::new(client));
     let agent = Arc::new(
         adk_agent::LlmAgentBuilder::new("coder")
             .model(model)
@@ -726,5 +785,4 @@ async fn live_sandbox_tool_runs_code_through_a_session_backend() {
     let handle = backend.handle().await.expect("the backend provisioned an environment");
     println!("environment: {}", handle.as_str());
     backend.close().await.unwrap();
-    assert!(client.sessions.read().await.is_empty());
 }
