@@ -280,6 +280,12 @@ stopped kernel missed; `Skip` fires only an occurrence that is on time, and `Cat
 the last `n` ([missed occurrences](../kernel/scheduling.md#cron-wakes-and-missed-occurrences)).
 A scheduled run that publishes holds `publish_status` in the inbox as the goal did.
 
+To try the trigger without waiting for 09:00, `adk-rust run-now --trigger <name>` fires it now,
+through quiet hours, budgets and the kill switch like a tick, without moving the schedule. A
+fleet of agents on the same expression can spread its starts with
+`KernelConfig::with_cron_jitter(Jitter::default())`
+([jitter and running a schedule now](../kernel/scheduling.md#jitter)).
+
 To watch one fire now, set the expression to `"0 * * * * *"` (every minute), restart
 `cargo run -- up`, and list the processes. Each run read the notes, found `STATUS.md`
 current, and published nothing:

@@ -348,8 +348,8 @@ pub use run_store::{
     RunCheckpointRef, RunFilter, RunOutcome, RunRecord, RunState,
 };
 pub use schedule::{
-    FirePlan, InMemoryScheduleStore, MissedFirePolicy, Schedule, ScheduleSpec, ScheduleStore,
-    firing_idempotency_key, plan_fires,
+    FirePlan, InMemoryScheduleStore, Jitter, MissedFirePolicy, Schedule, ScheduleSpec,
+    ScheduleStore, firing_idempotency_key, manual_idempotency_key, plan_fires,
 };
 pub use schema_adapter::{GenericSchemaAdapter, SchemaAdapter};
 pub use schema_cache::SchemaCache;

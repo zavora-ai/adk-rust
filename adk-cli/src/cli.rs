@@ -612,6 +612,26 @@ pub enum Commands {
         kernel: KernelTarget,
     },
 
+    /// Run a cron sleeper or a standing cron trigger now, outside its schedule
+    ///
+    /// The run passes quiet hours, budgets and quotas like a scheduled tick, the next tick
+    /// still fires on time, and a freeze refuses it.
+    #[cfg(feature = "harness")]
+    #[command(name = "run-now")]
+    RunNow {
+        /// Process id (or a unique prefix) of a process asleep on a cron wake
+        #[arg(required_unless_present = "trigger", conflicts_with = "trigger")]
+        pid: Option<String>,
+        /// Run the standing trigger of this name instead
+        #[arg(long)]
+        trigger: Option<String>,
+        /// A retry with the same id queues nothing new
+        #[arg(long)]
+        request_id: Option<String>,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
     /// Freeze execution on every replica: running processes park and nothing starts
     #[cfg(feature = "harness")]
     Freeze {
@@ -2005,6 +2025,30 @@ mod tests {
             Cli::try_parse_from(["adk-rust", "partitions", "set-mode", "work", "sometimes"])
                 .is_err()
         );
+    }
+
+    /// `adk-rust run-now PID` or `adk-rust run-now --trigger NAME`, never both or neither.
+    #[cfg(feature = "harness")]
+    #[test]
+    fn run_now_takes_a_process_or_a_trigger() {
+        match parse(&["adk-rust", "run-now", "abc", "--request-id", "r-1"]).command {
+            Some(Commands::RunNow { pid, trigger, request_id, .. }) => assert_eq!(
+                (pid.as_deref(), trigger, request_id.as_deref()),
+                (Some("abc"), None, Some("r-1"))
+            ),
+            _ => panic!("not the run-now command"),
+        }
+        match parse(&["adk-rust", "run-now", "--trigger", "digest"]).command {
+            Some(Commands::RunNow { pid, trigger, .. }) => {
+                assert_eq!((pid, trigger.as_deref()), (None, Some("digest")))
+            }
+            _ => panic!("not the run-now command"),
+        }
+        for args in
+            [&["adk-rust", "run-now"][..], &["adk-rust", "run-now", "abc", "--trigger", "d"]]
+        {
+            assert!(Cli::try_parse_from(args).is_err(), "{args:?} should not parse");
+        }
     }
 
     #[test]

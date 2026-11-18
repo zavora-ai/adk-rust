@@ -867,7 +867,10 @@ impl TenantKernel {
         for (expr, missed) in crons {
             let name = cron_source_name(&expr);
             let watermark = SourceWatermark::new(Arc::clone(&inner.watermarks), name.clone());
-            let source = CronWakeSource::watermarked(name, &expr, missed, Arc::new(watermark))?;
+            let mut source = CronWakeSource::watermarked(name, &expr, missed, Arc::new(watermark))?;
+            if let Some(jitter) = inner.config.salted_cron_jitter() {
+                source = source.with_jitter(jitter);
+            }
             builder = builder.wake_source(Arc::new(source));
         }
         builder.build()

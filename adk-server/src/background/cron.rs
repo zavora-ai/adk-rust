@@ -4,6 +4,17 @@
 //! targets a workflow or agent. The scheduler started by [`start_cron_scheduler`] is a
 //! [`DurableScheduler`]; run it on every replica.
 //!
+//! | Route | Does |
+//! |-------|------|
+//! | `POST /cron` | Creates a job |
+//! | `GET /cron`, `GET /cron/{job_id}` | Lists the jobs, reads one |
+//! | `PATCH /cron/{job_id}` | Pauses or resumes a job |
+//! | `POST /cron/{job_id}/run` | Runs the job now, outside its schedule ([`run_cron_job_now`]) |
+//! | `DELETE /cron/{job_id}` | Deletes a job |
+//!
+//! [`CronState::with_jitter`] spreads the jobs' fires (see the scheduler's
+//! [Jitter](super::scheduler#jitter)); [`CronState::with_audit`] records each run now.
+//!
 //! With a `RequestContextExtractor` on the server, a job belongs to the authenticated caller
 //! who created it (spec 3.1 §8.2): its runs act for that caller, and only that caller lists,
 //! reads, pauses, resumes, or deletes it — another owner's job answers `404`, and two owners
@@ -13,12 +24,16 @@
 
 use std::sync::Arc;
 
-use adk_core::schedule::{MissedFirePolicy, Schedule, ScheduleSpec};
-use adk_core::{InMemoryScheduleStore, NewRun, OnConflict, RequestContext, ScheduleStore};
+use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditRecordKind, AuditTrail};
+use adk_core::principal::SubjectRef;
+use adk_core::schedule::{Jitter, MissedFirePolicy, Schedule, ScheduleSpec};
+use adk_core::{
+    Enqueued, InMemoryScheduleStore, NewRun, OnConflict, RequestContext, ScheduleStore,
+};
 use axum::{
     Extension, Json, Router,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -177,23 +192,37 @@ pub struct PatchCronJobRequest {
 
 /// Shared state for the cron endpoints and the scheduler.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct CronState {
     /// Where schedules are stored.
     pub schedules: Arc<dyn ScheduleStore>,
     /// The background runs state whose run store the schedules enqueue into.
     pub background_state: BackgroundState,
+    /// The jitter each fire is delayed by; none by default.
+    pub jitter: Option<Jitter>,
+    /// Where each run now is recorded; none by default.
+    pub audit: Option<AuditTrail>,
 }
 
 impl std::fmt::Debug for CronState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CronState").field("background_state", &self.background_state).finish()
+        f.debug_struct("CronState")
+            .field("background_state", &self.background_state)
+            .field("jitter", &self.jitter)
+            .field("audit", &self.audit.is_some())
+            .finish()
     }
 }
 
 impl CronState {
     /// A cron state over a fresh [`InMemoryScheduleStore`].
     pub fn new(background_state: BackgroundState) -> Self {
-        Self { schedules: Arc::new(InMemoryScheduleStore::new()), background_state }
+        Self {
+            schedules: Arc::new(InMemoryScheduleStore::new()),
+            background_state,
+            jitter: None,
+            audit: None,
+        }
     }
 
     /// Uses `store` for schedules; share one store across replicas.
@@ -203,12 +232,42 @@ impl CronState {
         self
     }
 
-    /// A [`DurableScheduler`] over this state's stores and current governance control.
+    /// Delays each fire by its job's [`Jitter`] offset (see the scheduler's
+    /// [Jitter](super::scheduler#jitter)).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::schedule::Jitter;
+    /// use adk_server::background::{BackgroundState, CronState};
+    ///
+    /// let state = CronState::new(BackgroundState::new()).with_jitter(Jitter::default());
+    /// assert_eq!(state.scheduler().jitter(), Some(Jitter::default()));
+    /// ```
+    #[must_use]
+    pub fn with_jitter(mut self, jitter: Jitter) -> Self {
+        self.jitter = Some(jitter);
+        self
+    }
+
+    /// Records every run now in `trail` as a `schedule.run_now` record: the caller, the job
+    /// and the run it enqueued, or why it enqueued none.
+    #[must_use]
+    pub fn with_audit(mut self, trail: AuditTrail) -> Self {
+        self.audit = Some(trail);
+        self
+    }
+
+    /// A [`DurableScheduler`] over this state's stores, jitter and current governance
+    /// control.
     pub fn scheduler(&self) -> DurableScheduler {
-        let scheduler = DurableScheduler::new(
+        let mut scheduler = DurableScheduler::new(
             Arc::clone(&self.schedules),
             Arc::clone(self.background_state.run_store()),
         );
+        if let Some(jitter) = self.jitter {
+            scheduler = scheduler.with_jitter(jitter);
+        }
         match self.background_state.governance() {
             Some(control) => scheduler.with_governance(control),
             None => scheduler,
@@ -429,6 +488,129 @@ async fn delete_cron_job(
     }
 }
 
+/// `POST /cron/{job_id}/run` response.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunCronJobNowResponse {
+    /// The job's id, as its owner named it.
+    pub job_id: String,
+    /// The run the request enqueued, or the one an earlier request with the same key did.
+    pub run_id: String,
+    /// The run's status.
+    pub status: super::RunStatus,
+    /// The run's idempotency key, `schedule:{id}:manual:{request id}`.
+    pub idempotency_key: String,
+    /// `true` when an earlier request with the same `Idempotency-Key` enqueued the run.
+    pub existing: bool,
+}
+
+/// The `Idempotency-Key` header of a run now; a retried request with the same key returns
+/// the run the first one enqueued.
+pub const RUN_NOW_IDEMPOTENCY_HEADER: &str = "idempotency-key";
+
+/// `POST /cron/{job_id}/run` — Runs a cron job now, outside its schedule; another owner's job
+/// is `404`.
+///
+/// The run is the job's template, acting for the job's owner as a fire does, with the job's
+/// concurrency key, so it is subject to the same overlap rule; its idempotency key is
+/// `schedule:{id}:manual:{request id}`, the request id taken from the `Idempotency-Key`
+/// header or generated. The job itself is not changed: its next fire time and revision stay
+/// where they are, and a paused job stays paused and still runs now.
+///
+/// | Outcome | Status |
+/// |---------|--------|
+/// | Run enqueued | `202 Accepted` |
+/// | The `Idempotency-Key` already enqueued a run | `200 OK`, `existing: true` |
+/// | The kill switch refuses work | `503 Service Unavailable`; nothing is enqueued |
+/// | The job's concurrency policy is `skip` and a run is active | `409 Conflict`, with `blockingRunId` |
+/// | No such job for this caller | `404 Not Found` |
+///
+/// With [`CronState::with_audit`], every outcome but `404` is recorded as `schedule.run_now`.
+pub async fn run_cron_job_now(
+    State(state): State<CronState>,
+    caller: Option<Extension<Option<RequestContext>>>,
+    Path(job_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let owner = run_owner(caller);
+    let schedule = match visible_job(&state, owner.as_deref(), &job_id).await {
+        Ok(Some(schedule)) => schedule,
+        Ok(None) => return problem(StatusCode::NOT_FOUND, "cron job not found"),
+        Err(error) => return store_error(&error),
+    };
+    let request_id = headers
+        .get(RUN_NOW_IDEMPOTENCY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map_or_else(|| uuid::Uuid::new_v4().to_string(), str::to_string);
+    let run = schedule.run_now(&request_id);
+    let key = run.idempotency_key.clone().unwrap_or_default();
+    let requester = owner.as_deref().unwrap_or("anonymous");
+    if let Some(control) = state.background_state.governance()
+        && let Err(error) = control.check()
+    {
+        record_run_now(&state, requester, &schedule.id, &key, None, "refused_frozen").await;
+        return problem(StatusCode::SERVICE_UNAVAILABLE, error.to_string());
+    }
+    let enqueued = match state.background_state.run_store().enqueue(run).await {
+        Ok(enqueued) => enqueued,
+        Err(error) => return store_error(&error),
+    };
+    let (status, record, existing) = match enqueued {
+        Enqueued::Created(record) => (StatusCode::ACCEPTED, record, false),
+        Enqueued::Existing(record) => (StatusCode::OK, record, true),
+        Enqueued::Rejected { blocking_run_id } => {
+            record_run_now(&state, requester, &schedule.id, &key, None, "refused_concurrency")
+                .await;
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "a run of this cron job is still active and its concurrency policy is skip",
+                    "blockingRunId": blocking_run_id,
+                })),
+            )
+                .into_response();
+        }
+    };
+    state.background_state.ensure_worker_started();
+    state.background_state.wake_worker();
+    let outcome = if existing { "existing" } else { "enqueued" };
+    record_run_now(&state, requester, &schedule.id, &key, Some(&record.run_id), outcome).await;
+    tracing::info!(schedule.id = %schedule.id, run.id = %record.run_id, run.existing = existing, "cron job run now");
+    let response = RunCronJobNowResponse {
+        job_id: job_for(schedule, owner.as_deref()).job_id,
+        run_id: record.run_id,
+        status: record.state.into(),
+        idempotency_key: key,
+        existing,
+    };
+    (status, Json(response)).into_response()
+}
+
+/// Records a run now in the state's audit trail, when it has one. A failed write is logged:
+/// the run, once enqueued, is the durable fact.
+async fn record_run_now(
+    state: &CronState,
+    requester: &str,
+    schedule_id: &str,
+    key: &str,
+    run_id: Option<&str>,
+    outcome: &str,
+) {
+    let Some(trail) = &state.audit else { return };
+    let draft =
+        AuditRecordDraft::new(AuditRecordKind::Other("schedule".to_string()), "schedule.run_now")
+            .actor(AuditActor::subject(SubjectRef::human(requester)))
+            .ext("schedule", serde_json::json!(schedule_id))
+            .ext("idempotencyKey", serde_json::json!(key))
+            .ext("runId", serde_json::json!(run_id))
+            .ext("outcome", serde_json::json!(outcome));
+    if let Err(error) = trail.record(draft).await {
+        tracing::warn!(schedule.id = %schedule_id, error = %error, "could not record a cron job run now");
+    }
+}
+
 /// Starts the scheduling loop: a [`DurableScheduler`] tick every second over the state's
 /// schedule and run stores. Run it on every replica; each fire time is enqueued once.
 ///
@@ -474,5 +656,6 @@ pub(crate) fn cron_routes(state: CronState) -> Router {
     Router::new()
         .route("/cron", post(create_cron_job).get(list_cron_jobs))
         .route("/cron/{job_id}", get(get_cron_job).patch(patch_cron_job).delete(delete_cron_job))
+        .route("/cron/{job_id}/run", post(run_cron_job_now))
         .with_state(state)
 }

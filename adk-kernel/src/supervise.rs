@@ -183,6 +183,9 @@ pub(crate) struct Supervision {
     /// When this kernel's first maintenance pass since its start listed the sleepers:
     /// occurrences after a cursor and up to then came due while no kernel fired them.
     pub(crate) cron_started: Mutex<Option<DateTime<Utc>>>,
+    /// Delays each cron tick of sleepers, salted with the application name
+    /// ([`KernelConfig::cron_jitter`](crate::KernelConfig::cron_jitter)).
+    pub(crate) cron_jitter: Option<adk_core::schedule::Jitter>,
     /// The names of the router's [`Trigger`](crate::Trigger)s, whose runs the router
     /// records itself.
     pub(crate) triggers: BTreeSet<String>,
@@ -1628,6 +1631,10 @@ impl Supervision {
                 json!({ "expression": expr, "scheduled_for": at, "catch_up": false }),
             )
             .with_at(at);
+            let event = match &self.cron_jitter {
+                Some(jitter) => crate::wake::jittered_tick(event, &source, jitter),
+                None => event,
+            };
             match router.submit(&event, &self.app_name).await {
                 // A catch-up still out keeps the cursor at its last missed occurrence.
                 Ok(_) if !watch.catching_up => self.record_cron(&source, at).await,

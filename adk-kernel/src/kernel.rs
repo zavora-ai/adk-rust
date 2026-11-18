@@ -38,6 +38,7 @@ use std::time::Duration;
 
 use adk_core::audit_log::{AuditActor, AuditTrail};
 use adk_core::queue_source::QueueIngress;
+use adk_core::schedule::Jitter;
 use adk_core::{
     ApprovalPolicy, ApprovalService, ApproverSelector, Clock, DurableRunStore, Enqueued,
     GovernanceControl, GovernanceMirrorConfig, GovernanceStateStore, ScheduleStore, SpendLedger,
@@ -76,7 +77,7 @@ use crate::stores::{KernelStores, ProcessFilter, StoreOrigin, StoreUse};
 use crate::supervise::{KernelHooks, Supervision};
 use crate::wake::{
     CronWakeSource, FileWakeSource, KernelWakeExecutor, RunFinishedWakeSource, Trigger, Wake,
-    WakeRouter, WakeSource,
+    WakeEvent, WakeRouter, WakeSource, keys,
 };
 use crate::watermark::{CronWatermarkStore, SourceWatermark};
 
@@ -146,6 +147,11 @@ pub struct KernelConfig {
     /// Every partition's quotas: max running, max queued, the daily spend cap (spec 3.2
     /// §7.9). Defaults to none.
     pub quotas: Quotas,
+    /// Spreads the kernel's cron ticks and schedule fires: each is delayed by a share of the
+    /// gap to the next one, under half of it, the share derived from the source or schedule
+    /// and the [`app_name`](Self::app_name). The tick keeps its scheduled time as its key and
+    /// watermark. Defaults to none.
+    pub cron_jitter: Option<Jitter>,
 }
 
 impl Default for KernelConfig {
@@ -163,6 +169,7 @@ impl Default for KernelConfig {
             proactivity: ProactivityPolicy::default(),
             quiet_hours: None,
             quotas: Quotas::default(),
+            cron_jitter: None,
         }
     }
 }
@@ -187,6 +194,32 @@ impl KernelConfig {
     pub fn with_quotas(mut self, quotas: Quotas) -> Self {
         self.quotas = quotas;
         self
+    }
+
+    /// Delays each cron tick and schedule fire by `jitter` (see
+    /// [`cron_jitter`](Self::cron_jitter)): the kernel's own cron sources, the cron wakes of
+    /// sleepers, a managed tenant's cron sources and the schedule store's `DurableScheduler`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::time::Duration;
+    /// use adk_core::schedule::Jitter;
+    /// use adk_kernel::KernelConfig;
+    ///
+    /// let config = KernelConfig::default().with_cron_jitter(Jitter::new(15, Duration::from_secs(540)));
+    /// assert_eq!(config.cron_jitter, Some(Jitter::default()));
+    /// ```
+    #[must_use]
+    pub fn with_cron_jitter(mut self, jitter: Jitter) -> Self {
+        self.cron_jitter = Some(jitter);
+        self
+    }
+
+    /// [`cron_jitter`](Self::cron_jitter) salted with the application name, so two kernels
+    /// or tenants whose sources share names spread apart.
+    pub(crate) fn salted_cron_jitter(&self) -> Option<Jitter> {
+        self.cron_jitter.map(|jitter| jitter.salted(&self.app_name))
     }
 
     /// The mirrored kill switch's poll interval on multi-replica (K-I8): no backend
@@ -392,6 +425,45 @@ pub struct Steering {
     pub lease_epoch: u64,
     /// Resolves once the turn takes the message, or ends first and hands it back.
     pub receipt: adk_core::SteerReceipt,
+}
+
+/// What [`Kernel::run_now`] runs now.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::RunNowTarget;
+///
+/// let target = RunNowTarget::Trigger { name: "nightly".into() };
+/// assert_eq!(serde_json::to_value(&target).unwrap(), serde_json::json!({"trigger": {"name": "nightly"}}));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[non_exhaustive]
+pub enum RunNowTarget {
+    /// A process asleep on a cron wake, such as one `adk-rust wake --cron` started.
+    Process {
+        /// The process id.
+        pid: String,
+    },
+    /// A standing trigger on a cron wake.
+    Trigger {
+        /// The trigger's name.
+        name: String,
+    },
+}
+
+/// What [`Kernel::run_now`] queued.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct RunNow {
+    /// The wake's key, [`keys::run_now`].
+    pub key: String,
+    /// The `kernel.wake` run that routes it.
+    pub wake_run_id: String,
+    /// `true` when an earlier request with the same id queued it.
+    pub existing: bool,
 }
 
 /// One worker's health (spec 3.2 §7.2).
@@ -834,9 +906,12 @@ impl Kernel {
             }));
         }
         if let Some(schedules) = &self.inner.schedules {
-            let scheduler = DurableScheduler::new(Arc::clone(schedules), Arc::clone(&sup.runs))
+            let mut scheduler = DurableScheduler::new(Arc::clone(schedules), Arc::clone(&sup.runs))
                 .with_governance(governance.clone())
                 .with_clock(Arc::clone(&config.clock));
+            if let Some(jitter) = config.salted_cron_jitter() {
+                scheduler = scheduler.with_jitter(jitter);
+            }
             tasks.push(spawn_scheduler(
                 scheduler,
                 Arc::clone(&sup),
@@ -1172,6 +1247,135 @@ impl Kernel {
         sup.wake_suspended(&Suspension::Freeze).await;
         sup.nudge();
         Ok(())
+    }
+
+    /// Runs a cron sleeper or a standing cron trigger now, outside its schedule, for `by`.
+    ///
+    /// The run now is a wake like a tick's: an event keyed [`keys::run_now`] that becomes its
+    /// `kernel.wake` run, so a retried request with the same `request_id` routes once, and the
+    /// router wakes the sleeper, or fires the trigger, as a tick would. The woken run passes
+    /// admission like any other: quiet hours defer it, a spent budget parks it, a quota holds
+    /// it. The schedule is untouched: no watermark moves, the next tick fires as planned, and
+    /// a recurring sleeper's successor sleeps on the same cron wake after the run. The turn
+    /// is told it was run now: its wake reason's payload carries `run_now`, the expression
+    /// and who asked. The call is recorded as `kernel.run_now`.
+    ///
+    /// | Target | Must be |
+    /// |---|---|
+    /// | [`RunNowTarget::Process`] | `Waiting`, not suspended, its wake set holding a cron wake |
+    /// | [`RunNowTarget::Trigger`] | A standing trigger of this kernel on a cron wake |
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_core::audit_log::AuditActor;
+    /// use adk_kernel::{Kernel, RunNowTarget};
+    ///
+    /// # async fn example(kernel: Kernel) -> adk_kernel::Result<()> {
+    /// let run_now = kernel
+    ///     .run_now(RunNowTarget::Trigger { name: "nightly-digest".into() }, None, AuditActor::default())
+    ///     .await?;
+    /// println!("queued {}", run_now.key);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::Frozen`] while the kill switch refuses work, so nothing is
+    /// queued; [`KernelError::NotFound`] or [`KernelError::InvalidState`] for a process that
+    /// is missing or not asleep on a cron wake; [`KernelError::Config`] for a name no cron
+    /// trigger has; or a store error.
+    pub async fn run_now(
+        &self,
+        target: RunNowTarget,
+        request_id: Option<&str>,
+        by: AuditActor,
+    ) -> Result<RunNow> {
+        let governance = &self.inner.config.governance;
+        if let Err(error) = governance.check() {
+            return Err(KernelError::Frozen {
+                reason: governance.reason().unwrap_or(error.message),
+            });
+        }
+        let sup = &self.inner.sup;
+        let (key_target, expression, mut payload) = match &target {
+            RunNowTarget::Process { pid } => {
+                let run = sup
+                    .runs
+                    .get(pid)
+                    .await?
+                    .ok_or_else(|| KernelError::NotFound { pid: pid.clone() })?;
+                let meta = sup.processes.get(pid).await?;
+                let cron =
+                    meta.as_ref().filter(|meta| meta.suspended_by.is_none()).and_then(|meta| {
+                        meta.wake.iter().flat_map(|wake| wake.any_of.iter()).find_map(|wake| {
+                            match wake {
+                                Wake::Cron { expr, .. } => Some(expr.clone()),
+                                _ => None,
+                            }
+                        })
+                    });
+                let Some(expression) = cron.filter(|_| run.state == adk_core::RunState::Waiting)
+                else {
+                    return Err(KernelError::InvalidState {
+                        pid: pid.clone(),
+                        state: run.state,
+                        action: "run now (it is not asleep on a cron wake; `adk-rust resume` \
+                                 wakes any sleeper)",
+                    });
+                };
+                (pid.clone(), expression, json!({ "pid": pid }))
+            }
+            RunNowTarget::Trigger { name } => {
+                let expression = self.inner.router.triggers().iter().find_map(|trigger| {
+                    match (&trigger.wake, trigger.name == *name) {
+                        (Wake::Cron { expr, .. }, true) => Some(expr.clone()),
+                        _ => None,
+                    }
+                });
+                let Some(expression) = expression else {
+                    return Err(KernelError::Config {
+                        reason: format!(
+                            "no standing trigger `{name}` on a cron wake; `adk-rust inventory` \
+                             lists the kernel's triggers"
+                        ),
+                    });
+                };
+                (format!("trigger:{name}"), expression, json!({ "trigger": name }))
+            }
+        };
+        let request_id =
+            request_id.map_or_else(|| uuid::Uuid::new_v4().to_string(), str::to_string);
+        let key = keys::run_now(&key_target, &request_id);
+        if let serde_json::Value::Object(fields) = &mut payload {
+            fields.insert("run_now".into(), json!(true));
+            fields.insert("expression".into(), json!(expression));
+            fields.insert("requested_by".into(), json!(by.on_behalf_of));
+        }
+        let event = WakeEvent::new(crate::wake::RUN_NOW_SOURCE, key.clone(), payload);
+        let (wake_run_id, existing) =
+            match self.inner.router.submit(&event, &self.inner.config.app_name).await? {
+                Enqueued::Created(run) => (run.run_id, false),
+                Enqueued::Existing(run) => (run.run_id, true),
+                Enqueued::Rejected { blocking_run_id } => {
+                    return Err(KernelError::Config {
+                        reason: format!(
+                            "the run now `{key}` was refused by run {blocking_run_id}'s \
+                             concurrency key"
+                        ),
+                    });
+                }
+            };
+        sup.nudge();
+        sup.record(
+            audit::RUN_NOW,
+            by,
+            json!({ "target": target, "key": key, "expression": expression, "wakeRun": wake_run_id, "existing": existing }),
+        )
+        .await;
+        tracing::info!(run_now.key = %key, run_now.existing = existing, "run now queued");
+        Ok(RunNow { key, wake_run_id, existing })
     }
 
     /// Sends `text` to the turn of `user_id`'s session `session_id` that this replica runs
@@ -2702,7 +2906,12 @@ impl KernelBuilder {
             }
         }
         let trigger_names = self.triggers.iter().map(|trigger| trigger.name.clone()).collect();
-        let trigger_crons = trigger_cron_sources(&self.triggers, &self.wake_sources, &watermarks)?;
+        let trigger_crons = trigger_cron_sources(
+            &self.triggers,
+            &self.wake_sources,
+            &watermarks,
+            config.salted_cron_jitter(),
+        )?;
         #[cfg(feature = "proc")]
         let ledger = self.ledger.map(|ledger| ledger.with_clock(Arc::clone(&config.clock)));
         #[cfg(feature = "proc")]
@@ -2775,6 +2984,7 @@ impl KernelBuilder {
             crons: std::sync::Mutex::new(BTreeMap::new()),
             watermarks,
             cron_started: std::sync::Mutex::new(None),
+            cron_jitter: config.salted_cron_jitter(),
             triggers: trigger_names,
             #[cfg(feature = "proc-baselines")]
             proc: proc.clone(),
@@ -3073,11 +3283,12 @@ fn store_remedy(store: &str) -> &'static str {
 /// The kernel's own source for each cron expression of `triggers` no source in `sources`
 /// ticks on (spec 3.2 §7.4, spec 3.5 §7.11): one per expression, so every trigger on it
 /// matches each tick once, planned with the widest missed-tick policy of its triggers, its
-/// cursor kept in `watermarks` across restarts.
+/// cursor kept in `watermarks` across restarts, each tick delayed by `jitter`.
 fn trigger_cron_sources(
     triggers: &[Trigger],
     sources: &[Arc<dyn WakeSource>],
     watermarks: &Arc<dyn CronWatermarkStore>,
+    jitter: Option<Jitter>,
 ) -> Result<Vec<Arc<dyn WakeSource>>> {
     let covered: std::collections::BTreeSet<&str> =
         sources.iter().filter_map(|source| source.cron_expression()).collect();
@@ -3098,7 +3309,10 @@ fn trigger_cron_sources(
             let name =
                 format!("trigger-cron:{}", expr.split_whitespace().collect::<Vec<_>>().join("_"));
             let watermark = SourceWatermark::new(Arc::clone(watermarks), name.clone());
-            let source = CronWakeSource::watermarked(name, expr, missed, Arc::new(watermark))?;
+            let mut source = CronWakeSource::watermarked(name, expr, missed, Arc::new(watermark))?;
+            if let Some(jitter) = jitter {
+                source = source.with_jitter(jitter);
+            }
             Ok(Arc::new(source) as Arc<dyn WakeSource>)
         })
         .collect()
@@ -3561,6 +3775,201 @@ mod tests {
             !processes.iter().any(|p| p.meta.parent.as_deref() == Some(third.as_str())),
             "a killed sleeper is not re-armed"
         );
+        kernel.stop().await.unwrap();
+    }
+
+    /// A cron sleeper run now (spec 3.2 §7.4 parity): refused while frozen, queued once per
+    /// request id, woken with a wake reason that says so, re-armed on the same cron wake, and
+    /// the expression's watermark untouched; the next tick is jittered: submitted at its
+    /// scheduled time and keyed by it, routed only after the offset. A standing cron trigger
+    /// runs now too, and a name no cron trigger has is refused.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_cron_sleeper_runs_now_and_its_next_tick_waits_out_the_jitter() {
+        use adk_core::schedule::{Jitter, ScheduleSpec};
+        use adk_core::{Llm, ManualClock, RunFilter, RunState};
+        use adk_model::{ScriptedLlm, ScriptedResponse};
+
+        let clock = ManualClock::new(
+            chrono::DateTime::parse_from_rfc3339("2026-11-18T09:10:00Z").unwrap().into(),
+        );
+        let runs: Arc<dyn DurableRunStore> =
+            Arc::new(InMemoryRunStore::new().with_clock(Arc::new(clock.clone())));
+        let model = Arc::new(ScriptedLlm::new(
+            "scripted",
+            ["ran now", "the hourly tick", "the trigger now"].map(ScriptedResponse::text),
+        ));
+        let agent = adk_agent::LlmAgentBuilder::new("agent")
+            .model(Arc::clone(&model) as Arc<dyn Llm>)
+            .build()
+            .unwrap();
+        let runner = Arc::new(
+            Runner::builder()
+                .app_name("adk-rust")
+                .agent(Arc::new(agent))
+                .session_service(Arc::new(adk_session::InMemorySessionService::new()))
+                .build()
+                .unwrap(),
+        );
+        let jitter = Jitter::new(50, Duration::from_secs(3600));
+        let yearly = "0 0 0 1 1 *";
+        let kernel = Kernel::builder()
+            .config(
+                KernelConfig::default()
+                    .with_scheduler_tick(Duration::from_millis(50))
+                    .with_clock(Arc::new(clock.clone()))
+                    .with_cron_jitter(jitter)
+                    .with_control(ControlPlaneConfig::default().without_socket()),
+            )
+            .run_store(Arc::clone(&runs))
+            .agent("adk-rust", runner)
+            .trigger(Trigger::new(
+                "digest",
+                Wake::Cron { expr: yearly.into(), missed: adk_core::MissedFirePolicy::Skip },
+                NewRun::new("background", "adk-rust", "alice", "adk-rust", json!({ "text": "d" })),
+            ))
+            .build()
+            .unwrap();
+        kernel.start().await.unwrap();
+        let hourly = "0 0 * * * *";
+        let wake = WakeSet::any_of([Wake::Cron {
+            expr: hourly.into(),
+            missed: adk_core::MissedFirePolicy::Skip,
+        }]);
+        let run =
+            NewRun::new("background", "adk-rust", "alice", "adk-rust", json!({ "text": "x" }));
+        let first = kernel
+            .processes()
+            .spawn(run, ProcessSpec::new(ProcessKind::Scheduled).with_wake(wake.clone()))
+            .await
+            .unwrap()
+            .meta
+            .pid;
+        let state = |pid: String| {
+            let runs = Arc::clone(&runs);
+            async move { runs.get(&pid).await.unwrap().map(|run| run.state) }
+        };
+        let wait_for = |what: &'static str, pid: String, wanted: RunState| async move {
+            let started = tokio::time::Instant::now();
+            while state(pid.clone()).await != Some(wanted) {
+                assert!(started.elapsed() < Duration::from_secs(5), "timed out waiting for {what}");
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        };
+        wait_for("the sleeper asleep", first.clone(), RunState::Waiting).await;
+        eventually("the expression to be fired by the kernel", || {
+            kernel.inner.sup.watched_crons() == [hourly]
+        })
+        .await;
+        let source = format!("kernel:{hourly}");
+        let watermark = || async { kernel.inner.sup.watermarks.read(&source).await.unwrap() };
+        let cursor = watermark().await;
+
+        let target = || RunNowTarget::Process { pid: first.clone() };
+        kernel.freeze("incident", AuditActor::default()).await.unwrap();
+        let refused = kernel.run_now(target(), Some("r-1"), AuditActor::default()).await;
+        assert!(matches!(refused, Err(KernelError::Frozen { .. })), "{refused:?}");
+        kernel.unfreeze(AuditActor::default()).await.unwrap();
+
+        let queued = kernel.run_now(target(), Some("r-1"), AuditActor::default()).await.unwrap();
+        assert_eq!(
+            (queued.key.as_str(), queued.existing),
+            (format!("now:{first}:r-1").as_str(), false)
+        );
+        let again = kernel.run_now(target(), Some("r-1"), AuditActor::default()).await.unwrap();
+        assert!(
+            again.existing && again.wake_run_id == queued.wake_run_id,
+            "one wake per request id"
+        );
+        wait_for("the run now", first.clone(), RunState::Completed).await;
+        let reason = crate::WakeReason::recorded(
+            &kernel.processes().get(&first).await.unwrap().unwrap().meta,
+        )
+        .expect("the run now records its wake reason");
+        assert_eq!(reason.source, crate::wake::RUN_NOW_SOURCE);
+        assert!(reason.payload.contains(r#""run_now":true"#), "{}", reason.payload);
+        assert_eq!(watermark().await, cursor, "a run now moves no watermark");
+        let second = loop {
+            let processes = kernel.processes().ps(ProcessFilter::default()).await.unwrap();
+            if let Some(next) =
+                processes.iter().find(|p| p.meta.parent.as_deref() == Some(first.as_str()))
+            {
+                break next.meta.pid.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        wait_for("the successor asleep", second.clone(), RunState::Waiting).await;
+        assert_eq!(
+            kernel.processes().get(&second).await.unwrap().unwrap().meta.wake,
+            Some(wake.clone()),
+            "the successor sleeps on the same cron wake"
+        );
+        let refused = kernel
+            .run_now(RunNowTarget::Process { pid: "missing".into() }, None, AuditActor::default())
+            .await;
+        assert!(matches!(refused, Err(KernelError::NotFound { .. })), "{refused:?}");
+
+        // The 10:00 tick is submitted when it falls due, keyed by 10:00, and waits out its
+        // offset before it is routed.
+        let ten = chrono::DateTime::parse_from_rfc3339("2026-11-18T10:00:00Z").unwrap().into();
+        let spec = ScheduleSpec::Cron { expr: hourly.into(), timezone: "UTC".into() };
+        let offset = jitter.salted("adk-rust").offset_in(&spec, &source, ten);
+        assert!(offset < Duration::from_secs(30 * 60), "under half the hour: {offset:?}");
+        clock.set(ten + chrono::Duration::seconds(1));
+        let key = crate::wake::keys::cron(&source, ten);
+        let wake_run = loop {
+            let found = runs
+                .list(RunFilter::default())
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|run| run.idempotency_key.as_deref() == Some(key.as_str()));
+            if let Some(found) = found {
+                break found;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        if offset >= Duration::from_secs(2) {
+            assert_eq!(
+                wake_run.not_before,
+                Some(ten + chrono::Duration::from_std(offset).unwrap())
+            );
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            assert_eq!(
+                state(second.clone()).await,
+                Some(RunState::Waiting),
+                "not before the offset"
+            );
+        }
+        clock.set(ten + chrono::Duration::from_std(offset).unwrap() + chrono::Duration::seconds(1));
+        wait_for("the jittered tick's run", second.clone(), RunState::Completed).await;
+        assert_eq!(model.requests().len(), 2, "the run now and the tick");
+
+        let refused = kernel
+            .run_now(RunNowTarget::Trigger { name: "nope".into() }, None, AuditActor::default())
+            .await;
+        assert!(matches!(refused, Err(KernelError::Config { .. })), "{refused:?}");
+        kernel
+            .run_now(
+                RunNowTarget::Trigger { name: "digest".into() },
+                Some("t-1"),
+                AuditActor::default(),
+            )
+            .await
+            .unwrap();
+        let started = tokio::time::Instant::now();
+        loop {
+            let processes = kernel.processes().ps(ProcessFilter::default()).await.unwrap();
+            let fired = processes.iter().find(|p| {
+                p.meta.kind == ProcessKind::Triggered { source: "digest".into() }
+                    && p.run.state == RunState::Completed
+            });
+            if fired.is_some() {
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(5), "the trigger did not run now");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(model.requests().len(), 3, "and the trigger run now");
         kernel.stop().await.unwrap();
     }
 }

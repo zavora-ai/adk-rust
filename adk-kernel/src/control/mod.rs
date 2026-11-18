@@ -17,6 +17,7 @@
 //! | `GET /kernel/processes` | the process table, each process with its [`ProcessView`](crate::ProcessView) ([`api::ProcessesQuery`]) |
 //! | `POST /kernel/processes` | start a process of a registered target as the caller ([`api::SpawnRequest`]): a turn a surface sends, or a sleeper with a wake set |
 //! | `POST /kernel/processes/{pid}/{kill,nice,suspend,resume}` | [`ProcessTable`](crate::ProcessTable) actions |
+//! | `POST /kernel/processes/{pid}/run-now`, `POST /kernel/triggers/{name}/run-now` | run a cron sleeper or a standing cron trigger now, outside its schedule ([`api::RunNowRequest`], [`Kernel::run_now`]); refused while frozen |
 //! | `GET /kernel/events` | the event bus as server-sent events, from a cursor ([`api::EventsQuery`]) |
 //! | `POST /kernel/attach/{session}` | a surface attaches to a session: transcript cursor, pending holds, process |
 //! | `POST /kernel/sessions/{session}/steer` | send a message to the running turn of the caller's session ([`api::SteerRequest`], [`Kernel::steer`]): accepted by the turn this replica runs, or handed back to send as the next message |
@@ -180,6 +181,10 @@ pub mod paths {
     pub const SUSPEND: &str = "/kernel/processes/{pid}/suspend";
     /// `POST`: resume a process.
     pub const RESUME: &str = "/kernel/processes/{pid}/resume";
+    /// `POST`: run a cron sleeper now.
+    pub const RUN_NOW: &str = "/kernel/processes/{pid}/run-now";
+    /// `POST`: run a standing cron trigger now.
+    pub const TRIGGER_RUN_NOW: &str = "/kernel/triggers/{name}/run-now";
     /// `GET`: the event bus as server-sent events.
     pub const EVENTS: &str = "/kernel/events";
     /// `POST`: attach to a session.

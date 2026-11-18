@@ -99,7 +99,8 @@ pub use background::{
 #[cfg(feature = "background")]
 pub use background::{
     ConcurrencyPolicy, CreateCronJobRequest, CronJobResponse, CronJobStatus, CronState,
-    cron_jobs_router, cron_jobs_router_with_state, start_cron_scheduler, validate_cron_expression,
+    RunCronJobNowResponse, cron_jobs_router, cron_jobs_router_with_state, start_cron_scheduler,
+    validate_cron_expression,
 };
 
 pub use a2a::{

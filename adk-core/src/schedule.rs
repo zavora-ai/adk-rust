@@ -117,6 +117,144 @@ pub enum MissedFirePolicy {
     CatchUp(u32),
 }
 
+/// Spreads the fires of schedules that share a cadence, so a fleet of schedules on
+/// `0 * * * *` does not start every run in the same second.
+///
+/// Each fire is delayed by an offset that is a fixed share of a window, the share derived
+/// from the schedule's key and the jitter's [`seed`](Self::seed): the same schedule is
+/// delayed by the same share on every replica and after every restart, and two schedules
+/// are usually delayed by different shares. The window is [`percent`](Self::percent) of the
+/// gap to the next occurrence, at most [`max`](Self::max):
+///
+/// | Field | Bound |
+/// |-------|-------|
+/// | `percent` | 0 to 50; `new` clamps a larger value to 50 |
+/// | `max` | Any duration; the window is never longer |
+/// | offset | `0 <= offset < window <= gap / 2`, in whole milliseconds |
+///
+/// A delayed fire therefore lands before the next occurrence is due. The occurrence keeps
+/// its scheduled time as its identity — its idempotency key, its watermark and the
+/// missed-fire plan all use the scheduled time — so jitter moves when a fire runs, never
+/// which fires run. A one-shot [`ScheduleSpec::At`] has no next occurrence and is not
+/// delayed.
+///
+/// [`Jitter::default`] is 15 percent of the gap, at most nine minutes. Schedulers apply no
+/// jitter unless one is configured.
+///
+/// # Example
+///
+/// ```rust
+/// use std::time::Duration;
+/// use adk_core::schedule::{Jitter, ScheduleSpec};
+/// use chrono::{TimeZone, Utc};
+///
+/// let jitter = Jitter::new(15, Duration::from_secs(9 * 60));
+/// let at = Utc.with_ymd_and_hms(2026, 11, 18, 9, 0, 0).unwrap();
+/// let hourly = ScheduleSpec::Cron { expr: "0 * * * *".into(), timezone: "UTC".into() };
+/// let offset = jitter.offset_in(&hourly, "nightly-report", at);
+/// assert!(offset < Duration::from_secs(9 * 60));
+/// assert_eq!(offset, jitter.offset_in(&hourly, "nightly-report", at), "deterministic");
+/// assert_eq!(jitter.offset_in(&ScheduleSpec::At(at), "once", at), Duration::ZERO);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct Jitter {
+    /// The share of the gap to the next occurrence a fire may be delayed by, in percent.
+    pub percent: u8,
+    /// The longest a fire is delayed, whatever the gap.
+    pub max: Duration,
+    /// Folded into every schedule's share, so deployments that name their schedules alike
+    /// spread differently ([`salted`](Self::salted)).
+    pub seed: u64,
+}
+
+impl Default for Jitter {
+    /// 15 percent of the gap to the next occurrence, at most nine minutes.
+    fn default() -> Self {
+        Self::new(Self::DEFAULT_PERCENT, Self::DEFAULT_MAX)
+    }
+}
+
+impl Jitter {
+    /// The share of [`Jitter::default`], in percent.
+    pub const DEFAULT_PERCENT: u8 = 15;
+    /// The longest delay of [`Jitter::default`].
+    pub const DEFAULT_MAX: Duration = Duration::from_secs(9 * 60);
+    /// The largest share a jitter takes, so a delayed fire stays clear of the next one.
+    pub const MAX_PERCENT: u8 = 50;
+
+    /// A jitter of `percent` of the gap to the next occurrence, at most `max`; `percent`
+    /// above [`MAX_PERCENT`](Self::MAX_PERCENT) is clamped to it.
+    pub fn new(percent: u8, max: Duration) -> Self {
+        Self { percent: percent.min(Self::MAX_PERCENT), max, seed: 0 }
+    }
+
+    /// Folds `salt` into the seed, such as a tenant or application name, so its schedules
+    /// spread differently from another deployment's schedules of the same names.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::schedule::Jitter;
+    ///
+    /// assert_ne!(Jitter::default().salted("tenant-a").seed, Jitter::default().salted("tenant-b").seed);
+    /// ```
+    #[must_use]
+    pub fn salted(mut self, salt: &str) -> Self {
+        self.seed = fnv1a(self.seed ^ FNV_OFFSET, salt.as_bytes());
+        self
+    }
+
+    /// The window a fire at `at` may be delayed within: `percent` of the gap to `next`, at
+    /// most `max`; zero without a next occurrence.
+    pub fn window(&self, at: DateTime<Utc>, next: Option<DateTime<Utc>>) -> Duration {
+        let Some(gap) = next.and_then(|next| (next - at).to_std().ok()) else {
+            return Duration::ZERO;
+        };
+        let share = gap.as_nanos() * u128::from(self.percent.min(Self::MAX_PERCENT)) / 100;
+        Duration::from_nanos(u64::try_from(share).unwrap_or(u64::MAX)).min(self.max)
+    }
+
+    /// How long the fire of the schedule `key` at `at` is delayed, when the occurrence after
+    /// it is `next`: the schedule's share of [`window`](Self::window), rounded down to whole
+    /// milliseconds, so stores that keep milliseconds agree on it.
+    pub fn offset(&self, key: &str, at: DateTime<Utc>, next: Option<DateTime<Utc>>) -> Duration {
+        let window = self.window(at, next).as_nanos();
+        let share = u128::from(mix(fnv1a(self.seed ^ FNV_OFFSET, key.as_bytes())));
+        // `share / 2^64` is in [0, 1), so the offset is strictly inside the window.
+        let nanos = (window * share) >> 64;
+        Duration::from_millis(u64::try_from(nanos / 1_000_000).unwrap_or(u64::MAX))
+    }
+
+    /// [`offset`](Self::offset) with the next occurrence read from `spec`; zero when `spec`
+    /// has none or cannot be evaluated.
+    pub fn offset_in(&self, spec: &ScheduleSpec, key: &str, at: DateTime<Utc>) -> Duration {
+        self.offset(key, at, spec.next_after(at).ok().flatten())
+    }
+}
+
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// FNV-1a over `bytes` from `state`: stable across processes and platforms, unlike the
+/// standard library's randomly keyed hasher.
+fn fnv1a(mut state: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        state ^= u64::from(*byte);
+        state = state.wrapping_mul(0x0100_0000_01b3);
+    }
+    state
+}
+
+/// The murmur3 finalizer: spreads a change in any bit of `hash` over all of them, so keys
+/// that differ in one character get unrelated shares.
+fn mix(mut hash: u64) -> u64 {
+    hash ^= hash >> 33;
+    hash = hash.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    hash ^= hash >> 33;
+    hash = hash.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    hash ^ (hash >> 33)
+}
+
 /// A schedule and the run template it enqueues.
 ///
 /// # Example
@@ -193,6 +331,33 @@ impl Schedule {
         run
     }
 
+    /// Returns the run a manual "run now" of this schedule enqueues for `request_id`, keyed
+    /// by [`manual_idempotency_key`]: the template a fire enqueues, with its concurrency key,
+    /// so a run now and a fire are subject to the same overlap rule. The schedule itself is
+    /// not changed: its next fire time and revision stay where they are.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::time::Duration;
+    /// use adk_core::run_store::NewRun;
+    /// use adk_core::schedule::{MissedFirePolicy, Schedule, ScheduleSpec};
+    ///
+    /// let schedule = Schedule::new(
+    ///     "nightly-report",
+    ///     ScheduleSpec::Every(Duration::from_secs(3600)),
+    ///     NewRun::new("default", "reports", "system", "report_agent", serde_json::json!({})),
+    ///     MissedFirePolicy::FireOnce,
+    /// );
+    /// let run = schedule.run_now("req-1");
+    /// assert_eq!(run.idempotency_key.as_deref(), Some("schedule:nightly-report:manual:req-1"));
+    /// ```
+    pub fn run_now(&self, request_id: &str) -> NewRun {
+        let mut run = self.run.clone().with_service_subject();
+        run.idempotency_key = Some(manual_idempotency_key(&self.id, request_id));
+        run
+    }
+
     /// Checks the fields every store requires: a non-empty id, a valid run template, a
     /// positive interval, and a positive catch-up count. Cron syntax is checked by
     /// [`ScheduleSpec::next_after`].
@@ -235,6 +400,19 @@ impl Schedule {
 /// ```
 pub fn firing_idempotency_key(schedule_id: &str, fire_time: DateTime<Utc>) -> String {
     format!("schedule:{schedule_id}:{}", fire_time.to_rfc3339_opts(SecondsFormat::AutoSi, true))
+}
+
+/// Returns the idempotency key of the run a manual "run now" of a schedule enqueues:
+/// `schedule:{id}:manual:{request id}`. A fire's key ends in a timestamp, which starts with a
+/// digit, so the two never collide; a retried request with the same id enqueues nothing new.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_core::schedule::manual_idempotency_key("daily", "req-1"), "schedule:daily:manual:req-1");
+/// ```
+pub fn manual_idempotency_key(schedule_id: &str, request_id: &str) -> String {
+    format!("schedule:{schedule_id}:manual:{request_id}")
 }
 
 /// The fire times a scheduler enqueues for one due schedule, and where it moves next.
@@ -986,6 +1164,101 @@ mod tests {
                 cron("* * * * *", "Mars/Olympus").next_after(at(15, 0, 0)).unwrap_err().code,
                 INVALID_SCHEDULE_CODE
             );
+        }
+    }
+
+    mod jitter {
+        use proptest::prelude::*;
+
+        use super::*;
+
+        #[test]
+        fn a_fire_lands_before_the_next_occurrence() {
+            let jitter = Jitter::new(90, Duration::from_secs(3600));
+            assert_eq!(jitter.percent, Jitter::MAX_PERCENT, "clamped to half the gap");
+            let at = at(15, 9, 0);
+            let next = Some(at + chrono::Duration::minutes(10));
+            assert_eq!(jitter.window(at, next), Duration::from_secs(300));
+            for key in ["a", "b", "nightly", "report-17"] {
+                assert!(jitter.offset(key, at, next) < Duration::from_secs(300));
+            }
+            assert_eq!(jitter.window(at, None), Duration::ZERO);
+            assert_eq!(
+                Jitter::new(0, Duration::from_secs(60)).offset("a", at, next),
+                Duration::ZERO
+            );
+        }
+
+        #[test]
+        fn the_default_caps_a_daily_schedule_at_nine_minutes() {
+            let daily = ScheduleSpec::Cron { expr: "0 9 * * *".into(), timezone: "UTC".into() };
+            let at = at(15, 9, 0);
+            let jitter = Jitter::default();
+            assert_eq!(jitter.window(at, daily.next_after(at).unwrap()), Jitter::DEFAULT_MAX);
+            let every_minute = ScheduleSpec::Every(Duration::from_secs(60));
+            assert_eq!(
+                jitter.window(at, every_minute.next_after(at).unwrap()),
+                Duration::from_secs(9),
+                "15 percent of a minute"
+            );
+        }
+
+        #[test]
+        fn schedules_and_salts_spread_apart() {
+            let jitter = Jitter::new(50, Duration::from_secs(3600));
+            let at = at(15, 9, 0);
+            let next = Some(at + chrono::Duration::hours(2));
+            let offsets: std::collections::BTreeSet<Duration> =
+                (0..64).map(|n| jitter.offset(&format!("job-{n}"), at, next)).collect();
+            assert!(offsets.len() > 60, "64 schedules take {} distinct offsets", offsets.len());
+            let salted = jitter.salted("tenant-a");
+            assert_ne!(salted.offset("job-1", at, next), jitter.offset("job-1", at, next));
+            assert_eq!(salted, jitter.salted("tenant-a"), "a salt is deterministic");
+        }
+
+        #[test]
+        fn run_now_keeps_the_concurrency_key_and_leaves_the_schedule() {
+            let run = NewRun::new("default", "ops", "system", "probe", serde_json::json!({}))
+                .with_concurrency_key("cron:probe", crate::OnConflict::Reject);
+            let schedule = Schedule::new(
+                "probe",
+                ScheduleSpec::Every(Duration::from_secs(60)),
+                run,
+                MissedFirePolicy::Skip,
+            )
+            .with_next_fire_at(at(15, 9, 0));
+            let manual = schedule.run_now("r1");
+            assert_eq!(manual.idempotency_key.as_deref(), Some("schedule:probe:manual:r1"));
+            assert_eq!(manual.concurrency_key.as_deref(), Some("cron:probe"));
+            assert_ne!(manual.idempotency_key, schedule.run_for(at(15, 9, 0)).idempotency_key);
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// Every offset is below the window, the window at most `max` and half the gap,
+            /// and the same key always takes the same offset.
+            #[test]
+            fn offsets_stay_inside_the_window(
+                key in "[a-z0-9:-]{1,24}",
+                percent in 0u8..=255,
+                max_ms in 0u64..=86_400_000,
+                gap_ms in 1i64..=7 * 86_400_000,
+                seed in any::<u64>(),
+            ) {
+                let mut jitter = Jitter::new(percent, Duration::from_millis(max_ms));
+                jitter.seed = seed;
+                let at = at(15, 9, 0);
+                let next = at + chrono::Duration::milliseconds(gap_ms);
+                let window = jitter.window(at, Some(next));
+                let offset = jitter.offset(&key, at, Some(next));
+                prop_assert!(window <= Duration::from_millis(max_ms));
+                prop_assert!(window.as_nanos() * 2 <= u128::from(gap_ms.unsigned_abs()) * 1_000_000);
+                prop_assert!(offset <= window);
+                prop_assert!(window.is_zero() || offset < window);
+                prop_assert!(at + chrono::Duration::from_std(offset).unwrap() < next);
+                prop_assert_eq!(offset, jitter.offset(&key, at, Some(next)));
+            }
         }
     }
 }

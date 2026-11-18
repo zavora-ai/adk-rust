@@ -42,6 +42,7 @@ struct Fake {
     bus: EventBus,
     processes: Mutex<BTreeMap<String, Process>>,
     asked_after: Mutex<Vec<Option<u64>>>,
+    run_nows: Mutex<Vec<(crate::RunNowTarget, Option<String>)>>,
     #[cfg(feature = "drivers")]
     drivers: Option<crate::drivers::DriverSupervisor>,
     #[cfg(feature = "proc")]
@@ -63,6 +64,7 @@ impl Fake {
             bus: EventBus::new(16),
             processes: Mutex::new(BTreeMap::new()),
             asked_after: Mutex::new(Vec::new()),
+            run_nows: Mutex::new(Vec::new()),
             #[cfg(feature = "drivers")]
             drivers: None,
             #[cfg(feature = "proc")]
@@ -221,6 +223,29 @@ impl ControlBackend for Fake {
             process.meta.suspended_by = None;
             Ok(())
         })
+    }
+
+    async fn run_now(
+        &self,
+        target: crate::RunNowTarget,
+        request_id: Option<&str>,
+        _by: AuditActor,
+    ) -> Result<crate::RunNow> {
+        if let Err(error) = self.governance.check() {
+            return Err(KernelError::Frozen { reason: error.message });
+        }
+        let named = match &target {
+            crate::RunNowTarget::Process { pid } => pid.clone(),
+            crate::RunNowTarget::Trigger { name } => format!("trigger:{name}"),
+        };
+        let request = request_id.unwrap_or("generated");
+        self.run_nows.lock().unwrap().push((target, request_id.map(str::to_string)));
+        Ok(serde_json::from_value(json!({
+            "key": crate::keys::run_now(&named, request),
+            "wakeRunId": "wake-1",
+            "existing": false,
+        }))
+        .unwrap())
     }
 
     async fn freeze(&self, reason: &str, _by: AuditActor) -> Result<usize> {
@@ -1410,5 +1435,42 @@ async fn the_proc_routes_page_and_export_the_ledger_for_an_operator_only() {
         assert_eq!(error.http_status_code(), 403, "{}", error.message);
     }
     assert_eq!(fake.control_records().len(), 4, "a refused read writes no record");
+    plane.shutdown().await.unwrap();
+}
+
+/// `run-now` reaches the backend for a process or a trigger as an operator, is recorded as a
+/// control action first, and is refused without authentication and while frozen.
+#[tokio::test]
+async fn run_now_reaches_the_backend_for_an_operator_only() {
+    let fake = Fake::new();
+    let pid = fake.spawn("phone", "s-1", RunState::Waiting).await;
+    let config = ControlPlaneConfig::default()
+        .with_http(loopback())
+        .with_extractor(Arc::new(TokenExtractor));
+    let (plane, client) = http_plane(&fake, config).await;
+
+    let error = client.run_now(&pid, Some("r-1")).await.unwrap_err();
+    assert_eq!(adk_core::AdkError::from(error).http_status_code(), 401);
+    assert!(fake.run_nows.lock().unwrap().is_empty() && fake.control_records().is_empty());
+
+    let client = client.with_bearer_token("right");
+    let run_now = client.run_now(&pid, Some("r-1")).await.unwrap();
+    assert_eq!(run_now.key, format!("now:{pid}:r-1"));
+    let trigger = client.run_trigger_now("nightly digest", None).await.unwrap();
+    assert_eq!(trigger.key, "now:trigger:nightly digest:generated");
+    assert_eq!(
+        *fake.run_nows.lock().unwrap(),
+        [
+            (crate::RunNowTarget::Process { pid: pid.clone() }, Some("r-1".to_string())),
+            (crate::RunNowTarget::Trigger { name: "nightly digest".into() }, None),
+        ]
+    );
+    let actions: Vec<_> =
+        fake.control_records().iter().map(|record| record.ext["target"].clone()).collect();
+    assert_eq!(actions, [json!(pid), json!("trigger:nightly digest")]);
+
+    fake.governance.freeze("incident");
+    let error = adk_core::AdkError::from(client.run_now(&pid, None).await.unwrap_err());
+    assert_eq!(error.code, crate::error::FROZEN_CODE);
     plane.shutdown().await.unwrap();
 }

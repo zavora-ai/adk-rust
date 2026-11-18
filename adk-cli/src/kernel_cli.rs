@@ -264,6 +264,34 @@ pub async fn act(target: &KernelTarget, pid: &str, action: Action) -> Result<()>
     Ok(())
 }
 
+/// `adk-rust run-now`: runs a cron sleeper, or with `trigger` a standing cron trigger, now,
+/// outside its schedule.
+pub async fn run_now(
+    target: &KernelTarget,
+    pid: Option<&str>,
+    trigger: Option<&str>,
+    request_id: Option<&str>,
+) -> Result<()> {
+    let client = client(target).await?;
+    let (named, run_now) = match (pid, trigger) {
+        (Some(pid), None) => {
+            let pid = resolve_pid(&client, pid).await?;
+            let run_now = client.run_now(&pid, request_id).await?;
+            (pid, run_now)
+        }
+        (None, Some(trigger)) => {
+            (format!("trigger {trigger}"), client.run_trigger_now(trigger, request_id).await?)
+        }
+        _ => bail!("give a process id or --trigger NAME"),
+    };
+    let queued = if run_now.existing { "already queued" } else { "queued" };
+    println!(
+        "{queued} a run now of {named} ({}); the next scheduled tick still fires. `adk-rust events` shows the wake.",
+        run_now.key
+    );
+    Ok(())
+}
+
 /// `adk-rust nice`: moves a queued or sleeping process to `queue`. The run store has no
 /// queue change, so the moved process has a new pid.
 pub async fn nice(target: &KernelTarget, pid: &str, queue: QueueClass) -> Result<()> {
@@ -1420,6 +1448,160 @@ mod tests {
         assert!(shown.starts_with("run-1"), "{shown}");
         assert!(shown.contains("suspended: freeze · goal 3/10, check exit 1"), "{shown}");
         assert!(shown.contains("background"), "{shown}");
+    }
+
+    /// LIVE on Anthropic `claude-haiku-5-5`: a kernel agent woken by a jittered cron tick, then
+    /// by `adk-rust run-now` over the control socket. The tick's wake is keyed by its scheduled
+    /// time and routed no earlier than its offset; the run now wakes a cron sleeper without
+    /// moving the expression's schedule.
+    ///
+    /// ```text
+    /// ANTHROPIC_API_KEY=... cargo test -p adk-cli --bin adk-rust live_a_kernel_agent -- --ignored --nocapture
+    /// ```
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "live: needs ANTHROPIC_API_KEY"]
+    async fn live_a_kernel_agent_wakes_on_a_jittered_tick_and_on_run_now() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use adk_core::schedule::{Jitter, ScheduleSpec};
+        use adk_core::{
+            DurableRunStore, InMemoryRunStore, Llm, MissedFirePolicy, NewRun, RunFilter, RunState,
+        };
+        use adk_kernel::control::ControlPlaneConfig;
+        use adk_kernel::{Kernel, KernelConfig, ProcessSpec, Trigger, Wake, WakeEvent};
+
+        let key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY");
+        let model: Arc<dyn Llm> = Arc::new(
+            adk_model::anthropic::AnthropicClient::new(adk_model::anthropic::AnthropicConfig::new(
+                key,
+                "claude-haiku-5-5",
+            ))
+            .unwrap(),
+        );
+        let agent = adk_agent::LlmAgentBuilder::new("cron_agent")
+            .instruction("You run on a schedule. Answer in one short sentence that says what woke you, read from the kernel wake notice.")
+            .model(model)
+            .build()
+            .unwrap();
+        let runner = Arc::new(
+            adk_runner::Runner::builder()
+                .app_name("adk-rust")
+                .agent(Arc::new(agent))
+                .session_service(Arc::new(adk_session::InMemorySessionService::new()))
+                .build()
+                .unwrap(),
+        );
+        let home = tempfile::tempdir().unwrap();
+        let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+        let jitter = Jitter::new(50, Duration::from_secs(9 * 60));
+        let pulse = "*/20 * * * * *";
+        let kernel = Kernel::builder()
+            .config(
+                KernelConfig::default()
+                    .with_home(home.path())
+                    .with_scheduler_tick(Duration::from_millis(200))
+                    .with_cron_jitter(jitter)
+                    .with_control(ControlPlaneConfig::default()),
+            )
+            .run_store(Arc::clone(&runs))
+            .agent(APP_TARGET, runner)
+            .trigger(Trigger::new(
+                "pulse",
+                Wake::Cron { expr: pulse.into(), missed: MissedFirePolicy::Skip },
+                NewRun::new(
+                    "background",
+                    "adk-rust",
+                    "alice",
+                    APP_TARGET,
+                    serde_json::json!({ "text": "The pulse schedule fired." }),
+                ),
+            ))
+            .build()
+            .unwrap();
+        kernel.start().await.unwrap();
+
+        // 1. The jittered tick.
+        let started = std::time::Instant::now();
+        let (wake_run, fired) = loop {
+            let all = runs.list(RunFilter::default()).await.unwrap();
+            let fired = all.iter().find(|run| {
+                run.target == APP_TARGET
+                    && run.state == RunState::Completed
+                    && run.idempotency_key.as_deref().is_some_and(|key| key.starts_with("cron:"))
+            });
+            if let Some(fired) = fired {
+                let wake_key = fired.idempotency_key.as_deref().unwrap().split('#').next().unwrap();
+                let wake_run = all
+                    .iter()
+                    .find(|run| run.idempotency_key.as_deref() == Some(wake_key))
+                    .unwrap()
+                    .clone();
+                break (wake_run, fired.clone());
+            }
+            assert!(started.elapsed() < Duration::from_secs(90), "no pulse ran");
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        };
+        let event: WakeEvent = serde_json::from_value(wake_run.input.clone()).unwrap();
+        let at: chrono::DateTime<Utc> =
+            event.payload["scheduled_for"].as_str().unwrap().parse().unwrap();
+        let spec = ScheduleSpec::Cron { expr: pulse.into(), timezone: "UTC".into() };
+        let offset = jitter.salted("adk-rust").offset_in(&spec, event.source.as_str(), at);
+        println!(
+            "tick {} scheduled {at}, offset {offset:?}, not before {:?}; trigger run enqueued {}, result {:?}",
+            event.key, event.not_before, fired.created_at, fired.result
+        );
+        assert_eq!(
+            event.key,
+            adk_kernel::keys::cron(&event.source, at),
+            "keyed by the scheduled time"
+        );
+        assert!(offset < Duration::from_secs(10), "under half the 20 s gap");
+        if !offset.is_zero() {
+            let release = at + chrono::Duration::from_std(offset).unwrap();
+            assert_eq!(event.not_before, Some(release));
+            assert!(fired.created_at >= release, "routed no earlier than the offset");
+        }
+
+        // 2. Run now through the CLI, on a sleeper whose cron fires once a year.
+        let yearly = "0 0 0 1 1 *";
+        let sleeper = kernel
+            .processes()
+            .spawn(
+                NewRun::new(
+                    "background",
+                    "adk-rust",
+                    "alice",
+                    APP_TARGET,
+                    serde_json::json!({ "text": "The yearly report schedule woke you." }),
+                ),
+                ProcessSpec::new(ProcessKind::Scheduled).with_wake(WakeSet::any_of([Wake::Cron {
+                    expr: yearly.into(),
+                    missed: MissedFirePolicy::Skip,
+                }])),
+            )
+            .await
+            .unwrap()
+            .meta
+            .pid;
+        while runs.get(&sleeper).await.unwrap().map(|run| run.state) != Some(RunState::Waiting) {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let target =
+            KernelTarget { home: Some(home.path().to_path_buf()), ..KernelTarget::default() };
+        run_now(&target, Some(&sleeper), None, Some("live-1")).await.unwrap();
+        let started = std::time::Instant::now();
+        let done = loop {
+            let run = runs.get(&sleeper).await.unwrap().unwrap();
+            if run.state.is_terminal() {
+                break run;
+            }
+            assert!(started.elapsed() < Duration::from_secs(90), "the run now did not finish");
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        };
+        println!("run now of {sleeper}: {:?}, result {:?}", done.state, done.result);
+        assert_eq!(done.state, RunState::Completed);
+        kernel.stop().await.unwrap();
     }
 }
 
