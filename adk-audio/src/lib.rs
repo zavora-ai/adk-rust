@@ -16,10 +16,11 @@
 //! | `fx` | DSP processors: normalizer, resampler, noise suppressor, compressor, trimmer, pitch shifter |
 //! | `mlx` | Local model loading with tokenizers and Hugging Face Hub |
 //! | `onnx` | ONNX Runtime local inference; `kokoro`, `chatterbox`, `whisper-onnx`, `distil-whisper`, and `moonshine` add models |
+//! | `onnx-cuda`, `onnx-coreml` | The CUDA and CoreML execution providers; without its feature a provider falls back to the CPU |
 //! | `qwen3-tts` | Qwen3-TTS on Candle |
 //! | `livekit` | `RealtimeBridge` to `adk-realtime` |
 //! | `desktop-audio` | Microphone capture, speaker playback, and VAD turn-taking |
-//! | `all` | Every feature except `desktop-audio` |
+//! | `all` | Every feature except `desktop-audio`, `onnx-cuda`, and `onnx-coreml` |
 //!
 //! `VadProcessor` and `MusicProvider` are traits without a bundled implementation.
 //!
