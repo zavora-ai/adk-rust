@@ -394,6 +394,10 @@
             "validationRegexp": {
               "type": "string",
               "description": "A regular expression used for client-side validation of the input."
+            },
+            "placeholder": {
+              "$ref": "https://a2ui.org/specification/v0_9/common_types.json#/$defs/DynamicString",
+              "description": "The placeholder text for the input field (A2UI 1.0)."
             }
           },
           "required": [
@@ -556,6 +560,10 @@
             "value": {
               "$ref": "https://a2ui.org/specification/v0_9/common_types.json#/$defs/DynamicNumber",
               "description": "The current value of the slider."
+            },
+            "steps": {
+              "type": "number",
+              "description": "Snaps the value to intervals of this size (A2UI 1.0)."
             }
           },
           "required": [

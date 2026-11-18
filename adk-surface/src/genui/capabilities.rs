@@ -75,7 +75,7 @@ fn claim(id: &str, label: &str, status: ClaimStatus, scope: ClaimScope) -> Claim
 /// let claims = capabilities();
 /// let a2ui = &claims.protocols[0];
 /// assert_eq!(a2ui.id, "a2ui");
-/// assert_eq!(a2ui.claims[0].label, "Version 0.9.1");
+/// assert_eq!(a2ui.claims[0].label, "Version 1.0");
 /// assert_eq!(a2ui.claims[0].status, ClaimStatus::Supported);
 /// assert_eq!(claims.catalogs[0].label, "forms 1.0");
 /// ```

@@ -541,6 +541,18 @@ export interface CardLine {
 /** Where a decision is in its life. */
 export type CardStatus = "waiting" | "decided";
 
+/**
+ * `GET /surface/genui/catalogs` answer (spec 3.3 §6.1 `genui`): the catalogs this home
+ * renders, `forms` first, as documents of one A2UI version. In 1.0 an extension catalog's
+ * document holds only the components it adds, which a surface mixes with `forms`.
+ */
+export interface CatalogDocuments {
+  /** Each catalog's document, by the A2UI catalog meta-schema of that version. */
+  catalogs: unknown[];
+  /** The A2UI version of the documents: `1.0` or `v0.9.1`. */
+  version: string;
+}
+
 /** A catalog this home renders. */
 export interface CatalogView {
   /** The components it renders. */

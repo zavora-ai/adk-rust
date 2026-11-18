@@ -1499,6 +1499,25 @@
           }
         ]
       },
+      "CatalogDocuments": {
+        "description": "`GET /surface/genui/catalogs` answer (spec 3.3 §6.1 `genui`): the catalogs this home\nrenders, `forms` first, as documents of one A2UI version. In 1.0 an extension catalog's\ndocument holds only the components it adds, which a surface mixes with `forms`.",
+        "properties": {
+          "catalogs": {
+            "description": "Each catalog's document, by the A2UI catalog meta-schema of that version.",
+            "items": true,
+            "type": "array"
+          },
+          "version": {
+            "description": "The A2UI version of the documents: `1.0` or `v0.9.1`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "catalogs"
+        ],
+        "type": "object"
+      },
       "CatalogView": {
         "description": "A catalog this home renders.",
         "properties": {
@@ -7854,6 +7873,64 @@
           }
         },
         "summary": "What this home claims of A2UI, AG-UI and MCP Apps, and the catalogs it renders; served with the `genui` feature"
+      }
+    },
+    "/api/surface/genui/catalogs": {
+      "get": {
+        "parameters": [
+          {
+            "description": "The A2UI version of the documents: 1.0 (the default) or v0.9.1",
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogDocuments"
+                }
+              }
+            },
+            "description": "The catalog documents"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Every catalog this home renders, forms first, as A2UI catalog documents of one version (1.0 unless `version` names v0.9.1); served with the `genui` feature"
       }
     },
     "/api/surface/genui/sessions/{session}/apps/{call}": {

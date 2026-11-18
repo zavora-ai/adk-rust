@@ -3,6 +3,7 @@
 //! | Route (under `/api`) | Answer |
 //! |---|---|
 //! | `GET /surface/genui/capabilities` | [`GenuiCapabilities`]: what this home claims of A2UI, AG-UI and MCP Apps, and the catalogs it renders, which the developer panel's Protocols tab shows |
+//! | `GET /surface/genui/catalogs?version=1.0` | [`CatalogDocuments`]: every catalog this home renders, as documents of that A2UI version (`1.0`, the default, or `v0.9.1`) |
 //! | `GET /surface/genui/sessions/{session}/forms` | [`FormsResponse`]: the state of each form sent in the session, from its decision and its call's result |
 //! | `GET /surface/genui/sessions/{session}/apps/{call}` | [`AppOpen`]: an app from an MCP server, framed, blocked, or not shown here (`genui-apps`) |
 //! | `POST /surface/genui/sessions/{session}/apps/{call}/requests` | [`AppRequest`] → [`AppAnswer`]: what the app asked the home, which never approves anything (`genui-apps`) |
@@ -23,6 +24,8 @@ pub use crate::genui::{AppAnswer, AppMessageRequest, AppOpen, AppRequest, GenuiC
 pub mod paths {
     /// `GET`: what this home claims of the UI protocols agents draw in.
     pub const CAPABILITIES: &str = "/surface/genui/capabilities";
+    /// `GET`: the catalogs this home renders, as A2UI catalog documents.
+    pub const CATALOGS: &str = "/surface/genui/catalogs";
     /// `GET`: the state of each drawn form sent in a session.
     pub const FORMS: &str = "/surface/genui/sessions/{session}/forms";
     /// `GET`: an app from an MCP server, opened (spec 3.3 §6.1 `genui-apps`).
@@ -31,6 +34,26 @@ pub mod paths {
     pub const APP_REQUESTS: &str = "/surface/genui/sessions/{session}/apps/{call}/requests";
     /// `POST`: the person sends what an app suggested.
     pub const APP_MESSAGE: &str = "/surface/genui/sessions/{session}/apps/{call}/message";
+}
+
+/// `GET /surface/genui/catalogs` answer (spec 3.3 §6.1 `genui`): the catalogs this home
+/// renders, `forms` first, as documents of one A2UI version. In 1.0 an extension catalog's
+/// document holds only the components it adds, which a surface mixes with `forms`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogDocuments {
+    /// The A2UI version of the documents: `1.0` or `v0.9.1`.
+    pub version: String,
+    /// Each catalog's document, by the A2UI catalog meta-schema of that version.
+    pub catalogs: Vec<serde_json::Value>,
+}
+
+/// `GET /surface/genui/catalogs` query.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct CatalogsQuery {
+    /// `1.0` (the default) or `v0.9.1`.
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 /// `GET /surface/genui/sessions/{session}/forms` answer (spec 3.3 §7.4 rule 5).
@@ -50,7 +73,7 @@ mod routes {
     use axum::routing::get;
     use axum::{Json, Router};
 
-    use super::{FormsResponse, paths};
+    use super::{CatalogDocuments, CatalogsQuery, FormsResponse, paths};
     use crate::engine::SurfaceEngine;
     use crate::genui::GenuiWiring;
     use crate::model::{DecidedAnswer, ThreadItem};
@@ -106,7 +129,38 @@ mod routes {
                 }),
             )
             .route(paths::FORMS, get(forms))
+            .route(paths::CATALOGS, get(catalogs))
             .with_state(engine)
+    }
+
+    async fn catalogs(
+        State(engine): State<SurfaceEngine>,
+        context: Context,
+        Query(query): Query<CatalogsQuery>,
+    ) -> Response {
+        if caller(context, SurfaceKind::Web, None).is_err() {
+            return unauthenticated();
+        }
+        let version = match query.version.as_deref() {
+            None => crate::genui::A2uiVersion::CURRENT,
+            Some(named) => match crate::genui::A2uiVersion::of_wire(named) {
+                Some(version) => version,
+                None => {
+                    return failed(crate::error::SurfaceError::Invalid(format!(
+                        "version '{named}' is not an A2UI version this home writes: use 1.0 or v0.9.1"
+                    )));
+                }
+            },
+        };
+        Json(CatalogDocuments {
+            version: version.wire().to_string(),
+            catalogs: engine
+                .catalogs()
+                .iter()
+                .map(|catalog| catalog.document_for(version))
+                .collect(),
+        })
+        .into_response()
     }
 
     async fn capabilities(

@@ -532,6 +532,15 @@ draws as `forms` components. A scene draws in WebGL and a depth effect with CSS 
 line of blocks per series or a table of its categories; a scene is its summary and the objects
 it labels.
 
+**As A2UI 1.0 catalogs.** `Catalog::document_for(A2uiVersion::V1_0)` writes a catalog as an
+A2UI 1.0 catalog document (`protocolVersion: "1.0"`): `forms` derived from the 1.0 basic
+catalog, and an extension catalog as only the components it adds, which a 1.0 surface mixes
+with `forms` (each extension component names its catalog with `@catalogId`). Each component's
+`usage` line and the catalog's `with_instructions` text become the document's `instructions`;
+`ExtensionComponent::allowed_parents` and `allowed_children` become `allowedParents` and
+`allowedChildren`. `GET /api/surface/genui/catalogs?version=1.0` serves every catalog the home
+renders that way (`version=v0.9.1` for the internal superset documents).
+
 **In a host of your own**, `DrawnView` takes `renderers`, by catalog id and component type. A
 renderer gets the component's properties as the server resolved and checked them, the nodes it
 holds and `renderChild` to draw one as the home does; it gets no way to send or change a value.

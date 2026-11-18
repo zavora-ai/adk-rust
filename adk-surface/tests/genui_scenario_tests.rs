@@ -669,6 +669,19 @@ async fn governed_form(lasting: Lasting) {
     let (_, forms) = call(&home1.api, "GET", "/api/surface/genui/sessions/s1/forms", None).await;
     assert_eq!(forms["forms"][0]["status"], "waiting", "{forms}");
     assert!(forms["forms"][0]["text"].as_str().unwrap().ends_with(" · waiting for you"));
+    // The catalogs the home renders, as A2UI 1.0 documents unless v0.9.1 is asked for.
+    let (status, documents) = call(&home1.api, "GET", "/api/surface/genui/catalogs", None).await;
+    assert_eq!(status, 200, "{documents}");
+    assert_eq!(documents["version"], "1.0");
+    assert_eq!(documents["catalogs"][0]["protocolVersion"], "1.0");
+    assert_eq!(documents["catalogs"][0]["catalogId"], adk_surface::genui::FORMS_CATALOG_ID);
+    let (_, older) =
+        call(&home1.api, "GET", "/api/surface/genui/catalogs?version=v0.9.1", None).await;
+    assert_eq!(older["version"], "v0.9.1");
+    assert!(older["catalogs"][0].get("protocolVersion").is_none());
+    let (status, _) =
+        call(&home1.api, "GET", "/api/surface/genui/catalogs?version=0.8", None).await;
+    assert_eq!(status, 400);
 
     // 3. Tampering and origin.
     let refused = |command| {

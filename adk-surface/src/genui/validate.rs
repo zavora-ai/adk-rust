@@ -1731,6 +1731,7 @@ fn display_fields<'a>(name: &str, props: &'a Map<String, Value>) -> Vec<(String,
         "TextField" | "DateTimeInput" => {
             take("label");
             take("value");
+            take("placeholder");
         }
         "CheckBox" | "Slider" | "ChoicePicker" => take("label"),
         _ => {}

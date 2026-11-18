@@ -155,6 +155,7 @@ pub fn openapi() -> Value {
     let agent_preview = schema_ref::<crate::agents::AgentPreview>(&mut out);
     let genui_capabilities = schema_ref::<super::genui::GenuiCapabilities>(&mut out);
     let genui_forms = schema_ref::<super::genui::FormsResponse>(&mut out);
+    let genui_catalogs = schema_ref::<super::genui::CatalogDocuments>(&mut out);
     let app_open = schema_ref::<super::genui::AppOpen>(&mut out);
     let app_answer = schema_ref::<super::genui::AppAnswer>(&mut out);
     let mut schemas = out.take_definitions(true);
@@ -512,6 +513,14 @@ pub fn openapi() -> Value {
             "What this home claims of A2UI, AG-UI and MCP Apps, and the catalogs it renders; served with the `genui` feature",
             json!([]),
             answer("The claims", genui_capabilities),
+        ),
+    );
+    routes.insert(
+        with(super::genui::paths::CATALOGS),
+        read(
+            "Every catalog this home renders, forms first, as A2UI catalog documents of one version (1.0 unless `version` names v0.9.1); served with the `genui` feature",
+            json!([query("version", "The A2UI version of the documents: 1.0 (the default) or v0.9.1", json!({ "type": "string" }))]),
+            answer("The catalog documents", genui_catalogs),
         ),
     );
     routes.insert(
