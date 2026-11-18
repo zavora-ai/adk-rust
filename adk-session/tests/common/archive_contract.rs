@@ -148,8 +148,16 @@ pub async fn assert_archive_contract(service: &dyn SessionService, app_name: &st
         .expect("an archived session forks");
     assert!(ArchiveMark::of(fork.session.as_ref()).is_none(), "the fork is not archived");
     ensure_writable(fork.session.as_ref()).expect("the fork takes turns");
-    assert!(fork.session.events().iter().all(|event| event.author != ARCHIVE_AUTHOR));
+    assert!(fork.session.events().all().iter().all(|event| event.author != ARCHIVE_AUTHOR));
     assert_eq!(fork.session.events().len(), 2, "the conversation without the marker");
+    service
+        .delete(adk_session::DeleteRequest {
+            app_name: app_name.to_string(),
+            user_id: user.to_string(),
+            session_id: fork.session.id().to_string(),
+        })
+        .await
+        .expect("the fork is deleted");
 
     // Unarchived, it lists and takes turns again; unarchiving again writes nothing.
     service.unarchive(&archived).await.expect("unarchive");
