@@ -1,7 +1,7 @@
 # The `adk-rust` feature surface
 
 `adk-rust` is both a re-export facade and a dependency menu. Every new capability
-arrives as a new top-level feature, so the menu has grown to **151 features**
+arrives as a new top-level feature, so the menu has grown to **152 features**
 across 44 crates. This records what the surface currently is, which parts of it
 are load-bearing, and the rule that keeps it from growing further.
 
@@ -24,9 +24,9 @@ everyone.
 
 | Bucket | Count | Disposition |
 |---|---:|---|
-| Features | 151 | What `--report` lists by axis. Unadvertised members of a bundle keep working and keep their feature key. |
+| Features | 152 | What `--report` lists by axis. Unadvertised members of a bundle keep working and keep their feature key. |
 | Deprecated no-ops | 0 | The 19 aliases were folded into their siblings in 3.0.0; see [below](#the-19-aliases-removed-in-300). |
-| **Total** | **151** | |
+| **Total** | **152** | |
 
 Nothing is removed in a minor release. `STABILITY.md` (Deprecation Policy)
 requires an `#[deprecated]` announcement and an N+2 minor grace period before a
