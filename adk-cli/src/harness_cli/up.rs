@@ -579,6 +579,14 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     // coordinator's also runs the CLI's own targets, so `attach`, `goal` and `/api/runs`
     // reach it.
     let (primary_goal, primary_runner) = primary.harness.goal_target();
+    // The primary agent's MCP servers start and its model connection opens at boot, so the
+    // first message after `up` starts does not wait for them.
+    let warming = primary_runner.clone();
+    tokio::spawn(async move {
+        if let Err(error) = warming.prewarm(adk_runner::Prewarm::new()).await {
+            tracing::debug!(error = %error, "the primary agent did not prewarm");
+        }
+    });
     let mut builder = primary.harness.kernel();
     if let Some(partition) = &primary.partition {
         builder = builder

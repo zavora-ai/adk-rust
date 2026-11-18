@@ -876,6 +876,14 @@ impl HarnessLauncher {
                     .with_embedded_worker(false),
             );
         }
+        // The agent's MCP servers start and its model connection opens while the kernel comes
+        // up, so the first message does not wait for them.
+        let (_, warming) = harness.goal_target();
+        tokio::spawn(async move {
+            if let Err(error) = warming.prewarm(adk_runner::Prewarm::new()).await {
+                tracing::debug!(error = %error, "the kernel's agent did not prewarm");
+            }
+        });
         Ok(self.with_kernel(kernel))
     }
 
@@ -990,6 +998,14 @@ impl HarnessLauncher {
         // Tab completes the commands and, once the servers run, `@server:uri` mentions.
         shared.console.set_command_completions(command_completions(&commands));
         shared.refresh_mentions().await;
+        // The model's connection opens and the MCP servers start while the person types the
+        // first message, so the first turn does not wait for them.
+        let harness = shared.harness();
+        tokio::spawn(async move {
+            if let Err(error) = harness.runner().prewarm(adk_runner::Prewarm::new()).await {
+                tracing::debug!(error = %error, "the harness did not prewarm");
+            }
+        });
         let context = ConsoleCommandContext::new(
             shared.app_name.clone(),
             shared.user.to_string(),

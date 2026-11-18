@@ -897,6 +897,78 @@ impl Runner {
         }
     }
 
+    /// Readies the root agent, and optionally a session, before the first message: the
+    /// model's pooled connection, the servers an agent starts on its first turn, and the
+    /// session store's connection (see [`crate::prewarm`]). It sends no prompt and spends no
+    /// tokens.
+    ///
+    /// # Errors
+    ///
+    /// Returns the kill switch's error when the runner is frozen, `runner.prewarm.timeout`
+    /// when it takes longer than the request's budget, `session.archived` when the session
+    /// is archived, `session.not_found`, or the model's error.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_core::{SessionId, UserId};
+    /// use adk_runner::{Prewarm, Runner};
+    ///
+    /// # async fn example(runner: &Runner) -> adk_core::Result<()> {
+    /// // While the person is still typing: the first turn starts on a warm connection.
+    /// let report = runner
+    ///     .prewarm(Prewarm::new().session(UserId::new("ana")?, SessionId::new("trip")?))
+    ///     .await?;
+    /// println!("ready in {:?}, warm until {}", report.elapsed, report.warm_until);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn prewarm(&self, request: crate::Prewarm) -> Result<crate::PrewarmReport> {
+        self.governance.check()?;
+        self.run_config.check_governance()?;
+        let started = std::time::Instant::now();
+        let budget = request.budget_or_default();
+        let session_read = request.session.is_some();
+        let work = async {
+            if let Some((user_id, session_id)) = &request.session {
+                let identity = adk_core::AdkIdentity::new(
+                    AppName::try_from(self.app_name.clone())?,
+                    user_id.clone(),
+                    session_id.clone(),
+                );
+                let session = self.session_service.get_for_identity(&identity).await?;
+                adk_session::ensure_writable(session.as_ref())?;
+            }
+            self.root_agent.prewarm().await
+        };
+        match tokio::time::timeout(budget, work).await {
+            Ok(result) => result?,
+            Err(_) => {
+                return Err(adk_core::AdkError::new(
+                    adk_core::ErrorComponent::Agent,
+                    adk_core::ErrorCategory::Timeout,
+                    "runner.prewarm.timeout",
+                    format!(
+                        "prewarming did not finish within {budget:?}; the first turn readies \
+                         what it did not, or give Prewarm::budget more time"
+                    ),
+                ));
+            }
+        }
+        let elapsed = started.elapsed();
+        tracing::debug!(
+            prewarm.elapsed_ms = elapsed.as_millis() as u64,
+            session_read,
+            "runner prewarmed"
+        );
+        let warm_for = chrono::Duration::from_std(crate::prewarm::WARM_FOR).unwrap_or_default();
+        Ok(crate::PrewarmReport {
+            elapsed,
+            session_read,
+            warm_until: chrono::Utc::now() + warm_for,
+        })
+    }
+
     /// Returns the runner's configured [`RunConfig`].
     ///
     /// Useful as a base to clone and adjust for [`Self::run_with_config`].

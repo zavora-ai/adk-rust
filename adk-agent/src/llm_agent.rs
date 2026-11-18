@@ -3919,6 +3919,16 @@ impl Agent for LlmAgent {
         }
     }
 
+    /// Opens the model's connection, then prewarms the sub-agents. Toolsets resolve their
+    /// tools against a turn's context, so they are left to the turn.
+    async fn prewarm(&self) -> Result<()> {
+        self.model.prewarm().await?;
+        for agent in &self.sub_agents {
+            agent.prewarm().await?;
+        }
+        Ok(())
+    }
+
     fn capabilities(&self) -> adk_core::AgentCapabilities {
         adk_core::AgentCapabilities {
             runtime_tools: true,

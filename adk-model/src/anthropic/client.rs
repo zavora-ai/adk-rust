@@ -984,6 +984,12 @@ impl Llm for AnthropicClient {
             .then(|| adk_core::NativeCompaction::new("anthropic").keeping_thinking())
     }
 
+    /// Opens the pooled connections of the request and stream clients with a `GET
+    /// /v1/models` each; no tokens are spent.
+    async fn prewarm(&self) -> Result<(), AdkError> {
+        self.inner().prewarm().await.map_err(convert_anthropic_error)
+    }
+
     #[tracing::instrument(
         name = "model.generate_content",
         skip_all,

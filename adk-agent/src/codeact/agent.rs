@@ -2301,6 +2301,14 @@ impl Agent for CodeActAgent {
         }
     }
 
+    async fn prewarm(&self) -> adk_core::Result<()> {
+        self.model.prewarm().await?;
+        for agent in &self.sub_agents {
+            agent.prewarm().await?;
+        }
+        Ok(())
+    }
+
     async fn screen_user_input(&self, content: &Content) -> adk_core::Result<Option<Content>> {
         let own = if self.input_guardrails.is_empty() {
             None

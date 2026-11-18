@@ -16,6 +16,8 @@ Agent execution runtime for ADK-Rust.
 - **Services** — gives agents and tools the artifact service (scoped to the session), the memory service, and the request context
 - **Agent transfers** — runs transfer targets, enforcing each source agent's transfer restrictions
 - **Steering** — `Runner::steer` sends a screened message to a run in flight, which its agent takes at the next safe point
+- **Prewarm** — `Runner::prewarm` opens the model's connection, starts the servers an agent starts on its first turn and reads the session before the first message, under the kill switch and a time budget
+- **Archived sessions** — a turn on a session archived with `SessionService::archive` fails with `session.archived` before anything is saved
 - **Governance** — the run's tool policy, kill switch, budgets, spend ledger, action ledger, approval store, and audit trail
 - **Context compaction** — summarizes older session events after a run, and installs the auto-compaction agents apply before every model call
 - **`Launcher`** — a minimal stdin/stdout console loop
@@ -152,6 +154,7 @@ In an ordinary agent tree, the runner checks every handoff — from a model's `t
 | Steering | `Runner::steer(identity, content)` screens a message like the run's own and queues it on that run; an agent takes it after a tool step and the runner saves it as a user event, or its `SteerReceipt` returns it when the run ends first. `adk-surface`'s `send` and `steer` commands, `Kernel::steer` and the kernel's chat gateway call it for a message that arrives while a turn runs |
 | Plugin `after_run` | Runs once for every run whose `before_run` ran, however it ends — including a consumer that drops the stream, whose calls in flight are answered outcome-unknown first. A durable attempt its worker drops writes nothing; the recovering worker finishes the run |
 | `Runner::close` | Closes every agent's toolsets through `Agent::close`, then the plugins |
+| `Runner::prewarm` | Calls `Agent::prewarm` on the root agent — `LlmAgent` opens its model's pooled connection with `Llm::prewarm`, a harness also starts its MCP servers — and with `Prewarm::session` reads the session, refusing an archived one; refused while frozen, stopped by `Prewarm::budget` (10 s by default); sends no prompt |
 
 `Runner::recover_unanswered_calls` answers function calls a stopped process left unanswered from the action ledger (`already_succeeded`, `already_failed`, or `outcome_unknown`) without executing them.
 

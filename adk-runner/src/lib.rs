@@ -70,6 +70,7 @@ mod context;
 pub mod history;
 pub mod intra_compaction;
 mod launcher;
+pub mod prewarm;
 mod runner;
 #[cfg(feature = "sandbox-runner")]
 pub mod sandbox_runner;
@@ -80,6 +81,7 @@ pub use builder::RunnerConfigBuilder;
 pub use context::{InvocationContext, MutableSession};
 pub use history::{ActivityGuard, HistoryControl, RewindTarget, SessionActivity};
 pub use launcher::Launcher;
+pub use prewarm::{Prewarm, PrewarmReport};
 pub use runner::{Runner, RunnerConfig, RunnerInvocation};
 pub use spend::LlmSpendEstimate;
 

@@ -451,6 +451,10 @@ impl Llm for ProviderSearchFallback {
     fn native_compaction(&self) -> Option<adk_core::NativeCompaction> {
         self.inner.native_compaction()
     }
+
+    async fn prewarm(&self) -> adk_core::Result<()> {
+        self.inner.prewarm().await
+    }
 }
 
 /// What a provider reported searching and citing in one model response.

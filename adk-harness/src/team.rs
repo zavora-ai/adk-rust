@@ -833,6 +833,10 @@ impl Agent for Coordinator {
         self.inner.close().await;
     }
 
+    async fn prewarm(&self) -> Result<()> {
+        self.inner.prewarm().await
+    }
+
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
         self.inner.run(Arc::new(ScopedContext::new(ctx))).await
     }
@@ -1010,6 +1014,10 @@ impl Agent for MemberAgent {
 
     async fn close(&self) {
         self.inner.close().await;
+    }
+
+    async fn prewarm(&self) -> Result<()> {
+        self.inner.prewarm().await
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {

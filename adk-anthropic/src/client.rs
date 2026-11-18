@@ -963,6 +963,48 @@ impl Anthropic {
         Ok(response)
     }
 
+    /// Opens the pooled TLS connections the next request and the next stream would otherwise
+    /// open, with one `GET /v1/models?limit=1` on each client. It spends no tokens.
+    ///
+    /// The connections stay open while idle for the pool's idle timeout, 90 seconds, so call
+    /// it shortly before the turn it readies. An Anthropic-compatible endpoint without a
+    /// models list still opens its connections: only a refused key or an unreachable host
+    /// fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns the API's error when it refuses the key (`401`, `403`) or cannot be reached.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_anthropic::Anthropic;
+    ///
+    /// # async fn example() -> adk_anthropic::Result<()> {
+    /// let client = Anthropic::new(None)?;
+    /// client.prewarm().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn prewarm(&self) -> Result<()> {
+        let url = self.build_url("models");
+        let open = |client: &ReqwestClient| {
+            let request = client.get(&url).headers(self.default_headers()).query(&[("limit", "1")]);
+            async move {
+                let response = request.send().await.map_err(|e| self.map_request_error(e))?;
+                let status = response.status().as_u16();
+                if status == 401 || status == 403 {
+                    return Err(Self::process_error_response(response).await);
+                }
+                // Reading the body returns the connection to the pool.
+                response.bytes().await.map_err(|e| self.map_request_error(e))?;
+                Ok(())
+            }
+        };
+        futures::future::try_join(open(&self.client), open(&self.stream_client)).await?;
+        Ok(())
+    }
+
     /// Execute a GET request with error handling
     async fn execute_get_request<T: serde::de::DeserializeOwned>(
         &self,

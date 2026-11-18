@@ -886,6 +886,16 @@ impl Agent for HarnessAgent {
         self.root.close().await;
     }
 
+    /// Starts the MCP servers the first run would start, under the same trust rule, then
+    /// prewarms the root's model.
+    async fn prewarm(&self) -> Result<()> {
+        #[cfg(feature = "mcp")]
+        if let Some(mcp) = &self.runtime.mcp {
+            mcp.ensure_started(self.runtime.workspace_trusted()).await;
+        }
+        self.root.prewarm().await
+    }
+
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
         // A partition's harness runs only its own partition's sessions (spec 3.2 K-I15).
         #[cfg(feature = "kernel")]
@@ -1194,6 +1204,10 @@ impl Agent for GovernedRoot {
 
     async fn close(&self) {
         self.root.close().await;
+    }
+
+    async fn prewarm(&self) -> Result<()> {
+        self.root.prewarm().await
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {

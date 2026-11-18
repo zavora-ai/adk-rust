@@ -25,6 +25,8 @@ adk-session.workspace = true
 adk-plugin = { workspace = true, optional = true }
 adk-skill = { workspace = true, optional = true }
 async-trait.workspace = true
+# When a prewarmed connection is likely closed again (`PrewarmReport::warm_until`).
+chrono.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
 futures.workspace = true

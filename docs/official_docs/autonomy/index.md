@@ -137,6 +137,10 @@ socket, the banner names one in your temporary directory instead — and every `
 control command reaches it with `--home .adk` from the project directory. `cargo run -- up`
 refuses to start when any kernel store would be kept in memory.
 
+The kernel prewarms its agent as it comes up: the MCP servers the agent's first run would start
+are started, and its model connection is opened, so the first message does not wait for them
+([prewarming a runner](../core/runner.md#prewarming-a-runner)).
+
 ## 3. Give it a goal and walk away
 
 In a second terminal:
