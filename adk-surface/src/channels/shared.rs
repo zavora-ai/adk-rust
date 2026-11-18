@@ -1,5 +1,5 @@
-//! What the WhatsApp, Slack, Discord and Matrix adapters share (spec 3.5 §10 X12, on spec
-//! 3.3 §5.3): the rules the adapter keeps, kept once.
+//! What the WhatsApp, Slack, Discord, Matrix and Microsoft Teams adapters share (spec 3.5 §10
+//! X12, on spec 3.3 §5.3): the rules the adapter keeps, kept once.
 //!
 //! | Part | What it keeps |
 //! |---|---|
@@ -31,7 +31,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-#[cfg(any(feature = "whatsapp", feature = "slack", feature = "discord"))]
+#[cfg(any(feature = "whatsapp", feature = "slack", feature = "discord", feature = "teams"))]
 pub(crate) use super::telegram::wire::parse_callback;
 pub(crate) use super::telegram::wire::{
     ANSWER_NOT_TAKEN, Heading, MESSAGE_NOT_TAKEN, callback_data, heading, hh_mm, is_hidden,
@@ -51,7 +51,7 @@ const MIN_BACKOFF: Duration = Duration::from_secs(1);
 /// clear, before it is dropped and the person told.
 const UPDATE_ATTEMPTS: u32 = 5;
 /// The longest rate limit a send waits out; a longer one fails the send.
-#[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+#[cfg(any(feature = "slack", feature = "discord", feature = "matrix", feature = "teams"))]
 pub(crate) const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(30);
 /// How many times one send is tried while the platform rate-limits it.
 pub(crate) const RATE_LIMIT_ATTEMPTS: u32 = 3;
@@ -157,7 +157,7 @@ impl Words {
     }
 
     /// The message without its link line.
-    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix", feature = "teams"))]
     pub(crate) fn without_link(&self) -> Self {
         let lines = self
             .lines
@@ -169,7 +169,7 @@ impl Words {
     }
 
     /// The message as plain text, each piece as it reads, a link as "Open in home: url".
-    #[cfg(any(feature = "slack", feature = "matrix", test))]
+    #[cfg(any(feature = "slack", feature = "matrix", feature = "teams", test))]
     pub(crate) fn text(&self) -> String {
         self.render(|piece| match piece {
             Piece::Plain(text) | Piece::Bold(text) | Piece::Code(text) => text.clone(),
@@ -936,7 +936,7 @@ mod tests {
             ]
         );
         assert_eq!(words.link(), Some(("https://home.example/ui/", "Open in home")));
-        #[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+        #[cfg(any(feature = "slack", feature = "discord", feature = "matrix", feature = "teams"))]
         assert!(words.without_link().link().is_none());
         let high = self::card(ApprovalRisk::High);
         let words = card_words(&high, &heading(&high, None), utc());

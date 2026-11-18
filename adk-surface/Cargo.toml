@@ -39,6 +39,11 @@ whatsapp = ["channels", "dep:axum", "dep:hmac", "dep:sha2"]
 slack = ["channels", "dep:tokio-tungstenite", "adk-core/rustls"]
 discord = ["channels", "dep:tokio-tungstenite", "adk-core/rustls"]
 matrix = ["channels"]
+# Microsoft Teams: a bot registered with Azure Bot Service. The Bot Framework's activity
+# webhook the host serves, each request's Bot Connector JWT checked against the connector's
+# OpenID keys (jsonwebtoken on aws-lc-rs, the workspace's crypto provider); the Bot Connector
+# REST API out over `reqwest`.
+teams = ["channels", "dep:axum", "dep:jsonwebtoken"]
 # The phone (spec 3.3 §5.4, §6.1): the web home installed on a phone, its routes, Web Push
 # from the person's own kernel (aes128gcm, the VAPID key signed here with p256), pairing QR
 # codes and "Confirm it's you" (passkeys checked by webauthn-rs, which links the system's
@@ -142,6 +147,8 @@ sha2 = { workspace = true, optional = true }
 getrandom = { version = "0.3", optional = true }
 # The WhatsApp webhook's `X-Hub-Signature-256` (`whatsapp`).
 hmac = { version = "0.12", optional = true }
+# The Bot Connector's token on every Teams activity (`teams`).
+jsonwebtoken = { version = "11", features = ["aws_lc_rs"], optional = true }
 # Slack's Socket Mode and Discord's Gateway (`slack`, `discord`).
 tokio-tungstenite = { version = "0.29", optional = true, features = ["rustls-tls-native-roots", "connect"] }
 # "Confirm it's you" (`mobile`): passkey registration and assertions. Its core links OpenSSL.
@@ -172,6 +179,10 @@ adk-agent = { path = "../adk-agent" }
 adk-graph = { path = "../adk-graph", features = ["time-travel", "action-http", "sqlite", "postgres"] }
 # The fake Telegram Bot API the chat adapter's tests run against.
 axum = "0.8"
+# The Teams tests' signing key, its JWKS and signed Bot Connector tokens.
+aws-lc-rs = "1.18"
+base64 = "0.22"
+jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 dotenvy = "0.15"
 proptest = "1.5"
 tempfile = "3"
@@ -180,6 +191,8 @@ tokio = { workspace = true, features = ["full", "test-util"] }
 tower = { version = "0.5", features = ["util"] }
 # Parses what the terminal surface writes, as a terminal would (spec 3.3 WP-E).
 vt100 = "0.16"
+# The Teams tests' Bot Connector, Microsoft Entra token endpoint and OpenID metadata.
+wiremock = "0.6"
 # The in-process MCP server whose app the hostile-app tests show (`genui-apps`).
 rmcp = { version = "3.9", features = ["client", "server", "elicitation"] }
 # The voice view's socket, opened as a browser would (spec 3.3 §5.6).
