@@ -109,7 +109,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 keyring = { version = "3.6.3", default-features = false, features = ["async-secret-service", "async-io", "crypto-rust"] }
 
 [features]
-default = ["gemini", "openai", "anthropic", "ollama", "audit", "persist", "harness", "encrypted", "surface", "channels", "tui", "slack", "discord", "matrix"]
+default = ["gemini", "openai", "anthropic", "ollama", "audit", "persist", "harness", "encrypted", "surface", "channels", "tui", "slack", "discord", "matrix", "teams"]
 gemini = ["adk-model/gemini"]
 openai = ["adk-model/openai"]
 anthropic = ["adk-model/anthropic"]
@@ -212,6 +212,10 @@ slack = ["channels", "adk-surface/slack"]
 whatsapp = ["channels", "adk-surface/whatsapp"]
 discord = ["channels", "adk-surface/discord"]
 matrix = ["channels", "adk-surface/matrix"]
+# Microsoft Teams: `adk-rust up` starts it when TEAMS_APP_ID and TEAMS_APP_PASSWORD are set, and
+# serves the bot's messaging endpoint, `POST /api/messages`, on a listener of its own
+# (TEAMS_BIND, 127.0.0.1:3978) that a tunnel or reverse proxy publishes alone.
+teams = ["channels", "adk-surface/teams"]
 # The phone (spec 3.3 §5.4): `adk-rust up --home-url https://… --auth-token …` serves the
 # home as an installable app with Web Push from the kernel and "Confirm it's you". Opt-in:
 # its passkey checks link the system's OpenSSL (webauthn-rs).

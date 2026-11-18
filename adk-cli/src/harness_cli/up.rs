@@ -34,8 +34,8 @@ mod commands;
 mod phone;
 #[cfg(feature = "channels")]
 mod telegram;
-// Slack, Discord and Matrix (spec 3.5 §10 X12).
-#[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+// Slack, Discord, Matrix and Microsoft Teams (spec 3.5 §10 X12).
+#[cfg(any(feature = "slack", feature = "discord", feature = "matrix", feature = "teams"))]
 mod chats;
 #[cfg(feature = "discord")]
 mod discord;
@@ -43,6 +43,8 @@ mod discord;
 mod matrix;
 #[cfg(feature = "slack")]
 mod slack;
+#[cfg(feature = "teams")]
+mod teams;
 mod webhooks;
 
 /// Where `up` listens over HTTP when neither `--bind` nor `[kernel] bind` says.
@@ -177,8 +179,9 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     // The Telegram chat thread, only when `TELEGRAM_BOT_TOKEN` is set (spec 3.3 §5.3).
     #[cfg(feature = "channels")]
     let chat = telegram::Chat::from_env(&setup, store.as_deref()).await?;
-    // Slack, Discord and Matrix, each only when its variables are set (spec 3.5 §10 X12).
-    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+    // Slack, Discord, Matrix and Microsoft Teams, each only when its variables are set (spec
+    // 3.5 §10 X12).
+    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix", feature = "teams"))]
     let chats = chats::Chats::from_env(
         &setup,
         store.as_deref(),
@@ -205,7 +208,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         Some(chat) => service.with_notifier(chat.doorbell()),
         None => service,
     };
-    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix", feature = "teams"))]
     let service = match &chats {
         Some(chats) => service.with_notifier(chats.doorbell()),
         None => service,
@@ -242,7 +245,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         Some(_) if surface_records.is_none() => Some(telegram::answers_in_memory()),
         _ => surface_records,
     };
-    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix", feature = "teams"))]
     let surface_records = match &chats {
         Some(_) if surface_records.is_none() => Some(telegram::answers_in_memory()),
         _ => surface_records,
@@ -473,7 +476,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         Some(chat) => pairing.with_channel_bindings(chat.bindings()),
         None => pairing,
     };
-    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix", feature = "teams"))]
     let pairing = match &chats {
         Some(chats) if chat.is_none() => pairing.with_channel_bindings(chats.bindings()),
         _ => pairing,
@@ -656,7 +659,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         chat.start(host, decisions.clone(), surface_records.clone(), bind).await?;
     }
     #[cfg(all(
-        any(feature = "slack", feature = "discord", feature = "matrix"),
+        any(feature = "slack", feature = "discord", feature = "matrix", feature = "teams"),
         feature = "mobile"
     ))]
     let chats = match (chats, &phone) {
@@ -664,11 +667,11 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         (chats, _) => chats,
     };
     #[cfg(all(
-        any(feature = "slack", feature = "discord", feature = "matrix"),
+        any(feature = "slack", feature = "discord", feature = "matrix", feature = "teams"),
         feature = "verb-ui"
     ))]
     let chats = chats.map(|chats| chats.with_card_hints(Arc::new(verbs.hints())));
-    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix"))]
+    #[cfg(any(feature = "slack", feature = "discord", feature = "matrix", feature = "teams"))]
     if let Some(chats) = chats {
         let host: Arc<dyn adk_kernel::channels::ChannelHost> = Arc::new(kernel.clone());
         chats.start(host, decisions.clone(), surface_records.clone(), bind).await?;
