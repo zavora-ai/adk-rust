@@ -81,6 +81,10 @@ impl MongoMemoryService {
     /// 4. Returns an error if the database version exceeds the compiled-in max.
     /// 5. Executes each unapplied step idempotently and records it.
     ///
+    /// Several processes may migrate one database at once: every step creates its
+    /// indexes idempotently, and each version is recorded with an upsert, so a version
+    /// another process recorded first is not an error.
+    ///
     /// **Note:** Atlas Vector Search index on the `embedding` field must be
     /// created separately via the Atlas UI or API. The index should be named
     /// `memory_embedding_index` with cosine similarity on the `embedding` path.
@@ -187,37 +191,64 @@ impl MongoMemoryService {
         }
     }
 
-    /// Detect whether the `memory_entries` collection already exists (baseline).
+    /// Whether v1's last index exists (baseline). A first `migrate` running in another
+    /// process creates v1's indexes in order, so the collection or an earlier index
+    /// existing does not mean v1 is complete.
     async fn detect_existing_tables(&self) -> Result<bool> {
-        let collections =
-            self.db.list_collection_names().await.map_err(|e| {
-                adk_core::AdkError::memory(format!("baseline detection failed: {e}"))
-            })?;
-        Ok(collections.contains(&"memory_entries".to_string()))
+        let failed = |e: mongodb::error::Error| {
+            adk_core::AdkError::memory(format!("baseline detection failed: {e}"))
+        };
+        let collections = self.db.list_collection_names().await.map_err(failed)?;
+        if !collections.iter().any(|name| name == "memory_entries") {
+            return Ok(false);
+        }
+        let indexes = self
+            .db
+            .collection::<Document>("memory_entries")
+            .list_index_names()
+            .await
+            .map_err(failed)?;
+        Ok(indexes.iter().any(|name| name == "idx_memory_entries_text"))
     }
 
-    /// Record a successfully applied migration step in the registry.
+    /// Records an applied migration step unless another process recorded it first.
     async fn record_migration(&self, version: i64, description: &str) -> Result<()> {
         let registry = self.db.collection::<Document>(Self::REGISTRY_COLLECTION);
         let now = BsonDateTime::from_millis(Utc::now().timestamp_millis());
-        registry
-            .insert_one(doc! {
-                "version": version,
-                "description": description,
-                "applied_at": now,
-            })
-            .await
-            .map_err(|e| {
-                adk_core::AdkError::memory(format!(
-                    "{}",
-                    crate::migration::MigrationError {
-                        version,
-                        description: description.to_string(),
-                        cause: format!("registry record failed: {e}"),
-                    }
-                ))
-            })?;
+        let recorded = registry
+            .update_one(
+                doc! { "version": version },
+                doc! { "$setOnInsert": { "description": description, "applied_at": now } },
+            )
+            .upsert(true)
+            .await;
+        // The server retries an upsert that loses a race on the unique `version` index;
+        // a duplicate key that still surfaces means the version is recorded.
+        match recorded {
+            Ok(_) => Ok(()),
+            Err(e) if is_duplicate_key(&e) => Ok(()),
+            Err(e) => Err(e),
+        }
+        .map_err(|e| {
+            adk_core::AdkError::memory(format!(
+                "{}",
+                crate::migration::MigrationError {
+                    version,
+                    description: description.to_string(),
+                    cause: format!("registry record failed: {e}"),
+                }
+            ))
+        })?;
         Ok(())
+    }
+}
+
+/// Whether `error` is a duplicate-key violation of a unique index.
+fn is_duplicate_key(error: &mongodb::error::Error) -> bool {
+    use mongodb::error::{ErrorKind, WriteFailure};
+    match &*error.kind {
+        ErrorKind::Write(WriteFailure::WriteError(write)) => write.code == 11000,
+        _ => false,
     }
 }
 

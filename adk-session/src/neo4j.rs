@@ -104,29 +104,35 @@ impl Neo4jSessionService {
     ///
     /// The runner:
     /// 1. Creates a uniqueness constraint on registry nodes.
-    /// 2. Detects baseline — if `session_unique` constraint exists but
-    ///    registry is empty, records v1 as already applied.
+    /// 2. Detects baseline — if v1's last rule, the `user_state_unique`
+    ///    constraint, exists but the registry is empty, records v1 as applied.
     /// 3. Reads the maximum applied version from the registry.
     /// 4. Returns an error if the database version exceeds the compiled-in max.
     /// 5. Executes each unapplied step idempotently and records it.
+    ///
+    /// Several processes may migrate one database at once: a schema statement that
+    /// loses a race to create the same rule succeeds, and each version is recorded with
+    /// `MERGE`, so a version another process recorded first is not an error.
     pub async fn migrate(&self) -> Result<()> {
         // Step 1: Ensure registry has a uniqueness constraint on `version`
-        self.graph
-            .run(neo4rs::query(&format!(
+        run_schema_statement(
+            &self.graph,
+            &format!(
                 "CREATE CONSTRAINT {}_version_unique IF NOT EXISTS \
                  FOR (m:{}) REQUIRE (m.version) IS UNIQUE",
                 Self::REGISTRY_LABEL.to_lowercase(),
                 Self::REGISTRY_LABEL,
-            )))
-            .await
-            .map_err(|e| {
-                adk_core::AdkError::session(format!("migration registry creation failed: {e}"))
-            })?;
+            ),
+        )
+        .await
+        .map_err(|e| {
+            adk_core::AdkError::session(format!("migration registry creation failed: {e}"))
+        })?;
 
         // Step 2: Read current max applied version
         let mut max_applied = self.read_max_applied_version().await?;
 
-        // Step 3: Baseline detection — if registry is empty but session_unique
+        // Step 3: Baseline detection — if registry is empty but v1's last
         // constraint already exists, record v1 as applied.
         if max_applied == 0 {
             let existing = self.detect_existing_tables().await?;
@@ -157,7 +163,7 @@ impl Neo4jSessionService {
             }
 
             for cypher in cypher_statements {
-                self.graph.run(neo4rs::query(cypher)).await.map_err(|e| {
+                run_schema_statement(&self.graph, cypher).await.map_err(|e| {
                     adk_core::AdkError::session(format!(
                         "{}",
                         crate::migration::MigrationError {
@@ -199,12 +205,14 @@ impl Neo4jSessionService {
         }
     }
 
-    /// Detect whether the `session_unique` constraint already exists (baseline).
+    /// Detect whether v1's last rule, the `user_state_unique` constraint, already
+    /// exists (baseline). A first `migrate` running in another process creates v1's
+    /// rules in order, so an earlier rule existing does not mean v1 is complete.
     async fn detect_existing_tables(&self) -> Result<bool> {
         let mut row_stream = self
             .graph
             .execute(neo4rs::query(
-                "SHOW CONSTRAINTS YIELD name WHERE name = 'session_unique' RETURN name",
+                "SHOW CONSTRAINTS YIELD name WHERE name = 'user_state_unique' RETURN name",
             ))
             .await
             .map_err(|e| adk_core::AdkError::session(format!("baseline detection failed: {e}")))?;
@@ -218,10 +226,13 @@ impl Neo4jSessionService {
         Ok(found)
     }
 
-    /// Record a successfully applied migration step as a registry node.
+    /// Records an applied migration step as a registry node, unless another process
+    /// recorded it first. The uniqueness constraint on `version` makes `MERGE` take a lock,
+    /// so concurrent records create one node.
     async fn record_migration(&self, version: i64, description: &str) -> Result<()> {
         let query_str = format!(
-            "CREATE (m:{} {{version: $version, description: $description, applied_at: datetime()}})",
+            "MERGE (m:{} {{version: $version}}) \
+             ON CREATE SET m.description = $description, m.applied_at = datetime()",
             Self::REGISTRY_LABEL,
         );
         self.graph
@@ -242,6 +253,18 @@ impl Neo4jSessionService {
                 ))
             })?;
         Ok(())
+    }
+}
+
+/// Runs one idempotent schema statement, succeeding when a concurrent `migrate` created
+/// the same rule first.
+async fn run_schema_statement(
+    graph: &Graph,
+    cypher: &str,
+) -> std::result::Result<(), neo4rs::Error> {
+    match graph.run(neo4rs::query(cypher)).await {
+        Err(error) if crate::neo4j_stores::lost_schema_race(&error) => Ok(()),
+        result => result,
     }
 }
 

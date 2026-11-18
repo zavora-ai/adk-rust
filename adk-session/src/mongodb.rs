@@ -103,6 +103,10 @@ impl MongoSessionService {
         &[(1, "create initial indexes"), (2, "index events in read order")];
 
     /// Run versioned migrations for MongoDB session storage.
+    ///
+    /// Several processes may migrate one database at once: every step creates its
+    /// indexes idempotently, and each version is recorded with an upsert, so a version
+    /// another process recorded first is not an error.
     pub async fn migrate(&self) -> Result<()> {
         self.db
             .collection::<Document>(Self::REGISTRY_COLLECTION)
@@ -184,30 +188,54 @@ impl MongoSessionService {
         }
     }
 
+    /// Whether v1's last index exists. A first `migrate` running in another process
+    /// creates v1's indexes in order, so an earlier one existing does not mean v1 is
+    /// complete.
     async fn detect_existing_tables(&self) -> Result<bool> {
-        let collections =
-            self.db.list_collection_names().await.map_err(|e| {
-                adk_core::AdkError::session(format!("baseline detection failed: {e}"))
-            })?;
-        Ok(collections.contains(&"sessions".to_string()))
+        let failed = |e: mongodb::error::Error| {
+            adk_core::AdkError::session(format!("baseline detection failed: {e}"))
+        };
+        let collections = self.db.list_collection_names().await.map_err(failed)?;
+        if !collections.iter().any(|name| name == "user_states") {
+            return Ok(false);
+        }
+        let indexes = self
+            .db
+            .collection::<Document>("user_states")
+            .list_index_names()
+            .await
+            .map_err(failed)?;
+        Ok(indexes.iter().any(|name| name == "idx_user_states_unique"))
     }
 
+    /// Records `version` unless another process recorded it first.
     async fn record_migration(&self, version: i64, description: &str) -> Result<()> {
         let registry = self.db.collection::<Document>(Self::REGISTRY_COLLECTION);
         let now = chrono_to_bson_dt(Utc::now());
-        registry
-            .insert_one(doc! { "version": version, "description": description, "applied_at": now })
-            .await
-            .map_err(|e| {
-                adk_core::AdkError::session(format!(
-                    "{}",
-                    crate::migration::MigrationError {
-                        version,
-                        description: description.to_string(),
-                        cause: format!("registry record failed: {e}"),
-                    }
-                ))
-            })?;
+        let recorded = registry
+            .update_one(
+                doc! { "version": version },
+                doc! { "$setOnInsert": { "description": description, "applied_at": now } },
+            )
+            .upsert(true)
+            .await;
+        // The server retries an upsert that loses a race on the unique `version` index;
+        // a duplicate key that still surfaces means the version is recorded.
+        match recorded {
+            Ok(_) => Ok(()),
+            Err(e) if is_duplicate_key(&e) => Ok(()),
+            Err(e) => Err(e),
+        }
+        .map_err(|e| {
+            adk_core::AdkError::session(format!(
+                "{}",
+                crate::migration::MigrationError {
+                    version,
+                    description: description.to_string(),
+                    cause: format!("registry record failed: {e}"),
+                }
+            ))
+        })?;
         Ok(())
     }
 

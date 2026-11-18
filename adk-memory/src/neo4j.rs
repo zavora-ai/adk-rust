@@ -82,6 +82,26 @@ pub const DEFAULT_VECTOR_CANDIDATE_CAP: usize = 1000;
 /// tenant filter runs.
 const VECTOR_OVERFETCH_FACTOR: usize = 10;
 
+/// Schema codes that mean an `IF NOT EXISTS` statement raced another one and lost.
+const SCHEMA_ALREADY_EXISTS: [&str; 4] = [
+    "Neo.ClientError.Schema.EquivalentSchemaRuleAlreadyExists",
+    "Neo.ClientError.Schema.ConstraintAlreadyExists",
+    "Neo.ClientError.Schema.IndexAlreadyExists",
+    "Neo.ClientError.Schema.ConstraintWithNameAlreadyExists",
+];
+
+/// Runs one idempotent schema statement, succeeding when a concurrent `migrate` created
+/// the same rule first.
+async fn run_schema_statement(
+    graph: &Graph,
+    cypher: &str,
+) -> std::result::Result<(), neo4rs::Error> {
+    match graph.run(neo4rs::query(cypher)).await {
+        Err(neo4rs::Error::Neo4j(error)) if SCHEMA_ALREADY_EXISTS.contains(&error.code()) => Ok(()),
+        result => result,
+    }
+}
+
 /// Number of vector-index candidates to request for a search returning `limit` entries.
 ///
 /// Never less than `limit`, otherwise `limit * VECTOR_OVERFETCH_FACTOR` bounded by `cap`.
@@ -220,32 +240,38 @@ impl Neo4jMemoryService {
     ///
     /// The runner:
     /// 1. Creates a uniqueness constraint on registry nodes.
-    /// 2. Detects baseline — if `memory_entry_unique` constraint exists but
-    ///    registry is empty, records v1 as already applied.
+    /// 2. Detects baseline — if v1's last rule, the `memory_content` index,
+    ///    exists but the registry is empty, records v1 as already applied.
     /// 3. Reads the maximum applied version from the registry.
     /// 4. Returns an error if the database version exceeds the compiled-in max.
     /// 5. Executes each unapplied step idempotently and records it.
     /// 6. Creates the vector index if an embedding provider is configured
     ///    (always idempotent, runs after migration steps).
+    ///
+    /// Several processes may migrate one database at once: a schema statement that
+    /// loses a race to create the same rule succeeds, and each version is recorded with
+    /// `MERGE`, so a version another process recorded first is not an error.
     pub async fn migrate(&self) -> adk_core::Result<()> {
         // Step 1: Ensure registry has a uniqueness constraint on `version`
-        self.graph
-            .run(neo4rs::query(&format!(
+        run_schema_statement(
+            &self.graph,
+            &format!(
                 "CREATE CONSTRAINT {}_version_unique IF NOT EXISTS \
                  FOR (m:{}) REQUIRE (m.version) IS UNIQUE",
                 Self::REGISTRY_LABEL.to_lowercase(),
                 Self::REGISTRY_LABEL,
-            )))
-            .await
-            .map_err(|e| {
-                adk_core::AdkError::memory(format!("migration registry creation failed: {e}"))
-            })?;
+            ),
+        )
+        .await
+        .map_err(|e| {
+            adk_core::AdkError::memory(format!("migration registry creation failed: {e}"))
+        })?;
 
         // Step 2: Read current max applied version
         let mut max_applied = self.read_max_applied_version().await?;
 
-        // Step 3: Baseline detection — if registry is empty but memory_entry_unique
-        // constraint already exists, record v1 as applied.
+        // Step 3: Baseline detection — if registry is empty but v1's last
+        // index already exists, record v1 as applied.
         if max_applied == 0 {
             let existing = self.detect_existing_tables().await?;
             if existing
@@ -275,7 +301,7 @@ impl Neo4jMemoryService {
             }
 
             for cypher in cypher_statements {
-                self.graph.run(neo4rs::query(cypher)).await.map_err(|e| {
+                run_schema_statement(&self.graph, cypher).await.map_err(|e| {
                     adk_core::AdkError::memory(format!(
                         "{}",
                         crate::migration::MigrationError {
@@ -301,7 +327,7 @@ impl Neo4jMemoryService {
                  OPTIONS {{indexConfig: {{`vector.dimensions`: {dims}, \
                  `vector.similarity_function`: 'cosine'}}}}"
             );
-            self.graph.run(neo4rs::query(&vector_index_query)).await.map_err(|e| {
+            run_schema_statement(&self.graph, &vector_index_query).await.map_err(|e| {
                 adk_core::AdkError::memory(format!(
                     "migration failed: vector index creation failed: {e}"
                 ))
@@ -335,12 +361,14 @@ impl Neo4jMemoryService {
         }
     }
 
-    /// Detect whether the `memory_entry_unique` constraint already exists (baseline).
+    /// Detect whether v1's last rule, the `memory_content` index, already exists
+    /// (baseline). A first `migrate` running in another process creates v1's rules in
+    /// order, so an earlier rule existing does not mean v1 is complete.
     async fn detect_existing_tables(&self) -> Result<bool> {
         let mut row_stream = self
             .graph
             .execute(neo4rs::query(
-                "SHOW CONSTRAINTS YIELD name WHERE name = 'memory_entry_unique' RETURN name",
+                "SHOW INDEXES YIELD name WHERE name = 'memory_content' RETURN name",
             ))
             .await
             .map_err(|e| adk_core::AdkError::memory(format!("baseline detection failed: {e}")))?;
@@ -354,10 +382,13 @@ impl Neo4jMemoryService {
         Ok(found)
     }
 
-    /// Record a successfully applied migration step as a registry node.
+    /// Records an applied migration step as a registry node, unless another process
+    /// recorded it first. The uniqueness constraint on `version` makes `MERGE` take a lock,
+    /// so concurrent records create one node.
     async fn record_migration(&self, version: i64, description: &str) -> Result<()> {
         let query_str = format!(
-            "CREATE (m:{} {{version: $version, description: $description, applied_at: datetime()}})",
+            "MERGE (m:{} {{version: $version}}) \
+             ON CREATE SET m.description = $description, m.applied_at = datetime()",
             Self::REGISTRY_LABEL,
         );
         self.graph

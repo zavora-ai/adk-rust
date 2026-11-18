@@ -28,7 +28,8 @@ use serde_json::json;
 
 use crate::durable_common::storage_error;
 use crate::firestore_stores::{
-    TxFuture, TxResult, connect, document_id, retry_or_fail, transaction_error, transaction_options,
+    TxFuture, TxResult, connect, document_id, is_retryable, retry_or_fail, retry_while,
+    transaction_error, transaction_options,
 };
 use crate::subject_common::{
     SUBJECT_STORAGE, StoredSubject, consent_parts, consent_record, sort_consent, state_name,
@@ -234,15 +235,18 @@ impl SubjectRegistry for FirestoreSubjectRegistry {
 
     async fn ensure(&self, subject: &SubjectRef) -> Result<SubjectRecord> {
         let doc = SubjectDoc::fresh(subject, SubjectState::Active, self.clock.now())?;
-        let created = self
-            .db
-            .fluent()
-            .insert()
-            .into(SUBJECTS)
-            .document_id(subject_id(&doc.key))
-            .object(&doc)
-            .execute::<SubjectDoc>()
-            .await;
+        // Concurrent `ensure` calls for one subject contend for its document; a create
+        // Firestore aborts runs again and then finds the document a winner wrote.
+        let created = retry_while(is_retryable, || {
+            self.db
+                .fluent()
+                .insert()
+                .into(SUBJECTS)
+                .document_id(subject_id(&doc.key))
+                .object(&doc)
+                .execute::<SubjectDoc>()
+        })
+        .await;
         match created {
             Ok(_) | Err(FirestoreError::DataConflictError(_)) => self.required(subject).await,
             Err(error) => Err(failed(error)),

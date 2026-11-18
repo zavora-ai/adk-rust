@@ -358,7 +358,7 @@ async fn main() -> adk_core::Result<()> {
 
 SQLite version 3 adds the `idx_events_session_ts` index, so loading one session reads only its rows however many other sessions share the file.
 
-Each backend detects pre-existing tables (baseline detection) and registers them as already applied, so `migrate()` is safe to call on both fresh and existing databases. `schema_version()` returns 0 only when the registry table does not exist; a failed read is an error. PostgreSQL `migrate()` holds the advisory lock `PostgresSessionService::ADVISORY_LOCK_KEY` on one connection and closes that connection afterwards. The `migration::sqlite_runner` and `migration::pg_runner` runners take `&'static` migration steps and ASCII registry table names of at most 63 bytes.
+Each backend detects pre-existing tables (baseline detection) and registers them as already applied, so `migrate()` is safe to call on both fresh and existing databases. `schema_version()` returns 0 only when the registry table does not exist; a failed read is an error. PostgreSQL `migrate()` holds the advisory lock `PostgresSessionService::ADVISORY_LOCK_KEY` on one connection and closes that connection afterwards. MongoDB and Neo4j `migrate()` can run from several processes at once: index and constraint creation is idempotent, and each version is recorded once, with an upsert or `MERGE`. The `migration::sqlite_runner` and `migration::pg_runner` runners take `&'static` migration steps and ASCII registry table names of at most 63 bytes.
 
 ## Durable Stores
 

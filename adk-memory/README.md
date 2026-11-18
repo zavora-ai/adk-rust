@@ -256,7 +256,7 @@ adk-memory = { version = "3.0.0", features = ["database-memory"] }
 
 ## Schema Migrations
 
-The SQLite, PostgreSQL, MongoDB, and Neo4j backends include a versioned migration system. Migrations are forward-only, idempotent, and tracked in a registry table. `schema_version()` returns 0 only when the registry table does not exist; a failed read is an error. PostgreSQL `migrate()` holds the advisory lock `PostgresMemoryService::ADVISORY_LOCK_KEY` on one connection.
+The SQLite, PostgreSQL, MongoDB, and Neo4j backends include a versioned migration system. Migrations are forward-only, idempotent, and tracked in a registry table. `schema_version()` returns 0 only when the registry table does not exist; a failed read is an error. PostgreSQL `migrate()` holds the advisory lock `PostgresMemoryService::ADVISORY_LOCK_KEY` on one connection. MongoDB and Neo4j `migrate()` can run from several processes at once: index and constraint creation is idempotent, and each version is recorded once, with an upsert or `MERGE`.
 
 The example below needs the `sqlite-memory` feature.
 
