@@ -26,16 +26,25 @@
 //! | Slack (`slack`) | `SlackAdapter` | Socket Mode, a WebSocket the adapter opens, every envelope acknowledged; the Web API with Block Kit out; no inbound port |
 //! | Discord (`discord`) | `DiscordAdapter` | The Gateway WebSocket with heartbeat, resume and reconnect; REST with button components out, `allowed_mentions: {"parse": []}`; no inbound port |
 //! | Matrix (`matrix`) | `MatrixAdapter` | `/sync` long polling with the `since` token; `m.room.message` out. No buttons: a card's answers are reaction keys, and only the paired account's reaction on that card answers it; unencrypted direct chats only; no inbound port |
+//! | Microsoft Teams (`teams`) | `TeamsAdapter` | A bot registered with Azure Bot Service: the Bot Framework's activity webhook the host serves on a public HTTPS address, every request's Bot Connector JWT checked against the connector's OpenID keys before it is read; the Bot Connector REST API out with a Microsoft Entra ID token; a card as an Adaptive Card whose `Action.Execute` buttons carry the decision and version; one-on-one chats only |
 
 #[cfg(feature = "discord")]
 mod discord;
 #[cfg(feature = "matrix")]
 mod matrix;
 mod media;
-#[cfg(any(feature = "whatsapp", feature = "slack", feature = "discord", feature = "matrix"))]
+#[cfg(any(
+    feature = "whatsapp",
+    feature = "slack",
+    feature = "discord",
+    feature = "matrix",
+    feature = "teams"
+))]
 mod shared;
 #[cfg(feature = "slack")]
 mod slack;
+#[cfg(feature = "teams")]
+mod teams;
 mod telegram;
 #[cfg(feature = "whatsapp")]
 mod whatsapp;
@@ -49,11 +58,21 @@ pub use discord::{
 pub use matrix::{
     MATRIX, MATRIX_CHANNEL, MatrixAdapter, MatrixAdapterBuilder, MatrixError, MatrixSync,
 };
-#[cfg(any(feature = "whatsapp", feature = "slack", feature = "discord", feature = "matrix"))]
+#[cfg(any(
+    feature = "whatsapp",
+    feature = "slack",
+    feature = "discord",
+    feature = "matrix",
+    feature = "teams"
+))]
 pub use shared::ChannelConnection;
 #[cfg(feature = "slack")]
 pub use slack::{
     SLACK, SLACK_CHANNEL, SlackAdapter, SlackAdapterBuilder, SlackConnection, SlackError,
+};
+#[cfg(feature = "teams")]
+pub use teams::{
+    TEAMS, TEAMS_CHANNEL, TeamsAdapter, TeamsAdapterBuilder, TeamsError, TeamsWebhook,
 };
 pub use telegram::{
     TELEGRAM, TELEGRAM_CHANNEL, TelegramAdapter, TelegramAdapterBuilder, TelegramError,

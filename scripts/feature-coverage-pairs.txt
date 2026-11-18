@@ -204,6 +204,9 @@
 # WhatsApp, Slack, Discord and Matrix (spec 3.5 §10 X12): the contract suite and each adapter's
 # behaviour tests over fakes of the four platforms, with their WebSockets.
 9 adk-surface whatsapp,slack,discord,matrix doc
+# Microsoft Teams: the contract suite and the adapter's behaviour tests over a fake Bot
+# Connector, Entra ID token endpoint and OpenID metadata, with tokens signed by a local key.
+9 adk-surface teams doc
 # The phone (spec 3.3 §5.4): Web Push, the phone's routes and "Confirm it's you", whose
 # webauthn-rs verifier links OpenSSL.
 9 adk-surface mobile doc

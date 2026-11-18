@@ -5,8 +5,8 @@ their agents, gets a card when a decision waits, says yes once or no, and stops 
 The `channels` feature of `adk-surface` ships the Telegram adapter. It moves messages
 between a Telegram bot and the kernel's [channel gateway](../kernel/pairing.md#chat-channels),
 which applies every rule: pairing, what a card carries, what chat may decide, stopping. The
-`whatsapp`, `slack`, `discord` and `matrix` features add adapters for those platforms
-([WhatsApp, Slack, Discord and Matrix](#whatsapp-slack-discord-and-matrix)).
+`whatsapp`, `slack`, `discord`, `matrix` and `teams` features add adapters for those platforms
+([WhatsApp, Slack, Discord, Matrix and Microsoft Teams](#whatsapp-slack-discord-matrix-and-microsoft-teams)).
 
 > **Note:** chat is Beta. `adk-rust up` starts the adapter when `TELEGRAM_BOT_TOKEN` is set
 > ([With `adk-rust up`](#with-adk-rust-up)); a program that hosts its own kernel starts it as
@@ -205,9 +205,9 @@ The bot token never appears in an error, a log line or a `Debug` output.
 > and the kernel's `WebhookIngress` checks Standard Webhooks signatures and starts runs
 > directly, which would skip the gateway's pairing.
 
-## WhatsApp, Slack, Discord and Matrix
+## WhatsApp, Slack, Discord, Matrix and Microsoft Teams
 
-Four more adapters sit beside Telegram's (spec 3.5 §10 X12), one feature each, so a
+Five more adapters sit beside Telegram's (spec 3.5 §10 X12), one feature each, so a
 Telegram-only build stays lean. Each is a `ChannelSink` for the gateway and keeps the rules
 the adapter keeps on Telegram: only a pressed answer decides (S-I4); a card offers its own
 answers and no others, none at high risk or for money; "stop all" and the platform's `/stop`
@@ -222,16 +222,17 @@ stranger waits out a rate limit. The cards read as Telegram's do, in the same wo
 | `slack` | `SlackAdapter` | `slack` | Socket Mode: a WebSocket the adapter opens, every envelope acknowledged | Web API `chat.postMessage`, `chat.update`, Block Kit | Buttons (`block_actions`) |
 | `discord` | `DiscordAdapter` | `discord` | The Gateway: a WebSocket the adapter opens, with heartbeat, resume and reconnect | REST create message with button components | Buttons (`INTERACTION_CREATE`), each answered through its interaction callback |
 | `matrix` | `MatrixAdapter` | `matrix` | `/sync` long polling with the `since` token | `m.room.message` with `body` and an HTML `formatted_body` | Reactions: the card lists its answers as reaction keys |
+| `teams` | `TeamsAdapter` | `teams` | The Bot Framework messaging endpoint the host serves on a public HTTPS address, every request's Bot Connector JWT checked | Bot Connector REST API `/v3/conversations/{id}/activities` with a Microsoft Entra ID token | Adaptive Card `Action.Execute` buttons, `Action.Submit` on older clients |
 
 ```toml
 [dependencies]
-adk-surface = { version = "3.0.0", features = ["slack", "discord", "matrix", "whatsapp"] }
+adk-surface = { version = "3.0.0", features = ["slack", "discord", "matrix", "whatsapp", "teams"] }
 ```
 
 Each feature implies `channels`. Every adapter is built like Telegram's — `approvals`,
 `answer_log`, `audit`, `card_hints` and `utc_offset` on its builder — and started with
 `start(gateway)`, which returns a `ChannelConnection` (`SlackConnection`, `DiscordConnection`,
-`MatrixSync`) to stop or join. A refused token ends it with the platform's `Unauthorized`
+`MatrixSync`) to stop or join, or the webhook to mount (`WhatsAppWebhook`, `TeamsWebhook`). A refused token ends it with the platform's `Unauthorized`
 error. No token appears in an error, a log line or a `Debug` output.
 
 ### Slack
@@ -357,9 +358,84 @@ async fn whatsapp(
 > (spec 3.3 §13 decision 10), and a webhook needs a public address. A host with a tunnel or a
 > reverse proxy mounts `WhatsAppWebhook::router()` itself, on the kernel the gateway runs on.
 
+### Microsoft Teams
+
+The adapter is a bot registered with Azure Bot Service and installed in Teams. Teams reaches it
+only at the bot's messaging endpoint, so the host serves `TeamsWebhook::router()` on a public
+HTTPS address — `adk-rust up` does it on a listener of its own
+([With `adk-rust up`](#with-adk-rust-up-1)).
+
+1. Create an **Azure Bot** resource. Its Microsoft App ID is `TEAMS_APP_ID`; create a client
+   secret for its app registration, `TEAMS_APP_PASSWORD`. For a single-tenant bot, the
+   tenant's id is `TEAMS_TENANT_ID`.
+2. Set the bot's **Messaging endpoint** to the public address of the webhook, such as
+   `https://agents.example.com/api/messages`, and add the **Microsoft Teams** channel.
+3. Install the bot for yourself in Teams (an app package whose `bots` entry names the app
+   ID, `personal` scope), and write to it.
+
+```rust,ignore
+use std::sync::Arc;
+use adk_kernel::channels::{ChannelDoorbell, ChannelGateway, InMemoryChannelBindingStore};
+use adk_surface::channels::{TeamsAdapter, TeamsWebhook};
+
+async fn teams(
+    kernel: adk_kernel::Kernel,
+    doorbell: Arc<ChannelDoorbell>,
+) -> Result<(axum::Router, TeamsWebhook), Box<dyn std::error::Error>> {
+    let teams = TeamsAdapter::builder(
+        std::env::var("TEAMS_APP_ID")?,
+        std::env::var("TEAMS_APP_PASSWORD")?,
+    )
+    .tenant(std::env::var("TEAMS_TENANT_ID")?)
+    .build()?;
+    let bindings = Arc::new(InMemoryChannelBindingStore::new());
+    let gateway = ChannelGateway::builder(Arc::new(kernel), bindings)
+        .sink(Arc::new(teams.clone()))
+        .home_url("https://home.example/ui/")
+        .doorbell(doorbell)
+        .build();
+    gateway.start().await?;
+    let webhook = teams.start(gateway);
+    let router = axum::Router::new().nest("/api/messages", webhook.router());
+    Ok((router, webhook))
+}
+```
+
+Every request is refused before its body is acted on unless its `Authorization` header carries
+a Bot Connector token that passes each check of the Bot Framework's protocol:
+
+| Check | Refused with |
+|---|---|
+| A `Bearer` token is present and is a JWT | `401` |
+| Signed `RS256` — the algorithm the OpenID metadata lists — by a key in the `jwks_uri` of `https://login.botframework.com/v1/.well-known/openidconfiguration` | `401` |
+| `iss` is `https://api.botframework.com`, `aud` is the bot's app ID, `exp` and `nbf` hold with five minutes of clock skew | `401` |
+| The signing key's `endorsements` include the activity's `channelId` (`msteams`) | `403` |
+| The token's `serviceurl` claim is the activity's `serviceUrl`, which is `https` | `403` |
+| For a single-tenant bot, the conversation is in its tenant | `403` |
+| The signing keys cannot be fetched | `503`, so the Bot Connector delivers again |
+
+The keys are fetched once and kept for a day; a token naming a key the adapter does not hold
+fetches them again at most once every five minutes, so forged tokens cannot make it hammer the
+metadata endpoint.
+
+| What | How it reaches Teams |
+|---|---|
+| A card | An Adaptive Card 1.4: the chat screen's lines as `TextRun`s, which the schema never reads as Markdown, and Markdown link syntax broken apart for clients that do; an `Action.Execute` (verb `adk.answer`) for each answer the card offers and no others, whose data carries the decision and the version the card showed — falling back to `Action.Submit` on older clients; "Open in home" as `Action.OpenUrl`; a notification preview, "Waiting for you: Write file". Never the call's arguments |
+| A press | The `adaptiveCard/action` invoke is answered at once with `{"statusCode": 200, "type": "application/vnd.microsoft.activity.message", "value": "Answer received."}`; the gateway decides it at the card's version, and the confirmation replies to the card |
+| An agent's reply | `textFormat: plain`, which Teams shows as written, in messages of at most 16,000 characters |
+| What is read | Messages and card actions in one-on-one chats (`conversationType: personal`). Group chats, channels and other Bot Framework channels are not read; an activity delivered again is taken once |
+| Replies and wake-ups | Posted to `{serviceUrl}/v3/conversations/{id}/activities` with an access token from the client-credentials grant for `https://api.botframework.com/.default`, cached and renewed five minutes before it expires, and renewed once when the Bot Connector refuses it. A conversation not heard from since the adapter started — a wake-up after a restart — goes to the builder's `service_url`, `https://smba.trafficmanager.net/teams/` by default; set it for GCC or GCC High |
+| `429`, `412`, `502`, `504` | `Retry-After` is waited out when Teams sends one, else 1 and 2 seconds with jitter, up to 30 seconds; never for a stranger |
+| A `403` such as `MessageWritesBlocked` | `TeamsError::Forbidden`: the person blocked or removed the app |
+
+> **Note:** the adapter is proven against a fake Bot Connector, Entra ID token endpoint and
+> OpenID metadata that sign activities with a local key (`adk-surface/tests/teams_*.rs`), and
+> with a live model behind a simulated Teams activity. A run against a real Teams tenant
+> follows when credentials are available.
+
 ### Photos
 
-Every adapter downloads the images a paired account's message carried into
+Every adapter but Teams' downloads the images a paired account's message carried into
 `ChannelInbound::attachments` — JPEG, PNG, WebP and GIF, at most 10 MiB each and ten a
 message, the size checked while streaming — and never a stranger's. A photo's caption is the
 message's words.
@@ -390,27 +466,39 @@ gets a stranger a code. The site's public edge serves WhatsApp's webhook at
 
 ### With `adk-rust up`
 
-`adk-rust up` starts Slack, Discord and Matrix as it starts Telegram, each only when its
-variables are set; without them nothing of it is built, started or logged. None needs an
-inbound port, so the home keeps its loopback bind.
+`adk-rust up` starts Slack, Discord, Matrix and Microsoft Teams as it starts Telegram, each
+only when its variables are set; without them nothing of it is built, started or logged.
+Slack, Discord and Matrix need no inbound port, so the home keeps its loopback bind.
 
 | Variables | Starts |
 |---|---|
 | `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN` (`SLACK_API_BASE` for another address) | Slack |
 | `DISCORD_BOT_TOKEN` (`DISCORD_API_BASE` for another address) | Discord |
 | `MATRIX_HOMESERVER` and `MATRIX_ACCESS_TOKEN` | Matrix |
+| `TEAMS_APP_ID` and `TEAMS_APP_PASSWORD` (`TEAMS_TENANT_ID` for a single-tenant bot, `TEAMS_BIND` for the endpoint's address, `TEAMS_SERVICE_URL` for a sovereign cloud) | Microsoft Teams |
+
+Teams' messaging endpoint gets a listener of its own, `TEAMS_BIND` — `127.0.0.1:3978` by
+default — that serves `POST /api/messages` and nothing else. Publish that port alone over
+HTTPS, with a tunnel such as `devtunnel host -p 3978 --allow-anonymous` or a reverse proxy,
+and set the bot's messaging endpoint to `https://<public host>/api/messages`. The home is never
+reachable through it, and every request on it carries a Bot Connector token or is refused.
+
+```bash
+TEAMS_APP_ID=… TEAMS_APP_PASSWORD=… TEAMS_TENANT_ID=… adk-rust up
+```
 
 ```bash
 SLACK_APP_TOKEN=xapp-… SLACK_BOT_TOKEN=xoxb-… DISCORD_BOT_TOKEN=… adk-rust up
 ```
 
-The banner says `chat  Slack, Discord` and where cards link to: the phone's home when `up`
+The banner says `chat  Slack, Discord` and where cards link to, and `teams` with the
+endpoint's local address when Teams runs: the phone's home when `up`
 serves one, otherwise the bind address. Accounts write to the bot, get a pairing code, and are
 paired with `adk-rust pair accept <code>` in the store Telegram's accounts are in; they are
 listed by `adk-rust pair list` and in the home under **Where you can say yes from**. One of a
 pair of variables without the other stops `up` with an error, and `--mode auto` needs
-`--sandbox`, as with Telegram. The features are `adk-cli`'s `slack`, `discord` and `matrix`,
-on by default.
+`--sandbox`, as with Telegram. The features are `adk-cli`'s `slack`, `discord`, `matrix` and
+`teams`, on by default.
 
 ## Testing an adapter
 
@@ -420,17 +508,21 @@ what the person types and presses goes through the adapter's own reading of Tele
 updates. `adk-surface/tests/telegram_tests.rs` runs the scenario end to end on a
 kernel-hosted harness with a scripted model.
 
-The other four pass the same suite against fakes of their platforms in
-`adk-surface/tests/fake_<platform>/` — HTTP for all four, and a WebSocket for Slack's Socket
-Mode and Discord's Gateway — in `<platform>_contract.rs`, and `<platform>_tests.rs` covers
-what each keeps: strangers, answers given twice, typed text, escaping, `/stop`, rate limits,
-reconnects, and each platform's own rules (WhatsApp's signatures, handshake, window and button
-limits; Slack's acknowledgements; Matrix's reactions and encrypted rooms). A live test per
-platform is `#[ignore]`d and reads its variables from the environment.
+The other five pass the same suite against fakes of their platforms in
+`adk-surface/tests/fake_<platform>/` — HTTP for all five, a WebSocket for Slack's Socket
+Mode and Discord's Gateway, and for Teams a wiremock Bot Connector, Entra ID token endpoint and
+OpenID metadata whose tokens a local RSA key signs — in `<platform>_contract.rs`, and
+`<platform>_tests.rs` covers what each keeps: strangers, answers given twice, typed text,
+escaping, `/stop`, rate limits, reconnects, and each platform's own rules (WhatsApp's
+signatures, handshake, window and button limits; Slack's acknowledgements; Matrix's reactions
+and encrypted rooms; every check on a Teams token). A live test per platform is `#[ignore]`d
+and reads its variables from the environment; Teams' runs a harness agent on
+`claude-haiku-5-5` behind simulated Teams activities.
 
 ```bash
 cargo nextest run -p adk-surface --features channels
-cargo nextest run -p adk-surface --features whatsapp,slack,discord,matrix
+cargo nextest run -p adk-surface --features whatsapp,slack,discord,matrix,teams
+cargo test -p adk-surface --features teams --test teams_tests -- --ignored --nocapture
 ```
 
 ## Related

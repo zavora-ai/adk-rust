@@ -1428,6 +1428,7 @@ dependencies = [
  "adk-website",
  "async-trait",
  "awp-types",
+ "aws-lc-rs",
  "axum",
  "base64 0.22.1",
  "base64ct",
@@ -1441,6 +1442,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "jsonschema",
+ "jsonwebtoken 11.1.0",
  "mime_guess",
  "p256",
  "proptest",
@@ -1469,6 +1471,7 @@ dependencies = [
  "vt100",
  "web-push-native",
  "webauthn-rs",
+ "wiremock",
 ]
 
 [[package]]
