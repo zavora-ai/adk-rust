@@ -7,9 +7,10 @@
 #![cfg(feature = "gcp")]
 
 use adk_deploy::gcp::{
-    CreateReasoningEngineRequest, DeploymentSpec, EnvVar, GcpDeployClient, GcpDeployConfig,
-    SecretEnvVar, SecretRef, default_class_methods, gcloud_build_submit_command,
+    AgentEngineTarget, CreateReasoningEngineRequest, DeploymentSpec, EnvVar, GcpDeployClient,
+    GcpDeployConfig, SecretEnvVar, SecretRef, default_class_methods, gcloud_build_submit_command,
 };
+use adk_deploy::targets::{DeployRequest, DeployTarget, DeploymentOutcome, DeploymentStatus};
 use axum::extract::State;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -245,4 +246,152 @@ async fn foreign_operations_are_refused() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("does not belong"), "{error}");
+}
+
+// ── The same client through the DeployTarget trait ────────────────────────
+
+fn agent_engine_manifest() -> adk_deploy::DeploymentManifest {
+    toml::from_str(
+        r#"
+        [agent]
+        name = "support"
+        binary = "support"
+        version = "1.2.0"
+
+        [scaling]
+        minInstances = 1
+        maxInstances = 4
+        targetConcurrentRequests = 9
+
+        [[services]]
+        name = "sessions"
+        kind = "firestore"
+        mode = "managed"
+
+        [[secrets]]
+        key = "ANTHROPIC_API_KEY"
+
+        [env]
+        RUST_LOG = "info"
+        ANTHROPIC_API_KEY = { secretRef = "ANTHROPIC_API_KEY" }
+
+        [targets.agent-engine]
+        serviceAccount = "agent-runner@test-project.iam.gserviceaccount.com"
+        memory = "8Gi"
+        "#,
+    )
+    .unwrap()
+}
+
+fn agent_engine_target(client: GcpDeployClient) -> AgentEngineTarget {
+    let manifest = agent_engine_manifest();
+    AgentEngineTarget::with_client(client, manifest.target_config(AgentEngineTarget::NAME).unwrap())
+}
+
+/// The create body the trait sends: env from the deploy contract and `[env]`, secrets as
+/// Secret Manager references, scaling from `[scaling]`. PORT is the platform's to assign.
+fn expected_agent_engine_body() -> Value {
+    json!({
+        "displayName": "support",
+        "spec": {
+            "containerSpec": { "imageUri": "us-central1-docker.pkg.dev/test-project/agents/support:1.2.0" },
+            "deploymentSpec": {
+                "env": [
+                    { "name": "ADK_AGENT_NAME", "value": "support" },
+                    { "name": "ADK_AGENT_VERSION", "value": "1.2.0" },
+                    { "name": "ADK_DEPLOY_TARGET", "value": "agent-engine" },
+                    { "name": "BIND_HOST", "value": "0.0.0.0" },
+                    { "name": "RUST_LOG", "value": "info" },
+                ],
+                "secretEnv": [
+                    {
+                        "name": "ANTHROPIC_API_KEY",
+                        "secretRef": { "secret": "anthropic-api-key", "version": "latest" },
+                    }
+                ],
+                "resourceLimits": { "memory": "8Gi" },
+                "minInstances": 1,
+                "maxInstances": 4,
+                "containerConcurrency": 9,
+            },
+            "classMethods": default_class_methods(),
+            "agentFramework": "google-adk",
+            "serviceAccount": "agent-runner@test-project.iam.gserviceaccount.com",
+        },
+    })
+}
+
+#[tokio::test]
+async fn agent_engine_target_plans_and_deploys_through_the_trait() {
+    let state = SharedState::default();
+    let endpoint = start_mock(state.clone()).await;
+    let target = agent_engine_target(build_client(&endpoint).await);
+    let request = DeployRequest::new(
+        agent_engine_manifest(),
+        "us-central1-docker.pkg.dev/test-project/agents/support:1.2.0",
+    );
+
+    let plan = target.plan(&request).unwrap();
+    assert_eq!(plan.resources.len(), 1);
+    assert_eq!(plan.resources[0].kind, "aiplatform:reasoningEngines.create");
+    assert_eq!(
+        plan.resources[0].name,
+        format!("projects/{PROJECT}/locations/{LOCATION}/reasoningEngines")
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&plan.resources[0].body).unwrap(),
+        expected_agent_engine_body()
+    );
+    // IAM fronts the engine and it supplies managed sessions, so neither warns.
+    assert_eq!(plan.runtime.warnings, Vec::<String>::new());
+
+    let outcome = target.deploy(&request).await.unwrap();
+    assert_eq!(
+        outcome,
+        DeploymentOutcome::new("agent-engine", engine_name(), None, DeploymentStatus::Ready)
+    );
+    assert_eq!(state.lock().await.create_bodies, [expected_agent_engine_body()]);
+
+    assert_eq!(target.status(&engine_name()).await.unwrap(), DeploymentStatus::Ready);
+    target.destroy("4242").await.unwrap();
+    assert_eq!(state.lock().await.deleted, ["4242"]);
+}
+
+#[tokio::test]
+async fn agent_engine_status_reports_a_missing_engine() {
+    let app = Router::new().route(
+        &format!("/v1beta1/projects/{PROJECT}/locations/{LOCATION}/reasoningEngines/{{id}}"),
+        get(|| async {
+            (
+                axum::http::StatusCode::NOT_FOUND,
+                Json(json!({ "error": { "code": 404, "message": "not found", "status": "NOT_FOUND" } })),
+            )
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let target = agent_engine_target(build_client(&endpoint).await);
+    assert_eq!(target.status("4242").await.unwrap(), DeploymentStatus::NotFound);
+}
+
+#[test]
+fn agent_engine_target_refuses_a_literal_secret() {
+    let mut manifest = agent_engine_manifest();
+    manifest.env.insert(
+        "OPENAI_API_KEY".to_string(),
+        adk_deploy::EnvVarSpec::Plain("sk-literal".to_string()),
+    );
+    let runtime = adk_deploy::targets::RuntimeSpec::from_manifest(
+        &manifest,
+        "gcr.io/p/a:1",
+        &adk_deploy::targets::RuntimeOptions::new("agent-engine")
+            .with_provider_authentication(true)
+            .with_managed_stores(true),
+    );
+    assert!(
+        runtime.unwrap_err().to_string().contains("env 'OPENAI_API_KEY' holds a literal value")
+    );
 }

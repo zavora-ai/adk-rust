@@ -37,12 +37,18 @@
 //! post-create, and adk-python's `AdkApp` does not register it either —
 //! strict parity excludes it (Agent Engine plan, verification task V12).
 
+use crate::DeploymentManifest;
 use crate::error::{DeployError, DeployResult};
-use adk_core::{AdkError, ErrorComponent};
+use crate::targets::{
+    DeployPlan, DeployRequest, DeployTarget, DeploymentOutcome, DeploymentStatus, PlannedResource,
+    RuntimeOptions, RuntimeSpec,
+};
+use adk_core::{AdkError, ErrorCategory, ErrorComponent};
 use adk_gcp::{
     GcpErrorCodes, GcpErrorContext, GcpHttpClient, LroPoller, VertexResourceName,
     is_scoped_resource_name,
 };
+use async_trait::async_trait;
 use google_cloud_auth::credentials::Credentials;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
@@ -485,6 +491,28 @@ impl GcpDeployClient {
         })
     }
 
+    /// Fetches a reasoning engine, or `None` when it does not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request fails for any reason but a missing engine.
+    pub async fn find_reasoning_engine(
+        &self,
+        engine: &str,
+    ) -> DeployResult<Option<ReasoningEngine>> {
+        let name = self.engine_name(engine)?;
+        let request = self.gcp.request(Method::GET, &name).await.map_err(map_gcp_error)?;
+        match self.gcp.send_value(request).await {
+            Ok(value) => {
+                serde_json::from_value(value).map(Some).map_err(|error| DeployError::Client {
+                    message: format!("failed to parse reasoning engine payload: {error}"),
+                })
+            }
+            Err(error) if error.category == ErrorCategory::NotFound => Ok(None),
+            Err(error) => Err(map_gcp_error(error)),
+        }
+    }
+
     /// Deletes a reasoning engine, returning the pending operation.
     ///
     /// # Errors
@@ -560,6 +588,241 @@ fn parse_operation(value: Value) -> DeployResult<Operation> {
         });
     }
     Ok(operation)
+}
+
+// ── Deploy target ─────────────────────────────────────────────────────────
+
+/// `[targets.agent-engine]` settings.
+///
+/// # Example
+///
+/// ```toml
+/// [targets.agent-engine]
+/// image = "us-central1-docker.pkg.dev/my-project/agents/support:1.0.0"
+/// project = "my-project"
+/// location = "us-central1"
+/// serviceAccount = "agent-runner@my-project.iam.gserviceaccount.com"
+///
+/// [targets.agent-engine.secrets]
+/// ANTHROPIC_API_KEY = "anthropic-api-key"
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[non_exhaustive]
+pub struct AgentEngineTargetConfig {
+    /// Artifact Registry image URI.
+    pub image: Option<String>,
+    /// GCP project (default `$GOOGLE_CLOUD_PROJECT`).
+    pub project: Option<String>,
+    /// GCP location (default `$GOOGLE_CLOUD_LOCATION`).
+    pub location: Option<String>,
+    /// Service account the engine runs as.
+    pub service_account: Option<String>,
+    /// Customer-managed encryption key resource name.
+    pub kms_key: Option<String>,
+    /// Engine display name (default `[agent] name`).
+    pub display_name: Option<String>,
+    /// CPU limit, such as `"4"`.
+    pub cpu: Option<String>,
+    /// Memory limit, such as `"8Gi"`.
+    pub memory: Option<String>,
+    /// Secret Manager secret for each `[[secrets]]` key (default: the key lower-cased with
+    /// `_` as `-`, so `ANTHROPIC_API_KEY` reads the secret `anthropic-api-key`).
+    #[serde(default)]
+    pub secrets: BTreeMap<String, String>,
+    /// API origin override, for private endpoints and tests.
+    pub endpoint: Option<String>,
+}
+
+/// Deploys to Agent Engine (Gemini Enterprise Agent Platform ReasoningEngines) through
+/// [`GcpDeployClient`].
+///
+/// Agent Engine authenticates every caller with Google Cloud IAM before the request reaches the
+/// container, and supplies Vertex AI Sessions and Memory Bank, so `managed` session and memory
+/// bindings are accepted here.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use adk_deploy::DeploymentManifest;
+/// use adk_deploy::gcp::AgentEngineTarget;
+/// use adk_deploy::targets::{DeployRequest, DeployTarget};
+/// use std::path::Path;
+///
+/// # async fn deploy() -> adk_deploy::DeployResult<()> {
+/// let manifest = DeploymentManifest::from_path(Path::new("adk-deploy.toml"))?;
+/// let target = AgentEngineTarget::from_manifest(&manifest)?;
+/// let image = "us-central1-docker.pkg.dev/my-project/agents/support:1.0.0";
+/// let outcome = target.deploy(&DeployRequest::new(manifest, image)).await?;
+/// println!("engine: {}", outcome.deployment_id);
+/// # Ok(())
+/// # }
+/// ```
+pub struct AgentEngineTarget {
+    client: GcpDeployClient,
+    config: AgentEngineTargetConfig,
+}
+
+impl AgentEngineTarget {
+    /// The target name.
+    pub const NAME: &'static str = "agent-engine";
+
+    /// Creates a target from `[targets.agent-engine]`, authenticating with Application Default
+    /// Credentials.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeployError::InvalidManifest`] when the table is invalid or names no project
+    /// or location and `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_LOCATION` is unset, and the
+    /// errors of [`GcpDeployClient::new_with_adc`].
+    pub fn from_manifest(manifest: &DeploymentManifest) -> DeployResult<Self> {
+        let config: AgentEngineTargetConfig = manifest.target_config(Self::NAME)?;
+        let client = GcpDeployClient::new_with_adc(Self::client_config(&config)?)?;
+        Ok(Self { client, config })
+    }
+
+    /// Creates a target over an existing client.
+    pub fn with_client(client: GcpDeployClient, config: AgentEngineTargetConfig) -> Self {
+        Self { client, config }
+    }
+
+    /// The client config `config` describes, with the project and location from the
+    /// environment when the table omits them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeployError::InvalidManifest`] when no project or location is known.
+    pub fn client_config(config: &AgentEngineTargetConfig) -> DeployResult<GcpDeployConfig> {
+        let setting = |value: &Option<String>, key: &str, variable: &str| {
+            value.clone().or_else(|| std::env::var(variable).ok()).ok_or_else(|| {
+                DeployError::InvalidManifest {
+                    message: format!(
+                        "target 'agent-engine' needs {key} in [targets.agent-engine] or ${variable}"
+                    ),
+                }
+            })
+        };
+        let project = setting(&config.project, "project", "GOOGLE_CLOUD_PROJECT")?;
+        let location = setting(&config.location, "location", "GOOGLE_CLOUD_LOCATION")?;
+        let mut client_config = GcpDeployConfig::new(project, location);
+        if let Some(endpoint) = &config.endpoint {
+            client_config = client_config.with_endpoint(endpoint);
+        }
+        Ok(client_config)
+    }
+
+    fn runtime(&self, request: &DeployRequest) -> DeployResult<RuntimeSpec> {
+        RuntimeSpec::from_manifest(
+            &request.manifest,
+            &request.image,
+            &RuntimeOptions::new(Self::NAME)
+                .with_provider_authentication(true)
+                .with_managed_stores(true),
+        )
+    }
+
+    /// The `reasoningEngines.create` body for `runtime`.
+    pub fn create_request(&self, runtime: &RuntimeSpec) -> CreateReasoningEngineRequest {
+        let display_name = self.config.display_name.clone().unwrap_or_else(|| runtime.name.clone());
+        let mut request = CreateReasoningEngineRequest::byoc(display_name, &runtime.image);
+        if let Some(service_account) = &self.config.service_account {
+            request = request.with_service_account(service_account);
+        }
+        if let Some(kms_key) = &self.config.kms_key {
+            request = request.with_kms_key(kms_key);
+        }
+        // The platform assigns PORT.
+        let env = runtime
+            .env
+            .iter()
+            .filter(|(name, _)| name.as_str() != crate::targets::contract::PORT)
+            .map(|(name, value)| EnvVar { name: name.clone(), value: value.clone() })
+            .collect();
+        let secret_env = runtime
+            .secret_env
+            .iter()
+            .map(|(name, key)| SecretEnvVar {
+                name: name.clone(),
+                secret_ref: SecretRef {
+                    secret: self
+                        .config
+                        .secrets
+                        .get(key)
+                        .cloned()
+                        .unwrap_or_else(|| key.to_ascii_lowercase().replace('_', "-")),
+                    version: Some("latest".to_string()),
+                },
+            })
+            .collect();
+        let mut limits = BTreeMap::new();
+        if let Some(cpu) = &self.config.cpu {
+            limits.insert("cpu".to_string(), cpu.clone());
+        }
+        if let Some(memory) = &self.config.memory {
+            limits.insert("memory".to_string(), memory.clone());
+        }
+        let to_i32 = |value: u32| i32::try_from(value).unwrap_or(i32::MAX);
+        request.with_deployment_spec(DeploymentSpec {
+            env,
+            secret_env,
+            psc_interface_config: None,
+            resource_limits: (!limits.is_empty()).then_some(limits),
+            min_instances: Some(to_i32(runtime.scaling.min_instances)),
+            max_instances: Some(to_i32(runtime.scaling.max_instances)),
+            container_concurrency: runtime.scaling.target_concurrent_requests.map(to_i32),
+        })
+    }
+}
+
+#[async_trait]
+impl DeployTarget for AgentEngineTarget {
+    fn name(&self) -> &'static str {
+        Self::NAME
+    }
+
+    fn plan(&self, request: &DeployRequest) -> DeployResult<DeployPlan> {
+        let runtime = self.runtime(request)?;
+        let body =
+            serde_json::to_string_pretty(&self.create_request(&runtime)).map_err(|error| {
+                DeployError::Client {
+                    message: format!("failed to serialize the create request: {error}"),
+                }
+            })?;
+        Ok(DeployPlan::new(Self::NAME, runtime).with_resource(PlannedResource::new(
+            "aiplatform:reasoningEngines.create",
+            format!("{}/reasoningEngines", self.client.parent()),
+            body,
+        )))
+    }
+
+    async fn deploy(&self, request: &DeployRequest) -> DeployResult<DeploymentOutcome> {
+        let runtime = self.runtime(request)?;
+        let operation = self.client.create_reasoning_engine(&self.create_request(&runtime)).await?;
+        let response = self.client.wait_for_operation(operation).await?;
+        let engine = response
+            .as_ref()
+            .and_then(|value| value.get("name"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| DeployError::Client {
+                message: "the create operation finished without an engine resource name; \
+                          inspect the operation in Google Cloud"
+                    .to_string(),
+            })?;
+        Ok(DeploymentOutcome::new(Self::NAME, engine, None, DeploymentStatus::Ready))
+    }
+
+    async fn status(&self, deployment_id: &str) -> DeployResult<DeploymentStatus> {
+        Ok(match self.client.find_reasoning_engine(deployment_id).await? {
+            Some(_) => DeploymentStatus::Ready,
+            None => DeploymentStatus::NotFound,
+        })
+    }
+
+    async fn destroy(&self, deployment_id: &str) -> DeployResult<()> {
+        let operation = self.client.delete_reasoning_engine(deployment_id).await?;
+        self.client.wait_for_operation(operation).await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -28,6 +28,8 @@ flate2.workspace = true
 tar.workspace = true
 dirs = "7"
 url = "2"
+async-trait.workspace = true
+tokio = { workspace = true, features = ["fs", "process"] }
 # Optional: Agent Engine (ReasoningEngine) deployment client
 adk-core = { workspace = true, optional = true }
 adk-gcp = { workspace = true, optional = true }
@@ -41,6 +43,8 @@ gcp = ["dep:adk-core", "dep:adk-gcp", "dep:google-cloud-auth"]
 tempfile = "3"
 axum = "0.8"
 tokio = { workspace = true, features = ["rt", "macros", "net"] }
+wiremock = "0.6"
+serde-saphyr.workspace = true
 
 # Document every feature-gated API on docs.rs.
 [package.metadata.docs.rs]
