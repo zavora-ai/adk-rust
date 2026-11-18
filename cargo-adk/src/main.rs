@@ -20,6 +20,7 @@
 //! cargo adk deploy --target container --plan  # render the Dockerfile, Compose and Kubernetes files
 //! cargo adk deploy --target agent-engine --image IMAGE  # deploy to Agent Engine (feature gcp)
 //! cargo adk deploy --target ecs-express --image IMAGE   # deploy to Amazon ECS Express Mode (feature aws)
+//! cargo adk deploy --target azure-container-apps --image IMAGE  # deploy to Azure Container Apps (feature azure)
 //! cargo adk eval tests/ --agent-cmd "target/release/my-agent --eval"  # run eval sets
 //! cargo adk eval --ledger ledger.jsonl      # gate on drift in an exported activity ledger
 //! ```
@@ -1257,6 +1258,8 @@ enum TargetName {
     AgentEngine,
     /// Amazon ECS Express Mode (cargo-adk feature `aws`)
     EcsExpress,
+    /// Azure Container Apps (cargo-adk feature `azure`)
+    AzureContainerApps,
 }
 
 impl TargetName {
@@ -1266,6 +1269,7 @@ impl TargetName {
             Self::Container => "container",
             Self::AgentEngine => "agent-engine",
             Self::EcsExpress => "ecs-express",
+            Self::AzureContainerApps => "azure-container-apps",
         }
     }
 }
@@ -1308,10 +1312,18 @@ async fn build_target(
             .map_err(|e| e.to_string()),
         #[cfg(not(feature = "aws"))]
         TargetName::EcsExpress => Err(missing_target_feature(name, "aws")),
+        #[cfg(feature = "azure")]
+        TargetName::AzureContainerApps => {
+            adk_deploy::azure::ContainerAppsTarget::from_manifest(manifest)
+                .map(|target| Box::new(target) as Box<dyn adk_deploy::targets::DeployTarget>)
+                .map_err(|e| e.to_string())
+        }
+        #[cfg(not(feature = "azure"))]
+        TargetName::AzureContainerApps => Err(missing_target_feature(name, "azure")),
     }
 }
 
-#[cfg(any(not(feature = "gcp"), not(feature = "aws")))]
+#[cfg(any(not(feature = "gcp"), not(feature = "aws"), not(feature = "azure")))]
 fn missing_target_feature(name: TargetName, feature: &str) -> String {
     format!(
         "--target {} needs cargo-adk built with the `{feature}` feature: cargo install cargo-adk --features {feature}",

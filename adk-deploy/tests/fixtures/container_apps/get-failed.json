@@ -1,0 +1,5 @@
+{
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/agents/providers/Microsoft.App/containerApps/support-desk",
+  "name": "support-desk",
+  "properties": { "provisioningState": "Failed", "runningStatus": "Stopped" }
+}

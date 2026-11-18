@@ -15,6 +15,7 @@
 //! | `container` — Dockerfile, Compose, Kubernetes | [`targets::container`] | none |
 //! | `agent-engine` — Agent Engine (ReasoningEngine) | `gcp::AgentEngineTarget` | `gcp` |
 //! | `ecs-express` — Amazon ECS Express Mode | `aws::EcsExpressTarget` | `aws` |
+//! | `azure-container-apps` — Azure Container Apps | `azure::ContainerAppsTarget` | `azure` |
 //!
 //! # Example
 //!
@@ -28,6 +29,8 @@
 
 #[cfg(feature = "aws")]
 pub mod aws;
+#[cfg(feature = "azure")]
+pub mod azure;
 mod bundle;
 mod client;
 mod config;

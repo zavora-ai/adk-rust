@@ -9,6 +9,7 @@ resources, and every target enforces the same deployment guarantees before it cr
 | Container | `container` | `Dockerfile`, Docker Compose file, Kubernetes `Deployment`, `Service`, `HorizontalPodAutoscaler` | none | none |
 | Agent Engine | `agent-engine` | Gemini Enterprise Agent Platform ReasoningEngine | `gcp` | Google Cloud |
 | Amazon ECS Express Mode | `ecs-express` | Express service on Fargate, with the load balancer, TLS certificate and autoscaling ECS provisions | `aws` | AWS |
+| Azure Container Apps | `azure-container-apps` | `Microsoft.App/containerApps` app with Key Vault secret references and a managed identity | `azure` | Azure |
 
 ```bash
 cargo adk deploy --target container --plan                  # write and print, deploy nothing
@@ -104,7 +105,7 @@ location = "us-central1"
 
 | Flag | Effect |
 |------|--------|
-| `--target <name>` | `platform` (default), `container`, `agent-engine`, or `ecs-express` |
+| `--target <name>` | `platform` (default), `container`, `agent-engine`, `ecs-express`, or `azure-container-apps` |
 | `--image <ref>` | The image to deploy; default `[targets.<name>] image`, then `<agent name>:<version>` for `container` |
 | `--manifest <path>` | The manifest (default `adk-deploy.toml`); the target resolves paths from its directory |
 | `--plan` | Writes the files or provider request bodies and prints the plan; deploys nothing |
@@ -312,6 +313,74 @@ account also needs `iam:CreateServiceLinkedRole` for `ecs.amazonaws.com`, unless
 | Execution role | `ecs-tasks.amazonaws.com` | `AmazonECSTaskExecutionRolePolicy`; `secretsmanager:GetSecretValue` on each secret ARN; `ssm:GetParameters` on `arn:aws:ssm:<region>:<account>:parameter/<prefix>*`; `kms:Decrypt` on a customer-managed key that encrypts them |
 | Infrastructure role | `ecs.amazonaws.com` | `AmazonECSInfrastructureRoleforExpressGatewayServices` |
 | Task role (optional) | `ecs-tasks.amazonaws.com` | What the agent itself calls; nothing for the agent alone |
+
+## Azure Container Apps
+
+`azure-container-apps` deploys through `adk_deploy::azure::ContainerAppsClient` (cargo-adk
+feature `azure`, `cargo install cargo-adk --features azure`), which creates or updates
+(`PUT`), reads, and deletes `Microsoft.App/containerApps` through Azure Resource Manager,
+`api-version` `2024-03-01` unless `apiVersion` overrides it. It authenticates with
+`$AZURE_ACCESS_TOKEN` when set, and otherwise with `DefaultAzureCredential`: an environment
+service principal, workload identity (GitHub Actions OIDC), managed identity, or the Azure CLI.
+
+Each `deploy` is an idempotent `PUT` of the whole app, so the next deploy rolls out a new
+revision of the same app. Secrets are Key Vault references the app's user-assigned managed
+identity resolves, so no secret value passes through the deployment. The agent answers at
+`https://<app>.<environment>.<region>.azurecontainerapps.io`; the target adds
+`.azurecontainerapps.io` to `ADK_ALLOWED_HOSTS`.
+
+```bash
+cargo adk deploy --target container --plan
+docker build -f .adk-deploy/container/Dockerfile -t acme.azurecr.io/support-desk:1.4.0 .
+docker push acme.azurecr.io/support-desk:1.4.0
+cargo adk deploy --target azure-container-apps
+```
+
+| `[targets.azure-container-apps]` key | Default | Meaning |
+|--------------------------------------|---------|---------|
+| `image` | none | Image reference |
+| `subscriptionId` | `$AZURE_SUBSCRIPTION_ID` | Subscription |
+| `resourceGroup`, `location`, `environmentId` | required | Resource group, region, and the Container Apps environment's resource ID |
+| `name` | `[agent] name`, at most 32 characters | App name |
+| `identity` | required when the agent reads secrets or `registryServer` is set | Resource ID of the user-assigned managed identity |
+| `keyVaultUrl` | none | Vault holding the secrets, such as `https://acme-agents.vault.azure.net` |
+| `secrets` | the key lower-cased with `_` as `-` | Key Vault secret name, or full secret URL, for each `[[secrets]]` key |
+| `registryServer` | none | Registry the identity pulls the image from |
+| `cpu`, `memory` | platform defaults | Cores and memory per replica, such as `0.5` and `"1Gi"`; set both |
+| `ingress` | `public` | `public`: external ingress, requires `[auth]`. `internal`: reachable inside the environment only |
+| `port`, `args`, `allowedHosts` | `8080`, none, none | As for the container target |
+| `apiVersion` | `2024-03-01` | Container Apps API version |
+
+`[health]` becomes liveness and readiness probes (intervals and timeouts 1–240 seconds,
+`failureThreshold` 1–10), and `[scaling]` the replica bounds, with an HTTP concurrency rule when
+`targetConcurrentRequests` is set. Replicas have no persistent block volume, so a SQLite session
+store is refused; use Azure Database for PostgreSQL, Azure Cache for Redis, or another network
+store. `deploy` waits up to fifteen minutes for `provisioningState` `Succeeded`.
+
+### Role assignments
+
+The deployer needs these actions on the resource group, the environment, and the identity — a
+custom role with exactly these, or the built-in Container Apps Contributor and Managed Identity
+Operator roles:
+
+```json
+{
+  "Name": "ADK Container Apps Deployer",
+  "Actions": [
+    "Microsoft.App/containerApps/read",
+    "Microsoft.App/containerApps/write",
+    "Microsoft.App/containerApps/delete",
+    "Microsoft.App/managedEnvironments/join/action",
+    "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action"
+  ],
+  "AssignableScopes": ["/subscriptions/<subscription>/resourceGroups/<group>"]
+}
+```
+
+| Principal | Role | Scope |
+|-----------|------|-------|
+| The managed identity | Key Vault Secrets User (RBAC vaults), or a `Get` secret access policy | The Key Vault |
+| The managed identity | AcrPull | The container registry |
 
 ## Related
 

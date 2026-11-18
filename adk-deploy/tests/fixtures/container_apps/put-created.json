@@ -1,0 +1,16 @@
+{
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/agents/providers/Microsoft.App/containerApps/support-desk",
+  "name": "support-desk",
+  "type": "Microsoft.App/containerApps",
+  "location": "East US",
+  "properties": {
+    "provisioningState": "InProgress",
+    "runningStatus": "Progressing",
+    "environmentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/agents/providers/Microsoft.App/managedEnvironments/agents",
+    "latestRevisionName": "support-desk--0000001",
+    "configuration": {
+      "activeRevisionsMode": "Single",
+      "ingress": { "external": true, "targetPort": 8080, "transport": "Auto", "allowInsecure": false }
+    }
+  }
+}
