@@ -486,6 +486,10 @@ version = "3.0.0"
 dependencies = [
  "adk-core",
  "adk-gcp",
+ "async-trait",
+ "aws-config",
+ "aws-credential-types",
+ "aws-sigv4",
  "axum",
  "chrono",
  "dirs 7.0.0",
@@ -494,6 +498,7 @@ dependencies = [
  "hex",
  "reqwest 0.13.5",
  "serde",
+ "serde-saphyr 2.1.1",
  "serde_json",
  "sha2 0.10.9",
  "tar",
@@ -503,6 +508,7 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "url",
+ "wiremock",
 ]
 
 [[package]]

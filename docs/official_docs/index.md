@@ -233,6 +233,7 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Playbook Learning](deployment/website-learning.md) - Experiment decisions and KPIs short of the owner's targets propose playbook revisions; the owner accepts, edits or declines each, and accepted revisions are versioned
 - [Publishing from Git](deployment/website-repository.md) - A signed push from an authorised committer proposes a release on the owner's decision card: GitHub, GitLab or the plain signed form, a local repository or a forge's raw endpoint
 - [Website Experiments and Measurement](deployment/website-experiments.md) - Experiments on the charter's KPIs with guardrails that stop them, variants as static files, and the KPI sources that are not drivers
+- [Deploy Targets](deployment/deploy-targets.md) - One manifest to Docker Compose, Kubernetes, Agent Engine or Amazon ECS Express Mode through `cargo adk deploy --target`, with secrets by reference, explicit stores and authenticated endpoints enforced
 - [Agent Engine](deployment/agent-engine.md) - Deploying on the Gemini Enterprise Agent Platform
 - [Agent Registry](deployment/agent-registry.md) - Discovery, registration, and remote invocation on the Agent Platform
 

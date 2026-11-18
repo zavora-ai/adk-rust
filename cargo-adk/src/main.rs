@@ -17,6 +17,9 @@
 //! cargo adk validate --yaml agent.yaml      # validate agent definition
 //! cargo adk deploy                          # deploy to platform
 //! cargo adk deploy --stream-output          # deploy with JSON event streaming
+//! cargo adk deploy --target container --plan  # render the Dockerfile, Compose and Kubernetes files
+//! cargo adk deploy --target agent-engine --image IMAGE  # deploy to Agent Engine (feature gcp)
+//! cargo adk deploy --target ecs-express --image IMAGE   # deploy to Amazon ECS Express Mode (feature aws)
 //! cargo adk eval tests/ --agent-cmd "target/release/my-agent --eval"  # run eval sets
 //! cargo adk eval --ledger ledger.jsonl      # gate on drift in an exported activity ledger
 //! ```
@@ -143,8 +146,36 @@ enum AdkCommand {
         rust: Option<PathBuf>,
     },
 
-    /// Deploy the agent to the ADK platform
+    /// Deploy the agent to the ADK platform, or to a deploy target with --target
     Deploy {
+        /// Where to deploy: the ADK platform control plane, or a deploy target
+        #[arg(long, value_enum, default_value_t = TargetName::Platform)]
+        target: TargetName,
+
+        /// Container image to deploy with --target (default: `[targets.<name>] image`)
+        #[arg(long)]
+        image: Option<String>,
+
+        /// Deployment manifest
+        #[arg(long, default_value = "adk-deploy.toml")]
+        manifest: PathBuf,
+
+        /// Write and print what --target would create, without deploying
+        #[arg(long, conflicts_with_all = ["status", "destroy"])]
+        plan: bool,
+
+        /// Report the state of a deployment on --target
+        #[arg(long, value_name = "DEPLOYMENT_ID", conflicts_with = "destroy")]
+        status: Option<String>,
+
+        /// Remove a deployment from --target
+        #[arg(long, value_name = "DEPLOYMENT_ID")]
+        destroy: Option<String>,
+
+        /// Skip the health and authentication check of the deployed endpoint
+        #[arg(long)]
+        no_verify: bool,
+
         /// Target environment
         #[arg(long, default_value = "production")]
         environment: String,
@@ -481,6 +512,13 @@ fn main() {
             }
         }
         AdkCommand::Deploy {
+            target,
+            image,
+            manifest,
+            plan,
+            status,
+            destroy,
+            no_verify,
             environment,
             token,
             server,
@@ -495,7 +533,28 @@ fn main() {
                 .build()
                 .expect("failed to create tokio runtime");
 
+            if target != TargetName::Platform {
+                let action = match (plan, status, destroy) {
+                    (true, _, _) => TargetAction::Plan,
+                    (false, Some(id), _) => TargetAction::Status(id),
+                    (false, None, Some(id)) => TargetAction::Destroy(id),
+                    (false, None, None) => TargetAction::Deploy { verify: !no_verify },
+                };
+                if let Err(e) = rt.block_on(run_target(target, &manifest, image, action)) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            if plan || status.is_some() || destroy.is_some() || image.is_some() {
+                eprintln!(
+                    "Error: --plan, --status, --destroy and --image apply to a deploy target; pass --target"
+                );
+                std::process::exit(2);
+            }
+
             if let Err(e) = rt.block_on(run_deploy(
+                manifest,
                 environment,
                 token,
                 server,
@@ -920,6 +979,7 @@ fn validate_rust(
 
 #[allow(clippy::too_many_arguments)]
 async fn run_deploy(
+    manifest_path: PathBuf,
     environment: String,
     token: Option<String>,
     server: String,
@@ -935,7 +995,7 @@ async fn run_deploy(
     };
     use sha2::{Digest, Sha256};
 
-    let manifest_path = Path::new("adk-deploy.toml");
+    let manifest_path = manifest_path.as_path();
     let manifest = DeploymentManifest::from_path(manifest_path)
         .map_err(|e| format!("failed to load manifest: {e}"))?;
 
@@ -1182,6 +1242,239 @@ async fn run_deploy(
     }
 
     Ok(())
+}
+
+// ── Deploy targets ──────────────────────────────────────────────
+
+/// `cargo adk deploy --target`: the ADK platform, or a provider-neutral deploy target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum TargetName {
+    /// The ADK platform control plane (`--server`)
+    Platform,
+    /// Dockerfile, Docker Compose and Kubernetes manifests; no cloud account needed
+    Container,
+    /// Agent Engine on Google Cloud (cargo-adk feature `gcp`)
+    AgentEngine,
+    /// Amazon ECS Express Mode (cargo-adk feature `aws`)
+    EcsExpress,
+}
+
+impl TargetName {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Platform => "platform",
+            Self::Container => "container",
+            Self::AgentEngine => "agent-engine",
+            Self::EcsExpress => "ecs-express",
+        }
+    }
+}
+
+/// How long `cargo adk deploy --target` waits for a new endpoint to pass its health check; a
+/// cloud load balancer takes minutes to register its first target.
+const VERIFY_TIMEOUT_SECS: u64 = 300;
+
+/// What `cargo adk deploy --target` does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TargetAction {
+    Plan,
+    Deploy { verify: bool },
+    Status(String),
+    Destroy(String),
+}
+
+async fn build_target(
+    name: TargetName,
+    project_dir: &Path,
+    manifest: &adk_deploy::DeploymentManifest,
+) -> Result<Box<dyn adk_deploy::targets::DeployTarget>, String> {
+    match name {
+        TargetName::Platform => Err("the platform is not a deploy target".to_string()),
+        TargetName::Container => {
+            adk_deploy::targets::container::ContainerTarget::from_manifest(project_dir, manifest)
+                .map(|target| Box::new(target) as Box<dyn adk_deploy::targets::DeployTarget>)
+                .map_err(|e| e.to_string())
+        }
+        #[cfg(feature = "gcp")]
+        TargetName::AgentEngine => adk_deploy::gcp::AgentEngineTarget::from_manifest(manifest)
+            .map(|target| Box::new(target) as Box<dyn adk_deploy::targets::DeployTarget>)
+            .map_err(|e| e.to_string()),
+        #[cfg(not(feature = "gcp"))]
+        TargetName::AgentEngine => Err(missing_target_feature(name, "gcp")),
+        #[cfg(feature = "aws")]
+        TargetName::EcsExpress => adk_deploy::aws::EcsExpressTarget::from_manifest(manifest)
+            .await
+            .map(|target| Box::new(target) as Box<dyn adk_deploy::targets::DeployTarget>)
+            .map_err(|e| e.to_string()),
+        #[cfg(not(feature = "aws"))]
+        TargetName::EcsExpress => Err(missing_target_feature(name, "aws")),
+    }
+}
+
+#[cfg(any(not(feature = "gcp"), not(feature = "aws")))]
+fn missing_target_feature(name: TargetName, feature: &str) -> String {
+    format!(
+        "--target {} needs cargo-adk built with the `{feature}` feature: cargo install cargo-adk --features {feature}",
+        name.as_str()
+    )
+}
+
+/// The image `--target` deploys: `--image`, then `[targets.<name>] image`, then the container
+/// target's `<agent name>:<version>`.
+fn resolve_image(
+    name: TargetName,
+    image: Option<String>,
+    project_dir: &Path,
+    manifest: &adk_deploy::DeploymentManifest,
+) -> Result<String, String> {
+    if let Some(image) = image {
+        return Ok(image);
+    }
+    let configured = manifest
+        .targets
+        .get(name.as_str())
+        .and_then(|table| table.get("image"))
+        .and_then(serde_json::Value::as_str);
+    if let Some(image) = configured {
+        return Ok(image.to_string());
+    }
+    if name == TargetName::Container {
+        let target =
+            adk_deploy::targets::container::ContainerTarget::from_manifest(project_dir, manifest)
+                .map_err(|e| e.to_string())?;
+        return Ok(target.default_image(manifest));
+    }
+    Err(format!(
+        "--target {} needs a container image: pass --image or set image in [targets.{}]",
+        name.as_str(),
+        name.as_str()
+    ))
+}
+
+async fn run_target(
+    name: TargetName,
+    manifest_path: &Path,
+    image: Option<String>,
+    action: TargetAction,
+) -> Result<(), String> {
+    use adk_deploy::DeploymentManifest;
+    use adk_deploy::targets::{DeployRequest, verify_endpoint_within};
+
+    let manifest = DeploymentManifest::from_path(manifest_path)
+        .map_err(|e| format!("failed to load manifest: {e}"))?;
+    let project_dir = match manifest_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let target = build_target(name, &project_dir, &manifest).await?;
+
+    match action {
+        TargetAction::Status(id) => {
+            let status = target.status(&id).await.map_err(|e| e.to_string())?;
+            println!("{}", serde_json::to_string_pretty(&status).unwrap_or_default());
+            return Ok(());
+        }
+        TargetAction::Destroy(id) => {
+            target.destroy(&id).await.map_err(|e| e.to_string())?;
+            println!("Removed {id} from target {}", name.as_str());
+            return Ok(());
+        }
+        TargetAction::Plan | TargetAction::Deploy { .. } => {}
+    }
+
+    let image = resolve_image(name, image, &project_dir, &manifest)?;
+    let request = DeployRequest::new(manifest, image);
+    let plan = target.plan(&request).map_err(|e| e.to_string())?;
+    print_plan(&plan);
+
+    match action {
+        TargetAction::Plan => {
+            let written = write_plan(name, &project_dir, &request.manifest, &plan).await?;
+            println!("\nWrote {} file(s) to {}", plan.resources.len(), written.display());
+            Ok(())
+        }
+        TargetAction::Deploy { verify } => {
+            println!("\nDeploying to target {}...", name.as_str());
+            let outcome = target.deploy(&request).await.map_err(|e| e.to_string())?;
+            println!("{}", serde_json::to_string_pretty(&outcome).unwrap_or_default());
+            if let (true, Some(endpoint)) = (verify, outcome.endpoint.as_deref()) {
+                println!(
+                    "Checking {endpoint} (up to {VERIFY_TIMEOUT_SECS}s for it to pass its health check)..."
+                );
+                let report = verify_endpoint_within(
+                    endpoint,
+                    &plan.runtime,
+                    std::time::Duration::from_secs(VERIFY_TIMEOUT_SECS),
+                    std::time::Duration::from_secs(10),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+                println!(
+                    "Verified {endpoint}: health {}, unauthenticated API {}",
+                    report.health_status, report.unauthenticated_status
+                );
+                for warning in &report.warnings {
+                    println!("  warning: {warning}");
+                }
+            }
+            Ok(())
+        }
+        TargetAction::Status(_) | TargetAction::Destroy(_) => Ok(()),
+    }
+}
+
+fn print_plan(plan: &adk_deploy::targets::DeployPlan) {
+    let runtime = &plan.runtime;
+    println!(
+        "Plan for target {}: {} {} from image {}",
+        plan.target, runtime.name, runtime.version, runtime.image
+    );
+    for resource in &plan.resources {
+        println!("  {:<40} {}", resource.kind, resource.name);
+    }
+    let secrets: Vec<&str> = runtime.secret_keys().into_iter().collect();
+    if secrets.is_empty() {
+        println!("Secrets: none");
+    } else {
+        println!("Secrets from the provider's secret store: {}", secrets.join(", "));
+    }
+    println!(
+        "Ingress: {}; callers authenticate: {}",
+        if runtime.public { "public" } else { "internal" },
+        if runtime.auth_required { "yes" } else { "no" }
+    );
+    for warning in &runtime.warnings {
+        println!("  warning: {warning}");
+    }
+}
+
+/// Writes the plan's resources: the container target's files into its output directory, and
+/// every other target's provider requests into `.adk-deploy/<target>/`.
+async fn write_plan(
+    name: TargetName,
+    project_dir: &Path,
+    manifest: &adk_deploy::DeploymentManifest,
+    plan: &adk_deploy::targets::DeployPlan,
+) -> Result<PathBuf, String> {
+    if name == TargetName::Container {
+        let target =
+            adk_deploy::targets::container::ContainerTarget::from_manifest(project_dir, manifest)
+                .map_err(|e| e.to_string())?;
+        return target.write_files(plan).await.map_err(|e| e.to_string());
+    }
+    let dir = project_dir.join(".adk-deploy").join(name.as_str());
+    fs::create_dir_all(&dir).map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
+    for resource in &plan.resources {
+        let file: String = resource
+            .kind
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+            .collect();
+        let path = dir.join(format!("{file}.json"));
+        fs::write(&path, &resource.body)
+            .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+    }
+    Ok(dir)
 }
 
 // ── Bench command ───────────────────────────────────────────────
@@ -2463,6 +2756,117 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn deploy_args(argv: &[&str]) -> AdkCommand {
+        let mut full = vec!["cargo", "adk", "deploy"];
+        full.extend_from_slice(argv);
+        match Cargo::try_parse_from(full).expect("argv parses").command {
+            CargoSubcommand::Adk(cli) => cli.command,
+        }
+    }
+
+    #[test]
+    fn deploy_defaults_to_the_platform_and_takes_a_target() {
+        let AdkCommand::Deploy { target, plan, manifest, .. } = deploy_args(&[]) else {
+            panic!("not deploy");
+        };
+        assert_eq!(
+            (target, plan, manifest),
+            (TargetName::Platform, false, PathBuf::from("adk-deploy.toml"))
+        );
+        let AdkCommand::Deploy { target, plan, image, .. } =
+            deploy_args(&["--target", "container", "--plan", "--image", "demo:1"])
+        else {
+            panic!("not deploy");
+        };
+        assert_eq!((target, plan, image.as_deref()), (TargetName::Container, true, Some("demo:1")));
+        assert!(
+            Cargo::try_parse_from([
+                "cargo",
+                "adk",
+                "deploy",
+                "--target",
+                "container",
+                "--plan",
+                "--status",
+                "x"
+            ])
+            .is_err(),
+            "--plan and --status are exclusive"
+        );
+        assert!(Cargo::try_parse_from(["cargo", "adk", "deploy", "--target", "nowhere"]).is_err());
+    }
+
+    fn target_manifest(extra: &str) -> adk_deploy::DeploymentManifest {
+        toml::from_str(&format!(
+            "[agent]\nname = \"demo\"\nbinary = \"demo\"\nversion = \"0.2.0\"\n\n[[services]]\nname = \"sessions\"\nkind = \"in-memory\"\n{extra}"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_image_comes_from_the_flag_then_the_target_table_then_the_default() {
+        let dir = Path::new(".");
+        let plain = target_manifest("");
+        assert_eq!(
+            resolve_image(TargetName::Container, Some("flag:1".into()), dir, &plain).unwrap(),
+            "flag:1"
+        );
+        assert_eq!(resolve_image(TargetName::Container, None, dir, &plain).unwrap(), "demo:0.2.0");
+        let configured = target_manifest("[targets.agent-engine]\nimage = \"gcr.io/p/demo:7\"\n");
+        assert_eq!(
+            resolve_image(TargetName::AgentEngine, None, dir, &configured).unwrap(),
+            "gcr.io/p/demo:7"
+        );
+        assert!(
+            resolve_image(TargetName::AgentEngine, None, dir, &plain)
+                .unwrap_err()
+                .contains("--target agent-engine needs a container image")
+        );
+    }
+
+    #[tokio::test]
+    async fn target_plan_writes_the_container_files() {
+        let project = tempfile::tempdir().unwrap();
+        let manifest_path = project.path().join("adk-deploy.toml");
+        fs::write(
+            &manifest_path,
+            "[agent]\nname = \"demo\"\nbinary = \"demo\"\n\n[[services]]\nname = \"sessions\"\nkind = \"in-memory\"\n",
+        )
+        .unwrap();
+        run_target(TargetName::Container, &manifest_path, None, TargetAction::Plan).await.unwrap();
+        let out = project.path().join(".adk-deploy/container");
+        for file in ["Dockerfile", "Dockerfile.dockerignore", "compose.yaml", "kubernetes.yaml"] {
+            assert!(out.join(file).is_file(), "{file}");
+        }
+        let compose = fs::read_to_string(out.join("compose.yaml")).unwrap();
+        assert!(compose.contains("image: \"demo:0.1.0\""), "{compose}");
+    }
+
+    #[cfg(not(feature = "aws"))]
+    #[tokio::test]
+    async fn a_target_compiled_out_names_the_feature_to_enable() {
+        let error = build_target(TargetName::EcsExpress, Path::new("."), &target_manifest(""))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(
+            error,
+            "--target ecs-express needs cargo-adk built with the `aws` feature: cargo install cargo-adk --features aws"
+        );
+    }
+
+    #[tokio::test]
+    async fn target_plan_refuses_a_manifest_that_breaks_a_guarantee() {
+        let project = tempfile::tempdir().unwrap();
+        let manifest_path = project.path().join("adk-deploy.toml");
+        fs::write(&manifest_path, "[agent]\nname = \"demo\"\nbinary = \"demo\"\n").unwrap();
+        let error = run_target(TargetName::Container, &manifest_path, None, TargetAction::Plan)
+            .await
+            .unwrap_err();
+        assert!(error.contains("declare the session store"), "{error}");
+        assert!(!project.path().join(".adk-deploy").exists());
+    }
 
     #[test]
     fn bench_accepts_no_task_quality_suite() {
