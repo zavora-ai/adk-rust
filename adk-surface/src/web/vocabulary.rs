@@ -151,6 +151,7 @@ const WORDS: &[(&str, &str)] = listed![
     SEND_FORM_WHEN_FREE,
     FORM_BEING_SENT,
     SHOW_AS_TEXT,
+    SHOW_THE_DATA,
     SHOW_IN_3D,
     PAUSE_MOTION,
     PLAY_MOTION,

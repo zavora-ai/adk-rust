@@ -950,6 +950,8 @@ pub const FORM_BEING_SENT: &str = "Couldn't send: this form is being sent alread
 
 /// A 3D scene's toggle: its words instead of the scene.
 pub const SHOW_AS_TEXT: &str = "Show as text";
+/// Opens a chart's numbers as a table, for a screen reader or a closer look.
+pub const SHOW_THE_DATA: &str = "Show the data";
 /// A 3D scene's toggle back from its words.
 pub const SHOW_IN_3D: &str = "Show in 3D";
 /// Stops a scene's motion until it is played again.

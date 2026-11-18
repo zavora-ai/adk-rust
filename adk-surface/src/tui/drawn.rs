@@ -1132,6 +1132,7 @@ mod tests {
             scene: None,
             depth: None,
             extension: None,
+            accessibility: None,
         }
     }
 
@@ -1175,6 +1176,7 @@ mod tests {
                 scene: None,
                 depth: None,
                 extension: None,
+                accessibility: None,
             }),
             actions: vec![DrawnActionView {
                 id: "send".into(),

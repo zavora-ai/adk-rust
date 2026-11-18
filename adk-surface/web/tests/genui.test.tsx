@@ -56,6 +56,21 @@ describe("a drawing", () => {
     expect(note?.querySelector("code")?.textContent).toBe("send_invoice");
   });
 
+  it("gives assistive technology what the drawing names, and says each drawing once", () => {
+    const surface = invoiceForm();
+    const labelled = (node: DrawnNode): DrawnNode =>
+      node.key === "body"
+        ? { ...node, accessibility: { label: "Invoice number", description: "Due in 30 days", live: "polite" } }
+        : { ...node, children: node.children?.map(labelled) };
+    const { container } = render(<DrawnView surface={{ ...surface, root: surface.root && labelled(surface.root) }} onSend={async () => undefined} />);
+    const named = container.querySelector('[aria-label="Invoice number"]');
+    expect(named?.getAttribute("aria-description")).toBe("Due in 30 days");
+    expect(named?.getAttribute("aria-live")).toBe("polite");
+    expect(named?.getAttribute("role")).toBe("group");
+    const announced = container.querySelector('.drawn > p[aria-live="polite"]');
+    expect(announced?.textContent).toContain("Invoice INV-10");
+  });
+
   it("shows agent text as text: no markup, no control characters", () => {
     const surface = { ...timesheetCard(), title: "<b>Total</b>‮\u001b[31m" };
     const { container } = render(<DrawnView surface={surface} />);
@@ -582,6 +597,16 @@ describe("a chart an extension component drew", () => {
       expect(container.querySelector('[class*="decision"], [class*="pill"]')).toBeNull();
       unmount();
     }
+  });
+
+  it("offers its numbers as a table a screen reader can walk", () => {
+    const { container } = render(<ChartView chart={chart("bar")} />);
+    const details = container.querySelector("details.drawn-chart-data");
+    expect(details?.querySelector("summary")?.textContent).toBe("Show the data");
+    const rows = [...(details?.querySelectorAll("tbody tr") ?? [])].map((row) => [...row.children].map((cell) => cell.textContent));
+    expect(rows.length).toBe(3);
+    expect(rows.every((row) => row.length === 2)).toBe(true);
+    expect(details?.querySelector("caption")?.textContent).toBe("bar chart of Revenue, 3 points, from 4 to 7");
   });
 
   it("writes its words as text and names each point's value", () => {

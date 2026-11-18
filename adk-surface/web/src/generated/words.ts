@@ -136,6 +136,7 @@ export const SEND_FORMS_FROM_A_SCREEN = "A form an agent drew is sent from a scr
 export const SEND_FORM_WHEN_FREE = "Couldn't send: your agent is still working in this thread — send it when it's done";
 export const FORM_BEING_SENT = "Couldn't send: this form is being sent already";
 export const SHOW_AS_TEXT = "Show as text";
+export const SHOW_THE_DATA = "Show the data";
 export const SHOW_IN_3D = "Show in 3D";
 export const PAUSE_MOTION = "Pause motion";
 export const PLAY_MOTION = "Play motion";

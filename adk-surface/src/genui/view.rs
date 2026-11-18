@@ -11,8 +11,8 @@ use super::a2ui::DataModel;
 use super::catalog::{Catalog, HomeNode};
 use super::draw::{DRAWN_STATE_KEY, DrawnEnvelope, DrawnRecord, REFUSED_STATE_KEY};
 use super::drawn::{
-    DrawnActionView, DrawnArg, DrawnCheck, DrawnExtension, DrawnField, DrawnInput, DrawnKind,
-    DrawnNode, DrawnOption, DrawnSurface, RefusalKind, RefusedDrawing,
+    DrawnAccessibility, DrawnActionView, DrawnArg, DrawnCheck, DrawnExtension, DrawnField,
+    DrawnInput, DrawnKind, DrawnNode, DrawnOption, DrawnSurface, RefusalKind, RefusedDrawing,
 };
 use super::scene::ScenePanel;
 use super::validate::{
@@ -237,6 +237,7 @@ pub(crate) fn tree(catalog: &'static Catalog, validated: &ValidatedSurface) -> D
         scene: None,
         depth: None,
         extension: None,
+        accessibility: None,
     })
 }
 
@@ -253,6 +254,39 @@ struct Builder<'a> {
 impl Builder<'_> {
     fn text(&self, id: &str, scope: &str, field: &str) -> Option<String> {
         self.texts.get(&(id, scope, field)).map(|text| (*text).to_string())
+    }
+
+    /// What assistive technology reads for component `id` (A2UI 1.0 `@accessibility`): its
+    /// label and description as the validator resolved and checked them, its live setting,
+    /// and whether it is hidden, a binding read from the data model.
+    fn accessibility(
+        &self,
+        id: &str,
+        scope: &str,
+        props: &Map<String, Value>,
+    ) -> Option<DrawnAccessibility> {
+        let attributes = props.get("accessibility")?.as_object()?;
+        let hidden = match attributes.get("hidden") {
+            Some(Value::Bool(hidden)) => *hidden,
+            Some(Value::Object(binding)) => binding
+                .get("path")
+                .and_then(Value::as_str)
+                .and_then(|path| self.model.get(&Self::absolute(scope, path)))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            _ => false,
+        };
+        let drawn = DrawnAccessibility {
+            label: self.text(id, scope, "accessibility/label"),
+            description: self.text(id, scope, "accessibility/description"),
+            live: attributes
+                .get("live")
+                .and_then(Value::as_str)
+                .filter(|live| matches!(*live, "polite" | "assertive"))
+                .map(str::to_string),
+            hidden,
+        };
+        (drawn != DrawnAccessibility::default()).then_some(drawn)
     }
 
     /// `path` from a component in the list item `scope`, absolute.
@@ -282,7 +316,9 @@ impl Builder<'_> {
             scene: None,
             depth: None,
             extension: None,
+            accessibility: None,
         };
+        node.accessibility = self.accessibility(id, scope, props);
         // An extension component draws its home view as the validator checked it, and the
         // components it holds where that view places them.
         if let Some(view) = self.extensions.get(&(id.to_string(), scope.to_string())) {
@@ -408,6 +444,7 @@ impl Builder<'_> {
             scene: None,
             depth: None,
             extension: None,
+            accessibility: None,
         };
         let mut nested = |children: &[HomeNode], parts: &mut usize| -> Vec<DrawnNode> {
             children.iter().filter_map(|child| Self::home(child, key, parts, held)).collect()

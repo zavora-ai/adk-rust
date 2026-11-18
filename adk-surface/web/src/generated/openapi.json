@@ -3133,6 +3133,37 @@
           }
         ]
       },
+      "DrawnAccessibility": {
+        "description": "What assistive technology reads for a drawn node (A2UI 1.0 `AccessibilityAttributes`): its\nlabel and description resolved and checked like any shown text, how its changes are\nannounced, and whether it is hidden from screen readers (never a field or a button).",
+        "properties": {
+          "description": {
+            "description": "More it reads after the name: instructions, a format, a result.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hidden": {
+            "description": "Hidden from screen readers.",
+            "type": "boolean"
+          },
+          "label": {
+            "description": "A short name, read instead of its visible text.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "live": {
+            "description": "How its changes are announced: `polite` or `assertive`; absent is `off`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "DrawnActionView": {
         "description": "A declared action of a drawing, as its button shows it.",
         "properties": {
@@ -3435,6 +3466,17 @@
       "DrawnNode": {
         "description": "One component of a drawing, resolved for a renderer: templates expanded, every string a\nperson reads already in place (spec 3.3 §7.4 rule 5).\n\n| Component | `text` | `variant` | Other |\n|---|---|---|---|\n| `Text` | The text | `h1`–`h5`, `caption`, `body` | — |\n| `Row`, `Column`, `List` | — | `justify` (Row, Column) or `direction` (List) | `children`; a long `List` has `showAllText` |\n| `Card` | — | — | `children` |\n| `Tabs` | — | — | `tabs` titles and one child per tab |\n| `Divider` | — | `axis` | — |\n| `Button` | Its label | `primary`, `default`, `borderless` | `action` |\n| `TextField`, `DateTimeInput`, `CheckBox`, `ChoicePicker`, `Slider` | The label | the catalog's variant | `field` |\n| `Chart` | — | — | `chart`: a chart an extension component's home view draws |\n| `Scene` | — | — | `scene`: a 3D scene an extension component's home view draws; its children are its panels, then its text view |\n| `Depth` | — | — | `depth`: the children an extension component's home view holds, presented with CSS 3D |\n| An extension component, such as `Metric` | — | — | `extension`, and one child: what the home shows for it |",
         "properties": {
+          "accessibility": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DrawnAccessibility"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What assistive technology reads for it (A2UI 1.0 `@accessibility`), resolved and\nchecked by rule 5."
+          },
           "action": {
             "description": "The declared action a button asks for.",
             "type": [

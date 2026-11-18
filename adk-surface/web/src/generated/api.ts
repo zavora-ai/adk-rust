@@ -1044,6 +1044,22 @@ export interface Delivery {
 /** A depth effect. */
 export type DepthEffect = "tilt" | "flip" | "layers" | "carousel" | "wall" | "stage";
 
+/**
+ * What assistive technology reads for a drawn node (A2UI 1.0 `AccessibilityAttributes`): its
+ * label and description resolved and checked like any shown text, how its changes are
+ * announced, and whether it is hidden from screen readers (never a field or a button).
+ */
+export interface DrawnAccessibility {
+  /** More it reads after the name: instructions, a format, a result. */
+  description?: string | null;
+  /** Hidden from screen readers. */
+  hidden?: boolean;
+  /** A short name, read instead of its visible text. */
+  label?: string | null;
+  /** How its changes are announced: `polite` or `assertive`; absent is `off`. */
+  live?: string | null;
+}
+
 /** A declared action of a drawing, as its button shows it. */
 export interface DrawnActionView {
   /** The call's arguments: a field's value, or a constant the drawing fixed. */
@@ -1181,6 +1197,11 @@ export type DrawnKind = "form" | "card" | "table" | "screen";
  * | An extension component, such as `Metric` | — | — | `extension`, and one child: what the home shows for it |
  */
 export interface DrawnNode {
+  /**
+   * What assistive technology reads for it (A2UI 1.0 `@accessibility`), resolved and
+   * checked by rule 5.
+   */
+  accessibility?: DrawnAccessibility | null;
   /** The declared action a button asks for. */
   action?: string | null;
   /** A chart the home draws natively, from an extension component's home view. */

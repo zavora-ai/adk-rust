@@ -79,9 +79,10 @@ pub use catalog::{
 #[cfg(feature = "genui")]
 pub use draw::{DRAWN_STATE_KEY, DrawToolset, DrawnEnvelope, DrawnRecord, REFUSED_STATE_KEY};
 pub use drawn::{
-    ChartAxis, ChartKind, ChartSeries, ChartTick, DrawnActionView, DrawnArg, DrawnChart,
-    DrawnCheck, DrawnExtension, DrawnField, DrawnInput, DrawnKind, DrawnNode, DrawnOption,
-    DrawnSent, DrawnSurface, FormState, FormStatus, RefusalKind, RefusedDrawing, SentVia,
+    ChartAxis, ChartKind, ChartSeries, ChartTick, DrawnAccessibility, DrawnActionView, DrawnArg,
+    DrawnChart, DrawnCheck, DrawnExtension, DrawnField, DrawnInput, DrawnKind, DrawnNode,
+    DrawnOption, DrawnSent, DrawnSurface, FormState, FormStatus, RefusalKind, RefusedDrawing,
+    SentVia,
 };
 #[cfg(feature = "genui-apps")]
 pub use mcp_apps::{

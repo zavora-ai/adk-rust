@@ -146,6 +146,17 @@ internal form: an unknown `@` key, a literal object whose only key is `path` or 
 `ValidationResult` (`{"valid": false, "severity": "error", "code": …, "message": …}`) after its
 plain-words message.
 
+### Accessibility
+
+What assistive technology reads is part of the drawing (A2UI 1.0 `@accessibility`): a label
+and a description, checked by rule 5 like any shown text; `live` (`polite` or `assertive`)
+for values that change; `hidden` for decoration, never on a field or a button. Every surface
+gets them resolved on `DrawnNode.accessibility` (`DrawnAccessibility`); the web home puts them
+on the element (a labelled container is a named group), says each drawing once to a screen
+reader as it arrives ("Drawn by Finance: Invoice INV-10"), and gives every chart a **Show the
+data** table beside the sentence the server wrote for it. A label that names nothing
+("button", "icon", empty) is a `genui.warned.accessibility` warning.
+
 ### What a drawing may not contain
 
 Every drawing is checked on the server before it is shown, on the strings a person reads: its

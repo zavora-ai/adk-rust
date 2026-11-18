@@ -190,6 +190,34 @@ async fn strings_come_resolved_and_templates_expanded() {
     );
 }
 
+/// What assistive technology reads (A2UI 1.0 `@accessibility`) reaches every surface resolved:
+/// a bound label, a live setting, and a hidden flag read from the data model.
+#[tokio::test]
+async fn accessibility_reaches_the_drawn_node_resolved() {
+    let screen = envelope(
+        "status",
+        DrawnKind::Screen,
+        vec![
+            json!({ "id": "root", "component": "Column", "children": ["total", "note"],
+                    "accessibility": { "label": "Invoice summary" } }),
+            json!({ "id": "total", "component": "Text", "text": { "path": "/total" },
+                    "accessibility": { "label": { "path": "/label" }, "description": "In US dollars", "live": "polite" } }),
+            json!({ "id": "note", "component": "Text", "text": "decoration",
+                    "accessibility": { "hidden": { "path": "/quiet" } } }),
+        ],
+        json!({ "total": "4,200", "label": "Invoice total", "quiet": true }),
+    );
+    let items = items_of(vec![result("render_screen", &screen, Some(record_of(&screen)))]).await;
+    let [ThreadItem::Drawn { surface }] = items.as_slice() else { panic!("{items:?}") };
+    let root = surface.root.as_ref().unwrap();
+    assert_eq!(root.accessibility.as_ref().unwrap().label.as_deref(), Some("Invoice summary"));
+    let total = root.children[0].accessibility.as_ref().unwrap();
+    assert_eq!(total.label.as_deref(), Some("Invoice total"));
+    assert_eq!(total.description.as_deref(), Some("In US dollars"));
+    assert_eq!(total.live.as_deref(), Some("polite"));
+    assert!(root.children[1].accessibility.as_ref().unwrap().hidden);
+}
+
 /// A drawing whose record checks out but which rule 5 refuses — written before a stricter
 /// check, or forged — is the plain notice, never a drawing.
 #[tokio::test]

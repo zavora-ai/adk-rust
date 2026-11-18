@@ -102,6 +102,24 @@ const KINDS: &[Kind] = &[
     },
 ];
 
+/// Accessibility labels that name nothing: what a screen reader already says.
+const MEANINGLESS_LABELS: &[&str] = &[
+    "button",
+    "image",
+    "icon",
+    "link",
+    "text",
+    "label",
+    "field",
+    "input",
+    "click",
+    "here",
+    "item",
+    "component",
+    "untitled",
+    "none",
+];
+
 /// Each kind's phrases as folded words, folded once.
 /// A kind and its phrases as folded words.
 type FoldedKind = (&'static Kind, Vec<Vec<String>>);
@@ -191,6 +209,23 @@ pub fn dark_patterns(texts: &[ResolvedText]) -> Vec<ValidationResult> {
                 ));
             }
         }
+        // An accessibility label that names nothing: a screen reader reads "button" for a
+        // button.
+        if resolved.field.ends_with("accessibility/label")
+            && (found.is_empty() || MEANINGLESS_LABELS.iter().any(|label| found == [*label]))
+            && !seen.contains(&"genui.warned.accessibility")
+        {
+            seen.push("genui.warned.accessibility");
+            warnings.push(ValidationResult::warning(
+                "genui.warned.accessibility",
+                format!(
+                    "{}: \"{}\" names nothing a screen reader can use. Say what it is or does, \
+                     such as \"Invoice total\".",
+                    at(),
+                    resolved.text
+                ),
+            ));
+        }
         if !seen.contains(&"genui.warned.countdown") && counts_down(&found, &resolved.text) {
             seen.push("genui.warned.countdown");
             warnings.push(ValidationResult::warning(
@@ -247,6 +282,25 @@ mod tests {
         ] {
             assert!(dark_patterns(&[text(plain)]).is_empty(), "{plain}");
         }
+    }
+
+    #[test]
+    fn an_accessibility_label_that_names_nothing_is_warned() {
+        let label = |text: &str| ResolvedText {
+            component_id: Some("send".into()),
+            item: None,
+            field: "accessibility/label".into(),
+            text: text.into(),
+        };
+        for empty in ["", "Button", "icon"] {
+            let warnings = dark_patterns(&[label(empty)]);
+            assert_eq!(
+                warnings[0].code.as_deref(),
+                Some("genui.warned.accessibility"),
+                "{empty:?}"
+            );
+        }
+        assert!(dark_patterns(&[label("Invoice total")]).is_empty());
     }
 
     #[test]
