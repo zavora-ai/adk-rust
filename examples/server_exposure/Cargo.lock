@@ -128,6 +128,7 @@ dependencies = [
 name = "adk-deploy"
 version = "3.0.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "dirs",
  "flate2",
@@ -138,6 +139,7 @@ dependencies = [
  "sha2",
  "tar",
  "thiserror",
+ "tokio",
  "toml",
  "tracing",
  "url",
