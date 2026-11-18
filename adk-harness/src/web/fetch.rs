@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use super::WebConfig;
 use super::domain::{ParsedUrl, UrlRefusal, host_allowlisted, is_private_host};
-use super::html::{TextShape, html_to_text};
+use super::html::{TextShape, html_to_text_at};
 use super::screen::has_secret;
 
 /// Most bytes of text delivered to the model; the rest is cut with a marker
@@ -80,6 +80,16 @@ pub enum FetchRefusal {
     },
     /// The run's egress policy refuses the URL or a redirect hop (#1281).
     Egress(adk_core::egress::EgressDenial),
+    /// The URL did not appear in the conversation, so the model may have composed it
+    /// ([`UrlProvenance`](super::UrlProvenance)).
+    NotInContext,
+    /// The URL's host, or a redirect hop's, is outside [`WebConfig::fetch_domains`].
+    DomainNotAllowed {
+        /// The host refused.
+        host: String,
+        /// Whether a redirect led to it.
+        redirect: bool,
+    },
 }
 
 impl FetchRefusal {
@@ -98,6 +108,8 @@ impl FetchRefusal {
             Self::RedirectWithoutLocation { .. } => "harness.web.redirects",
             Self::UnsupportedType { .. } => "harness.web.unsupported_type",
             Self::Egress(_) => "harness.web.egress",
+            Self::NotInContext => "harness.web.url_not_in_context",
+            Self::DomainNotAllowed { .. } => "harness.web.domain_not_allowed",
         }
     }
 
@@ -114,13 +126,23 @@ impl FetchRefusal {
             Self::TooManyRedirects { .. } | Self::RedirectWithoutLocation { .. } => "redirects",
             Self::UnsupportedType { .. } => "unsupportedType",
             Self::Egress(_) => "egress",
+            Self::NotInContext => "notInContext",
+            Self::DomainNotAllowed { .. } => "domainNotAllowed",
         }
     }
 
     /// Whether the record may carry the URL: a refusal about the URL's own content
-    /// carries only its digest (spec 3.1 §9.2 I48).
+    /// carries only its digest (spec 3.1 §9.2 I48). A URL refused as not in context may
+    /// carry data in any part, its host included, so it is recorded by digest alone.
     pub fn url_is_loggable(&self) -> bool {
-        !matches!(self, Self::UrlTooLong { .. } | Self::SecretInQuery | Self::NonPathBudget { .. })
+        !matches!(
+            self,
+            Self::UrlTooLong { .. }
+                | Self::SecretInQuery
+                | Self::NonPathBudget { .. }
+                | Self::NotInContext
+                | Self::DomainNotAllowed { .. }
+        )
     }
 }
 
@@ -162,6 +184,22 @@ impl fmt::Display for FetchRefusal {
                 f,
                 "the response is '{content_type}', which the harness does not deliver; it \
                  delivers text, HTML, JSON and PDF"
+            ),
+            Self::NotInContext => f.write_str(
+                "the URL did not appear earlier in the conversation, so it is not fetched: \
+                 the harness fetches only a URL a user message or a tool result already holds, exactly as written there (query string included), so no data \
+                 leaves in a URL the model composed; fetch a URL exactly as it appeared, find \
+                 the page with a search, or ask the user for the URL",
+            ),
+            Self::DomainNotAllowed { host, redirect: false } => write!(
+                f,
+                "'{host}' is outside the harness's fetch filter, which no approval widens; \
+                 fetch a page on a permitted domain instead"
+            ),
+            Self::DomainNotAllowed { host, redirect: true } => write!(
+                f,
+                "the page redirects to '{host}', which is outside the harness's fetch filter; \
+                 the redirect was not followed"
             ),
         }
     }
@@ -315,6 +353,21 @@ impl Fetcher {
         Ok(parsed)
     }
 
+    /// Refuses `url` when its host is outside [`WebConfig::fetch_domains`]; `redirect` says
+    /// a redirect led to it.
+    ///
+    /// # Errors
+    ///
+    /// [`FetchRefusal::DomainNotAllowed`] for a host the filter excludes.
+    pub fn check_domain(&self, url: &ParsedUrl, redirect: bool) -> Result<(), FetchRefusal> {
+        match &self.config.fetch_domains {
+            Some(filter) if !filter.permits(&url.host) => {
+                Err(FetchRefusal::DomainNotAllowed { host: url.host.clone(), redirect })
+            }
+            Some(_) | None => Ok(()),
+        }
+    }
+
     /// Resolves `url`'s host and refuses it when any address is private
     /// (spec 3.1 §9.2 I46).
     ///
@@ -380,6 +433,7 @@ impl Fetcher {
             None => Ok(()),
         };
         let requested = self.check_url(url)?;
+        self.check_domain(&requested, false)?;
         admits(&requested)?;
         let mut current = requested.clone();
         let mut redirects = 0u8;
@@ -395,6 +449,7 @@ impl Fetcher {
                     .ok_or(FetchRefusal::RedirectWithoutLocation { status })?;
                 let target = current.join(location)?;
                 self.check_url(&target.as_string())?;
+                self.check_domain(&target, true)?;
                 admits(&target)?;
                 let allowlisted = host_allowlisted(&target.host, allowlist);
                 if target.host != current.host && !allowlisted {
@@ -429,9 +484,11 @@ impl Fetcher {
             let sha256 = hex_sha256(&bytes);
             let kind = classify(&content_type);
             let body = match kind {
-                Kind::Html => {
-                    FetchBody::Text(html_to_text(&String::from_utf8_lossy(&bytes), shape))
-                }
+                Kind::Html => FetchBody::Text(html_to_text_at(
+                    &String::from_utf8_lossy(&bytes),
+                    shape,
+                    &current,
+                )),
                 Kind::Text => FetchBody::Text(String::from_utf8_lossy(&bytes).into_owned()),
                 Kind::Pdf => FetchBody::Pdf,
                 Kind::Unsupported => return Err(FetchRefusal::UnsupportedType { content_type }),
@@ -620,6 +677,33 @@ mod tests {
             );
         }
         assert!(fetcher.check_url("https://docs.rs/crate/adk-core?version=3.0").is_ok());
+    }
+
+    #[test]
+    fn the_fetch_filter_covers_subdomains_and_names_redirects() {
+        let blocked = Fetcher::new(WebConfig {
+            fetch_domains: Some(super::super::SearchDomains::Blocked(vec!["pastebin.com".into()])),
+            ..WebConfig::default()
+        });
+        let url = |u: &str| ParsedUrl::parse(u).unwrap();
+        assert_eq!(
+            blocked.check_domain(&url("https://www.pastebin.com/raw/x"), true),
+            Err(FetchRefusal::DomainNotAllowed { host: "www.pastebin.com".into(), redirect: true })
+        );
+        assert!(blocked.check_domain(&url("https://docs.rs/"), false).is_ok());
+        let allowed = Fetcher::new(WebConfig {
+            fetch_domains: Some(super::super::SearchDomains::Allowed(vec!["docs.rs".into()])),
+            ..WebConfig::default()
+        });
+        assert!(allowed.check_domain(&url("https://docs.rs/serde"), false).is_ok());
+        assert!(allowed.check_domain(&url("https://evil-docs.rs/"), false).is_err());
+        assert!(
+            Fetcher::new(WebConfig::default()).check_domain(&url("https://a.b/"), false).is_ok()
+        );
+        let refusal = FetchRefusal::DomainNotAllowed { host: "a.b".into(), redirect: false };
+        assert_eq!(refusal.code(), "harness.web.domain_not_allowed");
+        assert!(!refusal.url_is_loggable() && !FetchRefusal::NotInContext.url_is_loggable());
+        assert_eq!(FetchRefusal::NotInContext.audit_refusal(), "notInContext");
     }
 
     #[test]

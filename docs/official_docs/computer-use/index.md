@@ -4,6 +4,10 @@
 server. It performs no actuation itself: it orders observation, approval, mutation, and
 verification as a deterministic graph, and checks what the external runtime returns.
 
+For Claude's computer use toolset, `ComputerUseToolset` runs each action the model asks for as a
+governed tool call over a `ComputerActuator` you supply; see
+[Governed Computer Use and Browser Use](toolsets.md).
+
 ## Use it
 
 ```toml

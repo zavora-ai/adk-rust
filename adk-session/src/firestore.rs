@@ -29,12 +29,13 @@
 //! A new session never inherits events: `create` removes any events left under its path.
 //! App names, user IDs, and session IDs are document IDs, so they must not contain `/`.
 
+use crate::history::{HistoryOutcome, ImportSessionRequest, RewriteHistoryRequest, SessionHistory};
 use crate::service::session_not_found_for;
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
     ListRequest, Session, SessionService, State, state_utils,
 };
-use adk_core::identity::SessionId;
+use adk_core::identity::{AdkIdentity, SessionId};
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -52,6 +53,9 @@ const APP_STATE_COLLECTION: &str = "app_state";
 const USERS_COLLECTION: &str = "users";
 const USER_STATE_COLLECTION: &str = "state";
 const STATE_DOCUMENT_ID: &str = "current";
+/// Attempts a history rewrite makes before giving up on a session that keeps changing between
+/// the read and the commit.
+const MAX_REWRITE_ATTEMPTS: usize = 16;
 
 /// Configuration for connecting to Firestore.
 ///
@@ -184,6 +188,10 @@ struct SessionDoc {
     /// Appends so far; the next event's `seq`.
     #[serde(default)]
     event_seq: i64,
+    /// The session state the session was created with; absent on sessions created by
+    /// earlier releases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    initial_state: Option<HashMap<String, Value>>,
 }
 
 /// Firestore document for an event.
@@ -332,12 +340,38 @@ fn firestore_error(context: &str, error: FirestoreError) -> AdkError {
 // ---------------------------------------------------------------------------
 
 /// Precondition the store re-checks inside the write transaction before applying a commit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 enum SessionGuard {
     /// The session document must not exist.
     Absent,
     /// The session document must exist and match the commit's app, user, and session ID.
     Owned,
+    /// The session document must still be this one, the one a history rewrite was planned
+    /// from. Every append changes `event_seq` and `updated_at`, so an append in between fails
+    /// it.
+    Unchanged(Box<SessionDoc>),
+}
+
+impl SessionGuard {
+    /// Whether the guard holds for the document `current` read inside the transaction.
+    fn holds(&self, current: Option<&SessionDoc>, commit: &SessionCommit) -> bool {
+        match self {
+            Self::Absent => current.is_none(),
+            Self::Owned => current.is_some_and(|doc| {
+                is_owned_by(doc, &commit.app_name, &commit.user_id, &commit.session_id)
+            }),
+            Self::Unchanged(expected) => current == Some(expected.as_ref()),
+        }
+    }
+}
+
+/// Event documents a history rewrite or an import writes and deletes.
+#[derive(Debug, Clone, PartialEq, Default)]
+struct EventWrites {
+    /// IDs of the event documents to delete.
+    remove: Vec<String>,
+    /// Event documents to write, replacing any with the same ID; each carries its `seq`.
+    put: Vec<EventDoc>,
 }
 
 /// What a commit does to the session document.
@@ -388,15 +422,20 @@ struct SessionCommit {
     app_state: Option<StateMerge>,
     user_state: Option<StateMerge>,
     event: Option<EventDoc>,
+    /// History rewrites and imports: events written and deleted as they are.
+    events: EventWrites,
 }
 
 impl SessionCommit {
     /// Whether the commit removes the events stored under the session path: a create
     /// clears orphans so the new session starts empty, and a delete removes them all.
     fn purges_events(&self) -> bool {
-        match (self.guard, &self.session) {
+        match (&self.guard, &self.session) {
             (SessionGuard::Absent, _) | (_, SessionWrite::Delete) => true,
-            (SessionGuard::Owned, SessionWrite::Put(_) | SessionWrite::Merge(_)) => false,
+            (
+                SessionGuard::Owned | SessionGuard::Unchanged(_),
+                SessionWrite::Put(_) | SessionWrite::Merge(_),
+            ) => false,
         }
     }
 }
@@ -620,13 +659,7 @@ impl SessionStore for FirestoreStore {
                 .one(&commit.session_id)
                 .await
                 .map_err(|e| firestore_error("query failed", e))?;
-            let guard_holds = match commit.guard {
-                SessionGuard::Absent => current.is_none(),
-                SessionGuard::Owned => current.as_ref().is_some_and(|doc| {
-                    is_owned_by(doc, &commit.app_name, &commit.user_id, &commit.session_id)
-                }),
-            };
-            if !guard_holds {
+            if !commit.guard.holds(current.as_ref(), &commit) {
                 return Ok(false);
             }
 
@@ -639,7 +672,10 @@ impl SessionStore for FirestoreStore {
                     .query()
                     .await
                     .map_err(|e| firestore_error("query failed", e))?;
-                for document in &stored_events {
+                // Documents the commit writes again are replaced by that write instead.
+                for document in stored_events.iter().filter(|document| {
+                    !commit.events.put.iter().any(|event| event.id == document_id(document))
+                }) {
                     self.db
                         .fluent()
                         .delete()
@@ -712,7 +748,9 @@ impl SessionStore for FirestoreStore {
                     // Backs up the in-transaction guard check at commit time.
                     let precondition = match commit.guard {
                         SessionGuard::Absent => FirestoreWritePrecondition::Exists(false),
-                        SessionGuard::Owned => FirestoreWritePrecondition::Exists(true),
+                        SessionGuard::Owned | SessionGuard::Unchanged(_) => {
+                            FirestoreWritePrecondition::Exists(true)
+                        }
                     };
                     self.db
                         .fluent()
@@ -756,6 +794,27 @@ impl SessionStore for FirestoreStore {
                     .document_id(STATE_DOCUMENT_ID)
                     .parent(&user_parent)
                     .object(user_state)
+                    .add_to_transaction(&mut transaction)
+                    .map_err(|e| firestore_error("write failed", e))?;
+            }
+            for event_id in &commit.events.remove {
+                self.db
+                    .fluent()
+                    .delete()
+                    .from(EVENTS_COLLECTION)
+                    .parent(&events_parent)
+                    .document_id(event_id)
+                    .add_to_transaction(&mut transaction)
+                    .map_err(|e| firestore_error("delete failed", e))?;
+            }
+            for event in &commit.events.put {
+                self.db
+                    .fluent()
+                    .update()
+                    .in_col(EVENTS_COLLECTION)
+                    .document_id(&event.id)
+                    .parent(&events_parent)
+                    .object(event)
                     .add_to_transaction(&mut transaction)
                     .map_err(|e| firestore_error("write failed", e))?;
             }
@@ -842,12 +901,40 @@ impl<S: SessionStore> SessionCore<S> {
             app_state: StateMerge::non_empty(app_delta, now),
             user_state: StateMerge::non_empty(user_delta, now),
             event: Some(event_to_doc(&event)?),
+            events: EventWrites::default(),
         };
 
         match self.store.commit(commit).await? {
             CommitOutcome::Committed => Ok(()),
             CommitOutcome::GuardFailed => Err(not_found()),
         }
+    }
+
+    /// Reads the session document `identity` names and its history, with each event's `seq`.
+    async fn load_history(
+        &self,
+        identity: &AdkIdentity,
+    ) -> Result<(SessionDoc, SessionHistory, HashMap<String, Option<i64>>)> {
+        let (app_name, user_id, session_id) =
+            (identity.app_name.as_ref(), identity.user_id.as_ref(), identity.session_id.as_ref());
+        validate_identity(app_name, user_id, session_id)?;
+        let doc = self
+            .store
+            .session(app_name, session_id)
+            .await?
+            .filter(|doc| is_owned_by(doc, app_name, user_id, session_id))
+            .ok_or_else(|| session_not_found_for(app_name, user_id, session_id))?;
+        let mut event_docs = self.store.events(app_name, session_id).await?;
+        event_docs.sort_by_key(|doc| (doc.timestamp, doc.seq));
+        let seqs = event_docs.iter().map(|event| (event.id.clone(), event.seq)).collect();
+        // Documents written by earlier releases also hold a copy of the app and user tiers.
+        let (_, _, state) = state_utils::extract_state_deltas(&doc.state);
+        let history = SessionHistory::new(
+            decode_event_docs(&event_docs, session_id),
+            state,
+            doc.initial_state.clone(),
+        );
+        Ok((doc, history, seqs))
     }
 }
 
@@ -876,10 +963,12 @@ impl<S: SessionStore> SessionService for SessionCore<S> {
                 created_at: now,
                 updated_at: now,
                 event_seq: 0,
+                initial_state: Some(session_state.clone()),
             }),
             app_state: StateMerge::non_empty(app_delta, now),
             user_state: StateMerge::non_empty(user_delta, now),
             event: None,
+            events: EventWrites::default(),
         };
 
         match self.store.commit(commit).await? {
@@ -985,6 +1074,7 @@ impl<S: SessionStore> SessionService for SessionCore<S> {
             app_state: None,
             user_state: None,
             event: None,
+            events: EventWrites::default(),
         };
         // A missing or foreign session is a no-op, so deletion reveals nothing about
         // sessions the caller does not own.
@@ -1057,6 +1147,124 @@ impl<S: SessionStore> SessionService for SessionCore<S> {
 
         self.store.delete_user_state(app_name, user_id).await
     }
+
+    async fn history(&self, identity: &AdkIdentity) -> Result<SessionHistory> {
+        Ok(self.load_history(identity).await?.1)
+    }
+
+    async fn rewrite_history(&self, req: RewriteHistoryRequest) -> Result<HistoryOutcome> {
+        let identity = &req.identity;
+        let (app_name, user_id, session_id) =
+            (identity.app_name.as_ref(), identity.user_id.as_ref(), identity.session_id.as_ref());
+        for _ in 0..MAX_REWRITE_ATTEMPTS {
+            let (doc, history, seqs) = self.load_history(identity).await?;
+            let rewritten =
+                history.rewrite(identity, &req.rewrite, req.expected_version.as_deref())?;
+            let now = Utc::now();
+            let put = rewritten
+                .events
+                .iter()
+                .filter(|event| rewritten.change.replaced.contains(&event.id))
+                .map(|event| {
+                    Ok(EventDoc {
+                        seq: seqs.get(&event.id).copied().flatten(),
+                        ..event_to_doc(event)?
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let commit = SessionCommit {
+                app_name: app_name.to_string(),
+                user_id: user_id.to_string(),
+                session_id: session_id.to_string(),
+                guard: SessionGuard::Unchanged(Box::new(doc.clone())),
+                session: SessionWrite::Put(SessionDoc {
+                    state: rewritten.state.clone(),
+                    updated_at: now,
+                    ..doc
+                }),
+                app_state: None,
+                user_state: None,
+                event: None,
+                events: EventWrites { remove: rewritten.change.removed.clone(), put },
+            };
+            match self.store.commit(commit).await? {
+                CommitOutcome::Committed => {
+                    let app_state = self.store.app_state(app_name).await?;
+                    let user_state = self.store.user_state(app_name, user_id).await?;
+                    let session = Box::new(FirestoreSession {
+                        app_name: app_name.to_string(),
+                        user_id: user_id.to_string(),
+                        session_id: session_id.to_string(),
+                        state: state_utils::merge_states(&app_state, &user_state, &rewritten.state),
+                        events: rewritten.events,
+                        updated_at: now,
+                    });
+                    return Ok(HistoryOutcome::new(session, rewritten.change));
+                }
+                CommitOutcome::GuardFailed => continue,
+            }
+        }
+        Err(AdkError::new(
+            ErrorComponent::Session,
+            ErrorCategory::Unavailable,
+            "session.firestore.history_contention",
+            format!(
+                "session '{session_id}' changed on each of {MAX_REWRITE_ATTEMPTS} rewrite \
+                 attempts; retry the rewrite"
+            ),
+        ))
+    }
+
+    async fn import_session(&self, req: ImportSessionRequest) -> Result<Box<dyn Session>> {
+        let identity = &req.identity;
+        let (app_name, user_id, session_id) =
+            (identity.app_name.as_ref(), identity.user_id.as_ref(), identity.session_id.as_ref());
+        validate_identity(app_name, user_id, session_id)?;
+        let (_, _, state) = state_utils::extract_state_deltas(&req.state);
+        let (_, _, initial_state) = state_utils::extract_state_deltas(&req.initial_state);
+        let updated_at = req.events.last().map_or_else(Utc::now, |event| event.timestamp);
+        let put = req
+            .events
+            .iter()
+            .zip(1_i64..)
+            .map(|(event, seq)| Ok(EventDoc { seq: Some(seq), ..event_to_doc(event)? }))
+            .collect::<Result<Vec<_>>>()?;
+        let commit = SessionCommit {
+            app_name: app_name.to_string(),
+            user_id: user_id.to_string(),
+            session_id: session_id.to_string(),
+            guard: SessionGuard::Absent,
+            session: SessionWrite::Put(SessionDoc {
+                app_name: app_name.to_string(),
+                user_id: user_id.to_string(),
+                session_id: session_id.to_string(),
+                state: state.clone(),
+                created_at: Utc::now(),
+                updated_at,
+                event_seq: i64::try_from(put.len()).unwrap_or(i64::MAX),
+                initial_state: Some(initial_state),
+            }),
+            app_state: None,
+            user_state: None,
+            event: None,
+            events: EventWrites { remove: Vec::new(), put },
+        };
+        match self.store.commit(commit).await? {
+            CommitOutcome::Committed => {
+                let app_state = self.store.app_state(app_name).await?;
+                let user_state = self.store.user_state(app_name, user_id).await?;
+                Ok(Box::new(FirestoreSession {
+                    app_name: app_name.to_string(),
+                    user_id: user_id.to_string(),
+                    session_id: session_id.to_string(),
+                    state: state_utils::merge_states(&app_state, &user_state, &state),
+                    events: req.events,
+                    updated_at,
+                }))
+            }
+            CommitOutcome::GuardFailed => Err(session_already_exists(app_name, session_id)),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1091,6 +1299,18 @@ impl SessionService for FirestoreSessionService {
 
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
         self.core.delete_all_sessions(app_name, user_id).await
+    }
+
+    async fn history(&self, identity: &AdkIdentity) -> Result<SessionHistory> {
+        self.core.history(identity).await
+    }
+
+    async fn rewrite_history(&self, req: RewriteHistoryRequest) -> Result<HistoryOutcome> {
+        self.core.rewrite_history(req).await
+    }
+
+    async fn import_session(&self, req: ImportSessionRequest) -> Result<Box<dyn Session>> {
+        self.core.import_session(req).await
     }
 }
 
@@ -1268,13 +1488,7 @@ mod tests {
             }
 
             let session_key = key(&commit.app_name, &commit.session_id);
-            let guard_holds = match commit.guard {
-                SessionGuard::Absent => !data.sessions.contains_key(&session_key),
-                SessionGuard::Owned => data.sessions.get(&session_key).is_some_and(|doc| {
-                    is_owned_by(doc, &commit.app_name, &commit.user_id, &commit.session_id)
-                }),
-            };
-            if !guard_holds {
+            if !commit.guard.holds(data.sessions.get(&session_key), &commit) {
                 return Ok(CommitOutcome::GuardFailed);
             }
 
@@ -1309,6 +1523,14 @@ mod tests {
                 let state = merge.apply(&stored.unwrap_or_default(), false);
                 data.user_states
                     .insert(user_key, UserStateDoc { state, updated_at: merge.updated_at });
+            }
+            let stored = data.events.entry(session_key.clone()).or_default();
+            stored.retain(|event| !commit.events.remove.contains(&event.id));
+            for event in commit.events.put {
+                match stored.iter_mut().find(|stored| stored.id == event.id) {
+                    Some(existing) => *existing = event,
+                    None => stored.push(event),
+                }
             }
             if let Some(event) = commit.event {
                 let seq = data.sessions.get(&session_key).map(|doc| doc.event_seq);
@@ -1490,6 +1712,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             event_seq: 0,
+            initial_state: None,
         };
         let replacement = takeover.clone();
         *core.store.before_commit.lock().unwrap() = Some(Box::new(move |data: &mut FakeData| {
@@ -1592,6 +1815,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             event_seq: 0,
+            initial_state: None,
         };
         core.store.data.lock().unwrap().sessions.insert(key("app", "forged"), forged);
 
@@ -1767,6 +1991,115 @@ mod tests {
         let events = decode_event_docs(&[bad, good], "s1");
         let ids: Vec<&str> = events.iter().map(|event| event.id.as_str()).collect();
         assert_eq!(ids, vec!["good"]);
+    }
+
+    fn identity(app: &str, user: &str, session: &str) -> AdkIdentity {
+        AdkIdentity::new(
+            AppName::try_from(app).unwrap(),
+            UserId::try_from(user).unwrap(),
+            SessionId::try_from(session).unwrap(),
+        )
+    }
+
+    async fn three_events(core: &SessionCore<FakeStore>) -> Vec<String> {
+        core.create(create_req("app", "alice", "s1", json!({"tier": "gold"}))).await.unwrap();
+        let mut ids = Vec::new();
+        for n in 0..3 {
+            let mut event =
+                event_with_delta(&format!("e{n}"), json!({"step": n, "tier": "silver"}));
+            event.timestamp = Utc::now() + chrono::Duration::milliseconds(n);
+            ids.push(event.id.clone());
+            core.append_event_for_identity(append_req("app", "alice", "s1", event)).await.unwrap();
+        }
+        ids
+    }
+
+    #[tokio::test]
+    async fn history_rewrites_delete_and_replace_event_documents() {
+        let core = service();
+        let ids = three_events(&core).await;
+        let alice = identity("app", "alice", "s1");
+
+        let rewound = core.rewind(&alice, &ids[1]).await.unwrap();
+        assert_eq!(rewound.state().get("step"), Some(json!(1)));
+        let stored: Vec<String> = core.store.data.lock().unwrap().events[&key("app", "s1")]
+            .iter()
+            .map(|event| event.id.clone())
+            .collect();
+        assert_eq!(stored, ids[..2]);
+
+        let mut replacement = event_with_delta(&ids[0], json!({"step": 7}));
+        replacement.author = "editor".into();
+        let edited = core
+            .rewrite_history(RewriteHistoryRequest::new(
+                alice.clone(),
+                crate::HistoryRewrite::Edit {
+                    edits: vec![crate::HistoryEdit::Replace { event: Box::new(replacement) }],
+                },
+            ))
+            .await
+            .unwrap();
+        assert_eq!(edited.session.state().get("step"), Some(json!(1)), "e1 still writes last");
+        let reread = core.get(get_req("app", "alice", "s1")).await.unwrap();
+        assert_eq!(reread.events().all()[0].author, "editor");
+        assert_eq!(reread.events().len(), 2);
+
+        let emptied = core.rewind_steps(&alice, 2).await.unwrap();
+        assert_eq!((emptied.events().len(), emptied.state().get("tier")), (0, Some(json!("gold"))));
+    }
+
+    #[tokio::test]
+    async fn a_rewrite_racing_an_append_plans_again_and_keeps_the_append() {
+        let core = service();
+        let ids = three_events(&core).await;
+        let mut late = event_with_delta("late", json!({"step": 9}));
+        late.timestamp = Utc::now() + chrono::Duration::days(1);
+        let late_doc = EventDoc { seq: Some(4), ..event_to_doc(&late).unwrap() };
+        *core.store.before_commit.lock().unwrap() = Some(Box::new(move |data: &mut FakeData| {
+            let doc = data.sessions.get_mut(&key("app", "s1")).unwrap();
+            doc.event_seq += 1;
+            doc.updated_at = Utc::now();
+            data.events.get_mut(&key("app", "s1")).unwrap().push(late_doc);
+        }));
+
+        let edited = core
+            .rewrite_history(RewriteHistoryRequest::new(
+                identity("app", "alice", "s1"),
+                crate::HistoryRewrite::Edit {
+                    edits: vec![crate::HistoryEdit::Remove { event_id: ids[0].clone() }],
+                },
+            ))
+            .await
+            .unwrap();
+        let kept: Vec<String> = edited.session.events().all().into_iter().map(|e| e.id).collect();
+        assert_eq!(kept, [ids[1].clone(), ids[2].clone(), "late".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn a_fork_imports_events_and_refuses_a_taken_id() {
+        let core = service();
+        let ids = three_events(&core).await;
+        let fork = core
+            .fork(
+                crate::ForkRequest::new(identity("app", "alice", "s1"))
+                    .at_event(&ids[0])
+                    .with_session_id("s2"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            (fork.session.events().len(), fork.session.state().get("step")),
+            (1, Some(json!(0)))
+        );
+        let doc = core.store.data.lock().unwrap().sessions[&key("app", "s2")].clone();
+        assert_eq!(doc.event_seq, 1);
+        assert!(doc.initial_state.unwrap().contains_key(crate::FORK_ORIGIN_KEY));
+        let taken = core
+            .fork(crate::ForkRequest::new(identity("app", "alice", "s1")).with_session_id("s2"))
+            .await
+            .err()
+            .unwrap();
+        assert_error(&taken, ErrorCategory::Conflict, "session.already_exists");
     }
 
     #[test]

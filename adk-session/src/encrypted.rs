@@ -54,8 +54,10 @@
 //! runner uses. `create` without a `session_id` generates a UUID v4 in the wrapper so the
 //! initial state can be bound to the session.
 //!
-//! `rewind` and `rewind_steps` forward to the inner service and decrypt its result.
-//! `rewind_steps` counts only the events callers see, so key-rotation events are not steps.
+//! History operations check the decrypted history, then forward to the inner service, which
+//! must implement them. A rewrite applies only while the stored history is still the one that
+//! was checked, `rewind_steps` counts only the events callers see, so key-rotation events are
+//! not steps, and a fork re-seals the copied state and events under the fork's identity.
 //!
 //! # Data Written by Earlier Releases
 //!
@@ -78,9 +80,13 @@
 //! ```
 
 use crate::encryption_key::EncryptionKey;
+use crate::history::{
+    HistoryEdit, HistoryOutcome, HistoryRewrite, ImportSessionRequest, RewriteHistoryRequest,
+    SessionHistory,
+};
 use crate::service::{
     AppendEventRequest, CreateRequest, DeleteRequest, GetRequest, ListRequest, SessionService,
-    rewind_steps_exceed, validate_scope, validate_session_id,
+    validate_scope, validate_session_id,
 };
 use crate::session::{KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER, Session};
 use crate::state::State;
@@ -472,6 +478,30 @@ impl<S: SessionService> EncryptedSession<S> {
         Ok((decrypted, opened))
     }
 
+    /// Decrypts a stored history, leaving out key-rotation events.
+    fn open_history(
+        &self,
+        identity: &AdkIdentity,
+        stored: &SessionHistory,
+    ) -> Result<SessionHistory> {
+        let id = SessionIdentity::from(identity);
+        let mut events = Vec::with_capacity(stored.events.len());
+        for event in &stored.events {
+            let event = self.open_event(&id, event)?;
+            if event.author != ROTATION_AUTHOR {
+                events.push(event);
+            }
+        }
+        let state = self.open_state(&id, &stored.state)?.state;
+        let initial_state = match &stored.initial_state {
+            Some(initial) => Some(self.open_state(&id, initial)?.state),
+            None => None,
+        };
+        let mut history = SessionHistory::new(events, state, initial_state);
+        history.shared_tiers = stored.shared_tiers;
+        Ok(history)
+    }
+
     /// Re-encrypts `opened.stale` with the current key through a state-only event.
     async fn reencrypt(&self, id: &SessionIdentity<'_>, opened: &OpenedState) -> Result<()> {
         let mut rotation = Event::new("");
@@ -839,36 +869,64 @@ impl<S: SessionService> SessionService for EncryptedSession<S> {
         self.inner.delete_all_sessions(app_name, user_id).await
     }
 
-    async fn rewind(
-        &self,
-        identity: &AdkIdentity,
-        target_event_id: &str,
-    ) -> Result<Box<dyn Session>> {
-        let session = self.inner.rewind(identity, target_event_id).await?;
-        let (decrypted, _) =
-            self.open_session(&SessionIdentity::from(identity), session.as_ref())?;
-        Ok(Box::new(decrypted))
+    async fn history(&self, identity: &AdkIdentity) -> Result<SessionHistory> {
+        Ok(self.open_history(identity, &self.inner.history(identity).await?)?)
     }
 
-    /// Counts `steps` over the events callers see; key-rotation events are stored but not
-    /// returned, so they do not count.
-    async fn rewind_steps(&self, identity: &AdkIdentity, steps: usize) -> Result<Box<dyn Session>> {
-        if steps == 0 {
-            return self.get_for_identity(identity).await;
-        }
-        let stored = self.inner.get_for_identity(identity).await?.events().all();
-        let visible: Vec<&Event> =
-            stored.iter().filter(|event| event.author != ROTATION_AUTHOR).collect();
-        let keep = visible
-            .len()
-            .checked_sub(steps)
-            .ok_or_else(|| rewind_steps_exceed(identity, steps, visible.len()))?;
-        let session = match keep.checked_sub(1) {
-            Some(last) => self.inner.rewind(identity, &visible[last].id).await?,
-            None => self.inner.rewind_steps(identity, stored.len()).await?,
+    /// Checks the rewrite against the decrypted history, then forwards it to the inner
+    /// service with the stored history's version, so the inner write applies only to the
+    /// history that was checked. `RewindSteps` counts only the events callers see.
+    async fn rewrite_history(&self, req: RewriteHistoryRequest) -> Result<HistoryOutcome> {
+        let identity = &req.identity;
+        let stored = self.inner.history(identity).await?;
+        let plain = self.open_history(identity, &stored)?;
+        let checked = plain.rewrite(identity, &req.rewrite, req.expected_version.as_deref())?;
+
+        let id = SessionIdentity::from(identity);
+        let rewrite = match &req.rewrite {
+            HistoryRewrite::RewindSteps { .. } => match checked.events.last() {
+                Some(last) => HistoryRewrite::RewindTo { event_id: last.id.clone() },
+                None => HistoryRewrite::RewindSteps { steps: stored.events.len() },
+            },
+            HistoryRewrite::Edit { edits } => HistoryRewrite::Edit {
+                edits: edits
+                    .iter()
+                    .map(|edit| match edit {
+                        HistoryEdit::Replace { event } => Ok(HistoryEdit::Replace {
+                            event: Box::new(self.seal_event(&id, event)?),
+                        }),
+                        other => Ok(other.clone()),
+                    })
+                    .collect::<Result<_>>()?,
+            },
+            other => other.clone(),
         };
-        let (decrypted, _) =
-            self.open_session(&SessionIdentity::from(identity), session.as_ref())?;
+        let outcome = self
+            .inner
+            .rewrite_history(
+                RewriteHistoryRequest::new(identity.clone(), rewrite)
+                    .expect_version(stored.version()),
+            )
+            .await?;
+        let (decrypted, _) = self.open_session(&id, outcome.session.as_ref())?;
+        Ok(HistoryOutcome::new(Box::new(decrypted), checked.change))
+    }
+
+    /// Seals the state, creation state, and events under the new session's identity.
+    async fn import_session(&self, req: ImportSessionRequest) -> Result<Box<dyn Session>> {
+        let id = SessionIdentity::from(&req.identity);
+        let sealed = ImportSessionRequest {
+            identity: req.identity.clone(),
+            initial_state: self.seal_state(&id, &req.initial_state)?,
+            state: self.seal_state(&id, &req.state)?,
+            events: req
+                .events
+                .iter()
+                .map(|event| self.seal_event(&id, event))
+                .collect::<Result<_>>()?,
+        };
+        let session = self.inner.import_session(sealed).await?;
+        let (decrypted, _) = self.open_session(&id, session.as_ref())?;
         Ok(Box::new(decrypted))
     }
 

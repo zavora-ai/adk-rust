@@ -85,8 +85,9 @@ pub(crate) fn with_terminal_usage(mut stream: LlmResponseStream) -> LlmResponseS
 /// [`with_priced_usage_tracking`].
 pub fn with_usage_tracking(stream: LlmResponseStream, span: Span) -> LlmResponseStream {
     let tracked = stream.map(move |result| {
-        if let Ok(ref response) = result {
-            record_usage_from_response(response, &span);
+        match &result {
+            Ok(response) => record_usage_from_response(response, &span),
+            Err(error) => record_error(error, &span),
         }
         result
     });
@@ -145,11 +146,13 @@ pub fn with_priced_usage_tracking(
     let provider = provider.into();
     let model = model.into();
     let tracked = stream.map(move |result| {
-        result.map(|mut response| {
-            attribute_and_price(&mut response, &provider, &model);
-            record_usage_from_response(&response, &span);
-            response
-        })
+        result
+            .map(|mut response| {
+                attribute_and_price(&mut response, &provider, &model);
+                record_usage_from_response(&response, &span);
+                response
+            })
+            .inspect_err(|error| record_error(error, &span))
     });
     Box::pin(tracked) as Pin<Box<_>>
 }
@@ -182,7 +185,51 @@ pub(crate) fn attribute_and_price(response: &mut LlmResponse, provider: &str, mo
         .or_else(|| catalog.cost_usd(provider, model, usage));
 }
 
+/// Records the GenAI response attributes of a final response on its inference span: the
+/// response model, the finish reason, `error.type`, and under content capture the output
+/// messages.
+fn record_response(response: &LlmResponse, span: &Span) {
+    if response.partial || span.is_disabled() {
+        return;
+    }
+    if let Some(model) = &response.model {
+        span.record("gen_ai.response.model", model.as_str());
+    }
+    if let Some(code) = &response.error_code {
+        span.record("error.type", code.as_str());
+    }
+    if let Some(reason) = response.finish_reason {
+        let reason = crate::telemetry::response_finish_reason(reason, response.content.as_ref());
+        adk_telemetry::record_str_array(span, "gen_ai.response.finish_reasons", &[reason]);
+    }
+    let capture = adk_telemetry::config::capture_content();
+    if let Some(content) =
+        response.content.as_ref().filter(|_| capture.on_spans() || capture.on_events())
+    {
+        let messages = crate::telemetry::output_messages(content).to_string();
+        if capture.on_spans() {
+            span.record("gen_ai.output.messages", messages.as_str());
+        }
+        adk_telemetry::events::ContentEventEmitter::emit_inference_details(
+            &adk_telemetry::config::SemconvConfig { capture_content: capture },
+            span,
+            &adk_telemetry::events::InferenceDetails {
+                output_messages: Some(messages),
+                ..Default::default()
+            },
+        );
+    }
+}
+
+/// Records `error.type` on the inference span of a call that failed.
+fn record_error(error: &adk_core::AdkError, span: &Span) {
+    if !span.is_disabled() {
+        span.record("error.type", error.code);
+    }
+}
+
 fn record_usage_from_response(response: &LlmResponse, span: &Span) {
+    record_response(response, span);
     if let Some(ref usage) = response.usage_metadata {
         let _entered = span.enter();
         record_usage(usage);

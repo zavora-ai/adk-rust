@@ -1,12 +1,16 @@
+use crate::history::{
+    HistoryOperation, HistoryOutcome, ImportSessionRequest, RewriteHistoryRequest, SessionHistory,
+};
 use crate::service::{
-    ambiguous_session_id, session_already_exists, session_id_not_found, session_not_found_for,
-    validate_scope, validate_session_id,
+    ambiguous_session_id, identity_not_found, session_already_exists, session_id_not_found,
+    session_not_found_for, validate_scope, validate_session_id,
 };
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
     ListRequest, Session, SessionService, State, state_utils,
 };
 use adk_core::Result;
+use adk_core::identity::AdkIdentity;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -93,7 +97,9 @@ impl PostgresSessionService {
     /// that creates the initial schema with PostgreSQL-native types (`JSONB`,
     /// `TIMESTAMPTZ`) and indexes for common query patterns. Version 2 adds `events.seq`, an
     /// insertion sequence that orders events with equal timestamps; existing rows are numbered
-    /// in their physical order.
+    /// in their physical order. Version 3 adds `sessions.initial_state`, the session state a
+    /// session was created with, which history rewrites rebuild from; it is `NULL` for sessions
+    /// created before it.
     const PG_SESSION_MIGRATIONS: &'static [(i64, &'static str, &'static str)] = &[
         (
             1,
@@ -146,6 +152,11 @@ CREATE INDEX IF NOT EXISTS idx_events_session_ts ON events(session_id, timestamp
             "ALTER TABLE events ADD COLUMN IF NOT EXISTS seq BIGSERIAL;\
 CREATE INDEX IF NOT EXISTS idx_events_session_order \
     ON events(app_name, user_id, session_id, timestamp, seq);",
+        ),
+        (
+            3,
+            "record the session state each session was created with",
+            "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS initial_state JSONB;",
         ),
     ];
 
@@ -431,6 +442,17 @@ async fn apply_event(
 
     apply_tier_deltas(conn, app_name, user_id, &app_delta, &user_delta, event.timestamp).await?;
 
+    insert_event(conn, app_name, user_id, session_id, event).await
+}
+
+/// Inserts `event` into the session's events without touching any state.
+async fn insert_event(
+    conn: &mut PgConnection,
+    app_name: &str,
+    user_id: &str,
+    session_id: &str,
+    event: &Event,
+) -> Result<()> {
     let llm_response_value = to_jsonb(&event.llm_response)?;
     let actions_value = to_jsonb(&event.actions)?;
     let tool_ids_value = to_jsonb(&event.long_running_tool_ids)?;
@@ -457,6 +479,93 @@ async fn apply_event(
     Ok(())
 }
 
+/// Decodes a stored event row, logging and skipping a row that no longer deserializes so one
+/// corrupt event does not hide the rest of the session history.
+fn decode_event_row(row: &sqlx::postgres::PgRow, session_id: &str) -> Option<Event> {
+    let event_id: String = row.get("id");
+    let column = |name: &str| from_jsonb(row.get(name));
+    let decoded = serde_json::from_value(column("llm_response")).and_then(|llm_response| {
+        Ok((
+            llm_response,
+            serde_json::from_value(column("actions"))?,
+            serde_json::from_value(column("long_running_tool_ids"))?,
+        ))
+    });
+    let (llm_response, actions, long_running_tool_ids) = match decoded {
+        Ok(parts) => parts,
+        Err(error) => {
+            tracing::warn!(
+                session.id = %session_id,
+                event.id = %event_id,
+                error = %error,
+                "skipping stored event that failed to deserialize"
+            );
+            return None;
+        }
+    };
+    Some(Event {
+        id: event_id,
+        timestamp: row.get("timestamp"),
+        invocation_id: row.get("invocation_id"),
+        branch: row.get("branch"),
+        author: row.get("author"),
+        llm_request: None,
+        llm_response,
+        actions,
+        long_running_tool_ids,
+        provider_metadata: HashMap::new(),
+    })
+}
+
+/// Reads the history of `identity` in read order, with the `seq` of each decoded event.
+/// `lock` takes the session row's write lock, which every append also takes, first.
+async fn load_history(
+    conn: &mut PgConnection,
+    identity: &AdkIdentity,
+    lock: bool,
+) -> Result<(SessionHistory, Vec<i64>)> {
+    let (app_name, user_id, session_id) =
+        (identity.app_name.as_ref(), identity.user_id.as_ref(), identity.session_id.as_ref());
+    let query = if lock {
+        "SELECT state, initial_state FROM sessions \
+         WHERE app_name = $1 AND user_id = $2 AND session_id = $3 FOR UPDATE"
+    } else {
+        "SELECT state, initial_state FROM sessions \
+         WHERE app_name = $1 AND user_id = $2 AND session_id = $3"
+    };
+    let row = sqlx::query(query)
+        .bind(app_name)
+        .bind(user_id)
+        .bind(session_id)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
+        .ok_or_else(|| identity_not_found(identity))?;
+    let (_, _, stored) = state_utils::extract_state_deltas(&decode_state(row.get("state")));
+    let initial: Option<Value> = row.get("initial_state");
+    let initial = initial.map(|value| decode_state(Some(value)));
+
+    let rows = sqlx::query(
+        "SELECT * FROM events WHERE app_name = $1 AND user_id = $2 AND session_id = $3 \
+         ORDER BY timestamp, seq",
+    )
+    .bind(app_name)
+    .bind(user_id)
+    .bind(session_id)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
+    let mut events = Vec::with_capacity(rows.len());
+    let mut seqs = Vec::with_capacity(rows.len());
+    for row in &rows {
+        if let Some(event) = decode_event_row(row, session_id) {
+            seqs.push(row.get::<i64, _>("seq"));
+            events.push(event);
+        }
+    }
+    Ok((SessionHistory::new(events, stored, initial), seqs))
+}
+
 #[async_trait]
 impl SessionService for PostgresSessionService {
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id))]
@@ -478,8 +587,8 @@ impl SessionService for PostgresSessionService {
         let (app_state, user_state) = read_tiers(&mut tx, &req.app_name, &req.user_id).await?;
 
         sqlx::query(
-            r#"INSERT INTO sessions (app_name, user_id, session_id, state, created_at, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6)"#,
+            r#"INSERT INTO sessions (app_name, user_id, session_id, state, initial_state, created_at, updated_at)
+               VALUES ($1, $2, $3, $4, $4, $5, $6)"#,
         )
         .bind(&req.app_name)
         .bind(&req.user_id)
@@ -555,43 +664,8 @@ impl SessionService for PostgresSessionService {
         .fetch_all(&self.pool)
         .await
         .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
-        .into_iter()
-        .filter_map(|row| {
-            let event_id: String = row.get("id");
-            let column = |name: &str| from_jsonb(row.get(name));
-            let decoded = serde_json::from_value(column("llm_response")).and_then(|llm_response| {
-                Ok((
-                    llm_response,
-                    serde_json::from_value(column("actions"))?,
-                    serde_json::from_value(column("long_running_tool_ids"))?,
-                ))
-            });
-            let (llm_response, actions, long_running_tool_ids) = match decoded {
-                Ok(parts) => parts,
-                Err(error) => {
-                    tracing::warn!(
-                        session.id = %req.session_id,
-                        event.id = %event_id,
-                        error = %error,
-                        "skipping stored event that failed to deserialize"
-                    );
-                    return None;
-                }
-            };
-            let timestamp: DateTime<Utc> = row.get("timestamp");
-            Some(Event {
-                id: event_id,
-                timestamp,
-                invocation_id: row.get("invocation_id"),
-                branch: row.get("branch"),
-                author: row.get("author"),
-                llm_request: None,
-                llm_response,
-                actions,
-                long_running_tool_ids,
-                provider_metadata: std::collections::HashMap::new(),
-            })
-        })
+        .iter()
+        .filter_map(|row| decode_event_row(row, &req.session_id))
         .collect();
 
         Ok(Box::new(PostgresSession {
@@ -761,12 +835,184 @@ impl SessionService for PostgresSessionService {
     }
 
     #[instrument(skip_all)]
+    async fn history(&self, identity: &AdkIdentity) -> Result<SessionHistory> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("connection failed: {e}")))?;
+        Ok(load_history(&mut conn, identity, false).await?.0)
+    }
+
+    async fn rewrite_history(&self, req: RewriteHistoryRequest) -> Result<HistoryOutcome> {
+        self.rewrite(req).await
+    }
+
+    async fn import_session(&self, req: ImportSessionRequest) -> Result<Box<dyn Session>> {
+        let (app_name, user_id, session_id) = (
+            req.identity.app_name.as_ref(),
+            req.identity.user_id.as_ref(),
+            req.identity.session_id.as_ref(),
+        );
+        let (_, _, state) = state_utils::extract_state_deltas(&req.state);
+        let (_, _, initial_state) = state_utils::extract_state_deltas(&req.initial_state);
+        let updated_at = req.events.last().map_or_else(Utc::now, |event| event.timestamp);
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
+        sqlx::query(
+            "INSERT INTO sessions \
+             (app_name, user_id, session_id, state, initial_state, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(app_name)
+        .bind(user_id)
+        .bind(session_id)
+        .bind(encode_state(&state)?)
+        .bind(encode_state(&initial_state)?)
+        .bind(Utc::now())
+        .bind(updated_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::Database(db) if db.is_unique_violation() => {
+                session_already_exists(app_name, user_id, session_id)
+            }
+            other => adk_core::AdkError::session(format!("insert failed: {other}")),
+        })?;
+        for event in &req.events {
+            insert_event(&mut tx, app_name, user_id, session_id, event).await?;
+        }
+        let (app_state, user_state) = read_tiers(&mut tx, app_name, user_id).await?;
+        tx.commit()
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
+
+        Ok(Box::new(PostgresSession {
+            app_name: app_name.to_string(),
+            user_id: user_id.to_string(),
+            session_id: session_id.to_string(),
+            state: state_utils::merge_states(&app_state, &user_state, &state),
+            events: req.events,
+            updated_at,
+        }))
+    }
+
     async fn health_check(&self) -> Result<()> {
         sqlx::query("SELECT 1")
             .execute(&self.pool)
             .await
             .map_err(|e| adk_core::AdkError::session(format!("health check failed: {e}")))?;
         Ok(())
+    }
+}
+
+impl PostgresSessionService {
+    /// Applies a history rewrite in one transaction that holds the session row's lock: reads
+    /// the history, checks and plans the rewrite, then deletes the removed rows, updates the
+    /// replaced ones in place, and writes the rebuilt session state.
+    async fn rewrite(&self, req: RewriteHistoryRequest) -> Result<HistoryOutcome> {
+        let identity = &req.identity;
+        let (app_name, user_id, session_id) =
+            (identity.app_name.as_ref(), identity.user_id.as_ref(), identity.session_id.as_ref());
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
+
+        let (history, seqs) = load_history(&mut tx, identity, true).await?;
+        let rewritten = history.rewrite(identity, &req.rewrite, req.expected_version.as_deref())?;
+        let change = &rewritten.change;
+
+        if change.operation == HistoryOperation::Rewind {
+            // Every row after the last kept one goes, including rows that no longer decode.
+            let keep = rewritten.events.len();
+            match keep.checked_sub(1).map(|last| (history.events[last].timestamp, seqs[last])) {
+                Some((timestamp, seq)) => sqlx::query(
+                    "DELETE FROM events WHERE app_name = $1 AND user_id = $2 AND session_id = $3 \
+                     AND (timestamp, seq) > ($4, $5)",
+                )
+                .bind(app_name)
+                .bind(user_id)
+                .bind(session_id)
+                .bind(timestamp)
+                .bind(seq),
+                None => sqlx::query(
+                    "DELETE FROM events WHERE app_name = $1 AND user_id = $2 AND session_id = $3",
+                )
+                .bind(app_name)
+                .bind(user_id)
+                .bind(session_id),
+            }
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("delete events failed: {e}")))?;
+        } else {
+            sqlx::query(
+                "DELETE FROM events WHERE app_name = $1 AND user_id = $2 AND session_id = $3 \
+                 AND id = ANY($4)",
+            )
+            .bind(app_name)
+            .bind(user_id)
+            .bind(session_id)
+            .bind(&change.removed)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("delete events failed: {e}")))?;
+            for event in rewritten.events.iter().filter(|e| change.replaced.contains(&e.id)) {
+                sqlx::query(
+                    "UPDATE events SET invocation_id = $1, branch = $2, author = $3, \
+                     llm_response = $4, actions = $5, long_running_tool_ids = $6 \
+                     WHERE app_name = $7 AND user_id = $8 AND session_id = $9 AND id = $10",
+                )
+                .bind(&event.invocation_id)
+                .bind(&event.branch)
+                .bind(&event.author)
+                .bind(to_jsonb(&event.llm_response)?)
+                .bind(to_jsonb(&event.actions)?)
+                .bind(to_jsonb(&event.long_running_tool_ids)?)
+                .bind(app_name)
+                .bind(user_id)
+                .bind(session_id)
+                .bind(&event.id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| adk_core::AdkError::session(format!("update event failed: {e}")))?;
+            }
+        }
+
+        let now = Utc::now();
+        sqlx::query(
+            "UPDATE sessions SET state = $1, updated_at = $2 \
+             WHERE app_name = $3 AND user_id = $4 AND session_id = $5",
+        )
+        .bind(encode_state(&rewritten.state)?)
+        .bind(now)
+        .bind(app_name)
+        .bind(user_id)
+        .bind(session_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
+        let (app_state, user_state) = read_tiers(&mut tx, app_name, user_id).await?;
+
+        tx.commit()
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
+
+        let session = Box::new(PostgresSession {
+            app_name: app_name.to_string(),
+            user_id: user_id.to_string(),
+            session_id: session_id.to_string(),
+            state: state_utils::merge_states(&app_state, &user_state, &rewritten.state),
+            events: rewritten.events,
+            updated_at: now,
+        });
+        Ok(HistoryOutcome::new(session, rewritten.change))
     }
 }
 

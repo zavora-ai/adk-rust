@@ -112,6 +112,9 @@ pub struct BrowserToolset {
     allow_private_network: bool,
     /// Whether those tools may open host names that do not resolve on the agent host
     allow_unresolved_hosts: bool,
+    /// With sources, the navigation and new-tab/window tools open only URLs that appeared in
+    /// them
+    url_sources: Option<adk_core::egress::UrlSources>,
 }
 
 impl BrowserToolset {
@@ -192,6 +195,7 @@ impl BrowserToolset {
             allowed_schemes: default_allowed_schemes(),
             allow_private_network: false,
             allow_unresolved_hosts: false,
+            url_sources: None,
         }
     }
 
@@ -331,6 +335,30 @@ impl BrowserToolset {
         self
     }
 
+    /// Open only URLs that already appeared in the conversation's `sources`: a user message
+    /// or a tool result, exactly as written there. Off by default.
+    ///
+    /// Applies to `browser_navigate`, `browser_new_tab` and `browser_new_window`; a URL the
+    /// model composed, for example with data appended to a query string, is refused with
+    /// [`URL_NOT_IN_CONTEXT_CODE`](crate::tools::URL_NOT_IN_CONTEXT_CODE) before the browser
+    /// moves. See [`NavigateTool::with_url_provenance`](crate::tools::NavigateTool::with_url_provenance).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_browser::{BrowserConfig, BrowserSession, BrowserToolset};
+    /// use adk_core::egress::UrlSources;
+    /// use std::sync::Arc;
+    ///
+    /// let browser = Arc::new(BrowserSession::new(BrowserConfig::default()));
+    /// let unattended = BrowserToolset::new(browser).with_url_provenance(UrlSources::default());
+    /// ```
+    #[must_use]
+    pub fn with_url_provenance(mut self, sources: adk_core::egress::UrlSources) -> Self {
+        self.url_sources = Some(sources);
+        self
+    }
+
     /// Offer `browser_file_upload`, limited to files inside `roots`.
     ///
     /// Off by default in every profile. The tool resolves each model-chosen path,
@@ -421,7 +449,8 @@ impl BrowserToolset {
                 NavigateTool::new(browser.clone())
                     .with_allowed_schemes(self.allowed_schemes.clone())
                     .with_private_network_access(self.allow_private_network)
-                    .with_unresolved_hosts(self.allow_unresolved_hosts),
+                    .with_unresolved_hosts(self.allow_unresolved_hosts)
+                    .with_url_provenance(self.url_sources.clone()),
             ));
             tools.push(Arc::new(
                 BackTool::new(browser.clone())
@@ -491,13 +520,15 @@ impl BrowserToolset {
                 NewTabTool::new(browser.clone())
                     .with_allowed_schemes(self.allowed_schemes.clone())
                     .with_private_network_access(self.allow_private_network)
-                    .with_unresolved_hosts(self.allow_unresolved_hosts),
+                    .with_unresolved_hosts(self.allow_unresolved_hosts)
+                    .with_url_provenance(self.url_sources.clone()),
             ));
             tools.push(Arc::new(
                 NewWindowTool::new(browser.clone())
                     .with_allowed_schemes(self.allowed_schemes.clone())
                     .with_private_network_access(self.allow_private_network)
-                    .with_unresolved_hosts(self.allow_unresolved_hosts),
+                    .with_unresolved_hosts(self.allow_unresolved_hosts)
+                    .with_url_provenance(self.url_sources.clone()),
             ));
             tools.push(Arc::new(SwitchWindowTool::new(browser.clone())));
             tools.push(Arc::new(CloseWindowTool::new(browser.clone())));

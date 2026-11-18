@@ -216,7 +216,24 @@ async fn assert_integrity(service: &RedisSessionService) {
     common::integrity_contract::assert_event_order_contract(service, &app).await;
     common::integrity_contract::assert_nul_round_trip_contract(service, &app).await;
     common::integrity_contract::assert_list_order_contract(service, &app).await;
-    common::integrity_contract::assert_rewind_unsupported(service, &app).await;
+    common::integrity_contract::assert_rewind_contract(service, &app).await;
+}
+
+#[tokio::test]
+#[ignore = "requires a Redis server at REDIS_URL"]
+async fn redis_standalone_history_contract() {
+    common::history_contract::assert_history_contract(
+        &standalone().await,
+        &run_app("history:{app}"),
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires a Redis Cluster at REDIS_CLUSTER_NODES"]
+async fn redis_cluster_history_contract() {
+    common::history_contract::assert_history_contract(&cluster().await, &run_app("history:{app}"))
+        .await;
 }
 
 #[tokio::test]

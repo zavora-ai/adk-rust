@@ -69,6 +69,7 @@ Autonomous agents that do vertically integrated tasks well, demonstrating:
 | Harness UI (one decision contract rendered by the console, web client, ACP, AG-UI and notifiers) | 🚧 | Designed — see [`docs/design/spec-3.3-harness-ui.md`](docs/design/spec-3.3-harness-ui.md); builds on specs 3.1 and 3.2 |
 | Self-improving harness (opt-in maintenance loop: defect mining, sealed gate, signed bot PRs, supervised patch upgrades) | 🚧 | Designed — see [`docs/design/spec-3.4-self-improving-harness.md`](docs/design/spec-3.4-self-improving-harness.md); Experimental, off by default |
 | AWP 2.0 and `adk-website` (signed static sites with an agent front door, run by a multi-agent team for every kind of site) | 🚧 | `awp-types` and `adk-awp` (Beta) and `adk-site`, `adk-drivers` and `adk-website` (Experimental) implement [`docs/design/spec-3.5-agentic-web.md`](docs/design/spec-3.5-agentic-web.md) except the items under its [Remaining work](docs/design/spec-3.5-agentic-web.md#remaining-work); the product story is [`docs/design/awp-2.0-overview.md`](docs/design/awp-2.0-overview.md) |
+| Vision (`adk-vision`: local-first detection, segmentation, OCR and embeddings; cloud reasoning behind a privacy guardrail; per-image and per-frame budgets; Document desk, Inspector and Screen copilot) | 🚧 | Designed — see [`docs/design/spec-3.7-vision.md`](docs/design/spec-3.7-vision.md); phases A (foundation) to D (spatial); Experimental |
 
 ### What's Shipped in Q2 2026
 

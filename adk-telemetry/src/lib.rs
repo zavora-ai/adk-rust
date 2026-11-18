@@ -9,7 +9,7 @@
 //! - In-process span retention for the server's debug endpoints ([`AdkSpanExporter`])
 //! - SQLite span export (`sqlite` feature) and Google Cloud export (`gcp` feature)
 //! - Automatic context propagation
-//! - OTel GenAI Semantic Conventions (v1.41.0) via `genai-semconv` feature (enabled by default)
+//! - OpenTelemetry GenAI semantic conventions (the `semantic-conventions-genai` repository) via the `genai-semconv` feature (enabled by default)
 //!
 //! ## Usage
 //!
@@ -45,8 +45,7 @@ pub mod gcp;
 #[cfg(feature = "genai-semconv")]
 pub mod semconv;
 
-// Content event configuration (feature-gated)
-#[cfg(feature = "genai-semconv")]
+// Content capture configuration, read by every crate that records GenAI content
 pub mod config;
 
 // Content event emitter (feature-gated)

@@ -46,7 +46,9 @@ use super::client::SandboxClient;
 use super::manifest::{Manifest, ManifestEntry};
 use super::path_safety::validate_relative_path;
 use super::session::SandboxSession;
-use super::types::{DirEntry, EntryType, ExecOutput, SessionHandle, SnapshotId};
+use super::types::{
+    ClientCapabilities, DirEntry, EntryType, ExecOutput, SessionHandle, SnapshotId,
+};
 use crate::SandboxError;
 
 /// The workspace root directory inside Docker containers.
@@ -904,6 +906,16 @@ impl SandboxClient for DockerClient {
         sessions.insert(session_id, container_id);
 
         Ok(handle)
+    }
+
+    fn provider(&self) -> &str {
+        "docker"
+    }
+
+    fn capabilities(&self) -> ClientCapabilities {
+        ClientCapabilities::default()
+            .with_snapshot(true)
+            .with_network_blocked(self.network_mode == "none")
     }
 }
 

@@ -14,6 +14,7 @@ Provider-native tools are declared through the normal `Tool` API, so you can mix
 | `UrlContextTool` | Gemini URL grounding | Summarize or reason over live URLs |
 | `GoogleMapsTool` | Gemini Google Maps grounding | Places, routes, and local context |
 | `GeminiCodeExecutionTool` | Gemini native code execution | Server-side Python execution |
+| `AnthropicAdvisorTool` | Claude's advisor tool (`advisor_20260301`, beta) | The executor consults a stronger Claude model inside the request; see [Anthropic](../models/anthropic.md#advisor-tool) |
 | `WebSearchTool` | Anthropic native web search | Claude server-side web search; `with_dynamic_filtering()` declares `web_search_20260209`, and `with_allowed_callers(["direct"])` turns its dynamic filtering off |
 | `OpenAIWebSearchTool` | OpenAI Responses web search | OpenAI-hosted retrieval |
 | `DeepSeekWebSearchTool` | DeepSeek Responses web search | DeepSeek server-side search with `deepseek-v4-pro` on `OpenAIResponsesClient` at `https://api.deepseek.com` |

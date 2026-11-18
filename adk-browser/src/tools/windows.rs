@@ -97,6 +97,16 @@ impl NewTabTool {
         self.policy.allowed_schemes = schemes.into_iter().map(Into::into).collect();
         self
     }
+
+    /// Opens the optional `url` only when it already appeared in the conversation's
+    /// `sources`. Off by default.
+    ///
+    /// See [`NavigateTool::with_url_provenance`](crate::tools::NavigateTool::with_url_provenance).
+    #[must_use]
+    pub fn with_url_provenance(mut self, sources: Option<adk_core::egress::UrlSources>) -> Self {
+        self.policy.url_sources = sources;
+        self
+    }
 }
 
 #[async_trait]
@@ -121,9 +131,10 @@ impl Tool for NewTabTool {
         }))
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let url = args.get("url").and_then(|v| v.as_str());
         if let Some(url) = url {
+            self.policy.check_in_context(url, ctx.as_ref())?;
             self.policy.check(url).await?;
         }
 
@@ -195,6 +206,16 @@ impl NewWindowTool {
         self.policy.allowed_schemes = schemes.into_iter().map(Into::into).collect();
         self
     }
+
+    /// Opens the optional `url` only when it already appeared in the conversation's
+    /// `sources`. Off by default.
+    ///
+    /// See [`NavigateTool::with_url_provenance`](crate::tools::NavigateTool::with_url_provenance).
+    #[must_use]
+    pub fn with_url_provenance(mut self, sources: Option<adk_core::egress::UrlSources>) -> Self {
+        self.policy.url_sources = sources;
+        self
+    }
 }
 
 #[async_trait]
@@ -219,9 +240,10 @@ impl Tool for NewWindowTool {
         }))
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let url = args.get("url").and_then(|v| v.as_str());
         if let Some(url) = url {
+            self.policy.check_in_context(url, ctx.as_ref())?;
             self.policy.check(url).await?;
         }
 

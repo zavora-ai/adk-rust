@@ -1546,8 +1546,15 @@ impl Runner {
             }
 
             // Run the agent with instrumentation (ADK-Go style attributes)
+            // The GenAI `invoke_agent` span of an in-process agent; the tracing name and the
+            // `gcp.vertex.agent.*` fields stay for the in-process debug exporter.
             let agent_span = tracing::info_span!(
                 "agent.execute",
+                otel.name = %format!("invoke_agent {}", agent_to_run.name()),
+                otel.kind = "internal",
+                "gen_ai.operation.name" = "invoke_agent",
+                "gen_ai.agent.name" = %agent_to_run.name(),
+                "gen_ai.agent.description" = tracing::field::Empty,
                 "gcp.vertex.agent.invocation_id" = ctx.invocation_id(),
                 "gcp.vertex.agent.session_id" = ctx.session_id(),
                 "gcp.vertex.agent.event_id" = ctx.invocation_id(), // Use invocation_id as event_id for agent spans
@@ -1561,6 +1568,9 @@ impl Runner {
 
             if let Some(user) = &telemetry_user_id {
                 agent_span.record("adk.user_id", user.as_str());
+            }
+            if !agent_to_run.description().is_empty() {
+                agent_span.record("gen_ai.agent.description", agent_to_run.description());
             }
 
             let mut agent_stream = match agent_to_run.run(ctx.clone()).instrument(agent_span.clone()).await {

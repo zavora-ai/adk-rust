@@ -70,14 +70,16 @@
 //! Every operation validates its identifiers (non-empty, at most
 //! [`MAX_ID_LEN`](adk_core::identity::MAX_ID_LEN) bytes, no NUL) before it sends a command.
 
+use crate::history::{HistoryOutcome, ImportSessionRequest, RewriteHistoryRequest, SessionHistory};
 use crate::service::{
-    session_already_exists, session_id_not_found, session_not_found_for, validate_scope,
-    validate_session_id,
+    identity_not_found, session_already_exists, session_id_not_found, session_not_found_for,
+    validate_scope, validate_session_id,
 };
 use crate::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
     ListRequest, Session, SessionService, State, state_utils,
 };
+use adk_core::identity::AdkIdentity;
 use adk_core::{ErrorCategory, ErrorComponent, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -418,6 +420,51 @@ end
 return 1
 ";
 
+/// Replaces a session's events and session-tier state in one atomic step while the session
+/// still holds what the rewrite was planned from.
+///
+/// `KEYS`: session hash, events sorted set. `ARGV`: the `state` and `updated_at` the session
+/// hash must still hold and the event count the set must still hold, the replacement `state`
+/// and `updated_at`, then a score and member for each event. Returns `1` when applied, `0` when
+/// the session changed since it was read, and `-1` when the session does not exist.
+const REWRITE_HISTORY_SCRIPT: &str = r"
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return -1
+end
+if (redis.call('HGET', KEYS[1], 'state') or '') ~= ARGV[1]
+  or (redis.call('HGET', KEYS[1], 'updated_at') or '') ~= ARGV[2]
+  or redis.call('ZCARD', KEYS[2]) ~= tonumber(ARGV[3]) then
+  return 0
+end
+redis.call('DEL', KEYS[2])
+for index = 6, #ARGV, 2 do
+  redis.call('ZADD', KEYS[2], ARGV[index], ARGV[index + 1])
+end
+redis.call('HSET', KEYS[1], 'state', ARGV[4], 'updated_at', ARGV[5])
+return 1
+";
+
+/// Writes a session hash and its events unless the session exists, replacing any events left
+/// under its key. `KEYS`: session hash, events sorted set. `ARGV`: the hash field count and
+/// field/value pairs, then a score and member for each event. Returns `1` when written and `0`
+/// when the session already exists.
+const IMPORT_SESSION_SCRIPT: &str = r"
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  return 0
+end
+redis.call('DEL', KEYS[2])
+local fields = tonumber(ARGV[1])
+local index = 2
+for _ = 1, fields do
+  redis.call('HSET', KEYS[1], ARGV[index], ARGV[index + 1])
+  index = index + 2
+end
+for event = index, #ARGV, 2 do
+  redis.call('ZADD', KEYS[2], ARGV[event], ARGV[event + 1])
+end
+return 1
+";
+
 /// Creates a session in one atomic step on a standalone server, writing nothing when the
 /// session hash exists.
 ///
@@ -625,6 +672,19 @@ where
     Ok(())
 }
 
+/// A session's history with the stored values a rewrite checks before it writes.
+struct StoredHistory {
+    history: SessionHistory,
+    /// Each decoded event's stored member, by event ID.
+    members: HashMap<String, String>,
+    /// The session hash's `state` field as stored.
+    state_field: String,
+    /// The session hash's `updated_at` field as stored.
+    updated_at_field: String,
+    /// How many members the events set holds, including ones that no longer decode.
+    stored_events: usize,
+}
+
 /// Redis-backed session service.
 ///
 /// Stores sessions using Redis hashes, events as sorted sets scored by
@@ -711,6 +771,58 @@ impl RedisSessionService {
                 })?;
         }
         Ok(())
+    }
+
+    /// Reads the history of `identity` with the stored forms a rewrite checks and keeps.
+    async fn read_history(&self, identity: &AdkIdentity) -> Result<StoredHistory> {
+        let (app, user, session) =
+            (identity.app_name.as_ref(), identity.user_id.as_ref(), identity.session_id.as_ref());
+        let layout = self.layout;
+        let raw: HashMap<String, String> = self
+            .client
+            .hgetall(layout.session(app, user, session))
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis hgetall failed: {e}")))?;
+        if raw.is_empty() {
+            return Err(identity_not_found(identity));
+        }
+        let state_field = raw.get("state").cloned().unwrap_or_default();
+        let updated_at_field = raw.get("updated_at").cloned().unwrap_or_default();
+        let stored: HashMap<String, Value> = serde_json::from_str(&state_field).unwrap_or_default();
+        // Hashes written by earlier releases also hold a copy of the app and user tiers.
+        let (_, _, state) = state_utils::extract_state_deltas(&stored);
+        let initial_state = raw.get("initial_state").and_then(|s| serde_json::from_str(s).ok());
+
+        let raw_events: Vec<(String, f64)> = self
+            .client
+            .zrange(layout.events(app, user, session), 0, -1, None, false, None, true)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis zrange failed: {e}")))?;
+        let stored_events = raw_events.len();
+        let mut members = HashMap::new();
+        let mut events = Vec::with_capacity(raw_events.len());
+        for (member, _score) in raw_events {
+            match serde_json::from_str::<Event>(&member) {
+                Ok(event) => {
+                    members.insert(event.id.clone(), member);
+                    events.push(event);
+                }
+                Err(error) => tracing::warn!(
+                    session.id = %session,
+                    error = %error,
+                    "skipping stored event that failed to deserialize"
+                ),
+            }
+        }
+        // Scores are append order; a stable sort keeps it among equal timestamps, as `get` does.
+        events.sort_by_key(|event| event.timestamp);
+        Ok(StoredHistory {
+            history: SessionHistory::new(events, state, initial_state),
+            members,
+            state_field,
+            updated_at_field,
+            stored_events,
+        })
     }
 
     /// Read a hash as `HashMap<String, Value>` (JSON values stored as strings).
@@ -943,6 +1055,7 @@ impl SessionService for RedisSessionService {
                 ("app_name".into(), req.app_name.clone()),
                 ("user_id".into(), req.user_id.clone()),
                 ("session_id".into(), session_id.clone()),
+                ("initial_state".into(), state_json.clone()),
                 ("state".into(), state_json),
                 ("created_at".into(), now.to_rfc3339()),
                 ("updated_at".into(), now.to_rfc3339()),
@@ -1230,6 +1343,182 @@ impl SessionService for RedisSessionService {
     }
 
     #[instrument(skip_all)]
+    async fn history(&self, identity: &AdkIdentity) -> Result<SessionHistory> {
+        Ok(self.read_history(identity).await?.history)
+    }
+
+    async fn rewrite_history(&self, req: RewriteHistoryRequest) -> Result<HistoryOutcome> {
+        let identity = &req.identity;
+        let (app, user, session) =
+            (identity.app_name.as_ref(), identity.user_id.as_ref(), identity.session_id.as_ref());
+        let layout = self.layout;
+        let session_k = layout.session(app, user, session);
+        let events_k = layout.events(app, user, session);
+
+        for _ in 0..MAX_STATE_WRITE_ATTEMPTS {
+            let read = self.read_history(identity).await?;
+            let rewritten =
+                read.history.rewrite(identity, &req.rewrite, req.expected_version.as_deref())?;
+            let state_json = serde_json::to_string(&rewritten.state)
+                .map_err(|e| adk_core::AdkError::session(format!("serialize state failed: {e}")))?;
+            let now = Utc::now();
+            let mut args = vec![
+                read.state_field.clone(),
+                read.updated_at_field.clone(),
+                read.stored_events.to_string(),
+                state_json,
+                now.to_rfc3339(),
+            ];
+            // Unchanged events keep their stored form; events that no longer decode are
+            // dropped, as reads already skip them.
+            for (index, event) in rewritten.events.iter().enumerate() {
+                let member = match read.members.get(&event.id) {
+                    Some(member) if !rewritten.change.replaced.contains(&event.id) => {
+                        member.clone()
+                    }
+                    _ => serde_json::to_string(event).map_err(|e| {
+                        adk_core::AdkError::session(format!("serialize failed: {e}"))
+                    })?,
+                };
+                args.push((index + 1).to_string());
+                args.push(member);
+            }
+            let outcome: i64 = self
+                .client
+                .eval(REWRITE_HISTORY_SCRIPT, vec![session_k.clone(), events_k.clone()], args)
+                .await
+                .map_err(|e| adk_core::AdkError::session(format!("redis eval failed: {e}")))?;
+            match outcome {
+                1 => {
+                    let _: () = self
+                        .client
+                        .zadd(
+                            layout.updated_index(app, user),
+                            None,
+                            None,
+                            false,
+                            false,
+                            (now.timestamp_micros() as f64, session),
+                        )
+                        .await
+                        .map_err(|e| {
+                            adk_core::AdkError::session(format!("redis zadd failed: {e}"))
+                        })?;
+                    self.apply_ttl(&session_k, &events_k).await?;
+                    let app_state = self.read_state_hash(&layout.app_state(app)).await?;
+                    let user_state = self.read_state_hash(&layout.user_state(app, user)).await?;
+                    let session = Box::new(RedisSession {
+                        app_name: app.to_string(),
+                        user_id: user.to_string(),
+                        session_id: session.to_string(),
+                        state: state_utils::merge_states(&app_state, &user_state, &rewritten.state),
+                        events: rewritten.events,
+                        updated_at: now,
+                    });
+                    return Ok(HistoryOutcome::new(session, rewritten.change));
+                }
+                -1 => return Err(identity_not_found(identity)),
+                _ => continue,
+            }
+        }
+        Err(adk_core::AdkError::new(
+            ErrorComponent::Session,
+            ErrorCategory::Unavailable,
+            "session.redis.state_contention",
+            format!(
+                "session '{session}' changed on each of {MAX_STATE_WRITE_ATTEMPTS} rewrite \
+                 attempts; retry the rewrite"
+            ),
+        ))
+    }
+
+    async fn import_session(&self, req: ImportSessionRequest) -> Result<Box<dyn Session>> {
+        let identity = &req.identity;
+        let (app, user, session) =
+            (identity.app_name.as_ref(), identity.user_id.as_ref(), identity.session_id.as_ref());
+        let layout = self.layout;
+        let (_, _, state) = state_utils::extract_state_deltas(&req.state);
+        let (_, _, initial_state) = state_utils::extract_state_deltas(&req.initial_state);
+        let encode = |state: &HashMap<String, Value>| {
+            serde_json::to_string(state)
+                .map_err(|e| adk_core::AdkError::session(format!("serialize state failed: {e}")))
+        };
+        let updated_at = req.events.last().map_or_else(Utc::now, |event| event.timestamp);
+        let session_k = layout.session(app, user, session);
+        let events_k = layout.events(app, user, session);
+
+        let exists: bool = self
+            .client
+            .exists(&session_k)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis exists failed: {e}")))?;
+        if exists {
+            return Err(session_already_exists(app, user, session));
+        }
+        // Index entries first: until the session hash exists, reads skip them.
+        let _: () = self
+            .client
+            .sadd(layout.index(app, user), session)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis sadd failed: {e}")))?;
+        let _: () = self
+            .client
+            .zadd(
+                layout.updated_index(app, user),
+                None,
+                None,
+                false,
+                false,
+                (updated_at.timestamp_micros() as f64, session),
+            )
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis zadd failed: {e}")))?;
+        let _: () = self
+            .client
+            .set(layout.lookup(session), lookup_value(app, user), None, None, false)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis set failed: {e}")))?;
+
+        let fields = vec![
+            ("app_name".to_string(), app.to_string()),
+            ("user_id".to_string(), user.to_string()),
+            ("session_id".to_string(), session.to_string()),
+            ("state".to_string(), encode(&state)?),
+            ("initial_state".to_string(), encode(&initial_state)?),
+            ("created_at".to_string(), Utc::now().to_rfc3339()),
+            ("updated_at".to_string(), updated_at.to_rfc3339()),
+        ];
+        let mut args = Vec::new();
+        push_fields(&mut args, fields);
+        for (index, event) in req.events.iter().enumerate() {
+            args.push((index + 1).to_string());
+            args.push(
+                serde_json::to_string(event)
+                    .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?,
+            );
+        }
+        let created: i64 = self
+            .client
+            .eval(IMPORT_SESSION_SCRIPT, vec![session_k.clone(), events_k.clone()], args)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("redis eval failed: {e}")))?;
+        if created != 1 {
+            return Err(session_already_exists(app, user, session));
+        }
+        self.apply_ttl(&session_k, &events_k).await?;
+
+        let app_state = self.read_state_hash(&layout.app_state(app)).await?;
+        let user_state = self.read_state_hash(&layout.user_state(app, user)).await?;
+        Ok(Box::new(RedisSession {
+            app_name: app.to_string(),
+            user_id: user.to_string(),
+            session_id: session.to_string(),
+            state: state_utils::merge_states(&app_state, &user_state, &state),
+            events: req.events,
+            updated_at,
+        }))
+    }
+
     async fn health_check(&self) -> Result<()> {
         let _: String = self
             .client

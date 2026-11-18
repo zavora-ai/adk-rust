@@ -163,14 +163,14 @@ async fn a_2_3_postgres_database_upgrades() {
     let service = PostgresSessionService::from_pool(pool.clone());
     service.migrate().await.expect("migrate");
     service.migrate().await.expect("migrate is idempotent");
-    assert_eq!(service.schema_version().await.expect("schema version"), 2);
+    assert_eq!(service.schema_version().await.expect("schema version"), 3);
     assert_upgraded(&service).await;
     let registry: Vec<i64> =
         sqlx::query_scalar("SELECT version FROM _adk_session_migrations ORDER BY version")
             .fetch_all(&pool)
             .await
             .expect("read registry");
-    assert_eq!(registry, [1, 2]);
+    assert_eq!(registry, [1, 2, 3]);
 
     pool.close().await;
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP DATABASE {database} WITH (FORCE)")))

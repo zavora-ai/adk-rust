@@ -80,6 +80,9 @@ impl Default for StructuredJudgeConfig {
 ///
 /// Tries function calling first (via response schema), then falls back
 /// to prompting for JSON output with a lenient parser.
+///
+/// Calls meter against the current [`ModelCallScope`](adk_core::ModelCallScope), as
+/// [`LlmJudge`](crate::LlmJudge) calls do.
 pub struct StructuredJudge {
     model: Arc<dyn Llm>,
     config: StructuredJudgeConfig,
@@ -244,16 +247,21 @@ Example response:
 
     /// Collect all text from an LLM response stream.
     async fn collect_response(&self, request: LlmRequest) -> Result<String> {
-        let mut stream = self
-            .model
-            .generate_content(request, false)
-            .await
-            .map_err(|e| EvalError::JudgeError(format!("LLM judge call failed: {e}")))?;
+        // Metered against the current scope, as `LlmJudge` calls are.
+        let mut stream =
+            adk_core::generate_metered(self.model.as_ref(), request, false).await.map_err(|e| {
+                EvalError::from_model_error(e, |e| {
+                    EvalError::JudgeError(format!("LLM judge call failed: {e}"))
+                })
+            })?;
 
         let mut response_text = String::new();
         while let Some(result) = stream.next().await {
-            let response =
-                result.map_err(|e| EvalError::JudgeError(format!("LLM response error: {e}")))?;
+            let response = result.map_err(|e| {
+                EvalError::from_model_error(e, |e| {
+                    EvalError::JudgeError(format!("LLM response error: {e}"))
+                })
+            })?;
             if let Some(content) = &response.content {
                 for part in &content.parts {
                     if let Some(text) = part.text() {

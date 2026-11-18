@@ -266,9 +266,11 @@ pub fn suggester_ceiling<'a>(
     };
     let shell = match shell {
         None => ShellAccess::None,
-        Some(IsolationStatus::OsSandbox { .. } | IsolationStatus::Container { .. }) => {
-            ShellAccess::Sandboxed
-        }
+        Some(
+            IsolationStatus::OsSandbox { .. }
+            | IsolationStatus::Container { .. }
+            | IsolationStatus::Remote { off_host: true, .. },
+        ) => ShellAccess::Sandboxed,
         Some(_) => ShellAccess::Host,
     };
     let web = if has("web_fetch") || has("web_search") { WebAccess::Any } else { WebAccess::None };

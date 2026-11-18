@@ -320,10 +320,40 @@ pub async fn assert_list_order_contract(service: &dyn SessionService, app_name: 
     service.delete_all_sessions(app_name, &user).await.expect("delete all");
 }
 
+/// Whether two users of one app can hold sessions with the same ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdScope {
+    /// A session ID names one session per user, as most backends key sessions.
+    PerUser,
+    /// A session ID names one session per app; Firestore refuses a second user's create.
+    PerApp,
+}
+
+impl IdScope {
+    /// The session `user` holds under `shared`: the same ID for every user where the backend
+    /// allows it.
+    pub fn session(self, shared: &str, user: &str) -> String {
+        match self {
+            Self::PerUser => shared.to_string(),
+            Self::PerApp => format!("{shared}-{user}"),
+        }
+    }
+}
+
 /// Rewind changes only the session the identity names, keeps the state the session was
 /// created with, and reports typed errors.
 pub async fn assert_rewind_contract(service: &dyn SessionService, app_name: &str) {
-    let shared = unique("shared");
+    assert_rewind_contract_scoped(service, app_name, IdScope::PerUser).await;
+}
+
+/// [`assert_rewind_contract`] on a backend whose session IDs have `scope`.
+pub async fn assert_rewind_contract_scoped(
+    service: &dyn SessionService,
+    app_name: &str,
+    scope: IdScope,
+) {
+    let shared_id = unique("shared");
+    let session = |user: &str| scope.session(&shared_id, user);
     let at = Utc::now().trunc_subsecs(6);
     let mut event_ids = HashMap::new();
     for user in ["alice", "bob"] {
@@ -331,7 +361,7 @@ pub async fn assert_rewind_contract(service: &dyn SessionService, app_name: &str
             service,
             app_name,
             user,
-            &shared,
+            &session(user),
             state(&[("owner", json!(user)), ("tier", json!("gold"))]),
         )
         .await
@@ -343,15 +373,15 @@ pub async fn assert_rewind_contract(service: &dyn SessionService, app_name: &str
                 &[("step", json!(n)), ("tier", json!("silver"))],
             );
             ids.push(event.id.clone());
-            append(service, app_name, user, &shared, event).await;
+            append(service, app_name, user, &session(user), event).await;
         }
         event_ids.insert(user, ids);
     }
 
-    let bob = identity(app_name, "bob", &shared);
+    let bob = identity(app_name, "bob", &session("bob"));
     let rewound = service.rewind_steps(&bob, 1).await.expect("rewind bob");
     assert_eq!((rewound.user_id(), rewound.events().len()), ("bob", 2));
-    let alice = get(service, app_name, "alice", &shared).await;
+    let alice = get(service, app_name, "alice", &session("alice")).await;
     assert_eq!(
         (alice.events().len(), alice.state().get("owner"), alice.state().get("step")),
         (3, Some(json!("alice")), Some(json!(2))),
@@ -365,7 +395,7 @@ pub async fn assert_rewind_contract(service: &dyn SessionService, app_name: &str
         (1, Some(json!(0)), Some(json!("silver")))
     );
     let emptied = service.rewind_steps(&bob, 1).await.expect("rewind bob's last event");
-    let reread = get(service, app_name, "bob", &shared).await;
+    let reread = get(service, app_name, "bob", &session("bob")).await;
     for session in [emptied.as_ref(), reread.as_ref()] {
         assert_eq!(
             (
@@ -379,11 +409,12 @@ pub async fn assert_rewind_contract(service: &dyn SessionService, app_name: &str
         );
     }
 
-    let unchanged = service.rewind_steps(&identity(app_name, "alice", &shared), 0).await.unwrap();
+    let unchanged =
+        service.rewind_steps(&identity(app_name, "alice", &session("alice")), 0).await.unwrap();
     assert_eq!(unchanged.events().len(), 3, "zero steps changes nothing");
 
     let too_many = service
-        .rewind_steps(&identity(app_name, "alice", &shared), 4)
+        .rewind_steps(&identity(app_name, "alice", &session("alice")), 4)
         .await
         .err()
         .expect("more steps than events must fail");
@@ -392,7 +423,7 @@ pub async fn assert_rewind_contract(service: &dyn SessionService, app_name: &str
         (ErrorCategory::InvalidInput, "session.rewind.too_many_steps")
     );
     let foreign_event = service
-        .rewind(&identity(app_name, "alice", &shared), &event_ids["bob"][1])
+        .rewind(&identity(app_name, "alice", &session("alice")), &event_ids["bob"][1])
         .await
         .err()
         .expect("another session's event is not a rewind target");
@@ -401,27 +432,13 @@ pub async fn assert_rewind_contract(service: &dyn SessionService, app_name: &str
         (ErrorCategory::NotFound, "session.event_not_found")
     );
     let missing = service
-        .rewind_steps(&identity(app_name, "carol", &shared), 1)
+        .rewind_steps(&identity(app_name, "carol", &session("carol")), 1)
         .await
         .err()
         .expect("a missing session cannot be rewound");
     assert_eq!((missing.category, missing.code), (ErrorCategory::NotFound, "session.not_found"));
-    assert_eq!(get(service, app_name, "alice", &shared).await.events().len(), 3);
+    assert_eq!(get(service, app_name, "alice", &session("alice")).await.events().len(), 3);
 
-    delete(service, app_name, "alice", &shared).await;
-    delete(service, app_name, "bob", &shared).await;
-}
-
-/// A backend without rewind reports it as `Unsupported`.
-pub async fn assert_rewind_unsupported(service: &dyn SessionService, app_name: &str) {
-    let target = identity(app_name, "user", "session");
-    for error in
-        [service.rewind(&target, "event").await.err(), service.rewind_steps(&target, 1).await.err()]
-    {
-        let error = error.expect("rewind must fail on this backend");
-        assert_eq!(
-            (error.category, error.code),
-            (ErrorCategory::Unsupported, "session.rewind.unsupported")
-        );
-    }
+    delete(service, app_name, "alice", &session("alice")).await;
+    delete(service, app_name, "bob", &session("bob")).await;
 }

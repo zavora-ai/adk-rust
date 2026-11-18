@@ -290,6 +290,41 @@ What a declaration does not cover:
 - Governed graph nodes and native realtime handlers declare nothing, so a run egress policy
   refuses them.
 
+## URL provenance
+
+An egress policy decides which hosts a call may reach; it cannot tell a URL the user gave from
+one a model composed to carry data to an admitted host. `ContextUrls` answers that: it collects
+the URLs a conversation's sources hold, and a fetch tool admits only those.
+
+```rust
+use adk_core::Content;
+use adk_core::egress::{ContextUrls, UrlSources};
+
+fn main() {
+    let history = [
+        Content::new("user").with_text("Summarize https://docs.example.com/guide"),
+        Content::new("model").with_text("Fetching https://collect.example/?k=secret"),
+    ];
+    let urls = ContextUrls::collect(&history, &UrlSources::default());
+    assert!(urls.contains("https://docs.example.com/guide"));
+    assert!(!urls.contains("https://docs.example.com/guide?k=secret"));
+    assert!(!urls.contains("https://collect.example/?k=secret"));
+}
+```
+
+| Source | Counts |
+|--------|--------|
+| User-role text, file references and embedded resources | `UrlSources::user_input` |
+| Tool results, by tool name | `UrlSources::tool_results`: `All`, `None`, `Only(..)` or `Except(..)` |
+| Model text, thinking, tool calls; the system instruction | Never |
+
+Two URLs match when they are equal after `normalize_url`: scheme and host lowercased, default
+port dropped, dot segments resolved, fragment removed; the query and path are compared
+exactly. `ContextUrls::from_tool_context` reads a call's session history on its branch and the
+invocation's user message. The harness `web_fetch` and browser navigation apply it under
+`WebConfig::url_provenance` ([URL provenance](../harness/web-and-mcp.md#url-provenance)), and
+`adk-browser`'s `BrowserToolset::with_url_provenance` outside the harness.
+
 ## Limits
 
 - **Not data-loss prevention.** An admitted host receives whatever is sent to it.

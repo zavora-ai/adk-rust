@@ -39,7 +39,10 @@ pub(super) fn preserve(message: &Message) -> Option<Part> {
 /// Returns `None`, so the caller converts the ADK parts instead, when the turn
 /// carries no native copy or when the copy no longer matches the parts: a
 /// guardrail or callback that rewrote the text must not fail later requests.
-pub(super) fn restore(content: &Content) -> Option<Vec<ContentBlock>> {
+pub(super) fn restore(
+    content: &Content,
+    forms: super::toolsets::ToolsetForms,
+) -> Option<Vec<ContentBlock>> {
     let mut saved = content.parts.iter().filter_map(|part| match part {
         Part::ServerToolResponse { server_tool_response }
             if server_tool_response["type"] == KIND =>
@@ -92,8 +95,9 @@ pub(super) fn restore(content: &Content) -> Option<Vec<ContentBlock>> {
             _ => None,
         });
         let Some((name, args)) = current else { return false };
-        tool.name.clone_from(name);
-        tool.input.clone_from(args);
+        let mut rebuilt = super::toolsets::tool_use_from_call(tool.id.clone(), name, args, forms);
+        rebuilt.cache_control = tool.cache_control.take();
+        *tool = rebuilt;
         true
     });
     Some(blocks)
