@@ -406,10 +406,12 @@ pub mod keys {
         format!("run:{pid}:{state}")
     }
 
-    /// `budget:<partition>:<UTC day>`: the partition's budget replenished on that day
-    /// (spec 3.2 §7.9), at most one wake per partition and day.
-    pub fn budget(partition: &str, day: chrono::NaiveDate) -> String {
-        format!("budget:{partition}:{day}")
+    /// `budget:<partition>:<UTC day>:<asleep>`: the partition's budget has room on that day
+    /// for the processes asleep on it, `asleep` a tag of those processes and their claims
+    /// (spec 3.2 §7.9). One wake goes out per partition, day and set of sleepers, so work held
+    /// again after a wake, by a new day's spend or a cap raised twice in a day, gets its own.
+    pub fn budget(partition: &str, day: chrono::NaiveDate, asleep: &str) -> String {
+        format!("budget:{partition}:{day}:{asleep}")
     }
 }
 
@@ -2414,7 +2416,7 @@ mod tests {
         let any = [
             cron_tick("0 0 2 * * *", false),
             event("hook:github", "hook:github:msg_1", json!({})),
-            event("budget", "budget:default:2026-10-23", json!({"partition": "default"})),
+            event("budget", "budget:default:2026-10-23:a1", json!({"partition": "default"})),
             event("manual", "manual:run-1", json!({})),
         ];
         for wake in [Wake::At(Utc::now()), Wake::Manual] {
@@ -2426,10 +2428,10 @@ mod tests {
     fn a_budget_wake_matches_its_partitions_replenishment_only() {
         let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap();
         let wake = Wake::BudgetReplenished { partition: PartitionId::new("work") };
-        let work = event("budget", &keys::budget("work", day), json!({"partition": "work"}));
-        let home = event("budget", &keys::budget("home", day), json!({"partition": "home"}));
+        let work = event("budget", &keys::budget("work", day, "a1"), json!({"partition": "work"}));
+        let home = event("budget", &keys::budget("home", day, "a1"), json!({"partition": "home"}));
         let forged = event("hook:x", "hook:x:1", json!({"partition": "work"}));
-        assert_eq!(keys::budget("work", day), "budget:work:2026-10-23");
+        assert_eq!(keys::budget("work", day, "a1"), "budget:work:2026-10-23:a1");
         assert!(wake_matches(&wake, &work));
         assert!(!wake_matches(&wake, &home));
         assert!(!wake_matches(&wake, &forged), "only the kernel's budget events match");

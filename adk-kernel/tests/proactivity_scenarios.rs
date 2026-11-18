@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use adk_agent::LlmAgentBuilder;
+use adk_core::audit_log::AuditActor;
 use adk_core::principal::SubjectRef;
 use adk_core::{
     ApprovalAction, ApprovalDecision, ApprovalService, Clock, DurableRunStore, GovernanceControl,
@@ -20,9 +21,9 @@ use adk_core::{
 };
 use adk_kernel::{
     AGENDA_TOOL_NAME, AgendaItem, AgendaOrigin, AgendaState, AgendaStateKind, Kernel, KernelConfig,
-    KernelError, KernelEvent, PartitionId, PartitionMode, ProactivityPolicy, ProcessFilter,
-    ProcessKind, ProcessSpec, ProcessStore, ProposalOutcome, QueueClass, Quotas, SpendDelta,
-    Suspension, Wake,
+    KernelError, KernelEvent, Partition, PartitionId, PartitionMode, ProactivityPolicy,
+    ProcessFilter, ProcessKind, ProcessSpec, ProcessStore, ProposalOutcome, QueueClass, Quotas,
+    SpendDelta, Suspension, Wake,
 };
 use adk_model::ScriptedResponse;
 use adk_runner::Runner;
@@ -436,7 +437,10 @@ async fn k4_in_auto_it_runs_after_quiet_hours_within_the_daily_budget() {
     assert_eq!(world.model_calls(), 2);
     let key = format!("budget:default:{}", clock.now().date_naive());
     let wakes = world.runs.list(RunFilter::default().queue(QueueClass::MAINTENANCE)).await.unwrap();
-    assert!(wakes.iter().any(|run| run.idempotency_key.as_deref() == Some(key.as_str())), "{key}");
+    assert!(
+        wakes.iter().any(|run| run.idempotency_key.as_deref().is_some_and(|k| k.starts_with(&key))),
+        "{key}"
+    );
     kernel.stop().await.unwrap();
 }
 
@@ -595,6 +599,139 @@ async fn the_daily_proactive_token_cap_refuses_proposals_and_holds_proactive_wor
     in_state(&world.runs, &tick.meta.pid, RunState::Completed).await;
     assert_eq!(world.model_calls(), 2);
     kernel.stop().await.unwrap();
+}
+
+/// A background goal spawned on the scenario's kernel, once admission holds it for the
+/// budget and it parked.
+async fn held_for_budget(kernel: &Kernel, text: &str, kind: ProcessKind) -> String {
+    let pid = kernel
+        .processes()
+        .spawn(run_on(QueueClass::Background, text), ProcessSpec::new(kind))
+        .await
+        .unwrap()
+        .meta
+        .pid;
+    eventually("the process held for the budget", || async {
+        let process = kernel.processes().get(&pid).await.ok().flatten()?;
+        let label = process.meta.labels.get("kernel.admission").map(String::as_str);
+        (process.run.state == RunState::Waiting && label == Some("budget")).then_some(())
+    })
+    .await;
+    pid
+}
+
+/// The `kernel.wake` runs of the budget wakes `day` sent to the default partition.
+async fn budget_wakes(runs: &Arc<dyn DurableRunStore>, day: chrono::NaiveDate) -> usize {
+    let key = format!("budget:default:{day}");
+    let wakes = runs.list(RunFilter::default().queue(QueueClass::MAINTENANCE)).await.unwrap();
+    wakes
+        .iter()
+        .filter(|run| run.idempotency_key.as_deref().is_some_and(|k| k.starts_with(&key)))
+        .count()
+}
+
+/// A partition's daily spend cap raised in its record, without the control plane, releases
+/// the work it held at the next tick; raised again the same day, it releases the work held
+/// since, which the day's first budget wake does not cover (spec 3.2 §7.9).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cap_raised_twice_in_a_day_releases_held_work_each_time() {
+    let today = Utc::now().date_naive();
+    let clock = ManualClock::new(Utc.from_utc_datetime(&today.and_hms_opt(12, 0, 0).unwrap()));
+    let mut world = World::new(vec![
+        ScriptedResponse::text("Ran under the first raise."),
+        ScriptedResponse::text("Ran under the second raise."),
+    ]);
+    world.runs = Arc::new(InMemoryRunStore::new().with_clock(Arc::new(clock.clone())));
+    let control = GovernanceControl::new();
+    let config = config(&control, Arc::new(clock.clone()));
+    let kernel = kernel(&world, &control, config, None, Arc::new(HeldStep(Arc::default())));
+    kernel.start().await.unwrap();
+    let partition = PartitionId::default();
+    let capped = |cap| {
+        Partition::new("default", "default").with_quotas(Quotas::new().with_daily_spend_cap(cap))
+    };
+    kernel.partitions().put(capped(1_000), AuditActor::default()).await.unwrap();
+    world.processes.add_spend("earlier", &partition, today, SpendDelta::new(1_000)).await.unwrap();
+
+    for (n, raised) in [(1, 2_000), (2, 3_000)] {
+        let pid = held_for_budget(&kernel, "tidy the inbox", ProcessKind::Goal).await;
+        assert_eq!(world.model_calls(), n - 1, "held work makes no model call");
+        kernel.partitions().put(capped(raised), AuditActor::default()).await.unwrap();
+        in_state(&world.runs, &pid, RunState::Completed).await;
+        assert_eq!(world.model_calls(), n, "the raise to {raised} released it once");
+        assert_eq!(budget_wakes(&world.runs, today).await, n);
+        world.processes.add_spend(&pid, &partition, today, SpendDelta::new(1_000)).await.unwrap();
+    }
+    kernel.stop().await.unwrap();
+}
+
+/// A daily spend cap removed from a partition's record releases the work it held at the
+/// next tick, though no cap is left to replenish (spec 3.2 §7.9).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cap_removed_from_its_partition_releases_held_work() {
+    let today = Utc::now().date_naive();
+    let clock = ManualClock::new(Utc.from_utc_datetime(&today.and_hms_opt(12, 0, 0).unwrap()));
+    let mut world = World::new(vec![ScriptedResponse::text("Ran once the cap was gone.")]);
+    world.runs = Arc::new(InMemoryRunStore::new().with_clock(Arc::new(clock.clone())));
+    let control = GovernanceControl::new();
+    let config = config(&control, Arc::new(clock.clone()));
+    let kernel = kernel(&world, &control, config, None, Arc::new(HeldStep(Arc::default())));
+    kernel.start().await.unwrap();
+    let partition = PartitionId::default();
+    let area = Partition::new("default", "default");
+    let capped = area.clone().with_quotas(Quotas::new().with_daily_spend_cap(1_000));
+    kernel.partitions().put(capped, AuditActor::default()).await.unwrap();
+    world.processes.add_spend("earlier", &partition, today, SpendDelta::new(1_000)).await.unwrap();
+    let pid = held_for_budget(&kernel, "tidy the inbox", ProcessKind::Goal).await;
+
+    kernel.partitions().put(area, AuditActor::default()).await.unwrap();
+    in_state(&world.runs, &pid, RunState::Completed).await;
+    assert_eq!(world.model_calls(), 1);
+    assert_eq!(budget_wakes(&world.runs, today).await, 1);
+    kernel.stop().await.unwrap();
+}
+
+/// The kernel's own daily spend cap and its daily proactive budget, lifted across a restart,
+/// release the background and proactive work they held (spec 3.2 §7.9).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn caps_lifted_across_a_restart_release_held_work() {
+    let today = Utc::now().date_naive();
+    let clock = ManualClock::new(Utc.from_utc_datetime(&today.and_hms_opt(12, 0, 0).unwrap()));
+    let mut world = World::new(vec![
+        ScriptedResponse::text("Ran once the caps were gone."),
+        ScriptedResponse::text("Ran once the caps were gone."),
+    ]);
+    world.runs = Arc::new(InMemoryRunStore::new().with_clock(Arc::new(clock.clone())));
+    let control = GovernanceControl::new();
+    let partition = PartitionId::default();
+    // An earlier maintenance process spent the day's cap and used the day's proactive tokens.
+    let earlier = adk_kernel::ProcessMeta::new(
+        "earlier-tick",
+        QueueClass::Maintenance,
+        ProcessKind::Maintenance,
+    )
+    .with_partition(partition.clone());
+    world.processes.put(earlier).await.unwrap();
+    let spent = SpendDelta::new(1_000).with_model_calls(1).with_total_tokens(10);
+    world.processes.add_spend("earlier-tick", &partition, today, spent).await.unwrap();
+    let capped = config(&control, Arc::new(clock.clone()))
+        .with_quotas(Quotas::new().with_daily_spend_cap(1_000))
+        .with_proactivity(
+            ProactivityPolicy::default().with_daily_budget(RunBudget::new().max_total_tokens(10)),
+        );
+    let first = kernel(&world, &control, capped, None, Arc::new(HeldStep(Arc::default())));
+    first.start().await.unwrap();
+    let goal = held_for_budget(&first, "tidy the inbox", ProcessKind::Goal).await;
+    let tick = held_for_budget(&first, "consolidate", ProcessKind::Maintenance).await;
+    first.stop().await.unwrap();
+
+    let uncapped = config(&control, Arc::new(clock.clone()));
+    let second = kernel(&world, &control, uncapped, None, Arc::new(HeldStep(Arc::default())));
+    second.start().await.unwrap();
+    in_state(&world.runs, &goal, RunState::Completed).await;
+    in_state(&world.runs, &tick, RunState::Completed).await;
+    assert_eq!(world.model_calls(), 2);
+    second.stop().await.unwrap();
 }
 
 /// K-I23: an item the consolidation tick proposed waits for a person even in an Auto

@@ -29,13 +29,20 @@ that says why, and carries the label `kernel.admission`:
 
 | Held for | Wake set | Label | Woken |
 |---|---|---|---|
-| Quiet hours | `at` the end of the window | `quiet_hours` | By the scheduler tick when the window ends |
-| Budget | `budgetReplenished { partition }` | `budget` | When the partition's budget has room again: a new UTC day, or a raised cap |
+| Quiet hours | `at` the end of the window | `quiet_hours` | By the scheduler tick when the window ends, or at once when the area's quiet time or its partition record's window changes over the control plane |
+| Budget | `budgetReplenished { partition }` | `budget` | When the partition's budget has room again: a new UTC day, or a cap raised or removed. A change of the area's spending limit or of the partition record over the control plane wakes it at once; any other change — `Partitions::put`, the kernel's quotas or daily proactive budget at a restart — at the next scheduler tick |
+| Its agent's daily limit | `at` the next UTC midnight | `the agent's daily limit` | The next UTC day, or at once when the added agent's daily limit changes |
 | A slot | `manual` | `quota` | When a process of its partition parks or finishes; human turns first, then oldest first |
 
 An agenda item the kernel schedules during quiet hours is enqueued with `not_before` at the
 window's end, so its worker does not claim it until then. Admission runs again at every
-claim, so a process woken into a full partition or a spent budget sleeps again.
+claim, so a process woken into a full partition or a spent budget sleeps again. A held process
+is decided on again at whatever claim reaches it: a change wakes held work that is still on
+its way to park with a pending wake, and the claim the moment it parks admits it once.
+
+Each budget wake is one `kernel.wake` run keyed `budget:<partition>:<UTC day>:<asleep>`, where
+`asleep` tags the processes asleep on it and their claims: the work asleep now gets one wake,
+and work held again later the same day, after a second raise, gets its own.
 
 A preempted process shows `suspended: preempted by <pid>` and a `runFinished` wake set in
 `adk-rust ps`. It makes no further model call, so it stops counting against the quota at once;

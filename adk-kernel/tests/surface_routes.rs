@@ -252,6 +252,7 @@ struct Setup {
     consolidator: Option<Arc<dyn adk_kernel::Consolidator>>,
     /// The partition the kernel's own target, the primary agent, is bound to.
     primary_area: Option<&'static str>,
+    progress: Option<Arc<dyn adk_kernel::ProgressSource>>,
 }
 
 impl Default for Setup {
@@ -271,6 +272,7 @@ impl Default for Setup {
             drivers: None,
             consolidator: None,
             primary_area: None,
+            progress: None,
         }
     }
 }
@@ -325,6 +327,9 @@ impl Plane {
         }
         if let Some(consolidator) = setup.consolidator {
             builder = builder.consolidator("default", consolidator);
+        }
+        if let Some(progress) = setup.progress {
+            builder = builder.progress_source(progress);
         }
         let kernel = builder.build().unwrap();
         let plane = ControlPlane::start(&kernel).await.unwrap();
@@ -976,6 +981,118 @@ async fn a_changed_quiet_time_holds_proactive_work_at_its_next_step() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert_eq!(plane._world.model_calls(), calls + 1);
+    plane.kernel.stop().await.unwrap();
+}
+
+/// A progress source whose reading at a claim waits while it is closed. Admission has
+/// decided on the claimed process by then, so work it held stays on its way to park, its run
+/// `Running`, until the test opens it.
+struct Parking(tokio::sync::watch::Sender<bool>);
+
+impl Parking {
+    fn open() -> Arc<Self> {
+        Arc::new(Self(tokio::sync::watch::channel(true).0))
+    }
+
+    fn set_open(&self, open: bool) {
+        self.0.send_replace(open);
+    }
+}
+
+#[async_trait::async_trait]
+impl adk_kernel::ProgressSource for Parking {
+    async fn usage(
+        &self,
+        _: &adk_core::RunRecord,
+    ) -> adk_kernel::Result<Option<adk_kernel::RunUsage>> {
+        let _ = self.0.subscribe().wait_for(|open| *open).await;
+        Ok(None)
+    }
+}
+
+/// Waits until `pid` finished, for at most ten seconds.
+async fn finishes(plane: &Plane, pid: &str, what: &str) {
+    let started = tokio::time::Instant::now();
+    while !plane.kernel.processes().get(pid).await.unwrap().unwrap().run.state.is_terminal() {
+        assert!(started.elapsed() < Duration::from_secs(10), "{what}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// A limit lifted or raised while the work it held is still on its way to park releases
+/// that work once it parks, exactly once (spec 3.3 §10 K3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_limit_changed_while_held_work_parks_releases_it() {
+    for limit in [None, Some(5_000_000)] {
+        let parking = Parking::open();
+        let setup = Setup { agent: true, progress: Some(parking.clone()), ..Setup::default() };
+        let plane = Plane::start(setup).await;
+        plane.kernel.start().await.unwrap();
+        plane.operator().set_spending_limit("default", Some(0)).await.unwrap();
+        parking.set_open(false);
+        let goal = SpawnRequest::new(common::TARGET, json!({ "text": "tidy the inbox" }))
+            .with_queue(QueueClass::Background)
+            .with_kind(ProcessKind::Goal);
+        let (pid, labels) = admitted_labels(&plane, goal).await;
+        assert_eq!(labels.get("kernel.admission").map(String::as_str), Some("budget"));
+        let parking_run = plane.kernel.processes().get(&pid).await.unwrap().unwrap().run;
+        assert_eq!(parking_run.state, adk_core::RunState::Running, "still on its way to park");
+
+        plane.operator().set_spending_limit("default", limit).await.unwrap();
+        parking.set_open(true);
+        finishes(&plane, &pid, &format!("the held work runs once the limit is {limit:?}")).await;
+        assert_eq!(plane._world.model_calls(), 1, "it ran once");
+        plane.kernel.stop().await.unwrap();
+    }
+}
+
+/// Quiet time turned off while the work it held is still on its way to park releases that
+/// work once it parks, not when the old window ends (spec 3.3 §10 K3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn quiet_time_turned_off_while_held_work_parks_releases_it() {
+    let parking = Parking::open();
+    let setup = Setup {
+        config: KernelConfig::default().with_app_name(APP).with_quiet_hours(window_around_now()),
+        agent: true,
+        progress: Some(parking.clone()),
+        ..Setup::default()
+    };
+    let plane = Plane::start(setup).await;
+    plane.kernel.start().await.unwrap();
+    parking.set_open(false);
+    let suggestion = SpawnRequest::new(common::TARGET, json!({ "text": "pay the supplier" }))
+        .with_queue(QueueClass::Background)
+        .with_kind(ProcessKind::Proposed);
+    let (pid, labels) = admitted_labels(&plane, suggestion).await;
+    assert_eq!(labels.get("kernel.admission").map(String::as_str), Some("quiet_hours"));
+    let parking_run = plane.kernel.processes().get(&pid).await.unwrap().unwrap().run;
+    assert_eq!(parking_run.state, adk_core::RunState::Running, "still on its way to park");
+
+    plane.operator().set_quiet_time("default", None).await.unwrap();
+    parking.set_open(true);
+    finishes(&plane, &pid, "the held work runs once quiet time is off").await;
+    assert_eq!(plane._world.model_calls(), 1, "it ran once");
+    plane.kernel.stop().await.unwrap();
+}
+
+/// A quiet window removed from the area's partition record over the control plane releases
+/// the work it held at once, as a changed setting does, not when the old window ends (spec
+/// 3.2 §7.8, spec 3.3 §10 K3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_quiet_window_removed_from_the_partition_releases_held_work() {
+    let plane = Plane::start(Setup { agent: true, ..Setup::default() }).await;
+    let area = || adk_kernel::Partition::new("default", "default");
+    plane.operator().put_partition(&area().with_quiet_hours(window_around_now())).await.unwrap();
+    plane.kernel.start().await.unwrap();
+    let suggestion = SpawnRequest::new(common::TARGET, json!({ "text": "pay the supplier" }))
+        .with_queue(QueueClass::Background)
+        .with_kind(ProcessKind::Proposed);
+    let (pid, labels) = admitted_labels(&plane, suggestion).await;
+    assert_eq!(labels.get("kernel.admission").map(String::as_str), Some("quiet_hours"));
+
+    plane.operator().put_partition(&area()).await.unwrap();
+    finishes(&plane, &pid, "the held work runs once the partition has no quiet window").await;
+    assert_eq!(plane._world.model_calls(), 1, "it ran once");
     plane.kernel.stop().await.unwrap();
 }
 

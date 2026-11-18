@@ -1741,10 +1741,10 @@ fn spawn_maintenance(
                 sup.admit_waiters().await;
             }
             let today = sup.clock.now().date_naive();
-            for partition in sup.replenished_partitions().await {
+            for (partition, asleep) in sup.replenished_partitions().await {
                 let event = crate::wake::WakeEvent::new(
                     "budget",
-                    crate::wake::keys::budget(partition.as_str(), today),
+                    crate::wake::keys::budget(partition.as_str(), today, &asleep),
                     json!({ "partition": partition, "day": today }),
                 );
                 if let Err(error) = router.submit(&event, &sup.app_name).await {
