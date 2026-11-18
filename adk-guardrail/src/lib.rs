@@ -105,7 +105,7 @@ pub use error::{
 pub use executor::{GuardrailExecutor, GuardrailSet, Screening};
 #[cfg(feature = "model-armor")]
 pub use model_armor::{ModelArmor, ModelArmorGuardrail, ModelArmorToolGuardrail};
-pub use pii::{PiiRedactor, PiiType};
+pub use pii::{PiiMatch, PiiRedactor, PiiType};
 #[cfg(feature = "schema")]
 pub use schema::SchemaValidator;
 pub use tool::{

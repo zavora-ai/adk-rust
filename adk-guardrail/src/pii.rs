@@ -110,7 +110,36 @@ fn card_spans(runs: &Regex, text: &str) -> Vec<Range<usize>> {
     spans
 }
 
-/// PII detection and redaction guardrail
+/// One piece of personal data [`PiiRedactor::find`] located: its type and where it is.
+///
+/// # Example
+///
+/// ```
+/// use adk_guardrail::{PiiMatch, PiiRedactor, PiiType};
+///
+/// let text = "Mail ana@example.com";
+/// let found = PiiRedactor::new().find(text);
+/// assert_eq!(found, vec![PiiMatch { pii_type: PiiType::Email, range: 5..20 }]);
+/// assert_eq!(&text[found[0].range.clone()], "ana@example.com");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PiiMatch {
+    /// The type of personal data.
+    pub pii_type: PiiType,
+    /// The byte range in the text searched, on character boundaries.
+    pub range: Range<usize>,
+}
+
+/// PII detection and redaction guardrail.
+///
+/// [`redact`](Self::redact) replaces personal data in text, and [`find`](Self::find) reports
+/// where it is as byte ranges, so a caller holding positions for the text — the word boxes
+/// of a page read by OCR — can redact it elsewhere.
+///
+/// As a [`Guardrail`], it redacts [`Part::Text`] parts only: an image part passes through
+/// unchanged, whatever text it shows. Personal text in images is redacted by `adk-vision`'s
+/// `ImagePrivacyGuardrail`, which reads the image on the device and fills the boxes of the
+/// words these patterns match.
 pub struct PiiRedactor {
     patterns: Vec<(PiiType, Regex)>,
 }
@@ -150,6 +179,46 @@ impl PiiRedactor {
             types.iter().filter_map(|t| Regex::new(t.pattern()).ok().map(|r| (*t, r))).collect();
 
         Self { patterns }
+    }
+
+    /// Finds the personal data in `text`, in text order.
+    ///
+    /// Types are searched in the order the redactor was created with, and a match that
+    /// overlaps an earlier type's match is dropped, as [`redact`](Self::redact) would have
+    /// replaced that text already. Card numbers pass the Luhn check, as in `redact`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_guardrail::{PiiRedactor, PiiType};
+    ///
+    /// let text = "Call 555-123-4567 or pay with 4111 1111 1111 1111";
+    /// let found = PiiRedactor::new().find(text);
+    /// let kinds: Vec<_> = found.iter().map(|m| (m.pii_type, &text[m.range.clone()])).collect();
+    /// assert_eq!(
+    ///     kinds,
+    ///     vec![(PiiType::Phone, "555-123-4567"), (PiiType::CreditCard, "4111 1111 1111 1111")]
+    /// );
+    /// ```
+    pub fn find(&self, text: &str) -> Vec<PiiMatch> {
+        let mut found: Vec<PiiMatch> = Vec::new();
+        for (pii_type, regex) in &self.patterns {
+            let spans = match pii_type {
+                PiiType::CreditCard => card_spans(regex, text),
+                PiiType::Email | PiiType::Phone | PiiType::Ssn | PiiType::IpAddress => {
+                    regex.find_iter(text).map(|m| m.range()).collect()
+                }
+            };
+            for range in spans {
+                let overlaps =
+                    found.iter().any(|m| m.range.start < range.end && range.start < m.range.end);
+                if !overlaps {
+                    found.push(PiiMatch { pii_type: *pii_type, range });
+                }
+            }
+        }
+        found.sort_by_key(|m| (m.range.start, m.range.end));
+        found
     }
 
     /// Redacts PII from text, returning the redacted text and the types found.
@@ -250,6 +319,50 @@ mod tests {
         let (result, found) = redactor.redact("Call me at 555-123-4567");
         assert_eq!(result, "Call me at [PHONE REDACTED]");
         assert!(found.contains(&PiiType::Phone));
+    }
+
+    #[test]
+    fn find_reports_byte_ranges_in_the_original_text() {
+        let redactor = PiiRedactor::new();
+        let text = "Zoë: zoe@example.org, SSN 123-45-6789, card 4111-1111-1111-1111";
+        let found: Vec<(PiiType, &str)> =
+            redactor.find(text).into_iter().map(|m| (m.pii_type, &text[m.range])).collect();
+        assert_eq!(
+            found,
+            vec![
+                (PiiType::Email, "zoe@example.org"),
+                (PiiType::Ssn, "123-45-6789"),
+                (PiiType::CreditCard, "4111-1111-1111-1111"),
+            ]
+        );
+    }
+
+    #[test]
+    fn find_agrees_with_redact_on_what_is_personal() {
+        let redactor = PiiRedactor::new();
+        for text in [
+            "Contact me at test@example.com",
+            "Call me at 555-123-4567",
+            "Amex 3782 822463 10005, or 371449635398431.",
+            "Order 2026 1028 0042 7315, tracking 1234567890123456",
+            "nothing here",
+        ] {
+            let (_, redacted) = redactor.redact(text);
+            let redacted: std::collections::HashSet<PiiType> = redacted.into_iter().collect();
+            let found: std::collections::HashSet<PiiType> =
+                redactor.find(text).into_iter().map(|m| m.pii_type).collect();
+            assert_eq!(found, redacted, "{text}");
+        }
+    }
+
+    #[test]
+    fn find_keeps_the_earlier_type_on_overlap() {
+        // The phone pattern also matches the address's local part.
+        let text = "write 5551234567@example.com";
+        let found = PiiRedactor::with_types(&[PiiType::Email, PiiType::Phone]).find(text);
+        assert_eq!(found, vec![PiiMatch { pii_type: PiiType::Email, range: 6..28 }]);
+        let found = PiiRedactor::with_types(&[PiiType::Phone]).find(text);
+        assert_eq!(found, vec![PiiMatch { pii_type: PiiType::Phone, range: 6..16 }]);
     }
 
     #[test]

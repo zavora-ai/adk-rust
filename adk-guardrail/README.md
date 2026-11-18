@@ -189,6 +189,24 @@ Detects and redacts personally identifiable information:
   number that fails the check, such as an order number, passes unchanged
 - `IpAddress` → `[IP REDACTED]`
 
+`PiiRedactor::find` reports the same data as `PiiMatch`es — the type and the byte range in the
+original text — so a caller that holds positions for the text, such as the word boxes of a page
+read by OCR, can redact it there:
+
+```rust
+use adk_guardrail::{PiiRedactor, PiiType};
+
+let text = "Ana Diaz, ana@example.com";
+let found = PiiRedactor::new().find(text);
+assert_eq!(found[0].pii_type, PiiType::Email);
+assert_eq!(&text[found[0].range.clone()], "ana@example.com");
+```
+
+As a `Guardrail`, `PiiRedactor` redacts text parts only: an image part passes through unchanged,
+whatever text it shows. `adk-vision`'s `ImagePrivacyGuardrail` (feature `guardrail`) covers
+personal text in images: it reads the image on the device and fills the boxes of the words these
+patterns match.
+
 `PiiRedactor::new()` redacts every type except `IpAddress`. To redact IP addresses as well, name
 the types with `with_types`:
 
