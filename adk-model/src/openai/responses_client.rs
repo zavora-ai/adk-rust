@@ -1043,6 +1043,11 @@ impl Llm for OpenAIResponsesClient {
             .context_window(Some(self.provider_name()), self.name())
     }
 
+    // An Open Responses server at a loopback address keeps the request on this machine.
+    fn data_locality(&self) -> adk_core::DataLocality {
+        adk_core::DataLocality::of_url(&self.base_url)
+    }
+
     fn name(&self) -> &str {
         &self.model
     }

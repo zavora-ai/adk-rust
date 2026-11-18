@@ -212,6 +212,9 @@ impl Llm for OpenCodeClient {
     fn schema_adapter(&self) -> &dyn SchemaAdapter {
         self.inner.schema_adapter()
     }
+    fn data_locality(&self) -> adk_core::DataLocality {
+        self.inner.data_locality()
+    }
     async fn generate_content(
         &self,
         request: LlmRequest,

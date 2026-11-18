@@ -538,6 +538,11 @@ impl Llm for MistralRsAdapterModel {
         Some(0)
     }
 
+    // mistral.rs runs the model in this process.
+    fn data_locality(&self) -> adk_core::DataLocality {
+        adk_core::DataLocality::InProcess
+    }
+
     fn name(&self) -> &str {
         &self.name
     }

@@ -217,6 +217,11 @@ impl Llm for OpenAIClient {
         self.inner.context_window()
     }
 
+    // The tool route shares the configured base URL.
+    fn data_locality(&self) -> adk_core::DataLocality {
+        self.inner.data_locality()
+    }
+
     fn name(&self) -> &str {
         self.inner.name()
     }

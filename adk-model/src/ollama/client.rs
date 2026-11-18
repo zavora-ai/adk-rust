@@ -263,6 +263,15 @@ impl Llm for OllamaModel {
         &self.model_name
     }
 
+    // A local server forwards a cloud model (`…-cloud`) to ollama.com, as pricing assumes.
+    fn data_locality(&self) -> adk_core::DataLocality {
+        if self.model_name.contains("cloud") {
+            adk_core::DataLocality::Remote
+        } else {
+            adk_core::DataLocality::of_url(&self.config.host)
+        }
+    }
+
     // OllamaModel uses the default GenericSchemaAdapter from the Llm trait.
     // This explicit override documents the intentional adapter selection.
     fn schema_adapter(&self) -> &dyn SchemaAdapter {

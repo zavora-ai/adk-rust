@@ -183,6 +183,10 @@ mod at_effort {
         fn native_compaction(&self) -> Option<adk_core::NativeCompaction> {
             self.inner.native_compaction()
         }
+
+        fn data_locality(&self) -> adk_core::DataLocality {
+            self.inner.data_locality()
+        }
     }
 }
 

@@ -945,6 +945,12 @@ impl Llm for OpenAICompatible {
             .context_window(Some(&self.provider_name), self.name())
     }
 
+    // A server at a loopback address, such as vLLM or LM Studio on this machine, keeps the
+    // request on it.
+    fn data_locality(&self) -> adk_core::DataLocality {
+        adk_core::DataLocality::of_url(self.completion_url.as_deref().unwrap_or(&self.base_url))
+    }
+
     fn name(&self) -> &str {
         &self.model
     }
