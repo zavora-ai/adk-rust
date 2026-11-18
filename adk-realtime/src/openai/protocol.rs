@@ -197,6 +197,23 @@ pub(crate) fn convert_config_to_openai(config: &crate::config::RealtimeConfig) -
     session_config
 }
 
+/// The session object for a session attached to a SIP call: [`convert_config_to_openai`]
+/// without `audio.input.format` and `audio.output.format`, since the call fixes the media
+/// format. An `audio` object set explicitly through `RealtimeConfig::extra` is kept as is.
+pub(crate) fn call_session_config(config: &crate::config::RealtimeConfig) -> Value {
+    let mut session = convert_config_to_openai(config);
+    let explicit_audio = config.extra.as_ref().and_then(|extra| extra.get("audio")).is_some();
+    if !explicit_audio {
+        for direction in ["input", "output"] {
+            if let Some(Value::Object(audio)) = session.pointer_mut(&format!("/audio/{direction}"))
+            {
+                audio.remove("format");
+            }
+        }
+    }
+    session
+}
+
 /// The universal Protocol Handler wrapping any transport layer.
 pub struct OpenAIProtocolHandler<T: OpenAITransportLink> {
     pub transport: T,

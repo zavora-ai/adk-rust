@@ -1090,6 +1090,7 @@ dependencies = [
  "uuid 1.29.2",
  "webrtc-sys",
  "webrtc-sys-build",
+ "wiremock",
 ]
 
 [[package]]
