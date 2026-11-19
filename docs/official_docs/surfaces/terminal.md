@@ -81,6 +81,7 @@ after a stop is never one of them (S-I10). `adk-rust pair revoke` ends it.
 | `e` | Edit the call's arguments as JSON, then allow; policy checks the edited call again |
 | `n` | Deny, with an optional reason |
 | `?` | Details: the whole call and how it got here |
+| `o` | On a decision with images: opens it in the home (`TerminalSurface::home`); the box shows the full digest, what was covered and each region's box as text ([Approve with the Image](approve-with-image.md)) |
 | `Esc` | Never decides: closes the details or a view, and switches between answering by key and typing |
 
 The keys answer the oldest open decision of the shown thread. It is the one box drawn; the
