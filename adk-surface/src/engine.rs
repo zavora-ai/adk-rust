@@ -1569,10 +1569,6 @@ impl SurfaceEngine {
         self.transcript(caller, session).await
     }
 
-    /// Asks for `call`, a tool call the app from `app` asked for in `session` (spec 3.3 §6.1
-    /// `genui-apps`): held as the agent whose call showed the app, for the person's decision,
-    /// whose card says "The app from Weather asked" and never offers **Always allow**.
-    #[cfg(feature = "genui-apps")]
     /// Approves the waiting decision `decision_id` by the home's policy `policy` (spec 3.3
     /// §6.1 `genui-apps`, opt-in tiered consent the person set): decided as the person, the
     /// rule recorded as `surface.app.call_auto_approved` and on the decision, then resumed like
@@ -1605,6 +1601,10 @@ impl SurfaceEngine {
         Ok(())
     }
 
+    /// Asks for `call`, a tool call the app from `app` asked for in `session` (spec 3.3 §6.1
+    /// `genui-apps`): held as the agent whose call showed the app, for the person's decision,
+    /// whose card says "The app from Weather asked" and never offers **Always allow**.
+    #[cfg(feature = "genui-apps")]
     pub(crate) async fn ask_for_app_call(
         &self,
         caller: &Caller,
