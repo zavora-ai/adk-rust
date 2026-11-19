@@ -8,6 +8,7 @@
 //! | Tools | `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`, `vision_crop`, `vision_redact`, `vision_annotate` join the harness tools, so RBAC, hooks and the class registry cover them |
 //! | Classes | A call that stays on the device is `Read`. A call that sends an image off it is `External`: trusted read-only under an `allow` rule, otherwise held in Ask and Auto and denied in ReadOnly and Plan |
 //! | Egress rules | `.adk/vision.toml` in the workspace, or the operator's [`VisionPack::config`]. Faces and personal text are always redacted; a workspace file's `allow` rules count only when the operator trusts them ([`VisionPack::trust_workspace_rules`]) |
+//! | Redactors | The operator's [`VisionPack::redactor`]s; with feature `vision-local`, RF-DETR Nano for `faces` and PP-OCRv6 for `personal_text` for each required class none covers. A required class no redactor covers refuses every release |
 //! | Approvals | The toolset's egress policy joins the operator policy, so a rule that asks holds the call, and the held call carries the exact egress image as evidence |
 //! | Privacy guardrail | Every image in a request to a remote harness model is released through the same gate or replaced by a placeholder; no agent tool removes it |
 //! | Text | What `vision_read` and `vision_describe` return is screened and delivered inside a delimited untrusted block, as fetched text is (spec 3.7 V-I16) |
@@ -46,8 +47,25 @@ type RuntimeFactory =
 /// The vision pack: the governed vision tools under the harness policy, with the egress
 /// rules and the privacy guardrail (spec 3.7 X15).
 ///
-/// The application names its backends and redactors; the pack builds the egress gate from
-/// the rules, hands it and the media store to the runtime factory, and wires the rest.
+/// The application names its backends and, optionally, its redactors; the pack builds the
+/// egress gate from the rules, hands it and the media store to the runtime factory, and
+/// wires the rest.
+///
+/// # Default redactors
+///
+/// Every release redacts `faces` and `personal_text` (spec 3.7 Q1, Q3). For each of the two
+/// the rules require and no [`redactor`](Self::redactor) covers, the pack installs a default:
+///
+/// | Class | Feature `vision-local` | Without it |
+/// |-------|------------------------|------------|
+/// | `faces` | `PersonRedactor::rf_detr`: RF-DETR Nano covers each detected person | No redactor: every release is refused |
+/// | `personal_text` | `PersonalTextRedactor::pp_ocr` with PP-OCRv6 small and `PERSONAL_FIELD_LABELS` | No redactor: every release is refused |
+///
+/// The default backends load on their first release through the pack's `model_fetcher`
+/// (feature `vision-local`), each file verified against adk-vision's built-in manifest. A
+/// load that fails — `HF_HUB_OFFLINE` with the weights not cached, a digest mismatch —
+/// refuses that release. Either way the image does not leave unredacted; perception on the
+/// device is unaffected.
 ///
 /// # Example
 ///
@@ -78,6 +96,8 @@ pub struct VisionPack {
     recorder: Arc<dyn EgressRecorder>,
     model_hosts: Vec<String>,
     classes: (String, String),
+    #[cfg(feature = "vision-local")]
+    fetcher: Option<adk_vision::ModelFetcher>,
 }
 
 impl std::fmt::Debug for VisionPack {
@@ -109,13 +129,36 @@ impl VisionPack {
             recorder: Arc::new(InMemoryEgressRecorder::new()),
             model_hosts: Vec::new(),
             classes: ("document".to_string(), "document_crop".to_string()),
+            #[cfg(feature = "vision-local")]
+            fetcher: None,
         }
     }
 
     /// Installs an on-device redactor: `PersonRedactor` for faces, `PersonalTextRedactor`
-    /// for personal text. A class the rules require with no redactor refuses every release.
+    /// for personal text. A class covered here gets no default redactor; a class the rules
+    /// require that nothing covers refuses every release.
     pub fn redactor(mut self, redactor: Arc<dyn Redactor>) -> Self {
         self.redactors.push(redactor);
+        self
+    }
+
+    /// Fetches the default redactors' weights through `fetcher` instead of one built from
+    /// the environment (`HF_HUB_CACHE`, `HF_HUB_OFFLINE`, `HF_TOKEN`).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_vision::{FetchConfig, InMemoryAcceptanceStore, ModelFetcher};
+    ///
+    /// let config = FetchConfig::from_env().with_cache_dir("/var/lib/adk/models").with_offline(true);
+    /// let fetcher = ModelFetcher::new(config, Arc::new(InMemoryAcceptanceStore::new()));
+    /// # let _ = fetcher;
+    /// // VisionPack::new(store, factory).model_fetcher(fetcher)
+    /// ```
+    #[cfg(feature = "vision-local")]
+    pub fn model_fetcher(mut self, fetcher: adk_vision::ModelFetcher) -> Self {
+        self.fetcher = Some(fetcher);
         self
     }
 
@@ -165,9 +208,55 @@ impl VisionPack {
             Some(config) => config,
             None => load_vision_config(root, self.trust_workspace_rules)?,
         };
+        let uncovered: Vec<RedactionClass> =
+            [RedactionClass::faces(), RedactionClass::personal_text()]
+                .into_iter()
+                .filter(|class| config.egress.redact.contains(class))
+                .filter(|class| !self.redactors.iter().any(|r| &r.class() == class))
+                .collect();
+        #[cfg(feature = "vision-local")]
+        let defaults: Vec<Arc<dyn Redactor>> = {
+            let fetcher = self.fetcher.unwrap_or_else(|| {
+                adk_vision::ModelFetcher::new(
+                    adk_vision::FetchConfig::from_env(),
+                    Arc::new(adk_vision::InMemoryAcceptanceStore::new()),
+                )
+            });
+            uncovered
+                .into_iter()
+                .map(|class| -> Arc<dyn Redactor> {
+                    tracing::debug!(vision.redaction_class = %class, "vision pack installs its default redactor");
+                    if class == RedactionClass::faces() {
+                        Arc::new(adk_vision::PersonRedactor::rf_detr(fetcher.clone()))
+                    } else {
+                        Arc::new(
+                            adk_vision::PersonalTextRedactor::pp_ocr(
+                                fetcher.clone(),
+                                adk_vision::PpOcrV6Size::Small,
+                            )
+                            .with_labelled_fields(
+                                adk_vision::PERSONAL_FIELD_LABELS.iter().copied(),
+                            ),
+                        )
+                    }
+                })
+                .collect()
+        };
+        #[cfg(not(feature = "vision-local"))]
+        let defaults: Vec<Arc<dyn Redactor>> = {
+            for class in uncovered {
+                tracing::warn!(
+                    vision.redaction_class = %class,
+                    "no redactor covers a class the egress rules require, so every release is \
+                     refused; install one with VisionPack::redactor or enable adk-harness's \
+                     `vision-local` feature"
+                );
+            }
+            Vec::new()
+        };
         let mut gate = EgressGate::new(self.egress, config.egress, self.recorder)
             .with_media_store(self.store.clone());
-        for redactor in self.redactors {
+        for redactor in self.redactors.into_iter().chain(defaults) {
             gate = gate.with_redactor(redactor);
         }
         let gate = Arc::new(gate);

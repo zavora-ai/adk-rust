@@ -150,7 +150,8 @@ pub use geometry::{
 };
 #[cfg(feature = "guardrail")]
 pub use guardrail::{
-    GateOutcome, ImagePrivacyGuardrail, MODEL_CONTEXT_CLASS, PersonalTextRedactor,
+    GateOutcome, ImagePrivacyGuardrail, MODEL_CONTEXT_CLASS, PERSONAL_FIELD_LABELS,
+    PersonalTextRedactor,
 };
 pub use manifest::{
     AcceptanceStore, FileAcceptanceStore, InMemoryAcceptanceStore, InputSpec, IoSpec,
@@ -171,7 +172,7 @@ pub use nim_cv::{
 pub use ocr::{PpOcrReader, PpOcrV6Size};
 #[cfg(feature = "ocr-vl")]
 pub use ocr_vl::{PADDLEOCR_VL_MANIFEST, PP_DOCLAYOUT_MANIFEST, PaddleOcrVlReader, VlDevice};
-pub use redact::{PersonRedactor, REDACTION_MARGIN};
+pub use redact::{DEFAULT_PERSON_DETECTOR, PersonRedactor, REDACTION_MARGIN};
 pub use runtime::{
     CallOptions, CallRecord, Edited, Escalation, Route, Trigger, VisionOutput, VisionRuntime,
     VisionRuntimeBuilder,
