@@ -507,7 +507,13 @@ impl Projector {
             let heading = hint.chat_heading.clone().unwrap_or_else(|| chat_heading(request));
             (heading, None, call)
         } else {
-            let heading = hint.heading.clone().unwrap_or_else(|| (self.heading)(request));
+            // What an MCP server asks reads as its question ("MCP server billing asks: …"),
+            // the summary the harness wrote, not as the tool name it was parked under.
+            let asked = elicitation_server(&request.tool_name)
+                .map(|_| request.summary.trim())
+                .filter(|summary| !summary.is_empty())
+                .map(str::to_string);
+            let heading = hint.heading.clone().or(asked).unwrap_or_else(|| (self.heading)(request));
             (heading, self.kernel_summary(request, now), call_view(request))
         };
         let decided = self.decided(request, caller, answer);

@@ -636,6 +636,10 @@ async fn elicit(
         &call,
         ApprovalPolicy::new([ApproverSelector::group("owner")]).allow_self_approval(),
     )
+    .with_summary(format!(
+        "MCP server billing asks: {}",
+        shown["message"].as_str().unwrap_or_default()
+    ))
     .with_risk(ApprovalRisk::Medium)
     .with_redacted_args(shown)
     .with_allowed_actions(actions);
@@ -665,6 +669,7 @@ async fn an_mcp_servers_form_is_drawn_in_the_homes_fields_and_its_answer_checked
     .await;
 
     let card = home.engine.decision(&web(), &request.id).await.unwrap();
+    assert_eq!(card.heading, "MCP server billing asks: Which account should the invoice go to?");
     let Some(ElicitationView::Form { server, message, fields }) = &card.elicitation else {
         panic!("a form: {:?}", card.elicitation)
     };
