@@ -27,7 +27,7 @@ export function DecisionList({
           <li key={card.id}>
             <button
               type="button"
-              className={`mini-decision${card.media ? " mini-decision-image" : ""}`}
+              className={`mini-decision${card.media && !card.media.images[0]?.purged ? " mini-decision-image" : ""}`}
               onClick={() => onOpen(card)}
             >
               {/* A decision about an image shows it, small (spec 3.7 §8.2, board choice A10). */}

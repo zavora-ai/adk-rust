@@ -319,7 +319,7 @@ export function DecisionCard({
             <button
               key={option.answer}
               type="button"
-              className={buttonClass(option.answer)}
+              className={media?.notice && option.answer === "deny" ? "button button-secondary" : buttonClass(option.answer)}
               disabled={busy || (option.needsExpanded && !expanded)}
               onClick={click(option)}
               onKeyDown={enterNeverDecides}
