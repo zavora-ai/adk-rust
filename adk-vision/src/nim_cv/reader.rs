@@ -92,9 +92,15 @@ pub struct NimDocumentReader {
     client: CvClient,
     ocr: NimOcrModel,
     layout: bool,
+    min_layout_confidence: f32,
     tables: bool,
     charts: bool,
 }
+
+/// The default floor below which a page element is ignored: the page-element model also
+/// answers faint boxes (0.18 around a chart's axis label in the probe) that would split a
+/// block.
+pub const DEFAULT_MIN_LAYOUT_CONFIDENCE: f32 = 0.3;
 
 /// The default backend id.
 pub const NIM_READER_ID: &str = "nim-document-reader";
@@ -120,6 +126,7 @@ impl NimDocumentReader {
             client,
             ocr: NimOcrModel::NemotronOcrV1,
             layout: true,
+            min_layout_confidence: DEFAULT_MIN_LAYOUT_CONFIDENCE,
             tables: true,
             charts: true,
         };
@@ -169,6 +176,12 @@ impl NimDocumentReader {
     pub fn with_layout(mut self, on: bool) -> Self {
         self.layout = on;
         self.refresh_hosts();
+        self
+    }
+
+    /// Ignores page elements whose confidence is below `floor`.
+    pub fn with_min_layout_confidence(mut self, floor: f32) -> Self {
+        self.min_layout_confidence = floor;
         self
     }
 
@@ -332,6 +345,18 @@ fn holder(elements: &[Element], point: [f32; 2]) -> Option<usize> {
         .map(|(i, _)| i)
 }
 
+/// The label of the smallest chart element near `word`: one whose box, grown by half the
+/// word's height, holds the word's centre. The element model reads a crop and the OCR the
+/// page, so their boxes for one label differ by a few pixels.
+fn label_of(labels: &[Element], word: &BBox) -> Option<String> {
+    let reach = 0.5 * word.height();
+    labels
+        .iter()
+        .filter(|e| e.px.expanded(reach).contains(word.center()))
+        .min_by(|a, b| a.px.area().total_cmp(&b.px.area()))
+        .map(|e| e.class.clone())
+}
+
 /// Rows and columns of a table: each cell's index range among the sorted rows (columns)
 /// it overlaps by at least half its own height (width).
 fn spans(cell: &BBox, bands: &[BBox], vertical: bool) -> Option<(u32, u32)> {
@@ -448,7 +473,9 @@ impl DocumentReader<ReleasedImage> for NimDocumentReader {
                     let norm = norm_box(&b);
                     Element { px: to_px(&norm, size), norm, class, confidence: b.confidence }
                 })
-                .filter(|e| !e.px.is_empty())
+                .filter(|e| {
+                    !e.px.is_empty() && e.confidence.is_none_or(|c| c >= self.min_layout_confidence)
+                })
                 .collect(),
             None => Vec::new(),
         };
@@ -506,8 +533,7 @@ impl DocumentReader<ReleasedImage> for NimDocumentReader {
                         .iter()
                         .map(|p| {
                             let mut word = p.word();
-                            word.region.label =
-                                holder(&labels, p.px.center()).map(|i| labels[i].class.clone());
+                            word.region.label = label_of(&labels, &p.px);
                             word
                         })
                         .collect();

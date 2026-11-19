@@ -148,12 +148,16 @@ pub fn line_boxes(page: &DocumentPage) -> Vec<BBox> {
         } else {
             let mut words: Vec<BBox> =
                 block.words.iter().filter_map(|w| w.region.shape.bbox()).collect();
-            words.sort_by(|a, b| a.y0.total_cmp(&b.y0));
+            words.sort_by(|a, b| a.x0.total_cmp(&b.x0));
             let mut lines: Vec<BBox> = Vec::new();
             for w in words {
+                // Same line: overlapping vertically and within two heights horizontally,
+                // so table columns and chart labels stay apart.
                 let joined = lines.iter_mut().find(|l| {
                     let shared = l.y1.min(w.y1) - l.y0.max(w.y0);
+                    let gap = (w.x0 - l.x1).max(l.x0 - w.x1).max(0.0);
                     shared >= 0.5 * w.height().min(l.height())
+                        && gap <= 2.0 * w.height().max(l.height())
                 });
                 match joined {
                     Some(l) => {

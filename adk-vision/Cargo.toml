@@ -165,3 +165,11 @@ required-features = ["sam"]
 [[test]]
 name = "ocr_live_tests"
 required-features = ["ocr", "fetch", "conformance"]
+
+[[test]]
+name = "nim_contract_tests"
+required-features = ["nim", "conformance"]
+
+[[test]]
+name = "nim_live_tests"
+required-features = ["nim", "ocr", "fetch", "conformance"]

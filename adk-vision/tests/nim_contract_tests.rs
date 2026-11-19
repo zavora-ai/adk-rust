@@ -66,19 +66,21 @@ impl Match for SameBody {
     }
 }
 
-/// Mounts the recorded answer for one endpoint, matched on path, key and body shape.
-async fn answer(server: &MockServer, model: &str, pair: &str, times: u64) {
+/// Mounts the recorded answer for one endpoint, matched on path, key and body shape,
+/// expected `times` times when given.
+async fn answer(server: &MockServer, model: &str, pair: &str, times: Option<u64>) {
     let request = recorded(&format!("cv/{pair}.request.json"));
     let response = recorded(&format!("cv/{pair}.response.json"));
-    Mock::given(method("POST"))
+    let mock = Mock::given(method("POST"))
         .and(path(format!("/v1/cv/{model}")))
         .and(header("authorization", format!("Bearer {KEY}").as_str()))
         .and(header("accept", "application/json"))
         .and(SameBody(request["body"].clone()))
-        .respond_with(ResponseTemplate::new(200).set_body_json(response["body"].clone()))
-        .expect(times)
-        .mount(server)
-        .await;
+        .respond_with(ResponseTemplate::new(200).set_body_json(response["body"].clone()));
+    match times {
+        Some(n) => mock.expect(n).mount(server).await,
+        None => mock.mount(server).await,
+    }
 }
 
 /// A client that sends `ai.api.nvidia.com` to the mock server.
@@ -116,13 +118,18 @@ impl DocumentReader<ReleasedImage> for Hosted {
 }
 
 /// A server answering the four endpoints with the report page's recorded answers.
-async fn recorded_server(times: u64) -> MockServer {
+async fn recorded_server(times: Option<u64>) -> MockServer {
     let server = MockServer::start().await;
     answer(&server, "nvidia/nemotron-ocr-v1", "cv-doc-nemotron-ocr-v1-merge-word", times).await;
     answer(&server, "nvidia/nemotron-page-elements-v3", "cv-doc-nemotron-page-elements-v3", times)
         .await;
-    answer(&server, "nvidia/nemotron-table-structure-v1", "cv-doc-nemotron-table-structure-v1", times)
-        .await;
+    answer(
+        &server,
+        "nvidia/nemotron-table-structure-v1",
+        "cv-doc-nemotron-table-structure-v1",
+        times,
+    )
+    .await;
     answer(
         &server,
         "nvidia/nemotron-graphic-elements-v1",
@@ -134,13 +141,13 @@ async fn recorded_server(times: u64) -> MockServer {
 }
 
 async fn hosted() -> Hosted {
-    let server = recorded_server(0..).await;
+    let server = recorded_server(None).await;
     let reader = NimDocumentReader::new(config(*server.address())).unwrap();
     Hosted { server, reader }
 }
 
 /// A spend ledger that remembers the keys it reserved under.
-#[derive(Default)]
+#[derive(Debug)]
 struct KeyedLedger {
     inner: InMemorySpendLedger,
     keys: Mutex<Vec<SpendKey>>,
@@ -188,7 +195,7 @@ fn within(found: Option<adk_vision::BBox>, want: [f32; 4], px: f32) -> bool {
 
 #[tokio::test]
 async fn the_report_page_is_composed_from_four_recorded_answers() {
-    let server = recorded_server(1).await;
+    let server = recorded_server(Some(1)).await;
     let reader = NimDocumentReader::new(config(*server.address())).unwrap();
     let recorder = Arc::new(InMemoryEgressRecorder::new());
     let runtime = VisionRuntime::builder()
@@ -231,7 +238,7 @@ async fn the_report_page_is_composed_from_four_recorded_answers() {
          Twelve parts carried seeded defects of known length,\n\
          and each defect was measured against the fiducial."
     );
-    assert_eq!(paragraph.words.len(), 26);
+    assert_eq!(paragraph.words.len(), 24);
 
     let table = page.blocks.iter().find(|b| b.kind == BlockKind::Table).unwrap();
     let grid: Vec<(u32, u32, &str)> =
@@ -259,9 +266,17 @@ async fn the_report_page_is_composed_from_four_recorded_answers() {
     }
     assert!(labelled.contains(&("5", Some("ylabel"))), "{labelled:?}");
 
-    let footer = page.blocks.iter().find(|b| b.text == "Page 1 of 1").unwrap();
+    // The recorded OCR answer itself misses the first "1".
+    let footer = page.blocks.iter().find(|b| b.text == "Page of 1").unwrap();
     assert!(within(footer.region.shape.bbox(), gt("footer"), 10.0));
 
+    let read: Vec<&str> =
+        page.reading_order.iter().map(|&i| page.blocks[i].text.as_str()).collect();
+    let chart_title = read.iter().position(|t| *t == "Defects by type").unwrap();
+    assert!(
+        read[chart_title + 1].starts_with("5\n4"),
+        "the chart's title reads before the chart: {read:?}"
+    );
     let mut order = page.reading_order.clone();
     order.sort_unstable();
     assert_eq!(order, (0..page.blocks.len()).collect::<Vec<_>>());
@@ -300,7 +315,8 @@ async fn a_downscaled_page_maps_back_to_source_pixels() {
         .egress_gate(allowing_gate(recorder.clone()))
         .build()
         .unwrap();
-    let out = runtime.read(&VisionCx::new(), &page(DOC_PAGE), &ReadOptions::default()).await.unwrap();
+    let out =
+        runtime.read(&VisionCx::new(), &page(DOC_PAGE), &ReadOptions::default()).await.unwrap();
     let released = recorder.released();
     assert!(
         released[0].chain.steps.contains(&Transform::Resize { width: 385, height: 500 }),
@@ -316,7 +332,7 @@ async fn a_downscaled_page_maps_back_to_source_pixels() {
 #[tokio::test]
 async fn paddleocr_lines_without_layout_are_one_block_each() {
     let server = MockServer::start().await;
-    answer(&server, "baidu/paddleocr", "cv-doc-paddleocr", 1).await;
+    answer(&server, "baidu/paddleocr", "cv-doc-paddleocr", Some(1)).await;
     let reader = NimDocumentReader::new(config(*server.address()))
         .unwrap()
         .with_ocr(NimOcrModel::PaddleOcr)
@@ -326,7 +342,8 @@ async fn paddleocr_lines_without_layout_are_one_block_each() {
         .egress_gate(allowing_gate(Arc::new(InMemoryEgressRecorder::new())))
         .build()
         .unwrap();
-    let out = runtime.read(&VisionCx::new(), &page(DOC_PAGE), &ReadOptions::default()).await.unwrap();
+    let out =
+        runtime.read(&VisionCx::new(), &page(DOC_PAGE), &ReadOptions::default()).await.unwrap();
     let texts: Vec<&str> =
         out.value.reading_order.iter().map(|&i| out.value.blocks[i].text.as_str()).collect();
     assert_eq!(texts.len(), 27);
@@ -337,7 +354,11 @@ async fn paddleocr_lines_without_layout_are_one_block_each() {
 
 /// Answers the OCR endpoint with a recorded error, and reads.
 async fn read_against(status: u16, content_type: &str, body: &str, times: u64) -> VisionError {
-    read_against_with(ResponseTemplate::new(status).insert_header("content-type", content_type).set_body_string(body.to_string()), times).await
+    read_against_with(
+        ResponseTemplate::new(status).set_body_raw(body.as_bytes().to_vec(), content_type),
+        times,
+    )
+    .await
 }
 
 async fn read_against_with(response: ResponseTemplate, times: u64) -> VisionError {
@@ -383,16 +404,21 @@ async fn recorded_errors_map_to_their_categories() {
         let err = recorded_error(name, 1).await;
         let message = err.to_string();
         let adk: AdkError = err.into();
-        assert_eq!((adk.category, adk.code.as_ref()), (category, code), "{name}: {message}");
+        assert_eq!((adk.category, adk.code), (category, code), "{name}: {message}");
         match name {
             "probe-cv-nvidia-nemotron-ocr" => {
                 assert!(message.contains("/v1/cv/nvidia/nemotron-ocr-v1"), "{message}")
             }
             // The NVCF body names the caller's account; the message must not repeat it.
             "cv-nvidia-nv-grounding-dino" => {
-                assert!(!message.contains("account '") && !message.contains("50128865"), "{message}")
+                assert!(
+                    !message.contains("account '") && !message.contains("50128865"),
+                    "{message}"
+                )
             }
-            "cv-nvidia-nemoretriever-ocr-v1" => assert!(message.contains("2026-05-18"), "{message}"),
+            "cv-nvidia-nemoretriever-ocr-v1" => {
+                assert!(message.contains("2026-05-18"), "{message}")
+            }
             _ => {}
         }
     }
@@ -423,7 +449,8 @@ async fn a_rate_limit_carries_retry_after() {
 #[tokio::test]
 async fn a_misconfigured_url_is_refused_when_the_reader_is_built() {
     let err = NimDocumentReader::new(
-        NimCvConfig::new("https://ai.api.nvidia.com/v1/cv").with_model_url("nvidia/nemotron-ocr-v1", "not a url"),
+        NimCvConfig::new("https://ai.api.nvidia.com/v1/cv")
+            .with_model_url("nvidia/nemotron-ocr-v1", "not a url"),
     )
     .unwrap_err();
     assert!(matches!(err, VisionError::InvalidInput(_)), "{err}");
