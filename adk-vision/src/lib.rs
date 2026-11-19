@@ -23,6 +23,9 @@
 //! | `fetch` | `ModelFetcher`: Hugging Face downloads by revision, SHA-256 checked before load, `HF_HUB_OFFLINE` honoured |
 //! | `conformance` | `conformance`: the suite every backend runs, and its test macros |
 //! | `guardrail` | `ImagePrivacyGuardrail` on model calls, tool results and user input, and `PersonalTextRedactor` (OCR words matched by `adk-guardrail`'s PII patterns) |
+//! | `onnx` | [`onnx`]: RF-DETR, EfficientSAM, SAM 2.1 and SigLIP 2 on ONNX Runtime, the runtime downloaded at build time |
+//! | `onnx-dynamic` | The same backends against an onnxruntime library loaded from `ORT_DYLIB_PATH` |
+//! | `onnx-coreml`, `onnx-cuda` | The CoreML and CUDA execution providers for the `onnx` backends |
 //!
 //! [`VisionToolset`] — `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`,
 //! `vision_crop`, `vision_redact`, `vision_annotate` — is always built: each tool runs on
@@ -30,8 +33,8 @@
 //! evidence, and every call, release and edit writes its `vision.*` audit record
 //! ([`audit`]).
 //!
-//! Backends — `ort`, OCR, mistral.rs, the cloud providers, Meta `sam-3.1`, NVIDIA NIM — are
-//! features added by the workstreams that bring them.
+//! The other backends — OCR, mistral.rs, the cloud providers, Meta `sam-3.1`, NVIDIA NIM —
+//! are features added by the workstreams that bring them.
 //!
 //! # Example
 //!

@@ -283,6 +283,7 @@ an approval card can show the exact image; see [Governed Vision Tools](governed-
 
 - [Governed Vision Tools](governed-tools.md)
 - [Image Privacy](../security/image-privacy.md)
+- [Local ONNX backends](onnx.md)
 - [Egress control](../security/egress.md)
 - [Tool authorization](../security/tool-authorization.md)
 - [Artifacts](../artifacts/artifacts.md)
