@@ -157,6 +157,8 @@ pub fn openapi() -> Value {
     let genui_forms = schema_ref::<super::genui::FormsResponse>(&mut out);
     let app_open = schema_ref::<super::genui::AppOpen>(&mut out);
     let app_answer = schema_ref::<super::genui::AppAnswer>(&mut out);
+    let viewer = schema_ref::<crate::viewer::ViewerView>(&mut out);
+    let saved_example = schema_ref::<crate::viewer::SavedExample>(&mut out);
     let mut schemas = out.take_definitions(true);
 
     let mut input = generator(Contract::Deserialize);
@@ -176,6 +178,7 @@ pub fn openapi() -> Value {
     let preview_body = schema_ref::<crate::agents::AgentPreviewRequest>(&mut input);
     let app_request = schema_ref::<super::genui::AppRequest>(&mut input);
     let app_message = schema_ref::<super::genui::AppMessageRequest>(&mut input);
+    let example_body = schema_ref::<crate::viewer::LabelledExample>(&mut input);
     let surface_query = input.subschema_for::<SurfaceQuery>().to_value();
     for (name, schema) in input.take_definitions(true) {
         schemas.entry(name).or_insert(schema);
@@ -228,6 +231,67 @@ pub fn openapi() -> Value {
                 ok
             }),
         } }),
+    );
+    let image_param = json!({
+        "name": "image", "in": "path", "required": true,
+        "description": "A `sha256:` digest, or the name of an image the session holds",
+        "schema": { "type": "string" },
+    });
+    routes.insert(
+        with(paths::VISION_VIEW),
+        read(
+            "The annotated viewer of one image of a session (spec 3.7 §8.2, X12): every answer the vision tools gave for it, with each region's backend, frame and transform chain; for the session's owner",
+            json!([
+                path_param("session"),
+                image_param.clone(),
+                query("surface", "The surface asking", surface.clone()),
+                query("answer", "The answer to show, by its call; the newest otherwise", json!({ "type": "string" })),
+                query("compare", "A second answer to show beside it", json!({ "type": "string" })),
+            ]),
+            answer("The viewer", viewer),
+        ),
+    );
+    routes.insert(
+        with(paths::VISION_IMAGE),
+        json!({ "get": {
+            "summary": "One image of a session (spec 3.7 §8.3): the exact bytes whose digest the viewer shows, for the session's owner; never cached",
+            "parameters": [path_param("session"), image_param, query("surface", "The surface asking", surface.clone())],
+            "responses": errors({
+                let mut ok = Map::new();
+                ok.insert("200".into(), json!({
+                    "description": "The image",
+                    "content": {
+                        "image/png": { "schema": { "type": "string", "format": "binary" } },
+                        "image/jpeg": { "schema": { "type": "string", "format": "binary" } },
+                        "image/webp": { "schema": { "type": "string", "format": "binary" } }
+                    }
+                }));
+                ok
+            }),
+        } }),
+    );
+    routes.insert(
+        with(paths::VISION_REGIONS),
+        read(
+            "One answer's RegionSet, as `adk-vision/schema/region-set.json` publishes it, to save as a file (board choice V14); with `with`, both answers' sets in an array",
+            json!([
+                path_param("session"),
+                path_param("answer"),
+                query("surface", "The surface asking", surface.clone()),
+                query("with", "A second answer, exported beside it", json!({ "type": "string" })),
+            ]),
+            answer("The RegionSet, or an array of two", json!({ "type": ["object", "array"] })),
+        ),
+    );
+    routes.insert(
+        with(paths::VISION_EXAMPLES),
+        write(
+            "post",
+            "Save a labelled example from an answer (board choices V11–V13): an adk-eval case pointing at the image by path and digest, the image beside its file; the run's answer is unchanged and the example recorded. Not from a paired phone",
+            json!([path_param("session")]),
+            Some(example_body),
+            ("200", answer("Where it was saved", saved_example)),
+        ),
     );
     routes.insert(
         with(paths::THREAD),
