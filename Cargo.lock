@@ -358,6 +358,7 @@ dependencies = [
  "adk-surface",
  "adk-telemetry",
  "adk-tool",
+ "adk-vision",
  "adk-website",
  "anyhow",
  "async-trait",

@@ -1,0 +1,2207 @@
+{
+ "frame": "source pixels, origin top-left, x1/y1 exclusive",
+ "note": "Every personal field is invented; portraits are drawn shapes, not people.",
+ "pages": [
+  {
+   "file": "invoice-01.png",
+   "kind": "invoice",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "INV-4817",
+     "box": [
+      236,
+      58,
+      404,
+      87
+     ],
+     "personal": false
+    },
+    {
+     "name": "customer",
+     "value": "Bruno Ferreira",
+     "box": [
+      147,
+      187,
+      313,
+      206
+     ],
+     "personal": true
+    },
+    {
+     "name": "date",
+     "value": "2026-02-04",
+     "box": [
+      552,
+      145,
+      682,
+      164
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "239.50",
+     "box": [
+      562,
+      589,
+      639,
+      608
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Bruno Ferreira",
+    "bruno.ferreira@example.com"
+   ]
+  },
+  {
+   "file": "invoice-02.png",
+   "kind": "invoice",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "INV-4834",
+     "box": [
+      236,
+      58,
+      404,
+      87
+     ],
+     "personal": false
+    },
+    {
+     "name": "customer",
+     "value": "Chen Achieng",
+     "box": [
+      147,
+      187,
+      307,
+      211
+     ],
+     "personal": true
+    },
+    {
+     "name": "date",
+     "value": "2026-03-07",
+     "box": [
+      552,
+      145,
+      682,
+      164
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "298.00",
+     "box": [
+      562,
+      589,
+      639,
+      608
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Chen Achieng",
+    "chen.achieng@example.com"
+   ]
+  },
+  {
+   "file": "invoice-03.png",
+   "kind": "invoice",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "INV-4851",
+     "box": [
+      236,
+      58,
+      404,
+      87
+     ],
+     "personal": false
+    },
+    {
+     "name": "customer",
+     "value": "Dalia Ibeh",
+     "box": [
+      147,
+      187,
+      262,
+      206
+     ],
+     "personal": true
+    },
+    {
+     "name": "date",
+     "value": "2026-04-10",
+     "box": [
+      552,
+      145,
+      682,
+      164
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "230.50",
+     "box": [
+      562,
+      589,
+      639,
+      608
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Dalia Ibeh",
+    "dalia.ibeh@example.com"
+   ]
+  },
+  {
+   "file": "invoice-04.png",
+   "kind": "invoice",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "INV-4868",
+     "box": [
+      236,
+      58,
+      404,
+      87
+     ],
+     "personal": false
+    },
+    {
+     "name": "customer",
+     "value": "Emeka Sato",
+     "box": [
+      147,
+      187,
+      286,
+      206
+     ],
+     "personal": true
+    },
+    {
+     "name": "date",
+     "value": "2026-05-13",
+     "box": [
+      552,
+      145,
+      682,
+      164
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "157.00",
+     "box": [
+      562,
+      589,
+      639,
+      608
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Emeka Sato",
+    "emeka.sato@example.com"
+   ]
+  },
+  {
+   "file": "invoice-05.png",
+   "kind": "invoice",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "INV-4885",
+     "box": [
+      236,
+      58,
+      404,
+      87
+     ],
+     "personal": false
+    },
+    {
+     "name": "customer",
+     "value": "Farah Moreau",
+     "box": [
+      147,
+      187,
+      308,
+      206
+     ],
+     "personal": true
+    },
+    {
+     "name": "date",
+     "value": "2026-06-16",
+     "box": [
+      552,
+      145,
+      682,
+      164
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "347.50",
+     "box": [
+      580,
+      588,
+      702,
+      614
+     ],
+     "personal": false,
+     "hard": "handwriting"
+    }
+   ],
+   "personal": [
+    "Farah Moreau",
+    "farah.moreau@example.com"
+   ]
+  },
+  {
+   "file": "invoice-06.png",
+   "kind": "invoice",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "INV-4902",
+     "box": [
+      236,
+      58,
+      404,
+      87
+     ],
+     "personal": false
+    },
+    {
+     "name": "customer",
+     "value": "Goran Mensah",
+     "box": [
+      147,
+      187,
+      316,
+      206
+     ],
+     "personal": true
+    },
+    {
+     "name": "date",
+     "value": "2026-07-19",
+     "box": [
+      552,
+      145,
+      682,
+      164
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "194.00",
+     "box": [
+      562,
+      589,
+      639,
+      608
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Goran Mensah",
+    "goran.mensah@example.com"
+   ]
+  },
+  {
+   "file": "invoice-07.png",
+   "kind": "invoice",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "INV-4919",
+     "box": [
+      236,
+      58,
+      404,
+      87
+     ],
+     "personal": false
+    },
+    {
+     "name": "customer",
+     "value": "Hana Varga",
+     "box": [
+      147,
+      187,
+      283,
+      211
+     ],
+     "personal": true
+    },
+    {
+     "name": "date",
+     "value": "2026-08-22",
+     "box": [
+      552,
+      145,
+      682,
+      164
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "154.50",
+     "box": [
+      562,
+      589,
+      639,
+      608
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Hana Varga",
+    "hana.varga@example.com"
+   ]
+  },
+  {
+   "file": "invoice-08.png",
+   "kind": "invoice",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "INV-4936",
+     "box": [
+      236,
+      58,
+      404,
+      87
+     ],
+     "personal": false
+    },
+    {
+     "name": "customer",
+     "value": "Ivo Haddad",
+     "box": [
+      147,
+      187,
+      277,
+      206
+     ],
+     "personal": true
+    },
+    {
+     "name": "date",
+     "value": "2026-09-25",
+     "box": [
+      552,
+      145,
+      682,
+      164
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "229.00",
+     "box": [
+      562,
+      589,
+      639,
+      608
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Ivo Haddad",
+    "ivo.haddad@example.com"
+   ]
+  },
+  {
+   "file": "invoice-09.png",
+   "kind": "invoice",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "INV-4953",
+     "box": [
+      236,
+      58,
+      404,
+      87
+     ],
+     "personal": false
+    },
+    {
+     "name": "customer",
+     "value": "Juno Rossi",
+     "box": [
+      147,
+      187,
+      274,
+      206
+     ],
+     "personal": true
+    },
+    {
+     "name": "date",
+     "value": "2026-01-01",
+     "box": [
+      552,
+      145,
+      682,
+      164
+     ],
+     "personal": false,
+     "hard": "stamp"
+    },
+    {
+     "name": "total",
+     "value": "175.50",
+     "box": [
+      562,
+      589,
+      639,
+      608
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Juno Rossi",
+    "juno.rossi@example.com"
+   ]
+  },
+  {
+   "file": "invoice-10.png",
+   "kind": "invoice",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "INV-4970",
+     "box": [
+      236,
+      58,
+      404,
+      87
+     ],
+     "personal": false
+    },
+    {
+     "name": "customer",
+     "value": "Kofi Novak",
+     "box": [
+      147,
+      187,
+      271,
+      206
+     ],
+     "personal": true
+    },
+    {
+     "name": "date",
+     "value": "2026-02-04",
+     "box": [
+      552,
+      145,
+      682,
+      164
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "170.00",
+     "box": [
+      562,
+      589,
+      639,
+      608
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Kofi Novak",
+    "kofi.novak@example.com"
+   ]
+  },
+  {
+   "file": "invoice-11.png",
+   "kind": "invoice",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "INV-4987",
+     "box": [
+      236,
+      58,
+      404,
+      87
+     ],
+     "personal": false
+    },
+    {
+     "name": "customer",
+     "value": "Lena Brandt",
+     "box": [
+      147,
+      187,
+      286,
+      206
+     ],
+     "personal": true
+    },
+    {
+     "name": "date",
+     "value": "2026-03-07",
+     "box": [
+      552,
+      145,
+      682,
+      164
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "238.50",
+     "box": [
+      562,
+      589,
+      639,
+      608
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Lena Brandt",
+    "lena.brandt@example.com"
+   ]
+  },
+  {
+   "file": "invoice-12.png",
+   "kind": "invoice",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "INV-5004",
+     "box": [
+      236,
+      58,
+      404,
+      87
+     ],
+     "personal": false
+    },
+    {
+     "name": "customer",
+     "value": "Mateo Tanaka",
+     "box": [
+      147,
+      187,
+      310,
+      206
+     ],
+     "personal": true
+    },
+    {
+     "name": "date",
+     "value": "2026-04-10",
+     "box": [
+      552,
+      145,
+      682,
+      164
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "101.00",
+     "box": [
+      562,
+      589,
+      639,
+      608
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Mateo Tanaka",
+    "mateo.tanaka@example.com"
+   ]
+  },
+  {
+   "file": "receipt-01.png",
+   "kind": "receipt",
+   "width": 520,
+   "height": 820,
+   "fields": [
+    {
+     "name": "store",
+     "value": "Larch Street Market",
+     "box": [
+      40,
+      45,
+      280,
+      64
+     ],
+     "personal": false
+    },
+    {
+     "name": "date",
+     "value": "2026-02-06",
+     "box": [
+      112,
+      135,
+      242,
+      154
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "28.30",
+     "box": [
+      417.0,
+      437,
+      480.0,
+      456
+     ],
+     "personal": false
+    }
+   ],
+   "personal": []
+  },
+  {
+   "file": "receipt-02.png",
+   "kind": "receipt",
+   "width": 520,
+   "height": 820,
+   "fields": [
+    {
+     "name": "store",
+     "value": "Harbour Hardware",
+     "box": [
+      40,
+      45,
+      265,
+      64
+     ],
+     "personal": false
+    },
+    {
+     "name": "date",
+     "value": "2026-03-11",
+     "box": [
+      112,
+      135,
+      242,
+      154
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "35.30",
+     "box": [
+      417.0,
+      437,
+      480.0,
+      456
+     ],
+     "personal": false
+    }
+   ],
+   "personal": []
+  },
+  {
+   "file": "receipt-03.png",
+   "kind": "receipt",
+   "width": 520,
+   "height": 820,
+   "fields": [
+    {
+     "name": "store",
+     "value": "Copperleaf Books",
+     "box": [
+      40,
+      45,
+      261,
+      69
+     ],
+     "personal": false
+    },
+    {
+     "name": "date",
+     "value": "2026-04-16",
+     "box": [
+      112,
+      135,
+      242,
+      154
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "29.80",
+     "box": [
+      387.0,
+      433,
+      480.0,
+      464
+     ],
+     "personal": false,
+     "hard": "handwriting"
+    }
+   ],
+   "personal": []
+  },
+  {
+   "file": "receipt-04.png",
+   "kind": "receipt",
+   "width": 520,
+   "height": 820,
+   "fields": [
+    {
+     "name": "store",
+     "value": "Juniper Pharmacy",
+     "box": [
+      40,
+      45,
+      263,
+      69
+     ],
+     "personal": false
+    },
+    {
+     "name": "date",
+     "value": "2026-05-21",
+     "box": [
+      112,
+      135,
+      242,
+      154
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "24.30",
+     "box": [
+      417.0,
+      437,
+      480.0,
+      456
+     ],
+     "personal": false
+    }
+   ],
+   "personal": []
+  },
+  {
+   "file": "receipt-05.png",
+   "kind": "receipt",
+   "width": 520,
+   "height": 820,
+   "fields": [
+    {
+     "name": "store",
+     "value": "Northgate Bakery",
+     "box": [
+      40,
+      45,
+      256,
+      69
+     ],
+     "personal": false
+    },
+    {
+     "name": "date",
+     "value": "2026-06-26",
+     "box": [
+      112,
+      135,
+      242,
+      154
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "31.30",
+     "box": [
+      417.0,
+      437,
+      480.0,
+      456
+     ],
+     "personal": false
+    }
+   ],
+   "personal": []
+  },
+  {
+   "file": "receipt-06.png",
+   "kind": "receipt",
+   "width": 520,
+   "height": 820,
+   "fields": [
+    {
+     "name": "store",
+     "value": "Quayside Coffee",
+     "box": [
+      40,
+      45,
+      243,
+      69
+     ],
+     "personal": false
+    },
+    {
+     "name": "date",
+     "value": "2026-07-04",
+     "box": [
+      112,
+      135,
+      242,
+      154
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "25.80",
+     "box": [
+      417.0,
+      437,
+      480.0,
+      456
+     ],
+     "personal": false
+    }
+   ],
+   "personal": []
+  },
+  {
+   "file": "receipt-07.png",
+   "kind": "receipt",
+   "width": 520,
+   "height": 820,
+   "fields": [
+    {
+     "name": "store",
+     "value": "Willow Garden Supply",
+     "box": [
+      40,
+      45,
+      313,
+      69
+     ],
+     "personal": false
+    },
+    {
+     "name": "date",
+     "value": "2026-08-09",
+     "box": [
+      112,
+      135,
+      242,
+      154
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "32.80",
+     "box": [
+      386.0,
+      433,
+      480.0,
+      454
+     ],
+     "personal": false,
+     "hard": "handwriting"
+    }
+   ],
+   "personal": []
+  },
+  {
+   "file": "receipt-08.png",
+   "kind": "receipt",
+   "width": 520,
+   "height": 820,
+   "fields": [
+    {
+     "name": "store",
+     "value": "Redfern Stationers",
+     "box": [
+      40,
+      45,
+      271,
+      64
+     ],
+     "personal": false
+    },
+    {
+     "name": "date",
+     "value": "2026-09-14",
+     "box": [
+      112,
+      135,
+      242,
+      154
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "27.30",
+     "box": [
+      417.0,
+      437,
+      480.0,
+      456
+     ],
+     "personal": false
+    }
+   ],
+   "personal": []
+  },
+  {
+   "file": "receipt-09.png",
+   "kind": "receipt",
+   "width": 520,
+   "height": 820,
+   "fields": [
+    {
+     "name": "store",
+     "value": "Ember Grill",
+     "box": [
+      40,
+      45,
+      178,
+      64
+     ],
+     "personal": false
+    },
+    {
+     "name": "date",
+     "value": "2026-10-19",
+     "box": [
+      112,
+      135,
+      242,
+      154
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "34.30",
+     "box": [
+      417.0,
+      437,
+      480.0,
+      456
+     ],
+     "personal": false
+    }
+   ],
+   "personal": []
+  },
+  {
+   "file": "receipt-10.png",
+   "kind": "receipt",
+   "width": 520,
+   "height": 820,
+   "fields": [
+    {
+     "name": "store",
+     "value": "Cedar Lane Grocers",
+     "box": [
+      40,
+      45,
+      285,
+      64
+     ],
+     "personal": false
+    },
+    {
+     "name": "date",
+     "value": "2026-11-24",
+     "box": [
+      112,
+      135,
+      242,
+      154
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "28.80",
+     "box": [
+      417.0,
+      437,
+      480.0,
+      456
+     ],
+     "personal": false
+    }
+   ],
+   "personal": []
+  },
+  {
+   "file": "receipt-11.png",
+   "kind": "receipt",
+   "width": 520,
+   "height": 820,
+   "fields": [
+    {
+     "name": "store",
+     "value": "Tidewater Fish Co",
+     "box": [
+      40,
+      45,
+      262,
+      64
+     ],
+     "personal": false
+    },
+    {
+     "name": "date",
+     "value": "2026-01-02",
+     "box": [
+      112,
+      135,
+      242,
+      154
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "35.80",
+     "box": [
+      417.0,
+      437,
+      480.0,
+      456
+     ],
+     "personal": false
+    }
+   ],
+   "personal": []
+  },
+  {
+   "file": "receipt-12.png",
+   "kind": "receipt",
+   "width": 520,
+   "height": 820,
+   "fields": [
+    {
+     "name": "store",
+     "value": "Maple Print Shop",
+     "box": [
+      40,
+      45,
+      251,
+      69
+     ],
+     "personal": false
+    },
+    {
+     "name": "date",
+     "value": "2026-02-07",
+     "box": [
+      112,
+      135,
+      242,
+      154
+     ],
+     "personal": false
+    },
+    {
+     "name": "total",
+     "value": "30.30",
+     "box": [
+      417.0,
+      437,
+      480.0,
+      456
+     ],
+     "personal": false
+    }
+   ],
+   "personal": []
+  },
+  {
+   "file": "contract-01.png",
+   "kind": "contract",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "C-2026-01",
+     "box": [
+      215,
+      125,
+      336,
+      144
+     ],
+     "personal": false
+    },
+    {
+     "name": "client",
+     "value": "Emeka Tanaka",
+     "box": [
+      354,
+      361,
+      526,
+      380
+     ],
+     "personal": true
+    },
+    {
+     "name": "fee",
+     "value": "1285.00",
+     "box": [
+      354,
+      481,
+      445,
+      500
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Emeka Tanaka",
+    "emeka.tanaka@example.com"
+   ]
+  },
+  {
+   "file": "contract-02.png",
+   "kind": "contract",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "C-2026-02",
+     "box": [
+      215,
+      125,
+      336,
+      144
+     ],
+     "personal": false
+    },
+    {
+     "name": "client",
+     "value": "Farah Duarte",
+     "box": [
+      354,
+      361,
+      505,
+      380
+     ],
+     "personal": true
+    },
+    {
+     "name": "fee",
+     "value": "1370.00",
+     "box": [
+      354,
+      481,
+      445,
+      500
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Farah Duarte",
+    "farah.duarte@example.com"
+   ]
+  },
+  {
+   "file": "contract-03.png",
+   "kind": "contract",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "C-2026-03",
+     "box": [
+      215,
+      125,
+      336,
+      144
+     ],
+     "personal": false
+    },
+    {
+     "name": "client",
+     "value": "Goran Lindqvist",
+     "box": [
+      354,
+      361,
+      534,
+      385
+     ],
+     "personal": true
+    },
+    {
+     "name": "fee",
+     "value": "1455.00",
+     "box": [
+      354,
+      481,
+      445,
+      500
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Goran Lindqvist",
+    "goran.lindqvist@example.com"
+   ]
+  },
+  {
+   "file": "contract-04.png",
+   "kind": "contract",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "C-2026-04",
+     "box": [
+      215,
+      125,
+      336,
+      144
+     ],
+     "personal": false
+    },
+    {
+     "name": "client",
+     "value": "Hana Kowalski",
+     "box": [
+      354,
+      361,
+      524,
+      380
+     ],
+     "personal": true
+    },
+    {
+     "name": "fee",
+     "value": "1540.00",
+     "box": [
+      354,
+      481,
+      445,
+      500
+     ],
+     "personal": false,
+     "hard": "stamp"
+    }
+   ],
+   "personal": [
+    "Hana Kowalski",
+    "hana.kowalski@example.com"
+   ]
+  },
+  {
+   "file": "contract-05.png",
+   "kind": "contract",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "C-2026-05",
+     "box": [
+      215,
+      125,
+      336,
+      144
+     ],
+     "personal": false
+    },
+    {
+     "name": "client",
+     "value": "Ivo Okafor",
+     "box": [
+      354,
+      361,
+      473,
+      380
+     ],
+     "personal": true
+    },
+    {
+     "name": "fee",
+     "value": "1625.00",
+     "box": [
+      354,
+      481,
+      445,
+      500
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Ivo Okafor",
+    "ivo.okafor@example.com"
+   ]
+  },
+  {
+   "file": "contract-06.png",
+   "kind": "contract",
+   "width": 800,
+   "height": 1040,
+   "fields": [
+    {
+     "name": "number",
+     "value": "C-2026-06",
+     "box": [
+      215,
+      125,
+      336,
+      144
+     ],
+     "personal": false
+    },
+    {
+     "name": "client",
+     "value": "Juno Ferreira",
+     "box": [
+      354,
+      361,
+      507,
+      380
+     ],
+     "personal": true
+    },
+    {
+     "name": "fee",
+     "value": "1710.00",
+     "box": [
+      354,
+      481,
+      445,
+      500
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Juno Ferreira",
+    "juno.ferreira@example.com"
+   ]
+  },
+  {
+   "file": "id-card-01.png",
+   "kind": "identity_card",
+   "width": 640,
+   "height": 400,
+   "fields": [
+    {
+     "name": "name",
+     "value": "Mateo Haddad",
+     "box": [
+      310,
+      92,
+      452,
+      108
+     ],
+     "personal": true
+    },
+    {
+     "name": "email",
+     "value": "mateo.haddad@example.com",
+     "box": [
+      307,
+      136,
+      596,
+      157
+     ],
+     "personal": true
+    },
+    {
+     "name": "phone",
+     "value": "555-213-5271",
+     "box": [
+      315,
+      180,
+      449,
+      196
+     ],
+     "personal": true
+    },
+    {
+     "name": "id_number",
+     "value": "137-63-8919",
+     "box": [
+      308,
+      224,
+      430,
+      240
+     ],
+     "personal": true
+    },
+    {
+     "name": "expires",
+     "value": "2031",
+     "box": [
+      325,
+      268,
+      373,
+      284
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Mateo Haddad",
+    "mateo.haddad@example.com",
+    "555-213-5271",
+    "137-63-8919"
+   ],
+   "portrait": [
+    28,
+    84,
+    208,
+    312
+   ]
+  },
+  {
+   "file": "id-card-02.png",
+   "kind": "identity_card",
+   "width": 640,
+   "height": 400,
+   "fields": [
+    {
+     "name": "name",
+     "value": "Nia Rossi",
+     "box": [
+      310,
+      92,
+      404,
+      108
+     ],
+     "personal": true
+    },
+    {
+     "name": "email",
+     "value": "nia.rossi@example.com",
+     "box": [
+      307,
+      136,
+      539,
+      157
+     ],
+     "personal": true
+    },
+    {
+     "name": "phone",
+     "value": "555-326-9542",
+     "box": [
+      315,
+      180,
+      449,
+      196
+     ],
+     "personal": true
+    },
+    {
+     "name": "id_number",
+     "value": "174-26-7838",
+     "box": [
+      308,
+      224,
+      430,
+      240
+     ],
+     "personal": true
+    },
+    {
+     "name": "expires",
+     "value": "2032",
+     "box": [
+      325,
+      268,
+      373,
+      284
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Nia Rossi",
+    "nia.rossi@example.com",
+    "555-326-9542",
+    "174-26-7838"
+   ],
+   "portrait": [
+    28,
+    84,
+    208,
+    312
+   ]
+  },
+  {
+   "file": "id-card-03.png",
+   "kind": "identity_card",
+   "width": 640,
+   "height": 400,
+   "fields": [
+    {
+     "name": "name",
+     "value": "Oskar Novak",
+     "box": [
+      310,
+      92,
+      436,
+      108
+     ],
+     "personal": true
+    },
+    {
+     "name": "email",
+     "value": "oskar.novak@example.com",
+     "box": [
+      307,
+      136,
+      575,
+      157
+     ],
+     "personal": true
+    },
+    {
+     "name": "phone",
+     "value": "555-439-4813",
+     "box": [
+      315,
+      180,
+      449,
+      196
+     ],
+     "personal": true
+    },
+    {
+     "name": "id_number",
+     "value": "211-79-6757",
+     "box": [
+      308,
+      224,
+      430,
+      240
+     ],
+     "personal": true
+    },
+    {
+     "name": "expires",
+     "value": "2033",
+     "box": [
+      325,
+      268,
+      373,
+      284
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Oskar Novak",
+    "oskar.novak@example.com",
+    "555-439-4813",
+    "211-79-6757"
+   ],
+   "portrait": [
+    28,
+    84,
+    208,
+    312
+   ]
+  },
+  {
+   "file": "id-card-04.png",
+   "kind": "identity_card",
+   "width": 640,
+   "height": 400,
+   "fields": [
+    {
+     "name": "name",
+     "value": "Priya Brandt",
+     "box": [
+      310,
+      92,
+      430,
+      112
+     ],
+     "personal": true
+    },
+    {
+     "name": "email",
+     "value": "priya.brandt@example.com",
+     "box": [
+      307,
+      136,
+      572,
+      157
+     ],
+     "personal": true
+    },
+    {
+     "name": "phone",
+     "value": "555-552-9084",
+     "box": [
+      315,
+      180,
+      449,
+      196
+     ],
+     "personal": true
+    },
+    {
+     "name": "id_number",
+     "value": "248-42-5676",
+     "box": [
+      308,
+      224,
+      430,
+      240
+     ],
+     "personal": true
+    },
+    {
+     "name": "expires",
+     "value": "2034",
+     "box": [
+      325,
+      268,
+      373,
+      284
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Priya Brandt",
+    "priya.brandt@example.com",
+    "555-552-9084",
+    "248-42-5676"
+   ],
+   "portrait": [
+    28,
+    84,
+    208,
+    312
+   ]
+  },
+  {
+   "file": "id-card-05.png",
+   "kind": "identity_card",
+   "width": 640,
+   "height": 400,
+   "fields": [
+    {
+     "name": "name",
+     "value": "Quinn Tanaka",
+     "box": [
+      310,
+      92,
+      446,
+      109
+     ],
+     "personal": true
+    },
+    {
+     "name": "email",
+     "value": "quinn.tanaka@example.com",
+     "box": [
+      307,
+      136,
+      582,
+      157
+     ],
+     "personal": true
+    },
+    {
+     "name": "phone",
+     "value": "555-665-4355",
+     "box": [
+      315,
+      180,
+      449,
+      196
+     ],
+     "personal": true
+    },
+    {
+     "name": "id_number",
+     "value": "285-95-4595",
+     "box": [
+      308,
+      224,
+      430,
+      240
+     ],
+     "personal": true
+    },
+    {
+     "name": "expires",
+     "value": "2035",
+     "box": [
+      325,
+      268,
+      373,
+      284
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Quinn Tanaka",
+    "quinn.tanaka@example.com",
+    "555-665-4355",
+    "285-95-4595"
+   ],
+   "portrait": [
+    28,
+    84,
+    208,
+    312
+   ]
+  },
+  {
+   "file": "id-card-06.png",
+   "kind": "identity_card",
+   "width": 640,
+   "height": 400,
+   "fields": [
+    {
+     "name": "name",
+     "value": "Rosa Duarte",
+     "box": [
+      310,
+      92,
+      432,
+      108
+     ],
+     "personal": true
+    },
+    {
+     "name": "email",
+     "value": "rosa.duarte@example.com",
+     "box": [
+      307,
+      136,
+      567,
+      157
+     ],
+     "personal": true
+    },
+    {
+     "name": "phone",
+     "value": "555-778-8626",
+     "box": [
+      315,
+      180,
+      449,
+      196
+     ],
+     "personal": true
+    },
+    {
+     "name": "id_number",
+     "value": "322-58-3514",
+     "box": [
+      308,
+      224,
+      430,
+      240
+     ],
+     "personal": true
+    },
+    {
+     "name": "expires",
+     "value": "2036",
+     "box": [
+      325,
+      268,
+      373,
+      284
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Rosa Duarte",
+    "rosa.duarte@example.com",
+    "555-778-8626",
+    "322-58-3514"
+   ],
+   "portrait": [
+    28,
+    84,
+    208,
+    312
+   ]
+  },
+  {
+   "file": "id-card-07.png",
+   "kind": "identity_card",
+   "width": 640,
+   "height": 400,
+   "fields": [
+    {
+     "name": "name",
+     "value": "Sami Lindqvist",
+     "box": [
+      310,
+      92,
+      452,
+      112
+     ],
+     "personal": true
+    },
+    {
+     "name": "email",
+     "value": "sami.lindqvist@example.com",
+     "box": [
+      307,
+      136,
+      589,
+      157
+     ],
+     "personal": true
+    },
+    {
+     "name": "phone",
+     "value": "555-891-3897",
+     "box": [
+      315,
+      180,
+      449,
+      196
+     ],
+     "personal": true
+    },
+    {
+     "name": "id_number",
+     "value": "359-21-2433",
+     "box": [
+      308,
+      224,
+      430,
+      240
+     ],
+     "personal": true
+    },
+    {
+     "name": "expires",
+     "value": "2030",
+     "box": [
+      325,
+      268,
+      373,
+      284
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Sami Lindqvist",
+    "sami.lindqvist@example.com",
+    "555-891-3897",
+    "359-21-2433"
+   ],
+   "portrait": [
+    28,
+    84,
+    208,
+    312
+   ]
+  },
+  {
+   "file": "id-card-08.png",
+   "kind": "identity_card",
+   "width": 640,
+   "height": 400,
+   "fields": [
+    {
+     "name": "name",
+     "value": "Tove Kowalski",
+     "box": [
+      310,
+      92,
+      451,
+      108
+     ],
+     "personal": true
+    },
+    {
+     "name": "email",
+     "value": "tove.kowalski@example.com",
+     "box": [
+      307,
+      136,
+      588,
+      157
+     ],
+     "personal": true
+    },
+    {
+     "name": "phone",
+     "value": "555-104-8168",
+     "box": [
+      315,
+      180,
+      449,
+      196
+     ],
+     "personal": true
+    },
+    {
+     "name": "id_number",
+     "value": "396-74-1352",
+     "box": [
+      308,
+      224,
+      430,
+      240
+     ],
+     "personal": true
+    },
+    {
+     "name": "expires",
+     "value": "2031",
+     "box": [
+      325,
+      268,
+      373,
+      284
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Tove Kowalski",
+    "tove.kowalski@example.com",
+    "555-104-8168",
+    "396-74-1352"
+   ],
+   "portrait": [
+    28,
+    84,
+    208,
+    312
+   ]
+  },
+  {
+   "file": "id-card-09.png",
+   "kind": "identity_card",
+   "width": 640,
+   "height": 400,
+   "fields": [
+    {
+     "name": "name",
+     "value": "Amara Okafor",
+     "box": [
+      309,
+      92,
+      446,
+      108
+     ],
+     "personal": true
+    },
+    {
+     "name": "email",
+     "value": "amara.okafor@example.com",
+     "box": [
+      307,
+      136,
+      585,
+      157
+     ],
+     "personal": true
+    },
+    {
+     "name": "phone",
+     "value": "555-217-3439",
+     "box": [
+      315,
+      180,
+      449,
+      196
+     ],
+     "personal": true
+    },
+    {
+     "name": "id_number",
+     "value": "433-37-9271",
+     "box": [
+      308,
+      224,
+      430,
+      240
+     ],
+     "personal": true
+    },
+    {
+     "name": "expires",
+     "value": "2032",
+     "box": [
+      325,
+      268,
+      373,
+      284
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Amara Okafor",
+    "amara.okafor@example.com",
+    "555-217-3439",
+    "433-37-9271"
+   ],
+   "portrait": [
+    28,
+    84,
+    208,
+    312
+   ]
+  },
+  {
+   "file": "id-card-10.png",
+   "kind": "identity_card",
+   "width": 640,
+   "height": 400,
+   "fields": [
+    {
+     "name": "name",
+     "value": "Bruno Ferreira",
+     "box": [
+      310,
+      92,
+      449,
+      108
+     ],
+     "personal": true
+    },
+    {
+     "name": "email",
+     "value": "bruno.ferreira@example.com",
+     "box": [
+      307,
+      136,
+      587,
+      157
+     ],
+     "personal": true
+    },
+    {
+     "name": "phone",
+     "value": "555-330-7710",
+     "box": [
+      315,
+      180,
+      449,
+      196
+     ],
+     "personal": true
+    },
+    {
+     "name": "id_number",
+     "value": "470-90-8190",
+     "box": [
+      308,
+      224,
+      430,
+      240
+     ],
+     "personal": true
+    },
+    {
+     "name": "expires",
+     "value": "2033",
+     "box": [
+      325,
+      268,
+      373,
+      284
+     ],
+     "personal": false
+    }
+   ],
+   "personal": [
+    "Bruno Ferreira",
+    "bruno.ferreira@example.com",
+    "555-330-7710",
+    "470-90-8190"
+   ],
+   "portrait": [
+    28,
+    84,
+    208,
+    312
+   ]
+  }
+ ]
+}

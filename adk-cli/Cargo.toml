@@ -67,6 +67,8 @@ adk-awp = { workspace = true, optional = true, features = ["verify"] }
 awp-types = { workspace = true, optional = true }
 # `adk-rust website …` (spec 3.5 §8.1, D-14): the product, served beside the web home
 adk-website = { workspace = true, optional = true }
+# `adk-rust vision …` (spec 3.7 §8.1): manifests, fetcher, backends and the egress gate
+adk-vision = { workspace = true, optional = true }
 # Private JWK key files for `awp keys` (spec 3.5 §7.2, A-I5)
 base64 = { version = "0.22", optional = true }
 zeroize = { version = "1.8.2", optional = true }
@@ -238,6 +240,15 @@ website = ["harness", "persist", "surface", "whatsapp", "adk-surface?/website", 
 # agent it hosts the `verb_*` tools, which always ask first, serves `/api/surface/verbs`, and
 # adds `/snooze` to the terminal attached to it. No dependency beyond `surface`.
 verb-ui = ["surface", "adk-surface/verb-ui"]
+# `adk-rust vision` (spec 3.7 §8.1): the model manifest with licence classes, fetches by revision
+# with SHA-256 checks, recorded licence acceptance, the egress log, and `vision run` through the
+# egress gate of `.adk/vision.toml`: the cloud describers (Claude, Gemini, NVIDIA NIM) and Meta
+# `sam-3.1`. Pure Rust; opt-in.
+vision = ["dep:adk-vision", "adk-vision/fetch", "adk-vision/cloud", "adk-vision/nim", "adk-vision/sam", "adk-vision/guardrail", "adk-model/anthropic", "adk-model/gemini"]
+# The on-device backends for `adk-rust vision run` (spec 3.7 §7.6): RF-DETR, EfficientSAM and
+# SAM 2.1 on ONNX Runtime, PP-OCRv6 and PaddleOCR-VL-1.6, and the face and personal-text
+# redactors the egress gate runs. ONNX Runtime is downloaded at build time.
+vision-local = ["vision", "adk-vision/onnx", "adk-vision/ocr", "adk-vision/ocr-vl"]
 
 # Standard error to terminal.log while the full screen is up (spec 3.3 §5.2, S-I9)
 [target.'cfg(unix)'.dependencies]

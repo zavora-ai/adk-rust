@@ -32,6 +32,8 @@ mod skills;
 #[cfg(all(feature = "harness", feature = "persist", feature = "encrypted"))]
 mod store;
 mod ultra;
+#[cfg(feature = "vision")]
+mod vision_cli;
 #[cfg(feature = "voice")]
 mod voice_cli;
 #[cfg(feature = "website")]
@@ -405,6 +407,8 @@ async fn run() -> Result<()> {
         Some(Commands::Awp { command }) => awp_cli::run(command).await,
         #[cfg(feature = "website")]
         Some(Commands::Website { command }) => website_cli::run(command).await,
+        #[cfg(feature = "vision")]
+        Some(Commands::Vision(args)) => vision_cli::run(args).await,
     }
 }
 
