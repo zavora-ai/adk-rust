@@ -137,12 +137,21 @@ speaks: A2UI 1.0 by default, v0.9.1 for a renderer that offers nothing newer.
 | A new surface | one `createSurface` carrying `components` and `dataModel` | `createSurface`, `updateComponents`, `updateDataModel` |
 | An extension component | `@catalogId` names its catalog; the surface's default is `forms` | the drawing's one catalog |
 | Removing a data path | `updateDataModel` with `value: null` | no `value` |
+| The display-only claim | `createSurface.metadata.extensions.adkrust_display_only: {"version": "1.0"}` | none |
+
+Every 1.0 surface claims the `adkrust_display_only` extension (`DISPLAY_ONLY_EXTENSION`): the
+surface only shows, no string in it reads as a decision, a secret or a link, and a send only
+asks the home for a call the person decides on a card the home draws. The rules, the approval
+card's minimum content and a watch list are in
+[the extension's design note](https://github.com/zavora-ai/adk-rust/blob/main/docs/design/a2ui-extension-display-only.md).
+A renderer that does not know the key ignores it, as A2UI 1.0 requires.
 
 `render_screen` and `patch_surface` read components in either syntax. `GenuiAgUi` writes
 drawings in 1.0 (`with_a2ui_version(A2uiVersion::V0_9_1)` for an older client) and reads
 activities a client sends back in either. Reading 1.0 refuses what would change meaning in the
 internal form: an unknown `@` key, a literal object whose only key is `path` or that has a
-`call` key, `@metadata`, `@index` and `theme`. A refusal comes with A2UI 1.0's
+`call` key, `@metadata`, `@index`, `theme`, and surface metadata other than the display-only
+claim. A refusal comes with A2UI 1.0's
 `ValidationResult` (`{"valid": false, "severity": "error", "code": …, "message": …}`) after its
 plain-words message.
 

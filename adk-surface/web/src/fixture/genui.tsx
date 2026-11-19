@@ -392,6 +392,10 @@ export function capabilities(): GenuiCapabilities {
           claim("version_0_9_1", "Version 0.9.1", "legacy", "runtime"),
           claim("trusted_catalog", "Trusted component catalog", "supported", "security"),
           claim("no_approval_controls", "No approval controls in drawn UI", "supported", "security"),
+          {
+            ...claim("display_only_extension", "Display-only extension", "supported", "security"),
+            note: "Every A2UI 1.0 surface claims the adkrust_display_only 1.0 extension",
+          },
         ],
       },
       {

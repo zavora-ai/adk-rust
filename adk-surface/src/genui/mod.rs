@@ -119,7 +119,8 @@ pub use validate::{
 pub use view::SHOWN_ROWS;
 #[cfg(feature = "genui")]
 pub use wire::{
-    A2uiVersion, WireError, component_to_v1_0, components_in, from_wire, is_v1_0_syntax, to_wire,
+    A2uiVersion, DISPLAY_ONLY_EXTENSION, DISPLAY_ONLY_EXTENSION_VERSION, WireError,
+    component_to_v1_0, components_in, from_wire, is_v1_0_syntax, to_wire,
 };
 
 #[cfg(feature = "genui")]

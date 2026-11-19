@@ -98,6 +98,13 @@
             "amount": 4200,
             "to": ""
           },
+          "metadata": {
+            "extensions": {
+              "adkrust_display_only": {
+                "version": "1.0"
+              }
+            }
+          },
           "surfaceId": "invoice-10"
         },
         "version": "1.0"

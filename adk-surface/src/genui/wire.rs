@@ -12,15 +12,39 @@
 //! | a literal key `"@@x"` | `"@x"` |
 //! | `createSurface` carrying `components` and `dataModel` | `createSurface`, `updateComponents`, `updateDataModel` |
 //! | `updateDataModel.value: null` | no value (removes the path) |
+//! | `createSurface.metadata.extensions.adkrust_display_only` | implied: every drawing follows rule 5 |
+//!
+//! Every 1.0 `createSurface` claims the display-only extension ([`DISPLAY_ONLY_EXTENSION`],
+//! `docs/design/a2ui-extension-display-only.md`): a drawing shows; only the host decides.
 //!
 //! Reading 1.0 refuses what the internal form cannot hold without changing its meaning: an
 //! unknown `@` key, a literal object whose only key is `path` or that has a `call` key (the
-//! internal form would read it as a binding or a call), `@metadata` and `@index`.
+//! internal form would read it as a binding or a call), `@metadata`, `@index`, and surface
+//! metadata other than the display-only claim.
 
 use serde_json::{Map, Value, json};
 
 use super::a2ui::{A2UI_VERSION, A2uiBody, A2uiMessage};
 use super::catalog::{Catalog, FORMS_CATALOG_ID};
+
+/// The A2UI 1.0 extension every drawing `genui` writes claims in its `createSurface`
+/// (`metadata.extensions`): the surface only shows, no string in it reads as a decision, a
+/// secret or a link, and a send only asks the host for a call the person then decides on
+/// (spec 3.3 §7.4 rule 5; `docs/design/a2ui-extension-display-only.md`).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::genui::{A2uiMessage, A2uiVersion, Catalog, DISPLAY_ONLY_EXTENSION, to_wire};
+///
+/// let wire = to_wire(&[A2uiMessage::create_surface("s")], Catalog::forms(), A2uiVersion::V1_0);
+/// let claim = &wire[0]["createSurface"]["metadata"]["extensions"][DISPLAY_ONLY_EXTENSION];
+/// assert_eq!(claim["version"], "1.0");
+/// ```
+pub const DISPLAY_ONLY_EXTENSION: &str = "adkrust_display_only";
+
+/// The version of [`DISPLAY_ONLY_EXTENSION`] this build follows.
+pub const DISPLAY_ONLY_EXTENSION_VERSION: &str = "1.0";
 
 /// An A2UI protocol version `genui` reads and writes.
 ///
@@ -256,6 +280,12 @@ pub fn to_wire(messages: &[A2uiMessage], catalog: &Catalog, version: A2uiVersion
                 if let Some(send) = create.send_data_model {
                     body.insert("sendDataModel".to_string(), json!(send));
                 }
+                body.insert(
+                    "metadata".to_string(),
+                    json!({ "extensions": {
+                        DISPLAY_ONLY_EXTENSION: { "version": DISPLAY_ONLY_EXTENSION_VERSION }
+                    } }),
+                );
                 // One message for a new surface: its components and whole data model inline.
                 if let Some(A2uiBody::UpdateComponents(update)) =
                     messages.get(index).map(|m| &m.body)
@@ -493,6 +523,31 @@ pub fn components_in(components: Vec<Value>, catalog: &Catalog) -> Result<Vec<Va
         .collect()
 }
 
+/// Checks a 1.0 `createSurface.metadata`: nothing but the display-only claim, which every
+/// drawing this home keeps follows anyway. Any other extension would ask the renderer for
+/// behavior the stored drawing cannot carry, so it is refused rather than dropped.
+fn display_only_claim(metadata: &Value) -> Result<(), WireError> {
+    const AT: &str = "/createSurface/metadata";
+    let refuse = |what: &str| {
+        Err(WireError::new(
+            AT,
+            format!(
+                "a drawing's metadata holds only the {DISPLAY_ONLY_EXTENSION} extension, not {what}"
+            ),
+        ))
+    };
+    let Some(metadata) = metadata.as_object() else { return refuse("a non-object") };
+    if let Some(key) = metadata.keys().find(|key| *key != "extensions") {
+        return refuse(key);
+    }
+    let Some(extensions) = metadata.get("extensions") else { return Ok(()) };
+    let Some(extensions) = extensions.as_object() else { return refuse("a non-object extensions") };
+    match extensions.keys().find(|key| *key != DISPLAY_ONLY_EXTENSION) {
+        Some(key) => refuse(key),
+        None => Ok(()),
+    }
+}
+
 /// One message from the wire, in either version, as internal messages: a 1.0 `createSurface`
 /// that carries components and a data model becomes three.
 ///
@@ -557,11 +612,8 @@ pub fn from_wire(message: &Value, catalog: &Catalog) -> Result<Vec<A2uiMessage>,
             if body.get("theme").is_some() {
                 return Err(WireError::new("/createSurface/theme", "A2UI 1.0 has no theme"));
             }
-            if body.get("metadata").is_some() {
-                return Err(WireError::new(
-                    "/createSurface/metadata",
-                    "a drawing carries no extension metadata",
-                ));
+            if let Some(metadata) = body.get("metadata") {
+                display_only_claim(metadata)?;
             }
             if let Some(id) = body.get("catalogId").and_then(Value::as_str)
                 && id != FORMS_CATALOG_ID
@@ -646,6 +698,10 @@ mod tests {
         let create = &wire[0]["createSurface"];
         assert_eq!(wire[0]["version"], "1.0");
         assert_eq!(create["catalogId"], FORMS_CATALOG_ID);
+        assert_eq!(
+            create["metadata"],
+            json!({ "extensions": { "adkrust_display_only": { "version": "1.0" } } })
+        );
         assert_eq!(create["dataModel"]["name"], "Ana");
         let components = create["components"].as_array().unwrap();
         assert_eq!(components[1]["text"]["@call"], "formatString");
@@ -744,8 +800,12 @@ mod tests {
                 "theme",
             ),
             (
-                json!({ "version": "1.0", "createSurface": { "surfaceId": "s", "metadata": {} } }),
-                "metadata",
+                json!({ "version": "1.0", "createSurface": { "surfaceId": "s", "metadata": { "extensions": { "org_example_theme": {} } } } }),
+                "not org_example_theme",
+            ),
+            (
+                json!({ "version": "1.0", "createSurface": { "surfaceId": "s", "metadata": { "theme": {} } } }),
+                "not theme",
             ),
             (
                 json!({ "version": "1.0", "createSurface": { "surfaceId": "s", "catalogId": "https://x.test/c.json" } }),

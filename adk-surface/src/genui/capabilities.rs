@@ -6,6 +6,7 @@ use super::capabilities_wire::{
     CatalogView, Claim, ClaimScope, ClaimStatus, GenuiCapabilities, ProtocolClaims,
 };
 use super::catalog::{Catalog, Catalogs, LEFT_OUT};
+use super::wire::{DISPLAY_ONLY_EXTENSION, DISPLAY_ONLY_EXTENSION_VERSION};
 
 /// The note of a claim this build supports that the server did not wire.
 const NOT_WIRED: &str = "Not set on this server";
@@ -131,6 +132,18 @@ pub fn capabilities_with(wiring: GenuiWiring, catalogs: &Catalogs) -> GenuiCapab
                         Supported,
                         Security,
                     ),
+                    Claim {
+                        note: Some(format!(
+                            "Every A2UI 1.0 surface claims the {DISPLAY_ONLY_EXTENSION} \
+                             {DISPLAY_ONLY_EXTENSION_VERSION} extension"
+                        )),
+                        ..claim(
+                            "display_only_extension",
+                            "Display-only extension",
+                            Supported,
+                            Security,
+                        )
+                    },
                 ],
             },
             ProtocolClaims {

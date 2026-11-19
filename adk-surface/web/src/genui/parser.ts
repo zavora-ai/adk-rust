@@ -18,7 +18,14 @@ export const A2UI_VERSIONS = ["1.0", "v0.9.1", "v0.9"] as const;
 
 export type CreateSurfaceMessage = {
   version?: string;
-  createSurface: { surfaceId: string; catalogId?: string; components?: A2uiComponent[]; dataModel?: unknown };
+  createSurface: {
+    surfaceId: string;
+    catalogId?: string;
+    components?: A2uiComponent[];
+    dataModel?: unknown;
+    /** `extensions.adkrust_display_only`: the drawing only shows; the home decides. */
+    metadata?: { extensions?: Record<string, unknown> };
+  };
 };
 
 export type UpdateComponentsMessage = {
