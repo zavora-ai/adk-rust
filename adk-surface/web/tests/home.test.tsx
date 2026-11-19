@@ -232,9 +232,8 @@ describe("the developer panel", () => {
     render(<App client={new FixtureClient()} initialSection="developer" />);
     const tabs = await screen.findByRole("navigation", { name: "Developer panel" });
     expect(within(tabs).getAllByRole("button").map((tab) => tab.textContent)).toEqual([
-      "Topology",
+      "Run",
       "Protocols",
-      "Telemetry",
       "State",
     ]);
   });
