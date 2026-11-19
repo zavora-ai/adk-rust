@@ -154,7 +154,14 @@ impl VisionRuntime {
             RegionTask::Detect(query) => {
                 let (descriptor, backend) = self.detectors.get(id)?;
                 let sent = planned_size(image.size(), crop, &descriptor.limits);
-                let hold = self.preflight(cx, task.task(), descriptor, &[sent], 0, None).await?;
+                let concepts = match query {
+                    DetectQuery::Classes(c) | DetectQuery::Concepts(c) => c.len(),
+                };
+                // The image is processed once per request the backend makes for the query.
+                let requests = descriptor.requests_for(concepts, false) as usize;
+                let hold = self
+                    .preflight(cx, task.task(), descriptor, &vec![sent; requests], 0, None)
+                    .await?;
                 let prepared =
                     self.prepare(cx, descriptor, backend.is_remote(), image, crop, options).await?;
                 let work = match (backend, &prepared) {
@@ -170,7 +177,13 @@ impl VisionRuntime {
             RegionTask::Segment(prompts) => {
                 let (descriptor, backend) = self.segmenters.get(id)?;
                 let sent = planned_size(image.size(), crop, &descriptor.limits);
-                let hold = self.preflight(cx, task.task(), descriptor, &[sent], 0, None).await?;
+                let concepts =
+                    prompts.iter().filter(|p| matches!(p, SegmentPrompt::Concept { .. })).count();
+                // The image is processed once per request the backend makes for the prompts.
+                let requests = descriptor.requests_for(concepts, concepts < prompts.len()) as usize;
+                let hold = self
+                    .preflight(cx, task.task(), descriptor, &vec![sent; requests], 0, None)
+                    .await?;
                 let prepared =
                     self.prepare(cx, descriptor, backend.is_remote(), image, crop, options).await?;
                 let prompts = prompts_for(descriptor, prepared.image(), prompts)?;

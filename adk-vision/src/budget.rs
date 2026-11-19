@@ -35,6 +35,12 @@ pub enum ImageTokens {
         /// Tokens per image.
         tokens: u64,
     },
+    /// `⌈w/side⌉ × ⌈h/side⌉` tiles of one token each: NVIDIA's Nemotron VL and Nano Omni,
+    /// and Muse, with 32-pixel tiles.
+    Tiles {
+        /// The tile side in pixels.
+        side: u32,
+    },
 }
 
 impl ImageTokens {
@@ -46,6 +52,10 @@ impl ImageTokens {
             Self::GeminiTiles if w <= 384 && h <= 384 => 258,
             Self::GeminiTiles => 258 * w.div_ceil(768) * h.div_ceil(768),
             Self::Fixed { tokens } => *tokens,
+            Self::Tiles { side } => {
+                let side = u64::from((*side).max(1));
+                w.div_ceil(side) * h.div_ceil(side)
+            }
         }
     }
 }

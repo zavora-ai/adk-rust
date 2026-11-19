@@ -1,0 +1,112 @@
+{
+ "recorded": "2026-11-19",
+ "path": "/v1/messages",
+ "request": {
+  "max_tokens": 4000,
+  "messages": [
+   {
+    "content": [
+     {
+      "type": "image",
+      "source": {
+       "type": "base64",
+       "data": "{{image:base64:sha256:c7697e0ce38cd431e3a28639859c5163af9951a4e341a951dabbd5d32ca71e00:26007}}",
+       "media_type": "image/png"
+      }
+     },
+     {
+      "type": "text",
+      "text": "Locate these objects and label each region exactly as given: \"red rectangle\", \"blue circle\", \"green triangle\", \"text 'INVOICE 4721'\", \"text 'TOTAL $58.20'\".\n\nThe image is 960x540 pixels. Give each region's `box` as [x_min, y_min, x_max, y_max] in pixels of that image, origin at the top-left corner, x to the right and y down, the box tight around the region. Answer with JSON only, in this shape: {\"text\": <the answer>, \"regions\": [...]}."
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "model": "claude-sonnet-5-5",
+  "thinking": {
+   "type": "adaptive"
+  },
+  "stream": false,
+  "output_config": {
+   "effort": "low",
+   "format": {
+    "type": "json_schema",
+    "schema": {
+     "additionalProperties": false,
+     "properties": {
+      "regions": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "box": {
+          "description": "[x_min, y_min, x_max, y_max] in pixels of the image.",
+          "items": {
+           "type": "number"
+          },
+          "type": "array"
+         },
+         "label": {
+          "description": "What the region is.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "label",
+         "box"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "text": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "text",
+      "regions"
+     ],
+     "type": "object"
+    }
+   }
+  },
+  "cache_control": {
+   "type": "ephemeral"
+  }
+ },
+ "status": 200,
+ "contentType": "application/json",
+ "response": {
+  "model": "claude-sonnet-5-5",
+  "id": "msg_011ChB9AercPcoLpTTp4qW6i",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "text",
+    "text": "{\"regions\":[{\"box\":[80,60,320,220],\"label\":\"red rectangle\"},{\"box\":[550,60,730,240],\"label\":\"blue circle\"},{\"box\":[140,330,301,482],\"label\":\"green triangle\"},{\"box\":[480,324,743,363],\"label\":\"text 'INVOICE 4721'\"},{\"box\":[480,412,744,453],\"label\":\"text 'TOTAL $58.20'\"}],\"text\":\"Located the five requested regions.\"}"
+   }
+  ],
+  "container": null,
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 4,
+   "cache_creation_input_tokens": 1240,
+   "cache_read_input_tokens": 0,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 1240,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 156,
+   "output_tokens_details": {
+    "thinking_tokens": 0
+   },
+   "service_tier": "standard",
+   "inference_geo": "global",
+   "speed": "standard"
+  },
+  "diagnostics": null
+ }
+}

@@ -23,9 +23,12 @@
 //! | `fetch` | `ModelFetcher`: Hugging Face downloads by revision, SHA-256 checked before load, `HF_HUB_OFFLINE` honoured |
 //! | `conformance` | `conformance`: the suite every backend runs, and its test macros |
 //! | `guardrail` | `ImagePrivacyGuardrail` on model calls, tool results and user input, and `PersonalTextRedactor` (OCR words matched by `adk-guardrail`'s PII patterns) |
-//! | `onnx` | [`onnx`]: RF-DETR, EfficientSAM, SAM 2.1 and SigLIP 2 on ONNX Runtime, the runtime downloaded at build time |
+//! | `onnx` | `onnx`: RF-DETR, EfficientSAM, SAM 2.1 and SigLIP 2 on ONNX Runtime, the runtime downloaded at build time |
 //! | `onnx-dynamic` | The same backends against an onnxruntime library loaded from `ORT_DYLIB_PATH` |
 //! | `onnx-coreml`, `onnx-cuda` | The CoreML and CUDA execution providers for the `onnx` backends |
+//! | `cloud` | `LlmDescriber` over any `adk_core::Llm` that takes images, with the Gemini, Claude and 0–1000 region adapters |
+//! | `nim` | NVIDIA NIM vision-language models over the OpenAI-compatible client (implies `cloud`) |
+//! | `sam` | The Meta `sam-3.1` client: `SamSegmenter`, its stream parser and mask placement |
 //!
 //! [`VisionToolset`] — `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`,
 //! `vision_crop`, `vision_redact`, `vision_annotate` — is always built: each tool runs on
@@ -33,8 +36,8 @@
 //! evidence, and every call, release and edit writes its `vision.*` audit record
 //! ([`audit`]).
 //!
-//! The other backends — OCR, mistral.rs, the cloud providers, Meta `sam-3.1`, NVIDIA NIM —
-//! are features added by the workstreams that bring them.
+//! The other backends — OCR and mistral.rs — are features added by the workstreams that
+//! bring them.
 //!
 //! # Example
 //!
@@ -86,6 +89,8 @@
 pub mod audit;
 mod backend;
 mod budget;
+#[cfg(feature = "cloud")]
+pub mod cloud;
 #[cfg(feature = "conformance")]
 pub mod conformance;
 mod cx;
@@ -104,6 +109,8 @@ mod media;
 pub mod onnx;
 mod redact;
 mod runtime;
+#[cfg(feature = "sam")]
+pub mod sam;
 mod sent;
 mod toolset;
 mod tracker;
@@ -111,6 +118,8 @@ mod traits;
 
 pub use backend::{BackendDescriptor, BackendId, InputLimits, Locality, Oversize, PriceRef};
 pub use budget::{ImageTokens, TokenEstimate};
+#[cfg(feature = "cloud")]
+pub use cloud::{LlmDescriber, RegionAdapter};
 pub use cx::VisionCx;
 pub use digest::Digest;
 pub use edit::{DeterministicEditor, EditOp, Overlay, Rgba, apply_edit};
@@ -146,6 +155,8 @@ pub use runtime::{
     CallOptions, CallRecord, Edited, Escalation, Route, Trigger, VisionOutput, VisionRuntime,
     VisionRuntimeBuilder,
 };
+#[cfg(feature = "sam")]
+pub use sam::{SamConfig, SamSegmenter};
 pub use sent::{SentImage, VisionInput};
 pub use toolset::{
     EgressApproval, VISION_EGRESS_POLICY_REF, VISION_TOOL_NAMES, VisionTool, VisionToolKind,

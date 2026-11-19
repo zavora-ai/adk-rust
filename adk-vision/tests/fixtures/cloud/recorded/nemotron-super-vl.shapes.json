@@ -1,0 +1,103 @@
+{
+ "recorded": "2026-11-19",
+ "path": "/v1/chat/completions",
+ "request": {
+  "chat_template_kwargs": {
+   "enable_thinking": false
+  },
+  "max_completion_tokens": 1500,
+  "messages": [
+   {
+    "content": [
+     {
+      "image_url": {
+       "detail": "auto",
+       "url": "{{image:image/png:sha256:c7697e0ce38cd431e3a28639859c5163af9951a4e341a951dabbd5d32ca71e00:26007}}"
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "Locate these objects and label each region exactly as given: \"red rectangle\", \"blue circle\", \"green triangle\", \"text 'INVOICE 4721'\", \"text 'TOTAL $58.20'\".\n\nGive each region's `bbox` as [x_min, y_min, x_max, y_max] normalised to 0-1000 (0,0 is the top-left corner, 1000,1000 the bottom-right corner, independent of the image's aspect ratio). Answer with JSON only, in this shape: {\"text\": <the answer>, \"regions\": [...]}.",
+      "type": "text"
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "model": "nvidia/nemotron-3.5-super-vl-120b-a12b",
+  "response_format": {
+   "json_schema": {
+    "name": "nvidia_nemotron_3_5_super_vl_120b_a12b",
+    "schema": {
+     "additionalProperties": false,
+     "properties": {
+      "regions": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "bbox": {
+          "description": "[x_min, y_min, x_max, y_max] normalized to 0-1000.",
+          "items": {
+           "type": "integer"
+          },
+          "type": "array"
+         },
+         "label": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "label",
+         "bbox"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "text": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "text",
+      "regions"
+     ],
+     "type": "object"
+    },
+    "strict": true
+   },
+   "type": "json_schema"
+  }
+ },
+ "status": 200,
+ "contentType": "application/json",
+ "response": {
+  "id": "chatcmpl-9f709aac-cd8f-47e9-8855-fbdf7993e2f6",
+  "choices": [
+   {
+    "index": 0,
+    "message": {
+     "content": "{\"regions\": [{\"bbox\": [77, 99, 341, 401], \"label\": \"red rectangle\"}, {\"bbox\": [569, 97, 757, 453], \"label\": \"blue circle\"}, {\"bbox\": [153, 605, 315, 906], \"label\": \"green triangle\"}, {\"bbox\": [492, 590, 773, 673], \"label\": \"text 'INVOICE 4721'\"}, {\"bbox\": [491, 749, 774, 832], \"label\": \"text 'TOTAL $58.20'\"}], \"text\": \"\"}",
+     "refusal": null,
+     "role": "assistant"
+    },
+    "finish_reason": "stop",
+    "logprobs": null
+   }
+  ],
+  "created": 1795039067,
+  "model": "private/nvidia/nemotron-3.5-super-120b-a12b",
+  "object": "chat.completion",
+  "usage": {
+   "prompt_tokens": 663,
+   "completion_tokens": 177,
+   "total_tokens": 840,
+   "prompt_tokens_details": {
+    "cached_tokens": 0
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 0
+   }
+  }
+ }
+}

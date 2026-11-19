@@ -1,0 +1,112 @@
+{
+ "recorded": "2026-11-19",
+ "path": "/v1/messages",
+ "request": {
+  "max_tokens": 4000,
+  "messages": [
+   {
+    "content": [
+     {
+      "type": "image",
+      "source": {
+       "type": "base64",
+       "data": "{{image:base64:sha256:e06122585d0e563291001437fa372c2190362a26f40ad318d3e0efc9c3a8078d:109385}}",
+       "media_type": "image/png"
+      }
+     },
+     {
+      "type": "text",
+      "text": "This is a screenshot of a form. Locate each of these labelled widgets: menu, search, avatar, name-field, email-field, phone-field, country, notes, cancel, save, help, status. Label each region with the widget's name exactly as given (for example `name-field`).\n\nThe image is 2356x1530 pixels. Give each region's `box` as [x_min, y_min, x_max, y_max] in pixels of that image, origin at the top-left corner, x to the right and y down, the box tight around the region. Answer with JSON only, in this shape: {\"text\": <the answer>, \"regions\": [...]}."
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "model": "claude-sonnet-5-5",
+  "thinking": {
+   "type": "adaptive"
+  },
+  "stream": false,
+  "output_config": {
+   "effort": "low",
+   "format": {
+    "type": "json_schema",
+    "schema": {
+     "additionalProperties": false,
+     "properties": {
+      "regions": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "box": {
+          "description": "[x_min, y_min, x_max, y_max] in pixels of the image.",
+          "items": {
+           "type": "number"
+          },
+          "type": "array"
+         },
+         "label": {
+          "description": "What the region is.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "label",
+         "box"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "text": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "text",
+      "regions"
+     ],
+     "type": "object"
+    }
+   }
+  },
+  "cache_control": {
+   "type": "ephemeral"
+  }
+ },
+ "status": 200,
+ "contentType": "application/json",
+ "response": {
+  "model": "claude-sonnet-5-5",
+  "id": "msg_011ChB9AJ4TiM8EuA7kLiAhC",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "text",
+    "text": "{\"regions\":[{\"box\":[19,14,171,67],\"label\":\"menu\"},{\"box\":[764,24,1465,86],\"label\":\"search\"},{\"box\":[2228,16,2330,87],\"label\":\"avatar\"},{\"box\":[312,234,1013,296],\"label\":\"name-field\"},{\"box\":[312,335,1013,397],\"label\":\"email-field\"},{\"box\":[312,436,1013,498],\"label\":\"phone-field\"},{\"box\":[1169,234,1636,296],\"label\":\"country\"},{\"box\":[312,545,1636,857],\"label\":\"notes\"},{\"box\":[1293,919,1465,981],\"label\":\"cancel\"},{\"box\":[1496,919,1636,981],\"label\":\"save\"},{\"box\":[31,1465,125,1519],\"label\":\"help\"},{\"box\":[1948,1465,2330,1519],\"label\":\"status\"}],\"text\":\"Located all 12 widgets.\"}"
+   }
+  ],
+  "container": null,
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 4,
+   "cache_creation_input_tokens": 5238,
+   "cache_read_input_tokens": 0,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 5238,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 296,
+   "output_tokens_details": {
+    "thinking_tokens": 0
+   },
+   "service_tier": "standard",
+   "inference_geo": "global",
+   "speed": "standard"
+  },
+  "diagnostics": null
+ }
+}

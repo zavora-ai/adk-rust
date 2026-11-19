@@ -143,6 +143,7 @@ Local-first perception (`adk-vision`, spec 3.7, Experimental): regions in source
 - [Overview](vision/index.md) - Concepts and the eight traits, coordinate frames and transform chains, the runtime's routing and crop escalation, the egress gate, model manifests, licences and the fetcher, writing a backend and its conformance suite
 - [Governed Vision Tools](vision/governed-tools.md) - The seven vision tools on the governed path, approval with the exact egress image, egress rules, budget holds before release, `vision.*` audit records, and the harness vision pack
 - [Local ONNX Backends](vision/onnx.md) - RF-DETR detection and instance masks, EfficientSAM and SAM 2.1 point and box segmentation, and SigLIP 2 image and text embeddings on ONNX Runtime; the built-in Apache-2.0 models, your own exports, execution providers, offline builds and measured latency
+- [Cloud backends](vision/cloud.md) - `LlmDescriber` over Gemini, Claude, Muse and any `Llm`, region adapters and preflight, NVIDIA NIM, and Meta `sam-3.1`
 
 ## Tools
 
