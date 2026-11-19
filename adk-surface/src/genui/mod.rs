@@ -35,6 +35,8 @@ mod capabilities_wire;
 #[cfg(feature = "genui")]
 mod catalog;
 #[cfg(feature = "genui")]
+mod chat_cards;
+#[cfg(feature = "genui")]
 mod draw;
 mod drawn;
 #[cfg(feature = "genui")]
@@ -79,6 +81,11 @@ pub use capabilities_wire::{
 pub use catalog::{
     Catalog, CatalogError, Catalogs, ChildSlot, ExtensionComponent, ExtensionSpec,
     FORMS_CATALOG_ID, HomeNode, HomePanel, HomeScene, HomeText, ResolvedComponent,
+};
+#[cfg(feature = "genui")]
+pub use chat_cards::{
+    DRAWN_ACTION_KEY, adaptive_card, slack_blocks, slack_pressed, submit_from_slack,
+    submit_from_teams, teams_pressed,
 };
 #[cfg(feature = "genui")]
 pub use draw::{

@@ -26,6 +26,7 @@ adk-surface = { version = "3.0.0", features = ["web", "genui"] }
 | `Validator`, `Catalog::forms` | `genui` | Rule 5, and the `forms` 1.0 catalog the tools draw in |
 | The A2UI v0.9.1 model (`A2uiMessage`, `encode_jsonl`, `decode_jsonl`) | `genui` | The internal form a drawing is stored and checked in |
 | `A2uiVersion`, `to_wire`, `from_wire`, `components_in` | `genui` | A2UI 1.0 (the default) and v0.9.1 on the wire. See [A2UI versions](#a2ui-versions) |
+| `slack_blocks`, `adaptive_card`, `submit_from_slack`, `submit_from_teams` | `genui` | Drawings as Slack Block Kit and Teams Adaptive Cards, and their presses as `SubmitDrawn`. See [In Slack and Teams](#in-slack-and-teams) |
 | `read_function_message`, `FunctionInvocation`, `FunctionResponse`, `INVALID_FUNCTION_CALL` | `genui` | A2UI 1.0 function calls read, and answered `INVALID_FUNCTION_CALL`. See [A2UI versions](#a2ui-versions) |
 | `ValidationResult`, `Severity` | `genui` | A refusal, or a warning, in A2UI 1.0's `ValidationResult` shape |
 | The thread items `drawn`, `drawnRefused` and `drawnSent`, and the `submitDrawn` command | every `web` build | The page and the OpenAPI document are the same on every server; one built without `genui` never projects a drawing and answers `submitDrawn` with `surface.unsupported` |
@@ -446,6 +447,23 @@ draws the invoice form, then a screen with an "Allow once" button, which is refu
 ```bash
 cargo run -p adk-surface --features web,genui --example scripted_genui -- 8805 /tmp/genui-home
 ```
+
+## In Slack and Teams
+
+`slack_blocks(&surface)` writes a projected drawing (`DrawnSurface`) as a Slack message and
+`adaptive_card(&surface)` as a Microsoft Teams Adaptive Card 1.5. They draw what the terminal
+draws: text and headings, the home's summary of a chart or scene with "Open the home to see it
+drawn.", fields as Slack input blocks or Adaptive Card inputs, and each drawn button with the
+engine's line under it. Nothing is markdown (Slack `plain_text`; Adaptive Card text has its
+markdown characters escaped), and buttons carry no style, so none looks like a decision's. A
+Slack message keeps to 50 blocks and ends with "Open the home to see the rest." when cut.
+
+A press comes back as the command the home sends: `slack_pressed(payload)` or
+`teams_pressed(value)` names the surface and version, and `submit_from_slack(session, &surface,
+payload)` or `submit_from_teams(session, &surface, value)` reads the fields into
+`Command::SubmitDrawn`, which the engine checks against the stored drawing and holds for the
+person's decision as from the home. A press of an older version reads as nothing. The chat
+adapters do not post drawings yet; a host that does calls these functions.
 
 ## Over AG-UI
 
