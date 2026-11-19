@@ -768,6 +768,7 @@ impl Worker {
                 user_content: ContentData::text(&judge_context(&user_text, &trace.events)),
                 final_response: None,
                 intermediate_data: None,
+                expected_vision: None,
             };
             let result = TurnResult {
                 invocation_id: trace.invocation_id.clone(),
@@ -775,6 +776,7 @@ impl Worker {
                 expected_response: None,
                 actual_tool_calls,
                 expected_tool_calls: Vec::new(),
+                actual_vision: None,
                 scores: HashMap::new(),
             };
             let (turn_scores, turn_failures) = self.scorer.score_turn(&turn, &result).await?;

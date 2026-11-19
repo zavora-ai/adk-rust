@@ -269,6 +269,9 @@ pub struct TurnResult {
     pub actual_tool_calls: Vec<crate::schema::ToolUse>,
     /// Expected tool calls
     pub expected_tool_calls: Vec<crate::schema::ToolUse>,
+    /// Perception answer read from the turn's vision tool responses
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual_vision: Option<crate::vision::VisionAnswer>,
     /// Scores for this turn
     pub scores: HashMap<String, f64>,
 }

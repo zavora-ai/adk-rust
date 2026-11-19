@@ -216,7 +216,9 @@ enum AdkCommand {
     /// stdin and writes one JSON response per line on stdout:
     /// request `{"case_id","turn","user_text","session_id"}`, response
     /// `{"text","tool_calls":[{"name","args"}]}` or `{"error"}`. Every turn of a case shares
-    /// a session_id. Logs go to stderr.
+    /// a session_id. Logs go to stderr. A turn that shows image fixtures adds
+    /// `"images":[{"path","digest","mime_type"}]`, verified before the run; a tool call may
+    /// add its `"response"`, which the vision criteria score.
     ///
     /// `--ledger <export.jsonl>` instead runs the ledger statistics over an exported activity
     /// ledger and exits non-zero on a meaningful deviation of its last day from the baseline.

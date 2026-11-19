@@ -217,6 +217,7 @@ mod tests {
             user_content: ContentData::text(input),
             final_response: expected.map(ContentData::model_response),
             intermediate_data: None,
+            expected_vision: None,
         }];
 
         // If there's no expected response on the turn, still keep it consistent

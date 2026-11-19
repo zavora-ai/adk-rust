@@ -100,6 +100,7 @@ fn weather_set() -> TestFile {
                     ],
                     ..Default::default()
                 }),
+                expected_vision: None,
             }],
             session_input: Default::default(),
             tags: vec![],

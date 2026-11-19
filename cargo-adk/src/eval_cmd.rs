@@ -13,6 +13,16 @@
 //! Every turn of a case shares one `session_id`, and each case gets a new one, so the
 //! agent keys its conversation state by `session_id`. The responses are scored with
 //! `adk_eval::Evaluator`, so the criteria behave exactly as they do in a Rust test.
+//!
+//! A turn that shows images adds `images`: each fixture's absolute path, its SHA-256 (already
+//! verified) and its MIME type. A tool call may carry the tool's `response`, which is how
+//! vision answers reach the vision criteria:
+//!
+//! ```text
+//! → {"case_id":"shapes","turn":0,"user_text":"…","session_id":"…",
+//!    "images":[{"path":"/…/shapes.png","digest":"sha256:…","mime_type":"image/png"}]}
+//! ← {"tool_calls":[{"name":"vision_detect","args":{},"response":{"regions":[{"box":[80,60,320,220],"label":"red rectangle"}]}}]}
+//! ```
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -27,7 +37,8 @@ use adk_core::{
 };
 use adk_eval::{
     BaselineStore, EvalCase, EvalError, EvaluationConfig, EvaluationCriteria, EvaluationReport,
-    EvaluationResult, Evaluator, Failure, JunitReporter, MultiRunConfig, MultiRunReport, TestFile,
+    EvaluationResult, Evaluator, Failure, ImageFixture, JunitReporter, MultiRunConfig,
+    MultiRunReport, TestFile,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -361,6 +372,9 @@ fn load_criteria(path: Option<&Path>) -> Result<EvaluationCriteria, String> {
                     least one, such as \"response_similarity\": 0.8"
             .to_string());
     }
+    if let Some(vision) = &criteria.vision {
+        vision.validate()?;
+    }
     Ok(criteria)
 }
 
@@ -524,6 +538,16 @@ struct AgentRequest<'a> {
     turn: usize,
     user_text: &'a str,
     session_id: &'a str,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    images: Vec<AgentImage>,
+}
+
+/// An image the turn shows, verified against its digest when the eval set was loaded.
+#[derive(Debug, Serialize)]
+struct AgentImage {
+    path: String,
+    digest: String,
+    mime_type: String,
 }
 
 /// One response line read from the agent's stdout.
@@ -542,6 +566,9 @@ struct AgentToolCall {
     name: String,
     #[serde(default)]
     args: serde_json::Value,
+    /// The tool's result, scored by the vision criteria when it is a vision tool's.
+    #[serde(default)]
+    response: Option<serde_json::Value>,
 }
 
 /// A running agent process and its protocol pipes.
@@ -705,6 +732,7 @@ impl Agent for CommandAgent {
             turn: self.next_turn.fetch_add(1, Ordering::SeqCst),
             user_text: &user_text,
             session_id: ctx.session_id(),
+            images: images_of(ctx.user_content())?,
         };
         let response = self.command.exchange(&request).await.map_err(AdkError::agent)?;
         if let Some(error) = response.error {
@@ -712,7 +740,15 @@ impl Agent for CommandAgent {
         }
 
         let mut content = Content::new("model");
+        let mut results = Content::new("function");
         for call in response.tool_calls {
+            if let Some(result) = call.response {
+                results.parts.push(Part::FunctionResponse {
+                    function_response: adk_core::FunctionResponseData::new(&call.name, result),
+                    id: None,
+                    annotations: None,
+                });
+            }
             content.parts.push(Part::FunctionCall {
                 name: call.name,
                 args: call.args,
@@ -723,11 +759,50 @@ impl Agent for CommandAgent {
         if let Some(text) = response.text {
             content = content.with_text(text);
         }
-        let mut event = Event::new(ctx.invocation_id());
-        event.author = self.name().to_string();
-        event.llm_response.content = Some(content);
-        Ok(Box::pin(futures::stream::iter([Ok(event)])))
+        let mut events = Vec::with_capacity(2);
+        for content in [content, results] {
+            if content.parts.is_empty() && !events.is_empty() {
+                continue;
+            }
+            let mut event = Event::new(ctx.invocation_id());
+            event.author = self.name().to_string();
+            event.llm_response.content = Some(content);
+            events.push(Ok(event));
+        }
+        Ok(Box::pin(futures::stream::iter(events)))
     }
+}
+
+/// The eval fixtures a turn's content shows, by path: `adk_eval` puts each verified
+/// fixture's resolved path in its inline part's `adkEvalFixture` annotation.
+fn images_of(content: &Content) -> adk_core::Result<Vec<AgentImage>> {
+    content
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            Part::InlineData { mime_type, data, annotations, .. } => {
+                Some((mime_type, data, annotations))
+            }
+            _ => None,
+        })
+        .map(|(mime_type, data, annotations)| {
+            let path = annotations
+                .as_ref()
+                .and_then(|a| a.pointer("/adkEvalFixture/path"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    AdkError::agent(
+                        "the turn shows an image that is not an eval fixture; give it as an \
+                         {\"image\": {\"path\", \"digest\"}} part",
+                    )
+                })?;
+            Ok(AgentImage {
+                path: path.to_string(),
+                digest: ImageFixture::digest_of(data),
+                mime_type: mime_type.clone(),
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -741,6 +816,7 @@ mod tests {
             turn: 1,
             user_text: "And tomorrow?",
             session_id: "s-1",
+            images: Vec::new(),
         };
         assert_eq!(
             serde_json::to_value(&request).unwrap(),
@@ -751,6 +827,63 @@ mod tests {
                 "session_id": "s-1"
             })
         );
+    }
+
+    #[test]
+    fn requests_name_each_verified_image_by_path_and_digest() {
+        let mut content = Content::new("user").with_text("Find the seal.");
+        content.parts.push(Part::InlineData {
+            mime_type: "image/png".to_string(),
+            data: b"png".to_vec(),
+            uri: None,
+            annotations: Some(serde_json::json!({
+                "adkEvalFixture": {"path": "/evals/img/seal.png", "digest": "sha256:ignored"}
+            })),
+        });
+        let request = AgentRequest {
+            case_id: "seal",
+            turn: 0,
+            user_text: "Find the seal.",
+            session_id: "s-2",
+            images: images_of(&content).unwrap(),
+        };
+        assert_eq!(
+            serde_json::to_value(&request).unwrap()["images"],
+            serde_json::json!([{
+                "path": "/evals/img/seal.png",
+                // Computed from the bytes the agent is pointed at, not copied.
+                "digest": ImageFixture::digest_of(b"png"),
+                "mime_type": "image/png"
+            }])
+        );
+
+        let mut stray = Content::new("user");
+        stray.parts.push(Part::InlineData {
+            mime_type: "image/png".to_string(),
+            data: b"png".to_vec(),
+            uri: None,
+            annotations: None,
+        });
+        assert!(images_of(&stray).unwrap_err().to_string().contains("not an eval fixture"));
+    }
+
+    #[test]
+    fn tool_call_responses_parse() {
+        let response: AgentResponse = serde_json::from_str(
+            r#"{"tool_calls":[{"name":"vision_detect","args":{},"response":{"regions":[]}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(response.tool_calls[0].response, Some(serde_json::json!({"regions": []})));
+    }
+
+    #[test]
+    fn vision_thresholds_are_checked_when_the_criteria_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("vision.json");
+        std::fs::write(&file, r#"{"vision": {"mask_iou": 90}}"#).unwrap();
+        assert!(load_criteria(Some(&file)).unwrap_err().contains("mask_iou is 90"));
+        std::fs::write(&file, r#"{"vision": {"mask_iou": 0.9}}"#).unwrap();
+        assert_eq!(load_criteria(Some(&file)).unwrap().vision.unwrap().mask_iou, Some(0.9));
     }
 
     #[test]

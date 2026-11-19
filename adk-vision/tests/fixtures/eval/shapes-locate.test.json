@@ -1,0 +1,84 @@
+{
+  "eval_set_id": "vision-shapes-locate",
+  "name": "Drawn shapes, located by a describer",
+  "description": "Five labelled objects located by a describer asked for regions; boxes in source pixels.",
+  "eval_cases": [
+    {
+      "eval_id": "shapes_locate",
+      "description": "Locate the shapes and the two text lines",
+      "conversation": [
+        {
+          "invocation_id": "t0",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "image": {
+                  "path": "../cloud/shapes-960x540.png",
+                  "digest": "sha256:7dcd8d7292fe3b2608f25d27ac53752e4854fce81aa0e86d324ff589208aca1f"
+                }
+              },
+              {
+                "text": "Locate these objects and label each region exactly as given: \"red rectangle\", \"blue circle\", \"green triangle\", \"text 'INVOICE 4721'\", \"text 'TOTAL $58.20'\"."
+              }
+            ]
+          },
+          "expected_vision": {
+            "regions": [
+              {
+                "label": "red rectangle",
+                "box": [
+                  80,
+                  60,
+                  320,
+                  220
+                ]
+              },
+              {
+                "label": "blue circle",
+                "box": [
+                  550,
+                  60,
+                  730,
+                  240
+                ]
+              },
+              {
+                "label": "green triangle",
+                "box": [
+                  140,
+                  330,
+                  301,
+                  481
+                ]
+              },
+              {
+                "label": "text 'INVOICE 4721'",
+                "box": [
+                  480,
+                  328,
+                  744,
+                  357
+                ]
+              },
+              {
+                "label": "text 'TOTAL $58.20'",
+                "box": [
+                  480,
+                  416,
+                  744,
+                  451
+                ]
+              }
+            ],
+            "count": 5
+          }
+        }
+      ],
+      "tags": [
+        "describe",
+        "regions"
+      ]
+    }
+  ]
+}

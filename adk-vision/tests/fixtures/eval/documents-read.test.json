@@ -1,0 +1,77 @@
+{
+  "eval_set_id": "vision-documents-read",
+  "name": "Generated documents",
+  "description": "A report page and an invoice drawn by documents/generate.py; text in reading order (12 px bands, left to right) and the invoice's `Label: value` fields.",
+  "eval_cases": [
+    {
+      "eval_id": "report_page",
+      "description": "Read the report page: title, paragraph, table, chart labels, footer",
+      "conversation": [
+        {
+          "invocation_id": "t0",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "image": {
+                  "path": "../documents/doc-page-1000x1300.png",
+                  "digest": "sha256:d90315711a767fbfc074af77488f3c22166d65f1f860258001729993236fff4c"
+                }
+              },
+              {
+                "text": "Read this page."
+              }
+            ]
+          },
+          "expected_vision": {
+            "text": "Quarterly Parts Report\nThe conveyor inspected 200 printed parts this quarter.\nTwelve parts carried seeded defects of known length,\nand each defect was measured against the fiducial.\nPart\nDefect\nLength (mm)\nP-017\ncrack\n4.2\nP-088\nvoid\n1.9\nP-143\nburr\n0.7\nDefects by type\n5\n4\n3\n2\n1\n0\ncrack\nvoid\nburr\nPage 1 of 1"
+          }
+        }
+      ],
+      "tags": [
+        "read",
+        "ocr"
+      ]
+    },
+    {
+      "eval_id": "invoice",
+      "description": "Read the invoice and its labelled fields (invented personal data)",
+      "conversation": [
+        {
+          "invocation_id": "t0",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "image": {
+                  "path": "../documents/invoice-personal-1000x1300.png",
+                  "digest": "sha256:b8f6d3d14333823c4053d77248aa0e404cc702dc371177d1a44995594970b16d"
+                }
+              },
+              {
+                "text": "Read this page."
+              }
+            ]
+          },
+          "expected_vision": {
+            "text": "INVOICE INV-4721\nBill to\nName: Amara Okafor\nDate: 2026-11-19\nAddress: 14 Larch Street, Springfield 62704\nDue: 2026-12-19\nEmail: amara.okafor@example.com\nPhone: +1 415 555 0142\nItem\nQty\nAmount\nTorque sensor\n2\n24.00\nFiducial card\n1\n12.70\nSeal kit\n3\n21.50\nTotal: 58.20\nThank you for your order.",
+            "fields": {
+              "name": "Amara Okafor",
+              "address": "14 Larch Street, Springfield 62704",
+              "email": "amara.okafor@example.com",
+              "phone": "+1 415 555 0142",
+              "date": "2026-11-19",
+              "due": "2026-12-19",
+              "total": "58.20"
+            }
+          }
+        }
+      ],
+      "tags": [
+        "read",
+        "ocr",
+        "fields"
+      ]
+    }
+  ]
+}

@@ -205,6 +205,7 @@ impl TestGenerator {
                     user_content: ContentData::text(&user_text),
                     final_response,
                     intermediate_data,
+                    expected_vision: None,
                 });
             }
         }
