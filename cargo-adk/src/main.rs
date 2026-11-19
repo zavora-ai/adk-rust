@@ -1756,7 +1756,7 @@ fn get_builtin_templates() -> Vec<TemplateInfo> {
         },
         TemplateInfo {
             name: "api",
-            description: "REST API server with /chat and /health endpoints",
+            description: "REST API server exposing the agent over HTTP",
             default_provider: "gemini",
             features: vec!["minimal", "server"],
         },
@@ -2538,13 +2538,14 @@ async fn main() -> anyhow::Result<()> {{
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
     // Loopback by default. Set BIND_HOST=0.0.0.0 to expose this agent, and configure
-    // authentication before you do: the A2A JSON-RPC routes run agent and tool work — and
-    // incur its cost — on behalf of whoever calls them.
+    // authentication before you do: the run routes run agent and tool work — and incur its
+    // cost — on behalf of whoever calls them.
     let host = std::env::var("BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let addr = format!("{{host}}:{{port}}");
     println!("ADK agent server running on http://{{addr}}");
-    println!("  POST /chat          — send messages");
-    println!("  GET  /health        — health check");
+    println!("  GET  /api/health                              — health check");
+    println!("  POST /api/sessions                            — create a session (appName, userId)");
+    println!("  POST /api/run/{name}/<user_id>/<session_id>   — send a message, SSE response");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
@@ -2637,8 +2638,10 @@ async fn main() -> anyhow::Result<()> {{
         .build()?;
 
     println!("A2A agent server running on http://{{addr}}");
-    println!("  GET  /.well-known/agent-card.json — agent card");
-    println!("  POST /jsonrpc                     — JSON-RPC endpoint");
+    println!("  GET  /.well-known/agent-card.json — A2A v1 agent card");
+    println!("  GET  /.well-known/agent.json      — A2A 0.3 agent card");
+    println!("  POST /a2a/v1                      — A2A v1 JSON-RPC (header A2A-Version: 1.0)");
+    println!("  POST /a2a, POST /a2a/stream       — A2A 0.3 JSON-RPC");
 
     server.serve().await?;
     Ok(())
@@ -2933,6 +2936,31 @@ mod tests {
             let (cargo_toml, _, _) = generator("assistant", "gemini");
             assert_current_template(&cargo_toml);
         }
+    }
+
+    #[test]
+    fn server_banners_name_only_routes_the_server_serves() {
+        // `create_app` serves the REST API under `/api`; A2aServer adds the A2A v1 and 0.3 routes.
+        let (_, api_main, _) = generate_api("assistant", "anthropic");
+        for route in ["GET  /api/health", "POST /api/sessions", "POST /api/run/assistant/"] {
+            assert!(api_main.contains(route), "api banner misses `{route}`:\n{api_main}");
+        }
+        let (_, a2a_main, _) = generate_a2a("assistant", "anthropic", false);
+        for route in [
+            "GET  /.well-known/agent-card.json",
+            "GET  /.well-known/agent.json",
+            "POST /a2a/v1",
+            "POST /a2a, POST /a2a/stream",
+        ] {
+            assert!(a2a_main.contains(route), "a2a banner misses `{route}`:\n{a2a_main}");
+        }
+        for main_rs in [&api_main, &a2a_main] {
+            for absent in ["/chat", "GET  /health", "/jsonrpc"] {
+                assert!(!main_rs.contains(absent), "banner names `{absent}`, which 404s");
+            }
+        }
+        let api = get_builtin_templates().into_iter().find(|t| t.name == "api").unwrap();
+        assert!(!api.description.contains("/chat"), "{}", api.description);
     }
 
     #[test]

@@ -624,6 +624,35 @@ mod tests {
     }
 
     #[test]
+    fn server_scaffolds_log_the_routes_they_serve() {
+        let api = generate_main_rs(
+            &resolve_composition(&registry(), "api", &[], "anthropic").unwrap(),
+            "qs",
+        );
+        for route in ["GET  /api/health", "POST /api/sessions", "POST /api/run/qs/"] {
+            assert!(api.contains(route), "api banner misses `{route}`:\n{api}");
+        }
+        // `--template a2a` is the `a2a-server` pattern: `llm` with the `server` and `sessions` addons.
+        let a2a = generate_main_rs(
+            &resolve_composition(&registry(), "llm", &["server", "sessions"], "anthropic").unwrap(),
+            "peer",
+        );
+        for route in [
+            "GET  /.well-known/agent-card.json",
+            "GET  /.well-known/agent.json",
+            "POST /a2a/v1",
+            "POST /a2a, POST /a2a/stream",
+        ] {
+            assert!(a2a.contains(route), "a2a banner misses `{route}`:\n{a2a}");
+        }
+        for main_rs in [&api, &a2a] {
+            for absent in ["/chat", "GET  /health", "/jsonrpc"] {
+                assert!(!main_rs.contains(absent), "banner names `{absent}`, which 404s");
+            }
+        }
+    }
+
+    #[test]
     fn graph_template_builds_a_checkpointed_graph_agent() {
         let manifest = resolve_composition(&registry(), "graph", &[], "gemini").unwrap();
         let main_rs = generate_main_rs(&manifest, "my-graph");
