@@ -6,7 +6,6 @@
 //! Apache-2.0 safetensors on Hugging Face, pinned in the built-in manifest
 //! (`paddleocr-vl-1.6`, `pp-doclayoutv3`).
 
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -91,41 +90,6 @@ impl std::fmt::Debug for PaddleOcrVlReader {
     }
 }
 
-/// The directory a verified model's top-level files sit in, after checking that the
-/// loader will find no weights there the manifest does not pin.
-fn model_dir(model: &VerifiedModel, required: &[&str]) -> Result<PathBuf> {
-    let id = &model.manifest().id;
-    let invalid = |reason: String| VisionError::Manifest { id: id.clone(), reason };
-    let mut dir: Option<PathBuf> = None;
-    for path in required {
-        let file = model.file(path).ok_or_else(|| {
-            invalid(format!("the manifest pins no `{path}`, which the loader reads"))
-        })?;
-        let parent = file.path().parent().map(Path::to_path_buf).unwrap_or_default();
-        match &dir {
-            None => dir = Some(parent),
-            Some(d) if *d != parent => {
-                return Err(invalid(format!("`{path}` is not beside the model's other files")));
-            }
-            Some(_) => {}
-        }
-    }
-    let dir = dir.ok_or_else(|| invalid("no file to load".into()))?;
-    // The loaders collect every `*.safetensors` in the directory; each must be pinned.
-    let entries =
-        std::fs::read_dir(&dir).map_err(|e| VisionError::io("could not read", &dir, e))?;
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.ends_with(".safetensors") && model.file(&name).is_none() {
-            return Err(invalid(format!(
-                "`{name}` in {} is not in the manifest and would load unverified; remove it",
-                dir.display()
-            )));
-        }
-    }
-    Ok(dir)
-}
-
 impl PaddleOcrVlReader {
     /// Loads PaddleOCR-VL-1.6 and PP-DocLayoutV3 from models verified against their
     /// manifests.
@@ -141,11 +105,13 @@ impl PaddleOcrVlReader {
         layout: &VerifiedModel,
         device: VlDevice,
     ) -> Result<Self> {
-        let vl_dir = model_dir(
-            vl,
-            &["config.json", "preprocessor_config.json", "tokenizer.json", "model.safetensors"],
-        )?;
-        let layout_dir = model_dir(layout, &["config.json", "model.safetensors"])?;
+        let vl_dir = vl.dir_of(&[
+            "config.json",
+            "preprocessor_config.json",
+            "tokenizer.json",
+            "model.safetensors",
+        ])?;
+        let layout_dir = layout.dir_of(&["config.json", "model.safetensors"])?;
         let id = "paddleocr-vl-1.6".to_string();
         let backend = |message: String| VisionError::Backend { backend: id.clone(), message };
         let candle = oar_ocr_vl::utils::parse_device(device.name()).map_err(|e| {

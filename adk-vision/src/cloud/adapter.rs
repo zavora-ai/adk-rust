@@ -98,6 +98,7 @@ pub trait RegionAdapter: Send + Sync + Debug {
 /// | `nvidia/nemotron-*` vision-language models | [`Normalized1000::nemotron`] | 0–1000, x first, fixed by the prompt |
 /// | `google/gemma-4-*` | [`Normalized1000::gemma4`] | 0–1000, x first, fixed by the prompt |
 /// | `muse-*` | [`Normalized1000::muse`] | 0–1000, x first, fixed by the prompt |
+/// | `qwen3-vl-*` (`Qwen/Qwen3-VL-2B-Instruct`, ...) | [`Normalized1000::qwen3_vl`] | 0–1000, x first, the model's own frame |
 pub fn adapter_for_model(model: &str) -> Option<Arc<dyn RegionAdapter>> {
     let id = model.to_ascii_lowercase();
     let name = id.rsplit('/').next().unwrap_or(&id);
@@ -115,6 +116,9 @@ pub fn adapter_for_model(model: &str) -> Option<Arc<dyn RegionAdapter>> {
     }
     if name.starts_with("muse-") {
         return Some(Arc::new(Normalized1000::muse(model)));
+    }
+    if name.starts_with("qwen3-vl") {
+        return Some(Arc::new(Normalized1000::qwen3_vl(model)));
     }
     None
 }
@@ -236,6 +240,8 @@ mod tests {
         );
         assert_eq!(name("google/gemma-4-31b-it").as_deref(), Some("normalized-1000"));
         assert_eq!(name("muse-spark-1.3").as_deref(), Some("normalized-1000"));
+        assert_eq!(name("Qwen/Qwen3-VL-2B-Instruct").as_deref(), Some("normalized-1000"));
+        assert_eq!(name("Qwen/Qwen2.5-VL-3B-Instruct"), None);
         assert_eq!(name("nvidia/nemotron-3.5-embed-1b"), None);
         assert_eq!(name("gpt-5.2"), None);
     }

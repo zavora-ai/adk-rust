@@ -22,10 +22,14 @@ use crate::traits::ImageRegion;
 /// | [`nemotron`](Self::nemotron) | `nvidia/nemotron-3.5-super-vl-120b-a12b`, `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | `⌈w/32⌉ × ⌈h/32⌉` | `chat_template_kwargs.enable_thinking: false` |
 /// | [`gemma4`](Self::gemma4) | `google/gemma-4-31b-it` | 260 per image | — |
 /// | [`muse`](Self::muse) | `muse-*` | `⌈w/32⌉ × ⌈h/32⌉` | — |
+/// | [`qwen3_vl`](Self::qwen3_vl) | `Qwen/Qwen3-VL-*`, in process through mistral.rs or behind an OpenAI-compatible server | `⌈w/32⌉ × ⌈h/32⌉` | no response schema; the prompt fixes the shape |
 ///
 /// The NVIDIA token counts were measured from `usage.prompt_tokens` on build.nvidia.com:
 /// 960×540 costs 510 tokens and 1600×1600 costs 2,500 on Super VL and Nano Omni; Gemma 4
-/// spends about 260 on any size.
+/// spends about 260 on any size. Qwen3-VL answers `bbox_2d` on 0–1000, x first, natively —
+/// Qwen's own grounding cookbook converts with `value / 1000 × width` — so for it the prompt
+/// restates the frame the model was trained on; one image token covers a 32×32 tile
+/// (patch 16, merge 2).
 ///
 /// # Example
 ///
@@ -40,6 +44,7 @@ pub struct Normalized1000 {
     tokens: ImageTokens,
     thinking_off: bool,
     vendor: Option<&'static str>,
+    structured: bool,
 }
 
 const FRAME: CoordFrame = CoordFrame::Normalized { scale: 1000, order: AxisOrder::Xy };
@@ -47,13 +52,18 @@ const FRAME: CoordFrame = CoordFrame::Normalized { scale: 1000, order: AxisOrder
 impl Normalized1000 {
     /// An adapter counting image tokens with `tokens`.
     pub fn new(tokens: ImageTokens) -> Self {
-        Self { tokens, thinking_off: false, vendor: None }
+        Self { tokens, thinking_off: false, vendor: None, structured: true }
     }
 
     /// NVIDIA's Nemotron vision-language models. Their reasoning counts toward
     /// `max_tokens` and can leave the answer empty, so perception calls turn it off.
     pub fn nemotron(_model: &str) -> Self {
-        Self { tokens: ImageTokens::Tiles { side: 32 }, thinking_off: true, vendor: Some("nvidia") }
+        Self {
+            tokens: ImageTokens::Tiles { side: 32 },
+            thinking_off: true,
+            vendor: Some("nvidia"),
+            structured: true,
+        }
     }
 
     /// Google's Gemma 4 as NVIDIA hosts it.
@@ -62,12 +72,41 @@ impl Normalized1000 {
             tokens: ImageTokens::Fixed { tokens: 260 },
             thinking_off: false,
             vendor: Some("nvidia"),
+            structured: true,
         }
     }
 
     /// Meta's Muse models through the Meta Model API.
     pub fn muse(_model: &str) -> Self {
-        Self { tokens: ImageTokens::Tiles { side: 32 }, thinking_off: false, vendor: None }
+        Self {
+            tokens: ImageTokens::Tiles { side: 32 },
+            thinking_off: false,
+            vendor: None,
+            structured: true,
+        }
+    }
+
+    /// Qwen3-VL, whose native grounding frame this is. `adk-mistralrs` passes no response
+    /// schema to the model, so the answer's shape is fixed by the prompt and parsed
+    /// defensively: a bare list of `{"bbox_2d": [...], "label": ...}`, Qwen's own form, is
+    /// read too.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_vision::cloud::{Normalized1000, RegionAdapter};
+    ///
+    /// let qwen = Normalized1000::qwen3_vl("Qwen/Qwen3-VL-2B-Instruct");
+    /// assert!(!qwen.structured_output());
+    /// assert_eq!(qwen.image_tokens().tokens((640, 400)), 260);
+    /// ```
+    pub fn qwen3_vl(_model: &str) -> Self {
+        Self {
+            tokens: ImageTokens::Tiles { side: 32 },
+            thinking_off: false,
+            vendor: None,
+            structured: false,
+        }
     }
 }
 
@@ -135,6 +174,10 @@ impl RegionAdapter for Normalized1000 {
 
     fn vendor(&self) -> Option<&str> {
         self.vendor
+    }
+
+    fn structured_output(&self) -> bool {
+        self.structured
     }
 }
 

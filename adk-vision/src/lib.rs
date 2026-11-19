@@ -32,6 +32,8 @@
 //! | `ocr` | `PpOcrReader`: PP-OCRv6 text lines and words through `oar-ocr` on ONNX Runtime |
 //! | `ocr-vl` | `PaddleOcrVlReader`: PaddleOCR-VL-1.6 with PP-DocLayoutV3 through `oar-ocr-vl` on Candle |
 //! | `ocr-vl-metal` | `ocr-vl` on Apple GPUs |
+//! | `mistralrs` | `mistralrs`: `LlmDescriber::mistralrs` loads a verified Qwen3-VL (or another mistral.rs vision model) in this process; regions in Qwen3-VL's own 0–1000 frame (implies `cloud`, `fetch`) |
+//! | `mistralrs-metal`, `mistralrs-cuda` | `mistralrs` on Apple GPUs or CUDA |
 //!
 //! [`VisionToolset`] — `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`,
 //! `vision_crop`, `vision_redact`, `vision_annotate` — is always built: each tool runs on
@@ -39,8 +41,6 @@
 //! evidence, and every call, release and edit writes its `vision.*` audit record
 //! ([`audit`]).
 //!
-//! The other backends — OCR and mistral.rs — are features added by the workstreams that
-//! bring them.
 //!
 //! # Example
 //!
@@ -108,6 +108,8 @@ mod geometry;
 mod guardrail;
 mod manifest;
 mod media;
+#[cfg(feature = "mistralrs")]
+pub mod mistralrs;
 #[cfg(feature = "nim")]
 mod nim_cv;
 #[cfg(feature = "ocr")]

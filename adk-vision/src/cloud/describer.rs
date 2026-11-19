@@ -185,6 +185,13 @@ impl<I> LlmDescriber<I> {
         self
     }
 
+    /// Names the manifest the model was loaded from.
+    #[cfg(feature = "mistralrs")]
+    pub(crate) fn with_manifest(mut self, id: &str) -> Self {
+        self.descriptor.manifest = Some(id.to_string());
+        self
+    }
+
     /// Sets the input limits, for a provider whose limit is lower than its adapter's.
     pub fn with_limits(mut self, limits: InputLimits) -> Self {
         self.descriptor.limits = limits;
