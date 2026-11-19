@@ -447,21 +447,23 @@ Surfaces a person uses speak plainly. The terminal and developer panels may use 
 
 ## 9. Visual language
 
-The look follows [adk-rust.com](https://adk-rust.com): Inter and JetBrains Mono, rust orange as the one accent, two-tone display headings, a soft rust glow in one corner. Light and dark come from one set of tokens, and every dark screen is the light screen rendered with the dark set.
+Calm mission control. The look keeps [adk-rust.com](https://adk-rust.com)'s rust orange and soft corner glow, set in Geist and Geist Mono over warm neutrals. One accent is kept for what waits on the person and for the primary action; data takes blues, teals and violets, never the accent. Light and dark come from one set of tokens, and every dark screen is the light screen rendered with the dark set. Dark is layered from near black, so depth reads without extra borders. The tokens live in `adk-surface/web/src/styles/tokens.css`, and a script checks their contrast when it writes them.
 
 | Token | Light | Dark |
 |---|---|---|
-| Background | `#FFFFFF` | `#0A1628` |
-| Card | `#FFFFFF` | `#15233B` |
-| Raised (chips, switchers) | `#F6F7F9` | `#1C2B45` |
-| Border | `#E6E8EC` | `#2A3D5C` |
-| Text / secondary / labels | `#0F172A` / `#475569` / `#64748B` | `#F1F5F9` / `#D5DEE8` / `#A7B4C6` |
-| Brand (display, dots) | `#F74C00` | `#F74C00` |
-| Accent text and primary button | `#C03A00` with white text | `#FF9C78` text; `#F74C00` button with navy text |
-| Decision background | `#FFF8F3` | `#2A2432` |
-| Stop control | navy `#0A1628` | light `#F1F5F9` |
+| Background / sidebar | `#FAFAF9` / `#F4F4F2` | `#0E0F11` / `#0B0C0E` |
+| Card | `#FFFFFF` | `#16171A` |
+| Raised (chips, switchers) | `#F4F4F1` | `#1E1F23` |
+| Border / strong border | `#E7E6E2` / `#D6D4CF` | `#26272C` / `#36373D` |
+| Text / secondary / labels | `#18181B` / `#4B4B53` / `#6B6B74` | `#EDEDEF` / `#B5B5BD` / `#8E8E97` |
+| Brand (display, dots) | `#F74C00` | `#FF6A1F` |
+| Accent text and primary button | `#C2410C` with white text | `#FF8A4C` with near-black text |
+| Decision background / border | `#FFF7F1` / `#F6CDB4` | `#1F1610` / `#5C3119` |
+| Stop control | `#18181B` | `#EDEDEF` |
 
-Text colours target WCAG AA contrast (4.5:1) against their background; the bright brand orange appears only on large type and dots. Agents have rounded monogram avatars in their own colour. Status uses a word and a colour, never colour alone.
+Type is a seven-step scale: 12/16, 13/18, 14/20, 16/24, 20/28, 24/32 and 32/40. Radii are 6, 10 and 14 px, plus round pills. Shadows have two layers, a contact shadow and a soft lift. Motion uses 120, 160 and 240 ms on one ease-out curve, and none of it runs when the person asks for reduced motion.
+
+Text colours meet WCAG AA contrast (4.5:1) against their background; the bright brand orange appears only on large type and dots. What waits on the person carries one accent edge. Agents have rounded monogram avatars in their own colour. Status uses a word and a colour, never colour alone. On a phone, touch targets are at least 44 px.
 
 ## 10. Changes outside the new crate
 
