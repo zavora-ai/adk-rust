@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zavora-ai/adk-rust/blob/main/adk-vision/schema/region-set.json",
+  "title": "RegionSet",
+  "description": "An image's digest and dimensions and the regions found in it, every region in that image's pixels: origin top-left, x right, y down, box edges x1 and y1 exclusive. Each region names the backend that found it, the coordinate frame the backend answered in, and the transform chain from the image to what the backend saw. Spec 3.7 §7.3.",
+  "type": "object",
+  "required": ["image", "width", "height", "regions"],
+  "additionalProperties": false,
+  "properties": {
+    "image": { "$ref": "#/$defs/digest" },
+    "width": { "type": "integer", "minimum": 1 },
+    "height": { "type": "integer", "minimum": 1 },
+    "regions": { "type": "array", "items": { "$ref": "#/$defs/region" } }
+  },
+  "$defs": {
+    "digest": {
+      "description": "SHA-256 of the image's encoded bytes.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "coordinate": { "type": "number" },
+    "pair": {
+      "type": "array",
+      "prefixItems": [{ "$ref": "#/$defs/coordinate" }, { "$ref": "#/$defs/coordinate" }],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "count": { "type": "integer", "minimum": 0 },
+    "region": {
+      "type": "object",
+      "required": ["image", "shape", "origin"],
+      "additionalProperties": false,
+      "properties": {
+        "image": { "$ref": "#/$defs/digest" },
+        "shape": { "$ref": "#/$defs/shape" },
+        "label": { "type": "string" },
+        "score": { "type": "number" },
+        "track": { "$ref": "#/$defs/count" },
+        "origin": { "$ref": "#/$defs/origin" }
+      }
+    },
+    "shape": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "x", "y"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "point" },
+            "x": { "$ref": "#/$defs/coordinate" },
+            "y": { "$ref": "#/$defs/coordinate" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "x0", "y0", "x1", "y1"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "box" },
+            "x0": { "$ref": "#/$defs/coordinate" },
+            "y0": { "$ref": "#/$defs/coordinate" },
+            "x1": { "$ref": "#/$defs/coordinate" },
+            "y1": { "$ref": "#/$defs/coordinate" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "points"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "polygon" },
+            "points": { "type": "array", "items": { "$ref": "#/$defs/pair" } }
+          }
+        },
+        {
+          "description": "A binary mask at the image's resolution, run-length encoded in COCO's column-major order, unset run first; the runs sum to width times height.",
+          "type": "object",
+          "required": ["kind", "width", "height", "counts"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "mask" },
+            "width": { "$ref": "#/$defs/count" },
+            "height": { "$ref": "#/$defs/count" },
+            "counts": { "type": "array", "items": { "$ref": "#/$defs/count" } }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "skeleton", "points"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "keypoints" },
+            "skeleton": { "type": "string" },
+            "points": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["x", "y", "visible"],
+                "additionalProperties": false,
+                "properties": {
+                  "x": { "$ref": "#/$defs/coordinate" },
+                  "y": { "$ref": "#/$defs/coordinate" },
+                  "visible": { "type": "boolean" },
+                  "score": { "type": "number" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "origin": {
+      "type": "object",
+      "required": ["backend", "frame", "chain"],
+      "additionalProperties": false,
+      "properties": {
+        "backend": { "type": "string" },
+        "manifest": { "type": "string" },
+        "frame": { "$ref": "#/$defs/frame" },
+        "chain": { "$ref": "#/$defs/chain" },
+        "escalatedFrom": { "$ref": "#/$defs/escalatedFrom" }
+      }
+    },
+    "frame": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": { "kind": { "const": "sentPixels" } }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "scale", "order"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "normalized" },
+            "scale": { "$ref": "#/$defs/count" },
+            "order": { "enum": ["xy", "yx"] }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "width", "height", "letterbox"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "modelInput" },
+            "width": { "$ref": "#/$defs/count" },
+            "height": { "$ref": "#/$defs/count" },
+            "letterbox": { "enum": ["stretch", "center", "topLeft"] }
+          }
+        }
+      ]
+    },
+    "chain": {
+      "type": "object",
+      "required": ["sourceWidth", "sourceHeight", "steps"],
+      "additionalProperties": false,
+      "properties": {
+        "sourceWidth": { "$ref": "#/$defs/count" },
+        "sourceHeight": { "$ref": "#/$defs/count" },
+        "steps": { "type": "array", "items": { "$ref": "#/$defs/transform" } }
+      }
+    },
+    "transform": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["op", "x", "y", "width", "height"],
+          "additionalProperties": false,
+          "properties": {
+            "op": { "const": "crop" },
+            "x": { "$ref": "#/$defs/count" },
+            "y": { "$ref": "#/$defs/count" },
+            "width": { "$ref": "#/$defs/count" },
+            "height": { "$ref": "#/$defs/count" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["op", "width", "height"],
+          "additionalProperties": false,
+          "properties": {
+            "op": { "const": "resize" },
+            "width": { "$ref": "#/$defs/count" },
+            "height": { "$ref": "#/$defs/count" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["op", "left", "top", "right", "bottom"],
+          "additionalProperties": false,
+          "properties": {
+            "op": { "const": "pad" },
+            "left": { "$ref": "#/$defs/count" },
+            "top": { "$ref": "#/$defs/count" },
+            "right": { "$ref": "#/$defs/count" },
+            "bottom": { "$ref": "#/$defs/count" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["op", "quarterTurns"],
+          "additionalProperties": false,
+          "properties": {
+            "op": { "const": "rotate" },
+            "quarterTurns": { "type": "integer", "minimum": 0, "maximum": 255 }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["op"],
+          "additionalProperties": false,
+          "properties": { "op": { "const": "redact" } }
+        }
+      ]
+    },
+    "escalatedFrom": {
+      "type": "object",
+      "required": ["backend", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "backend": { "type": "string" },
+        "reason": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["kind", "threshold"],
+              "additionalProperties": false,
+              "properties": { "kind": { "const": "lowConfidence" }, "threshold": { "type": "number" } }
+            },
+            {
+              "type": "object",
+              "required": ["kind"],
+              "additionalProperties": false,
+              "properties": { "kind": { "const": "noResult" } }
+            },
+            {
+              "type": "object",
+              "required": ["kind", "with"],
+              "additionalProperties": false,
+              "properties": { "kind": { "const": "disagreement" }, "with": { "type": "string" } }
+            }
+          ]
+        },
+        "label": { "type": "string" },
+        "score": { "type": "number" },
+        "text": { "type": "string" }
+      }
+    }
+  }
+}

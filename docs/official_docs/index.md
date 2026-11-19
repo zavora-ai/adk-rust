@@ -136,6 +136,12 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 - [Building Web Apps](realtime/building-web-apps.md) - The server-side bridge, WS protocol, and Web Audio
 - [Examples](realtime/examples.md) - The four runnable examples and a suggested learning path
 
+## Vision
+
+Local-first perception (`adk-vision`, spec 3.7, Experimental): regions in source pixels, verified weights, and a gate every image passes before it leaves the machine.
+
+- [Overview](vision/index.md) - Concepts and the eight traits, coordinate frames and transform chains, the runtime's routing and crop escalation, the egress gate, model manifests, licences and the fetcher, writing a backend and its conformance suite
+
 ## Tools
 
 - [Function Tools](tools/function-tools.md) - Create custom tools with async Rust functions

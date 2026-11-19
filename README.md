@@ -10,7 +10,7 @@
 [![Sponsors](https://img.shields.io/github/sponsors/zavora-ai?logo=githubsponsors&color=EA4AAA)](https://github.com/sponsors/zavora-ai)
 
 A Rust framework for building AI agents, including agents that work on their own inside limits
-you set. Model-agnostic, type-safe and async, across 49 publishable crates for agent
+you set. Model-agnostic, type-safe and async, across 50 publishable crates for agent
 orchestration.
 
 > **v3.0.0 release candidate — unpublished.** This major release carries breaking
@@ -19,7 +19,7 @@ orchestration.
 > approvals, and audit records join the runtime, with the harness, the agent kernel and
 > agent surfaces on top. The published release is 2.3.0, with all 43 crates on
 > [crates.io](https://crates.io/crates/adk-rust/2.3.0); `adk-harness`, `adk-kernel`,
-> `adk-surface`, `adk-site`, `adk-drivers`, and `adk-website` are new in 3.0.0.
+> `adk-surface`, `adk-site`, `adk-drivers`, `adk-website`, and `adk-vision` are new in 3.0.0.
 >
 > **Milestone:** ADK-Rust has crossed **500K total crates.io downloads** across
 > the workspace crates.
@@ -293,6 +293,7 @@ checks an agent definition without building. `cargo adk templates` and
 | `adk-site` | Site pipeline (Experimental) | Content, the built-in and sandboxed external generators, the launch gate, signed releases and the site log, host adapters, migration, constant updates |
 | `adk-drivers` | Service drivers (Experimental) | DNS and registrar, email, analytics and search console, social and advertising, as kernel driver manifests with conformance suites |
 | `adk-website` | The AWP website product (Experimental) | Site kinds, the team of eight agents, onboarding, capability packs, playbooks, incidents, alarms, the weekly review and deployment shapes |
+| `adk-vision` | Local-first perception (Experimental) | Regions in source pixels with their transform chains, model manifests pinned by revision and SHA-256, detection, segmentation, document, embedding, description, tracking and editing traits with conformance suites, crop escalation and the egress gate |
 | `adk-acp` | Agent Client Protocol integration | Official stable v1 client and server, one-shot and persistent sessions, streaming, cancellation, async permissions, client files and terminals, per-session MCP, and editor-facing ADK agents |
 | `adk-rag` | RAG pipeline | Document chunking, embeddings, vector search, reranking, 6 backends |
 | `adk-runner` | Agent execution runtime | Event streaming, session persistence, transfer enforcement, plugins, run budgets, spend and action ledgers, durable cancellation, `Runner::close` |

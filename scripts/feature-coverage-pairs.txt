@@ -23,7 +23,7 @@
 # | 3  | adk-server, adk-durability-gates, adk-graph, adk-managed, adk-code |
 # | 4  | adk-tool, adk-agent, adk-runner, adk-model, adk-skill |
 # | 5  | adk-cli: voice, website and phone |
-# | 6  | small opt-in surfaces, adk-sandbox, adk-awp, adk-site |
+# | 6  | small opt-in surfaces, adk-sandbox, adk-awp, adk-site, adk-vision |
 # | 7  | adk-harness |
 # | 8  | adk-cli: registries, stores, providers, agent-drawn UI |
 # | 9  | adk-surface |
@@ -430,6 +430,10 @@
 # External generators (spec 3.5 §7.8): export, starter projects and assembly from recorded
 # generator output under the launch gate, with the doctests; then one generator alone.
 6 adk-site gen-zola,gen-hugo,gen-astro,gen-build-awesome doc
+# The vision model fetcher (spec 3.7 §7.4): downloads by revision, SHA-256 checks, offline mode
+# without a socket and the licence gate against a local fixture hub, with the doctests; the
+# live huggingface.co fetches are ignored.
+6 adk-vision fetch doc
 6 adk-site gen-astro
 # `awp verify` against the preview in the launch gate (spec 3.5 §7.8.1), without `migrate`.
 6 adk-site verify doc
