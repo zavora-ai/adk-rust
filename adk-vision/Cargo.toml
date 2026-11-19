@@ -53,10 +53,10 @@ sam = ["dep:adk-model", "adk-model/muse", "dep:base64", "dep:futures", "dep:reqw
 # PP-OCRv6 text lines and words through `oar-ocr` on ONNX Runtime (§7.6), the runtime
 # downloaded at build time over rustls as `onnx` does. Weights come through the manifest and
 # fetcher; `oar-ocr`'s own ModelScope `auto-download` stays off.
-ocr = ["dep:oar-ocr", "dep:ort", "ort/download-binaries", "ort/tls-rustls", "ort/copy-dylibs", "oar-ocr/simd", "dep:serde-saphyr"]
+ocr = ["fetch", "dep:oar-ocr", "dep:ort", "ort/download-binaries", "ort/tls-rustls", "ort/copy-dylibs", "oar-ocr/simd", "dep:serde-saphyr"]
 # PaddleOCR-VL-1.6 with PP-DocLayoutV3 through `oar-ocr-vl` on Candle (§7.6): layout,
 # reading order, tables, formulas and seals.
-ocr-vl = ["dep:oar-ocr-vl"]
+ocr-vl = ["fetch", "dep:oar-ocr-vl"]
 # `ocr-vl` on Apple GPUs through Candle's Metal backend.
 ocr-vl-metal = ["ocr-vl", "oar-ocr-vl/metal"]
 
