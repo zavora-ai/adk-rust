@@ -17,7 +17,7 @@ exclude = ["tests/"]
 [package.metadata.docs.rs]
 # docs.rs has no CUDA or Metal toolchain, so the GPU features are left out; ort-sys skips
 # linking on docs.rs.
-features = ["fetch", "conformance", "guardrail", "onnx", "ocr", "ocr-vl", "nim"]
+features = ["fetch", "conformance", "guardrail", "onnx", "ocr", "ocr-vl", "cloud", "nim", "sam"]
 
 # Spec 3.7 §7.1: media, geometry, manifests, the traits, `VisionRuntime`, the egress boundary
 # and the deterministic `Editor` always build; each runtime and provider is a feature, added
@@ -86,6 +86,7 @@ adk-model = { workspace = true, optional = true }
 # Base64 images inside tool results (`guardrail`), data URLs and mask payloads (`cloud`, `sam`), and NIM data URIs (`nim`).
 base64 = { version = "0.22", optional = true }
 futures = { workspace = true, optional = true }
+# `sam` streams; `nim`'s CV endpoints take JSON bodies with inline data URIs.
 reqwest = { workspace = true, optional = true }
 
 # Same client configuration as adk-rag: the blocking ureq client, no default TLS stack.
@@ -104,8 +105,6 @@ oar-ocr = { version = "0.10.3", optional = true, default-features = false }
 serde-saphyr = { workspace = true, optional = true }
 # `ocr-vl`: the release matching `oar-ocr`; no `auto-download`.
 oar-ocr-vl = { version = "0.10.3", optional = true, default-features = false }
-# `nim`: the CV endpoints take JSON bodies with inline data URIs.
-reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Path-only self dependency, so the crate's own tests run the conformance suite.

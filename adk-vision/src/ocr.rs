@@ -126,7 +126,7 @@ fn verified_bytes(model: &VerifiedModel, path: &str) -> Result<Vec<u8>> {
 /// On-device: it implements the trait for [`SentImage`] and answers in the pixels of the
 /// image it was handed (`CoordFrame::SentPixels`). Words are the recogniser's character
 /// boxes merged at spaces, so their horizontal extent is the CTC alignment's estimate.
-/// Layout, tables and fields come from [`PaddleOcrVlReader`](crate::PaddleOcrVlReader) or a
+/// Layout, tables and fields come from `PaddleOcrVlReader` (feature `ocr-vl`) or a
 /// cloud reader.
 ///
 /// # Example
