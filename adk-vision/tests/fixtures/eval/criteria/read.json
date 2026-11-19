@@ -1,0 +1,7 @@
+{
+  "vision": {
+    "ocr_char_accuracy": 0.95,
+    "ocr_word_accuracy": 0.9,
+    "field_normalized_match": 0.85
+  }
+}

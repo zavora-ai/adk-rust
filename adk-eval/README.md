@@ -24,6 +24,7 @@ Agent evaluation framework for Rust Agent Development Kit (ADK-Rust).
 - **Cost & Latency Tracking**: Token usage extraction, dollar cost estimation, latency recording
 - **Trace Analysis**: Detect redundant tool calls, execution loops, compute efficiency scores
 - **Regression Baselines**: Save/load metric snapshots, detect quality degradation
+- **Vision**: image fixtures pinned by SHA-256 and verified on load (`ImageFixture`), and `EvaluationCriteria::vision` scoring regions, masks, OCR text, document fields, detections and click targets in source pixels against each turn's `expected_vision` (`vision` module)
 - **Repeated Runs**: `Evaluator::evaluate_test_file_runs` runs an eval set `num_runs` times and reports each case's pass rate, score mean and sample variance, and flakiness (`MultiRunReport`); baselines from it carry a `pass_rate` metric
 - **Metered Judging**: `Evaluator::set_run_config` puts every eval run and LLM-judge call under one budget, spend ledger and kill switch; a refusal stops the evaluation (`EvalError::Refused`) instead of failing cases
 - **Online Evaluation**: `online::OnlineEvaluator` judges a seeded sample of finished production runs (filters by agent, request metadata and outcome) on a background worker with rubric, safety, hallucination, trajectory-efficiency and thread-level criteria, under its own budget and the kill switch; verdicts go to an `OnlineEvalStore` (in-memory or JSONL) and to `gen_ai.evaluation.result` telemetry
@@ -518,6 +519,36 @@ fn main() -> adk_eval::Result<()> {
 ```
 
 A baseline metric or case with no score in the new run, such as a case that errored, is a regression with `current_value: None`. A missing baseline file is an error rather than an empty result.
+
+### Vision
+
+A turn shows the agent an image fixture by path and digest, and states what it must perceive
+in `expected_vision`; the scores come from the agent's `vision_detect`, `vision_segment`,
+`vision_read` and `vision_describe` responses.
+
+```json
+{
+  "invocation_id": "t0",
+  "user_content": {"role": "user", "parts": [
+    {"image": {"path": "scene-1024x640.png", "digest": "sha256:c0e126b352e65420f0072d06ee1f15b73d3fc90e930adcd44a525954999048a9"}},
+    {"text": "stop sign, clock"}
+  ]},
+  "expected_vision": {
+    "regions": [{"label": "stop sign", "box": [121.4, 111.4, 398.6, 388.6]}],
+    "count": 2
+  }
+}
+```
+
+| Scores | From |
+|--------|------|
+| `region_iou`, `box_hit_rate`, `mask_iou` | Expected regions and masks |
+| `detection_precision`, `detection_recall`, `detection_ap`, `detection_map` | COCO matching at `iou_threshold` |
+| `ocr_char_accuracy`, `ocr_word_accuracy` | Expected page text |
+| `field_exact_match`, `field_normalized_match` | Expected fields |
+| `grounding_hit_rate`, `count_accuracy` | Click targets and the region count |
+
+See [Vision Evals](../docs/official_docs/vision/evals.md).
 
 ### Ledger Statistics
 

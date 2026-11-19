@@ -298,9 +298,11 @@ dependencies = [
  "adk-runner",
  "adk-session",
  "adk-tool",
+ "adk-vision",
  "async-trait",
  "chrono",
  "futures",
+ "image",
  "libc",
  "serde",
  "serde_json",
@@ -308,6 +310,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "wiremock",
 ]
 
 [[package]]

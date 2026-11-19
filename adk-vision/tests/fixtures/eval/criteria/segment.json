@@ -1,0 +1,7 @@
+{
+  "vision": {
+    "mask_iou": 0.9,
+    "region_iou": 0.9,
+    "count_accuracy": 1.0
+  }
+}

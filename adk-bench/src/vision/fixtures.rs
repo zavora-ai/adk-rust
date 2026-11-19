@@ -122,6 +122,7 @@ mod tests {
             ("shapes-locate", (960, 540)),
             ("s5-grounding", (3024, 1964)),
             ("documents-read", (1000, 1300)),
+            ("generated-detect", (1024, 640)),
         ] {
             let workload = set.workload(name, &["region_iou"]).unwrap();
             let (image, _) = workload.latency.as_ref().unwrap();

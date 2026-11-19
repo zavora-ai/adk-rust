@@ -2,6 +2,7 @@
 """Writes the vision eval sets in this directory from the fixtures' ground truth.
 
 Each image is pinned by its SHA-256, so `adk-eval` refuses a case whose image changed.
+The detection scene is drawn by scene.py first.
 Masks are rasterised from the drawn geometry, pixel centres inside each shape, and
 run-length encoded in COCO's column-major order. Run from anywhere:
 
@@ -180,7 +181,22 @@ def documents():
     )
 
 
+def detect():
+    truth = json.loads((HERE / "scene-1024x640.groundtruth.json").read_text())
+    labels = [o["label"] for o in truth["objects"]]
+    write(
+        "generated-detect.test.json", "vision-generated-detect", "Drawn scene, COCO classes",
+        "A stop sign and a wall clock drawn by scene.py at known boxes, for closed-set "
+        "detectors trained on COCO (RF-DETR); the turn's text names the classes.",
+        [case("scene_stop_sign_clock", "Detect the stop sign and the clock",
+              [turn("t0", [image_part("scene-1024x640.png"), {"text": ", ".join(labels)}],
+                    {"regions": [{"label": o["label"], "box": o["bbox"]} for o in truth["objects"]],
+                     "count": len(labels)})], ["detect"])],
+    )
+
+
 if __name__ == "__main__":
     shapes()
     s5()
     documents()
+    detect()
