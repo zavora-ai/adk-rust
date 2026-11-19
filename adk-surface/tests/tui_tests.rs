@@ -99,6 +99,7 @@ async fn the_terminal_waits_on_a_held_call_draws_it_and_answers_it() {
         edited_args: None,
         reason: None,
         expanded: true,
+        evidence: Vec::new(),
     };
     s.engine.execute(&terminal(), decide).await.unwrap();
     eventually("the allowed write to run", WITHIN, || async {
@@ -153,6 +154,7 @@ async fn json_lines_say_a_decision_was_answered_in_telegram() {
         edited_args: None,
         reason: None,
         expanded: false,
+        evidence: Vec::new(),
     };
     s.engine.execute(&telegram(), decide).await.unwrap();
     eventually("the allowed write to run", WITHIN, || async {

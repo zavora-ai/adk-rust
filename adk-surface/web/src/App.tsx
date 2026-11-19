@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { ImageLoaderContext, sameOriginLoader } from "./evidence/images";
+import type { ImageLoader } from "./evidence/images";
 import type { Command, DecisionCard, Origin } from "./generated/api";
 import type { HomeClient } from "./client";
 import { ApiError, problemText } from "./client";
@@ -42,6 +44,7 @@ export function App({
   seams = {},
   takeOver,
   initialSection,
+  initialAgent,
   website,
   verbs,
   workflow,
@@ -50,6 +53,8 @@ export function App({
   seams?: Seams;
   takeOver?: TakeOverSeam;
   initialSection?: Section;
+  /** The agent whose thread opens first, by its name in the runtime; the first row's otherwise. */
+  initialAgent?: string;
   /** The website's views, where the server serves a website (spec 3.5 §8.2). */
   website?: WebsiteClient;
   /** Screen actions, where the server takes them (spec 3.3 §2 item 7). */
@@ -60,7 +65,7 @@ export function App({
   const [section, setSection] = useState<Section>(() => initialSection ?? sectionOf(window.location.pathname));
   const [theme, setTheme] = useState<Theme>(storedTheme);
   const [problem, setProblem] = useState("");
-  const [selected, setSelected] = useState<string>();
+  const [selected, setSelected] = useState<string | undefined>(initialAgent);
   const [focusDecision, setFocusDecision] = useState<string>();
   // A decision of another session is shown in place of the person's conversation until they go
   // back; the conversation each thread follows (`followed`) never moves to it.
@@ -234,6 +239,12 @@ export function App({
       voice && voiceOffered(voiceModels.value?.models.length ?? 0) ? { open: () => navigate("voice") } : undefined,
     [voice, voiceModels.value, navigate],
   );
+  // A decision's images load as the signed-in viewer (spec 3.7 §8.2).
+  const imageLoader = useMemo<ImageLoader>(
+    () => (client.image ? (href) => client.image!(href) : sameOriginLoader),
+    [client],
+  );
+
   if (section === "voice" && voice) {
     // The conversation ended opens in Threads under the agent, in place of its own thread.
     const ended = (sessionId?: string) => {
@@ -390,7 +401,11 @@ export function App({
       </div>
     </div>
   );
-  return <VoiceEntryContext.Provider value={voiceEntry}>{home}</VoiceEntryContext.Provider>;
+  return (
+    <ImageLoaderContext.Provider value={imageLoader}>
+      <VoiceEntryContext.Provider value={voiceEntry}>{home}</VoiceEntryContext.Provider>
+    </ImageLoaderContext.Provider>
+  );
 }
 
 /** The client's voice routes, when it has them. */

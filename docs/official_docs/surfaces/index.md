@@ -342,6 +342,7 @@ generated from the Rust types. `bash scripts/check-surface-api.sh` fails when th
 
 - [The Web Home](web-home.md) — the page at `/ui/` that reads and acts through this API
 - [The Terminal](terminal.md) — the `tui` feature: full screen, inline and JSON
+- [Approve with the Image](approve-with-image.md) — a held call's images on every surface: the exact image that would leave, the digest an answer names, changing it before it leaves
 - [Chat](chat.md) — the `channels` feature: the Telegram adapter over the kernel's channel contract
 - [The Phone](phone.md) — the `mobile` feature: wake-ups from your own kernel, device answers and "Confirm it's you"
 - [The Desktop Tray](desktop.md) — Experimental, a separate app: the home in a desktop window and the tray panel at `/ui/tray`

@@ -30,6 +30,7 @@ the agent and the risk, and nothing of the call's arguments (S-I5):
 | Who and risk | Finance · Medium risk | The asking agent, and the risk in the words of spec 3.3 §8 |
 | Buttons | **Allow once** · **Deny** | The answers the card offers, and no others; none at high risk or for a call that moves money |
 | Link | Open in home | The gateway's `home_url`, for everything chat may not decide |
+| Image | The exact image that would leave | For a call with images: Telegram built with `artifacts` sends the image first and keeps **Allow once** beside it; otherwise the card names the digest, says to look in the home and offers **Deny** only ([Approve with the Image](approve-with-image.md)) |
 
 A card chat may not answer says why instead of offering buttons: "This always needs you, on a
 screen. Voice, chat and standing permissions can't say yes to it." The decision's id and

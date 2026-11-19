@@ -161,6 +161,7 @@ mod engine {
                         edited_args: None,
                         reason: None,
                         expanded: true,
+                        evidence: Vec::new(),
                     },
                 )
                 .await
@@ -498,6 +499,7 @@ mod conversation {
                     edited_args: None,
                     reason: None,
                     expanded: true,
+                    evidence: Vec::new(),
                 },
             )
             .await
@@ -692,6 +694,7 @@ mod conversation {
                     edited_args: None,
                     reason: None,
                     expanded: true,
+                    evidence: Vec::new(),
                 },
             )
             .await

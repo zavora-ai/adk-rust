@@ -44,6 +44,9 @@ pub struct AnswerRequest {
     /// The device showed the call in full (§7.1).
     #[serde(default)]
     pub expanded: bool,
+    /// The digests of the images the device showed, for a call with images (spec 3.7 §8.2).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<String>,
 }
 
 /// `POST /surface/stop` body: **Stop all** from a paired device (spec 3.3 §11 S-I10).

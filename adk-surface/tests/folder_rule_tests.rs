@@ -80,6 +80,7 @@ async fn answer(s: &Scenario, card: &DecisionCard, answer: Answer) {
                 edited_args: None,
                 reason: None,
                 expanded: true,
+                evidence: Vec::new(),
             },
         )
         .await

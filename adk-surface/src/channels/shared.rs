@@ -34,8 +34,8 @@ use tokio::time::Instant;
 #[cfg(any(feature = "whatsapp", feature = "slack", feature = "discord", feature = "teams"))]
 pub(crate) use super::telegram::wire::parse_callback;
 pub(crate) use super::telegram::wire::{
-    ANSWER_NOT_TAKEN, Heading, MESSAGE_NOT_TAKEN, callback_data, heading, hh_mm, is_hidden,
-    is_invisible, split,
+    ANSWER_NOT_TAKEN, Heading, MESSAGE_NOT_TAKEN, callback_data, chat_images, heading, hh_mm,
+    is_hidden, is_invisible, split,
 };
 use crate::answers::{AnswerLog, AnswerRecord, SURFACE_AUDIT_DECIDE};
 use crate::origin::{Origin, SurfaceKind, Via};
@@ -668,6 +668,11 @@ impl Kit {
         };
         let mut heading = heading(card, request.as_ref());
         let mut card = card.clone();
+        // A card with images: this adapter cannot attach them, so it links to the home and
+        // never offers Allow once (spec 3.7 §8.2, board choice A17).
+        if let Some(request) = request.as_ref().filter(|request| request.id == card.decision) {
+            chat_images(request, None, &mut card, &mut heading).await;
+        }
         if let Some(request) = request.as_ref().filter(|request| request.id == card.decision) {
             let mut headed = false;
             for hints in &self.card_hints {

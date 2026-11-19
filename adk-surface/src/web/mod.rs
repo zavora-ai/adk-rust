@@ -111,6 +111,9 @@ pub mod paths {
     pub const QUEUED: &str = "/surface/sessions/{session}/queued";
     /// `POST`: the secret a person typed for a take-over decision.
     pub const TAKE_OVER: &str = "/surface/decisions/{id}/take-over";
+    /// `GET`: one of the images a decision holds as evidence, its digest checked, for a viewer
+    /// who may see the decision (spec 3.7 §8.2, §8.3).
+    pub const EVIDENCE: &str = "/surface/decisions/{id}/evidence/{index}";
     /// `GET`: the roster.
     pub const AGENTS: &str = "/surface/agents";
     /// `GET`: one agent a person added (spec 3.3 §5.7).
@@ -190,6 +193,7 @@ pub fn router(engine: SurfaceEngine) -> Router {
     Router::new()
         .route(paths::DECISIONS, get(decisions))
         .route(paths::DECISION, get(decision))
+        .route(paths::EVIDENCE, get(evidence))
         .route(paths::THREAD, get(thread))
         .route(paths::FEED, get(feed))
         .route(paths::QUEUED, get(queued))
@@ -430,6 +434,35 @@ async fn decision(
     let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
     match engine.decision(&caller, &id).await {
         Ok(card) => Json(card).into_response(),
+        Err(error) => failed(error),
+    }
+}
+
+/// An image a decision holds as evidence, for a viewer who may see the decision: the exact
+/// bytes whose digest the card shows, never cached and never sniffed (spec 3.7 §8.2).
+async fn evidence(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path((id, index)): Path<(String, usize)>,
+    Query(query): Query<SurfaceQuery>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine.evidence_image(&caller, &id, index).await {
+        Ok(image) => {
+            let mime = match image.mime_type.as_str() {
+                "image/png" | "image/jpeg" | "image/webp" | "image/gif" => image.mime_type,
+                _ => "application/octet-stream".to_string(),
+            };
+            (
+                [
+                    (axum::http::header::CONTENT_TYPE, mime),
+                    (axum::http::header::CACHE_CONTROL, "private, no-store".to_string()),
+                    (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+                ],
+                image.bytes,
+            )
+                .into_response()
+        }
         Err(error) => failed(error),
     }
 }

@@ -49,6 +49,17 @@ pub const SURFACE_AUDIT_DRAWN_SUBMITTED: &str = "surface.drawn.submitted";
 /// The audit action of an answer as it is given, written before it takes effect; its
 /// `surface.decide` record says how it ended (spec 3.3 §11).
 pub const SURFACE_AUDIT_ANSWER: &str = "surface.answer";
+/// The audit action of a person changing an image before it leaves: the old digest, the new
+/// one and the change, written before the call is held again (spec 3.7 §9.3 `vision.edit`).
+pub const SURFACE_AUDIT_IMAGE_CHANGE: &str = "surface.image.change";
+
+/// The code an answer is recorded with when the images it names are not the call's.
+const EVIDENCE_CHANGED: &str = "surface.evidence_changed";
+
+/// What the agent is told of a call a person changed before it ran: it is held again, with
+/// what it would send now, for their answer (spec 3.7 V-I5).
+const HELD_AGAIN_REASON: &str = "The person changed this call before it ran. It is held again \
+    with the change, and the images it would send now, for their answer.";
 
 /// How often the feed reads the session store when the source has nothing faster.
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -122,6 +133,30 @@ pub enum Command {
         /// The surface showed the call in full (§7.1).
         #[serde(default)]
         expanded: bool,
+        /// The digests of the images the surface showed, in the order of the card's media
+        /// (spec 3.7 §8.2): an answer that lets a call with images run names the images it
+        /// lets leave, and is refused when they are not the call's.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        evidence: Vec<String>,
+    },
+    /// Tightens the crop of one of a decision's images or covers more of it, then holds the
+    /// call again with the new image in its place (spec 3.7 §8.2, board choice A8): the crop
+    /// only shrinks and covering only grows. The decision at `version` closes; the call with
+    /// the new image waits for the person's answer.
+    #[serde(rename_all = "camelCase")]
+    ChangeImage {
+        /// The card's `id`.
+        decision_id: String,
+        /// The card's `version`.
+        version: u64,
+        /// The digest of the image the person changed, as the card showed it.
+        from: String,
+        /// The change.
+        change: crate::evidence::ImageChange,
+        /// Only make the new image and say its digest and size, holding nothing again: what
+        /// the editor shows before **Use this image** (board choice A8).
+        #[serde(default)]
+        preview: bool,
     },
     /// Cancels a spoken "allow once" inside its cancel window (§7.2).
     #[serde(rename_all = "camelCase")]
@@ -284,6 +319,24 @@ pub enum CommandOutcome {
     #[serde(rename_all = "camelCase")]
     Changed {
         /// The decision now.
+        card: DecisionCard,
+    },
+    /// What a change to an image would make, held nowhere: the editor shows it before **Use
+    /// this image** (board choice A8).
+    #[serde(rename_all = "camelCase")]
+    ImagePreview {
+        /// The image the change would make: its digest and size, and the one it replaces.
+        changed: crate::evidence::ImageChanged,
+    },
+    /// The call was held again with what the person changed — its arguments, or one of its
+    /// images (spec 3.7 V-I5): `card` is the old decision, closed; the call waiting with the
+    /// new image follows in the feed.
+    #[serde(rename_all = "camelCase")]
+    HeldAgain {
+        /// The image change, when an image changed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        changed: Option<crate::evidence::ImageChanged>,
+        /// The old decision.
         card: DecisionCard,
     },
     /// A spoken "allow once" takes effect at `cancel_until` unless cancelled (§7.2).
@@ -705,6 +758,7 @@ impl SurfaceEngineBuilder {
                 draining: Mutex::new(HashSet::new()),
                 wake: Notify::new(),
                 spoken: Mutex::new(HashMap::new()),
+                changed_images: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -771,6 +825,9 @@ struct Inner {
     wake: Notify,
     /// Spoken "allow once" answers inside their cancel window, by decision.
     spoken: Mutex<HashMap<String, Spoken>>,
+    /// Images a person changed through this engine, by the new image's digest: the digest it
+    /// replaced, which the card of the call held again names (spec 3.7 §8.2).
+    changed_images: Mutex<HashMap<String, String>>,
 }
 
 /// One message of a session's queue.
@@ -977,6 +1034,20 @@ impl SurfaceEngine {
         let hint = self.hint(request).await;
         let mut card =
             self.inner.projector.card(request, caller, always, answer.as_ref(), self.now(), &hint);
+        // A call held again after a person changed it closed this request with a refusal; it
+        // reads as the change it was (spec 3.7 V-I5).
+        if let (Some(decided), Some(record)) = (card.decided.as_mut(), answer.as_ref())
+            && request.state == ApprovalState::Rejected
+            && record.answer == Answer::Edit
+            && record.approval_id == request.id
+        {
+            decided.answer = crate::model::DecidedAnswer::Edited;
+            decided.text = words::held_again_at(&decided.at_text);
+            if let Some(step) = card.timeline.last_mut() {
+                step.text = decided.text.clone();
+            }
+        }
+        self.add_media(caller, request, &hint, &mut card).await;
         // How far a surface's answer reaches: once, or by the standing rule it made (§5.4).
         if let (Some(decided), Some(record)) = (card.decided.as_mut(), answer.as_ref())
             && decided.via.is_some()
@@ -1062,6 +1133,119 @@ impl SurfaceEngine {
     /// The label of "Always allow" for `request`, when the source can create its rule. A
     /// request that needs more than one approver never offers it: the rule would let every
     /// later call skip the other approvers (spec 3.3 §7.2, §8.2).
+    /// The images `request` holds, on its card, and what they change about its answers and
+    /// its timeline (spec 3.7 §8.2): a chat card carries none (S-I5), and a decision whose run
+    /// ended while it waits says so (board choice A12).
+    async fn add_media(
+        &self,
+        caller: &Caller,
+        request: &ApprovalRequest,
+        hint: &CardHint,
+        card: &mut DecisionCard,
+    ) {
+        let waiting = request.state == ApprovalState::Pending;
+        if waiting && let Some(ended) = self.inner.source.run_ended(request).await {
+            let at_text = self.inner.projector.hh_mm(ended);
+            let minutes = (ended - request.created_at).num_minutes().max(0);
+            card.parked = Some(crate::model::ParkedView {
+                at: ended,
+                text: words::stopped_waiting(&card.agent.display_name, &at_text),
+                at_text: at_text.clone(),
+            });
+            let at = card.timeline.len().saturating_sub(1);
+            let step = crate::model::TimelineStep {
+                text: words::run_ended(minutes, &at_text),
+                current: false,
+            };
+            card.timeline.insert(at, step);
+        }
+        let decided = card.decided.as_ref().map(|decided| decided.answer);
+        let agent = card.agent.display_name.clone();
+        let Some(media) = self.media(request, hint, decided, &agent).await else { return };
+        if waiting {
+            rules::image_answers(rules::row(caller), self.image_gate(&media), &mut card.allowed);
+            if let Some(day) =
+                media.images.iter().find_map(|image| image.purged.as_ref()?.day.clone())
+            {
+                let at = card.timeline.len().saturating_sub(1);
+                let step = crate::model::TimelineStep {
+                    text: words::image_deleted_step(&day),
+                    current: false,
+                };
+                card.timeline.insert(at, step);
+            }
+        }
+        if rules::row(caller) != Row::Chat {
+            card.media = Some(media);
+        }
+    }
+
+    /// The media of `request`'s card, or `None` when it holds no image.
+    async fn media(
+        &self,
+        request: &ApprovalRequest,
+        hint: &CardHint,
+        decided: Option<crate::model::DecidedAnswer>,
+        agent: &str,
+    ) -> Option<crate::evidence::CardMedia> {
+        let first = crate::evidence::images(request).first().map(|image| image.digest.clone())?;
+        let kept = self.inner.source.evidence_kept(request).await;
+        let replaces = {
+            let changed =
+                self.inner.changed_images.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            request
+                .args_redacted
+                .get("image")
+                .and_then(Value::as_str)
+                .and_then(|named| changed.get(named))
+                .or_else(|| changed.get(&first))
+                .cloned()
+        };
+        crate::evidence::project(
+            request,
+            &crate::evidence::MediaInput {
+                facts: hint.media.as_ref(),
+                kept: &kept,
+                decided,
+                agent: agent.to_string(),
+                now: self.now(),
+                offset: self.inner.projector.offset,
+                can_change: self.inner.source.holds_again(),
+                replaces,
+            },
+        )
+    }
+
+    /// What the rules need to know of a card's images.
+    fn image_gate(&self, media: &crate::evidence::CardMedia) -> rules::ImageGate {
+        rules::ImageGate {
+            sendable: media.sendable(),
+            holds_again: self.inner.source.holds_again(),
+        }
+    }
+
+    /// The `index`th image decision `id` holds as evidence, for `caller` (spec 3.7 §8.3): only a
+    /// decision the caller may see, its bytes checked against the evidence's digest by the
+    /// source.
+    ///
+    /// # Errors
+    ///
+    /// `surface.not_found` when the caller has no such decision or image, or the image is no
+    /// longer kept; the source's error.
+    pub async fn evidence_image(
+        &self,
+        caller: &Caller,
+        id: &str,
+        index: usize,
+    ) -> Result<crate::evidence::EvidenceBytes> {
+        let request = self.owned_request(caller, id).await?;
+        let missing = || SurfaceError::not_found(format!("image {index} of decision '{id}'"));
+        if index >= crate::evidence::images(&request).len() {
+            return Err(missing());
+        }
+        self.inner.source.evidence_image(&request, index).await?.ok_or_else(missing)
+    }
+
     async fn always_label(&self, request: &ApprovalRequest) -> Option<String> {
         if request.policy.quorum > 1 {
             return None;
@@ -1399,7 +1583,15 @@ impl SurfaceEngine {
                     "a spoken answer goes through decide_spoken with its transcript".into(),
                 ))
             }
-            Command::Decide { decision_id, version, answer, edited_args, reason, expanded } => {
+            Command::Decide {
+                decision_id,
+                version,
+                answer,
+                edited_args,
+                reason,
+                expanded,
+                evidence,
+            } => {
                 self.decide(
                     caller,
                     &decision_id,
@@ -1407,10 +1599,13 @@ impl SurfaceEngine {
                     answer,
                     edited_args,
                     reason,
-                    expanded,
+                    (expanded, evidence),
                     None,
                 )
                 .await
+            }
+            Command::ChangeImage { decision_id, version, from, change, preview } => {
+                self.change_image(caller, &decision_id, version, &from, change, preview).await
             }
             Command::CancelAnswer { decision_id } => self.cancel_answer(caller, &decision_id).await,
             Command::Send { session_id, text } => {
@@ -1619,7 +1814,16 @@ impl SurfaceEngine {
         let (settle, settled) = oneshot::channel();
         let outcome = with_digest(
             Some(digest),
-            self.decide(caller, decision_id, version, answer, None, None, false, Some(settle)),
+            self.decide(
+                caller,
+                decision_id,
+                version,
+                answer,
+                None,
+                None,
+                (false, Vec::new()),
+                Some(settle),
+            ),
         )
         .await?;
         let settled = matches!(outcome, CommandOutcome::Pending { .. }).then_some(settled);
@@ -1635,7 +1839,7 @@ impl SurfaceEngine {
         answer: Answer,
         edited_args: Option<Value>,
         reason: Option<String>,
-        expanded: bool,
+        (expanded, evidence): (bool, Vec<String>),
         settle: Option<oneshot::Sender<Result<CommandOutcome>>>,
     ) -> Result<CommandOutcome> {
         let request = self.owned_request(caller, id).await?;
@@ -1651,7 +1855,14 @@ impl SurfaceEngine {
         }
         let always = self.always_label(&request).await;
         let hint = self.hint(&request).await;
-        let facts = self.inner.projector.facts(&request, always, &hint);
+        let mut facts = self.inner.projector.facts(&request, always, &hint);
+        let images: Vec<String> =
+            crate::evidence::images(&request).iter().map(|image| image.digest.clone()).collect();
+        if !images.is_empty() {
+            let agent = self.inner.projector.agent(&project::agent_name(&request)).display_name;
+            let media = self.media(&request, &hint, None, &agent).await;
+            facts.image = media.as_ref().map(|media| self.image_gate(media));
+        }
         if let Err(violation) = rules::check(caller, &facts, answer, expanded) {
             let error = SurfaceError::Rule(violation);
             self.audit_decide(caller, &request, answer, "refused", Some(&error.code())).await?;
@@ -1659,6 +1870,31 @@ impl SurfaceEngine {
         }
         if answer == Answer::Edit && edited_args.is_none() {
             return Err(SurfaceError::Invalid("an edit needs the changed arguments".into()));
+        }
+        // An answer that lets a call with images run names the images the person saw: the
+        // decision binds to those digests, and to no other image (spec 3.7 V-I5).
+        if !images.is_empty()
+            && matches!(answer, Answer::AllowOnce | Answer::AlwaysAllow | Answer::Edit)
+        {
+            if evidence.is_empty() {
+                return Err(SurfaceError::Invalid(
+                    "an answer that sends images names the digests of the images it saw: send \
+                     the card's `media.images[].digest` as `evidence`"
+                        .into(),
+                ));
+            }
+            if evidence != images || request.version != version {
+                self.audit_decide(caller, &request, answer, "changed", Some(EVIDENCE_CHANGED))
+                    .await?;
+                let card = self.card(caller, &request).await?;
+                return Ok(CommandOutcome::Changed { card });
+            }
+        }
+        // An edited call with images is held again with what it would send now, never run on
+        // arguments whose images nobody saw (spec 3.7 V-I5).
+        if !images.is_empty() && answer == Answer::Edit {
+            let args = edited_args.unwrap_or(Value::Null);
+            return self.held_again(caller, &request, version, args).await;
         }
         if rules::row(caller) == Row::Voice && answer == Answer::AllowOnce {
             // A spoken answer to a decision that changed since it was read is shown again at
@@ -1678,6 +1914,199 @@ impl SurfaceEngine {
             return self.speak_later(caller, request, version, settle).await;
         }
         self.commit(caller, &request, version, answer, edited_args, reason).await
+    }
+
+    /// Tightens the crop of one of decision `id`'s images or covers more of it, then holds its
+    /// call again with the new image (spec 3.7 §8.2, board choice A8, V-I5).
+    async fn change_image(
+        &self,
+        caller: &Caller,
+        id: &str,
+        version: u64,
+        from: &str,
+        change: crate::evidence::ImageChange,
+        preview: bool,
+    ) -> Result<CommandOutcome> {
+        let request = self.owned_request(caller, id).await?;
+        if !matches!(caller.origin, Origin::Keyboard | Origin::Pointer | Origin::Touch)
+            || !matches!(rules::row(caller), Row::Web | Row::Phone | Row::Terminal)
+        {
+            return Err(SurfaceError::NotHere(
+                "an image is changed by a person looking at it, in the home or on the phone".into(),
+            ));
+        }
+        if request.state != ApprovalState::Pending {
+            return self.already_decided(caller, &request, Answer::Edit).await;
+        }
+        let card = self.card(caller, &request).await?;
+        let media = card.media.as_ref().ok_or_else(|| {
+            SurfaceError::Invalid(format!("decision '{id}' holds no image to change"))
+        })?;
+        let image = media.images.get(change.image as usize).ok_or_else(|| {
+            SurfaceError::not_found(format!("image {} of decision '{id}'", change.image))
+        })?;
+        if request.version != version || image.digest != from {
+            return Ok(CommandOutcome::Changed { card });
+        }
+        if !media.can_change {
+            return Err(SurfaceError::unsupported("changing this image before it leaves"));
+        }
+        change.check(image.width, image.height).map_err(SurfaceError::Invalid)?;
+        if preview {
+            return self.preview_change(&request, from, &change).await;
+        }
+        // The change is on record before it takes effect (spec 3.3 §11).
+        self.record(
+            caller,
+            SURFACE_AUDIT_IMAGE_CHANGE,
+            json!({
+                "approvalId": request.id,
+                "sessionId": request.scope.session_id,
+                "tool": request.tool_name,
+                "version": version,
+                "fromDigest": from,
+                "crop": change.crop,
+                "cover": change.cover,
+            }),
+        )
+        .await?;
+        let changed = match self.inner.source.change_image(caller, &request, version, &change).await
+        {
+            Ok(changed) => changed,
+            Err(error) => return self.not_held_again(caller, &request, error).await,
+        };
+        self.inner
+            .changed_images
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(changed.to.clone(), changed.from.clone());
+        self.record(
+            caller,
+            SURFACE_AUDIT_IMAGE_CHANGE,
+            json!({
+                "approvalId": request.id,
+                "fromDigest": changed.from,
+                "toDigest": changed.to,
+                "outcome": "held_again",
+            }),
+        )
+        .await?;
+        self.after_held_again(caller, &request, Some(changed)).await
+    }
+
+    /// The image `change` would make of `request`'s image, made as the source makes it, and
+    /// held nowhere (board choice A8).
+    #[cfg(feature = "web")]
+    async fn preview_change(
+        &self,
+        request: &ApprovalRequest,
+        from: &str,
+        change: &crate::evidence::ImageChange,
+    ) -> Result<CommandOutcome> {
+        let image = self
+            .inner
+            .source
+            .evidence_image(request, change.image as usize)
+            .await?
+            .ok_or_else(|| SurfaceError::Invalid("the image is no longer kept".into()))?;
+        let (bytes, width, height) =
+            crate::evidence::changed_png(&image.bytes, change).map_err(SurfaceError::Invalid)?;
+        let changed = crate::evidence::ImageChanged {
+            from: from.to_string(),
+            to: crate::evidence::digest_of(&bytes),
+            width,
+            height,
+        };
+        Ok(CommandOutcome::ImagePreview { changed })
+    }
+
+    #[cfg(not(feature = "web"))]
+    async fn preview_change(
+        &self,
+        _request: &ApprovalRequest,
+        _from: &str,
+        _change: &crate::evidence::ImageChange,
+    ) -> Result<CommandOutcome> {
+        Err(SurfaceError::unsupported("changing an image before it leaves"))
+    }
+
+    /// Holds `request`'s call again with the edited `args` (spec 3.7 V-I5).
+    async fn held_again(
+        &self,
+        caller: &Caller,
+        request: &ApprovalRequest,
+        version: u64,
+        args: Value,
+    ) -> Result<CommandOutcome> {
+        self.record(
+            caller,
+            SURFACE_AUDIT_ANSWER,
+            json!({
+                "approvalId": request.id,
+                "sessionId": request.scope.session_id,
+                "tool": request.tool_name,
+                "answer": Answer::Edit,
+                "version": version,
+                "heldAgain": true,
+            }),
+        )
+        .await?;
+        if let Err(error) =
+            self.inner.source.hold_again(caller, request, version, args, HELD_AGAIN_REASON).await
+        {
+            return self.not_held_again(caller, request, error).await;
+        }
+        self.after_held_again(caller, request, None).await
+    }
+
+    /// What a hold again that failed shows: the decision as it is now when someone answered
+    /// or changed it first (S-I2), else the error.
+    async fn not_held_again(
+        &self,
+        caller: &Caller,
+        request: &ApprovalRequest,
+        error: SurfaceError,
+    ) -> Result<CommandOutcome> {
+        let Some(now) = self.inner.source.request(&request.id).await? else {
+            return Err(error);
+        };
+        if now.state != ApprovalState::Pending {
+            return self.already_decided(caller, &now, Answer::Edit).await;
+        }
+        if now.version != request.version {
+            let card = self.card(caller, &now).await?;
+            return Ok(CommandOutcome::Changed { card });
+        }
+        Err(error)
+    }
+
+    /// Records a hold again as the person's change and shows the closed decision.
+    async fn after_held_again(
+        &self,
+        caller: &Caller,
+        request: &ApprovalRequest,
+        changed: Option<crate::evidence::ImageChanged>,
+    ) -> Result<CommandOutcome> {
+        let record = AnswerRecord {
+            approval_id: request.id.clone(),
+            by: caller.subject.clone(),
+            via: caller.via(),
+            answer: Answer::Edit,
+            at: self.now(),
+        };
+        if let Err(error) = self.inner.answers.record(&record).await {
+            tracing::warn!(error = %error, decision.id = %request.id, "where the change was made could not be kept");
+        }
+        self.inner.wake.notify_waiters();
+        let closed =
+            self.inner.source.request(&request.id).await?.unwrap_or_else(|| request.clone());
+        if let Err(error) =
+            self.audit_decide(caller, &closed, Answer::Edit, "held_again", None).await
+        {
+            tracing::warn!(error = %error, decision.id = %closed.id, "the call was held again; its audit record failed");
+        }
+        let card = self.card(caller, &closed).await?;
+        Ok(CommandOutcome::HeldAgain { changed, card })
     }
 
     /// Records the answer: `ApprovalService::decide` at `version`, never retried (S-I2).

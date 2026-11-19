@@ -13,6 +13,10 @@ import { shownCall } from "./call";
 import type { PhoneClient } from "./client";
 import { decidedLine } from "./Decisions";
 import { phoneLabels } from "./labels";
+import { ImageLoaderContext, sameOriginLoader } from "../evidence/images";
+import { PhoneEvidence, PhoneEvidenceMore } from "../evidence/PhoneEvidence";
+import { evidenceLabels } from "../evidence/labels";
+import { decisionPath } from "../route";
 
 /** The refusals that mean this phone cannot confirm it is the person (spec 3.3 §8.2). */
 const PASSKEY_FAILED = new Set([
@@ -192,6 +196,8 @@ export function Decide({
   }
 
   const ask = takeOverOf(card.call);
+  // A decision about images (spec 3.7 §8.2): the image leads, the call follows.
+  const media = card.media ?? undefined;
   const offered = card.allowed.options.filter((option) => !inTheHome || !option.needsPresence);
   const presence = offered.find((option) => option.needsPresence && option.answer === "allowOnce");
   const others = offered.filter((option) => option !== presence);
@@ -207,7 +213,7 @@ export function Decide({
       </Pill>
     </header>
   );
-  const lede = addsAgent ? null : (
+  const lede = addsAgent || media ? null : (
     <p className="phone-lede">
       {phoneLabels.wantsToRun(visible(card.agent.displayName))} {card.reversibilityText}.
     </p>
@@ -259,6 +265,115 @@ export function Decide({
       ))}
     </ol>
   );
+
+  const images = media ? <PhoneEvidence card={card} media={media} /> : null;
+  const loader = client.image ? (href: string) => client.image!(href) : sameOriginLoader;
+  if (media) {
+    return (
+      <ImageLoaderContext.Provider value={loader}>
+        <section className={`phone-decide phone-decide-image${decided ? " phone-decide-decided" : ""}`} aria-labelledby="phone-decide-heading">
+          <button type="button" className="phone-back" onClick={onBack}>
+            <Icon name="back" /> {phoneLabels.back}
+          </button>
+          <header className="phone-decide-who">
+            <Avatar agent={card.agent} size="md" />
+            <span>
+              <strong>{visible(card.agent.displayName)}</strong> · {card.sinceText}
+            </span>
+            <Pill kind={decided ? "decided" : "neutral"}>{decided ? phoneLabels.decided : card.riskText}</Pill>
+          </header>
+          <h1 id="phone-decide-heading" className="phone-display">
+            <TwoTone text={visible(card.heading)} />
+          </h1>
+          {decided && card.decided && (
+            <p className="phone-evidence-said">
+              <strong>{visible(card.decided.text)}</strong>
+              {card.decided.scopeText && <span>{visible(card.decided.scopeText)}.</span>}
+            </p>
+          )}
+          {card.parked && <p className="evidence-info">ⓘ {visible(card.parked.text)}</p>}
+          {summary}
+          {images}
+          {media.notice && !decided && (
+            <p className="evidence-notice" role="note">
+              <span aria-hidden="true">⚠</span>
+              <span>
+                <strong>{visible(media.notice.title)}</strong> {visible(media.notice.text)}
+              </span>
+            </p>
+          )}
+          {!decided && <PhoneEvidenceMore card={card} media={media} home={decisionPath(card.id)} />}
+          {!decided && !media.notice && command}
+          {!decided && timeline}
+          {!decided && (
+            <p className="phone-footnote">
+              {[card.riskText, card.reversibilityText, media.keptText].filter(Boolean).map((part) => visible(part ?? "")).join(" · ")}
+            </p>
+          )}
+          {!decided && <p className="phone-footnote">{visible(media.fixedLine)}</p>}
+          {note && (
+            <p className="phone-note" role="status">
+              {note}
+            </p>
+          )}
+          {editing && (
+            <EditArgs
+              card={card}
+              busy={busy}
+              onCancel={() => setEditing(false)}
+              onAllow={(args) => {
+                const option = card.allowed.options.find((candidate) => candidate.answer === "edit");
+                if (option) void give(option, args);
+              }}
+            />
+          )}
+          {problem && (
+            <p className="phone-problem" role="alert">
+              {problem}
+            </p>
+          )}
+          {!decided && !editing && (
+            <footer className="phone-actions phone-actions-fixed">
+              {(media.notice || !others.some((option) => option.answer === "allowOnce")) && !presence && (
+                <button type="button" className="phone-button phone-button-primary" disabled>
+                  {phoneLabels.allowOnce}
+                </button>
+              )}
+              {presence && (
+                <button type="button" className="phone-button phone-button-primary" disabled={busy} onKeyDown={enterNeverDecides} onClick={() => void give(presence)}>
+                  <Icon name="lock" /> {presence.label}
+                </button>
+              )}
+              {others
+                .filter((option) => option.answer === "allowOnce")
+                .map((option) => (
+                  <button key={option.answer} type="button" className="phone-button phone-button-primary" disabled={busy} onKeyDown={enterNeverDecides} onClick={() => void give(option)}>
+                    {option.label}
+                  </button>
+                ))}
+              <div className="phone-actions-row">
+                {others
+                  .filter((option) => option.answer !== "allowOnce")
+                  .map((option) => (
+                    <button
+                      key={option.answer}
+                      type="button"
+                      className="phone-button phone-button-secondary"
+                      disabled={busy}
+                      onKeyDown={enterNeverDecides}
+                      onClick={() => (option.answer === "edit" ? setEditing(true) : void give(option))}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+              </div>
+              <p className="phone-footnote">{evidenceLabels.answeredElsewhereUpdates}</p>
+            </footer>
+          )}
+        </section>
+      </ImageLoaderContext.Provider>
+    );
+  }
 
   if (decided) {
     return (

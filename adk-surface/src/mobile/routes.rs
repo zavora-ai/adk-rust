@@ -460,6 +460,7 @@ async fn confirm(
         edited_args: binding.edited_args,
         reason: None,
         expanded: binding.expanded,
+        evidence: Vec::new(),
     };
     let caller = who.caller().clone().with_presence_confirmed();
     match phone.inner.engine.execute(&caller, command).await {

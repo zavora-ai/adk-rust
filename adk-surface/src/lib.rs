@@ -66,6 +66,7 @@ pub mod channels;
 mod control;
 mod engine;
 pub mod error;
+mod evidence;
 pub mod genui;
 mod hints;
 mod inbox;
@@ -102,19 +103,25 @@ pub use answers::{
 pub use control::ControlSource;
 pub use engine::SURFACE_AUDIT_ANSWER;
 pub use engine::SURFACE_AUDIT_DRAWN_SUBMITTED;
+pub use engine::SURFACE_AUDIT_IMAGE_CHANGE;
 pub use engine::{
     Command, CommandOutcome, DEFAULT_POLL_INTERVAL, FeedFrame, SURFACE_AUDIT_RESUME_ALL,
     SURFACE_AUDIT_SEND, SURFACE_AUDIT_SET_MODE, SURFACE_AUDIT_STEER, SURFACE_AUDIT_STOP_ALL,
     SurfaceEngine, SurfaceEngineBuilder,
 };
 pub use error::{Result, SurfaceError};
+pub use evidence::{
+    CardMedia, CoverClass, CoveredLine, EVIDENCE_RETENTION_DAYS, EvidenceBytes, EvidenceImage,
+    EvidenceKept, EvidenceRegion, GoesTo, ImageChange, ImageChanged, ImageFacts, MediaFacts,
+    MediaNotice, MediaNoticeKind, PurgedView, short_digest,
+};
 pub use hints::{CardHint, CardHints};
 pub use local::{LocalSource, LocalSourceBuilder};
 pub use model::CardDetail;
 pub use model::{
     AgentRef, AgentRow, AgentStatus, Avatar, Briefing, BriefingLine, CallView, CardStatus, Decided,
-    DecidedAnswer, DecisionCard, FeedEntry, Mode, ModeView, Pill, QuietView, Reversibility,
-    Speaker, SpendView, StatusLine, ThreadItem, TimelineStep,
+    DecidedAnswer, DecisionCard, FeedEntry, Mode, ModeView, ParkedView, Pill, QuietView,
+    Reversibility, Speaker, SpendView, StatusLine, ThreadItem, TimelineStep,
 };
 pub use origin::{Caller, Origin, SurfaceKind, Via};
 pub use project::{CALL_TEXT_LIMIT, Place};

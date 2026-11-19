@@ -185,6 +185,83 @@ pub trait Source: Send + Sync {
         false
     }
 
+    /// Whether each image `request` holds as evidence is still kept, in the order of its
+    /// evidence (spec 3.7 §8.2). The default cannot tell, and the card shows each image.
+    async fn evidence_kept(&self, request: &ApprovalRequest) -> Vec<crate::evidence::EvidenceKept> {
+        vec![crate::evidence::EvidenceKept::Unknown; crate::evidence::images(request).len()]
+    }
+
+    /// The `index`th image `request` holds as evidence, read from where its locator says and
+    /// served only when its bytes hash to its digest; `None` when it is no longer kept. The
+    /// engine checks the caller may see the request first (spec 3.7 §7.8: surfaces load
+    /// evidence with the viewer's own authorisation).
+    ///
+    /// # Errors
+    ///
+    /// `surface.unsupported` when the source keeps no images, `surface.invalid` when the
+    /// stored bytes do not match the digest, or the source's error.
+    async fn evidence_image(
+        &self,
+        request: &ApprovalRequest,
+        index: usize,
+    ) -> Result<Option<crate::evidence::EvidenceBytes>> {
+        let _ = (request, index);
+        Err(SurfaceError::unsupported("showing a decision's images"))
+    }
+
+    /// Whether [`hold_again`](Self::hold_again) and [`change_image`](Self::change_image) work
+    /// here: an edited call with images, or a changed image, is held again for the person
+    /// rather than run (spec 3.7 V-I5). `false`, the default.
+    fn holds_again(&self) -> bool {
+        false
+    }
+
+    /// Holds `request`'s call again with `args`, as `caller` asked for it: the request at
+    /// `version` is closed with `why`, and the session's agent holds the call with its new
+    /// arguments, and the evidence they make, for the person's decision (spec 3.7 V-I5). A
+    /// call with images never runs on edited arguments nobody saw the images of.
+    ///
+    /// # Errors
+    ///
+    /// `surface.unsupported` by default; `approval.version_conflict` when the request changed.
+    async fn hold_again(
+        &self,
+        caller: &Caller,
+        request: &ApprovalRequest,
+        version: u64,
+        args: serde_json::Value,
+        why: &str,
+    ) -> Result<()> {
+        let _ = (caller, request, version, args, why);
+        Err(SurfaceError::unsupported("holding a call again"))
+    }
+
+    /// Makes the image `change` describes from `request`'s evidence — cut smaller, more of it
+    /// covered — keeps it beside the original, and holds the call again with it in place of
+    /// the original (board choice A8, spec 3.7 V-I5).
+    ///
+    /// # Errors
+    ///
+    /// `surface.unsupported` by default; `surface.invalid` when the image cannot be changed.
+    async fn change_image(
+        &self,
+        caller: &Caller,
+        request: &ApprovalRequest,
+        version: u64,
+        change: &crate::evidence::ImageChange,
+    ) -> Result<crate::evidence::ImageChanged> {
+        let _ = (caller, request, version, change);
+        Err(SurfaceError::unsupported("changing an image before it leaves"))
+    }
+
+    /// When the run that waited on `request` ended while the request is still open, so the
+    /// answer is used when the agent picks the thread up again (board choice A12). `None`, the
+    /// default, when a run still waits or the source cannot tell.
+    async fn run_ended(&self, request: &ApprovalRequest) -> Option<DateTime<Utc>> {
+        let _ = request;
+        None
+    }
+
     /// Whether `request`'s call moves money by the source's account (spec 3.3 §7.4 rule 4): a
     /// kernel answers for the tools its mounted drivers declare `financial` (spec 3.2 K-I9).
     /// The engine also counts the payment tools; `false`, the default, adds nothing to them.

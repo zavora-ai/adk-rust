@@ -207,6 +207,29 @@ pub fn openapi() -> Value {
         ),
     );
     routes.insert(
+        with(paths::EVIDENCE),
+        json!({ "get": {
+            "summary": "One image a decision holds as evidence (spec 3.7 §8.2): the exact bytes whose digest the card shows, for a viewer who may see the decision; never cached",
+            "parameters": [
+                path_param("id"),
+                { "name": "index", "in": "path", "required": true, "description": "The image's place in the card's `media.images`", "schema": { "type": "integer", "minimum": 0 } },
+                query("surface", "The surface asking", surface.clone()),
+            ],
+            "responses": errors({
+                let mut ok = Map::new();
+                ok.insert("200".into(), json!({
+                    "description": "The image",
+                    "content": {
+                        "image/png": { "schema": { "type": "string", "format": "binary" } },
+                        "image/jpeg": { "schema": { "type": "string", "format": "binary" } },
+                        "image/webp": { "schema": { "type": "string", "format": "binary" } }
+                    }
+                }));
+                ok
+            }),
+        } }),
+    );
+    routes.insert(
         with(paths::THREAD),
         read(
             "The session's entries, numbered by their position in the session store",

@@ -190,6 +190,7 @@ impl Projector {
                     .collect(),
                 always_label: None,
                 adds_agent: true,
+                image: None,
             };
         }
         // Edit replaces the call's arguments with what the surface sends back, so it is
@@ -219,6 +220,7 @@ impl Projector {
                 .collect(),
             always_label: always_label.filter(|_| !take_over && !hint.removes_always()),
             adds_agent: false,
+            image: None,
         }
     }
 
@@ -392,6 +394,8 @@ impl Projector {
             adds_agent,
             // Like the summary, never on a chat card (S-I5).
             detail: hint.detail.clone().filter(|_| !chat),
+            media: None,
+            parked: None,
         }
     }
 

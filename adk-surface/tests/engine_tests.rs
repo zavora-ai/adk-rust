@@ -142,6 +142,7 @@ fn decide(request: &ApprovalRequest, answer: Answer) -> Command {
         edited_args: None,
         reason: None,
         expanded: false,
+        evidence: Vec::new(),
     }
 }
 
@@ -362,6 +363,7 @@ async fn a_truncated_call_is_approved_only_once_expanded() {
         edited_args: None,
         reason: None,
         expanded: true,
+        evidence: Vec::new(),
     };
     assert!(matches!(
         home.engine.execute(&web(), expanded).await.unwrap(),

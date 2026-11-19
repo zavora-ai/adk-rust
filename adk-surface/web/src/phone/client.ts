@@ -33,6 +33,8 @@ export interface PhoneClient {
   /** The open decisions, and those decided since `decidedSince`. */
   decisions(decidedSince?: string): Promise<DecisionCard[]>;
   decision(id: string): Promise<DecisionCard>;
+  /** An image a decision holds, at the `href` its card names, read with the device's token (spec 3.7 §8.2). */
+  image?(href: string): Promise<Blob>;
   /**
    * Answers through the device's own route, with the changed arguments of an Edit; never for
    * an answer that needs presence.
@@ -124,12 +126,25 @@ export class HttpPhoneClient implements PhoneClient {
     return this.request<DecisionCard>(`/surface/decisions/${encodeURIComponent(id)}?surface=phone`);
   }
 
+  async image(href: string) {
+    if (!href.startsWith(`${this.base}/surface/decisions/`)) throw new ApiError(400, "Not an image of a decision");
+    const response = await fetch(`${href}?surface=phone`, {
+      credentials: "same-origin",
+      headers: { accept: "image/*", ...(this.token ? { authorization: `Bearer ${this.token}` } : {}) },
+    });
+    if (!response.ok) throw await problem(response);
+    return response.blob();
+  }
+
   answer(card: DecisionCard, answer: Answer, expanded: boolean, editedArgs?: unknown) {
+    // An answer that lets a call with images run names the images the phone showed (V-I5).
+    const evidence = card.media?.images.map((image) => image.digest) ?? [];
     return this.post<CommandOutcome>(`/surface/decisions/${encodeURIComponent(card.id)}/answer`, {
       version: card.version,
       answer,
       expanded,
       ...(editedArgs === undefined ? {} : { editedArgs }),
+      ...(evidence.length > 0 ? { evidence } : {}),
     });
   }
 

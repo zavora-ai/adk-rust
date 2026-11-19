@@ -379,6 +379,7 @@ fn decide(request: &ApprovalRequest, version: u64, answer: Answer) -> Command {
         edited_args: None,
         reason: None,
         expanded: true,
+        evidence: Vec::new(),
     }
 }
 

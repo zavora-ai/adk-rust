@@ -1,4 +1,5 @@
 import type { DecisionCard } from "../generated/api";
+import { EvidenceThumb } from "../evidence/EvidencePanel";
 import { labels } from "../labels";
 import { visible } from "../safe";
 
@@ -24,10 +25,18 @@ export function DecisionList({
       <ul className="mini-decisions">
         {decisions.map((card) => (
           <li key={card.id}>
-            <button type="button" className="mini-decision" onClick={() => onOpen(card)}>
-              <span className="mini-heading">{visible(card.heading)}</span>
-              <span className={`mini-meta${card.risk === "high" || card.money ? " mini-high" : ""}`}>
-                {visible(card.agent.displayName)} · {card.riskText}
+            <button
+              type="button"
+              className={`mini-decision${card.media && !card.media.images[0]?.purged ? " mini-decision-image" : ""}`}
+              onClick={() => onOpen(card)}
+            >
+              {/* A decision about an image shows it, small (spec 3.7 §8.2, board choice A10). */}
+              {card.media && <EvidenceThumb media={card.media} />}
+              <span className="mini-words">
+                <span className="mini-heading">{visible(card.heading)}</span>
+                <span className={`mini-meta${card.risk === "high" || card.money ? " mini-high" : ""}`}>
+                  {visible(card.agent.displayName)} · {card.riskText}
+                </span>
               </span>
             </button>
           </li>

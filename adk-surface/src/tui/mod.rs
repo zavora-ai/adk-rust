@@ -215,6 +215,7 @@ pub struct TerminalSurface {
     theme: ThemeChoice,
     model: Option<String>,
     place: Option<String>,
+    home: Option<String>,
     poll: Duration,
     notices: Vec<String>,
     late: LateNotices,
@@ -235,6 +236,7 @@ impl TerminalSurface {
             theme: ThemeChoice::Auto,
             model: None,
             place: None,
+            home: None,
             poll: POLL,
             notices: Vec::new(),
             late: LateNotices::default(),
@@ -284,6 +286,14 @@ impl TerminalSurface {
     #[must_use]
     pub fn place(mut self, place: impl Into<String>) -> Self {
         self.place = Some(place.into());
+        self
+    }
+
+    /// The web home's address, such as `http://127.0.0.1:8080`: a decision with images links
+    /// to itself there, and `o` opens it (spec 3.7 §8.2, board choice A16).
+    #[must_use]
+    pub fn home(mut self, url: impl Into<String>) -> Self {
+        self.home = Some(url.into().trim_end_matches('/').to_string());
         self
     }
 
@@ -594,6 +604,12 @@ impl TerminalSurface {
                 app.took_back(self.engine.unqueue_last(&self.caller, &session));
             }
             app::Effect::Briefing => pump.refresh_briefing(),
+            app::Effect::Open(url) => match open_in_browser(&url) {
+                Ok(()) => app.notice(format!("Opened {url}"), app::Tone::Info),
+                Err(why) => {
+                    app.notice(format!("Open {url} in your browser: {why}"), app::Tone::Problem)
+                }
+            },
             app::Effect::RunCommand { serial, name, args } => {
                 let found = self.commands.find(&name).or_else(|| self.commands.shadowed(&name));
                 match found {
@@ -652,4 +668,28 @@ impl TerminalSurface {
         }
         uuid::Uuid::new_v4().to_string()
     }
+}
+
+/// Opens `url`, an `http` or `https` address, in the person's browser.
+fn open_in_browser(url: &str) -> std::result::Result<(), String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("only a web address opens".into());
+    }
+    let mut command = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else if cfg!(windows) {
+        let mut start = std::process::Command::new("cmd");
+        start.args(["/C", "start", ""]);
+        start
+    } else {
+        std::process::Command::new("xdg-open")
+    };
+    command
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
