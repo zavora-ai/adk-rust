@@ -234,6 +234,9 @@ pub struct MachineInfo {
     /// Physical memory in bytes, when it can be read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_bytes: Option<u64>,
+    /// The 1, 5 and 15 minute load averages when the run started, when they can be read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_average: Option<String>,
     /// `adk-bench`'s version.
     pub adk_version: String,
     /// Runtime library versions, by name.
@@ -251,6 +254,7 @@ impl MachineInfo {
             cpu: cpu_model(),
             cores: std::thread::available_parallelism().map_or(0, std::num::NonZero::get),
             memory_bytes: memory_bytes(),
+            load_average: load_average(),
             adk_version: env!("CARGO_PKG_VERSION").to_string(),
             runtimes: BTreeMap::new(),
         }
@@ -295,6 +299,20 @@ fn cpu_model() -> String {
         _ => None,
     };
     model.unwrap_or_else(|| "unknown".to_string())
+}
+
+fn load_average() -> Option<String> {
+    let text = match std::env::consts::OS {
+        "macos" => command_output("sysctl", &["-n", "vm.loadavg"])?,
+        "linux" => std::fs::read_to_string("/proc/loadavg").ok()?,
+        _ => return None,
+    };
+    let loads: Vec<&str> = text
+        .trim_matches(|c: char| c == '{' || c == '}' || c.is_whitespace())
+        .split_whitespace()
+        .take(3)
+        .collect();
+    (loads.len() == 3).then(|| loads.join(" "))
 }
 
 fn memory_bytes() -> Option<u64> {
@@ -499,6 +517,9 @@ impl VisionBenchReport {
         let _ = writeln!(out, "| CPU | {}, {} logical cores |", m.cpu, m.cores);
         if let Some(bytes) = m.memory_bytes {
             let _ = writeln!(out, "| Memory | {:.0} GiB |", bytes as f64 / (1u64 << 30) as f64);
+        }
+        if let Some(load) = &m.load_average {
+            let _ = writeln!(out, "| Load average at start | {load} |");
         }
         let _ = writeln!(out, "| adk-rust | {} |", m.adk_version);
         for (name, version) in &m.runtimes {

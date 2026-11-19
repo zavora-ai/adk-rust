@@ -91,6 +91,7 @@ fn runtime_versions(machine: MachineInfo) -> MachineInfo {
 }
 
 async fn run(args: &[String]) -> Result<(), String> {
+    let machine = runtime_versions(MachineInfo::detect());
     let mut config = VisionBenchConfig::default();
     if let Some(runs) = option(args, "--runs") {
         config.runs = runs.parse().map_err(|e| format!("--runs: {e}"))?;
@@ -158,7 +159,7 @@ async fn run(args: &[String]) -> Result<(), String> {
         config = earlier.config;
         rows = earlier.rows.into_iter().chain(rows).collect();
     }
-    let mut report = VisionBenchReport::new(runtime_versions(MachineInfo::detect()), rows);
+    let mut report = VisionBenchReport::new(machine, rows);
     report.config = config;
     let markdown = report.to_markdown();
     match option(args, "--out") {
