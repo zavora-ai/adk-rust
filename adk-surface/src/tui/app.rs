@@ -901,6 +901,8 @@ impl App {
             }
             // The call was held again with the person's change: the old card goes, and the call
             // with the new image arrives through the feed (spec 3.7 V-I5).
+            // The terminal changes no image: a preview never reaches it.
+            CommandOutcome::ImagePreview { .. } => {}
             CommandOutcome::HeldAgain { card, .. } => {
                 self.cards.retain(|open| open.card.id != card.id);
                 self.refocus(now);

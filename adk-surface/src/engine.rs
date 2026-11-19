@@ -153,6 +153,10 @@ pub enum Command {
         from: String,
         /// The change.
         change: crate::evidence::ImageChange,
+        /// Only make the new image and say its digest and size, holding nothing again: what
+        /// the editor shows before **Use this image** (board choice A8).
+        #[serde(default)]
+        preview: bool,
     },
     /// Cancels a spoken "allow once" inside its cancel window (§7.2).
     #[serde(rename_all = "camelCase")]
@@ -316,6 +320,13 @@ pub enum CommandOutcome {
     Changed {
         /// The decision now.
         card: DecisionCard,
+    },
+    /// What a change to an image would make, held nowhere: the editor shows it before **Use
+    /// this image** (board choice A8).
+    #[serde(rename_all = "camelCase")]
+    ImagePreview {
+        /// The image the change would make: its digest and size, and the one it replaces.
+        changed: crate::evidence::ImageChanged,
     },
     /// The call was held again with what the person changed — its arguments, or one of its
     /// images (spec 3.7 V-I5): `card` is the old decision, closed; the call waiting with the
@@ -1593,8 +1604,8 @@ impl SurfaceEngine {
                 )
                 .await
             }
-            Command::ChangeImage { decision_id, version, from, change } => {
-                self.change_image(caller, &decision_id, version, &from, change).await
+            Command::ChangeImage { decision_id, version, from, change, preview } => {
+                self.change_image(caller, &decision_id, version, &from, change, preview).await
             }
             Command::CancelAnswer { decision_id } => self.cancel_answer(caller, &decision_id).await,
             Command::Send { session_id, text } => {
@@ -1914,6 +1925,7 @@ impl SurfaceEngine {
         version: u64,
         from: &str,
         change: crate::evidence::ImageChange,
+        preview: bool,
     ) -> Result<CommandOutcome> {
         let request = self.owned_request(caller, id).await?;
         if !matches!(caller.origin, Origin::Keyboard | Origin::Pointer | Origin::Touch)
@@ -1940,6 +1952,9 @@ impl SurfaceEngine {
             return Err(SurfaceError::unsupported("changing this image before it leaves"));
         }
         change.check(image.width, image.height).map_err(SurfaceError::Invalid)?;
+        if preview {
+            return self.preview_change(&request, from, &change).await;
+        }
         // The change is on record before it takes effect (spec 3.3 §11).
         self.record(
             caller,
@@ -1977,6 +1992,42 @@ impl SurfaceEngine {
         )
         .await?;
         self.after_held_again(caller, &request, Some(changed)).await
+    }
+
+    /// The image `change` would make of `request`'s image, made as the source makes it, and
+    /// held nowhere (board choice A8).
+    #[cfg(feature = "web")]
+    async fn preview_change(
+        &self,
+        request: &ApprovalRequest,
+        from: &str,
+        change: &crate::evidence::ImageChange,
+    ) -> Result<CommandOutcome> {
+        let image = self
+            .inner
+            .source
+            .evidence_image(request, change.image as usize)
+            .await?
+            .ok_or_else(|| SurfaceError::Invalid("the image is no longer kept".into()))?;
+        let (bytes, width, height) =
+            crate::evidence::changed_png(&image.bytes, change).map_err(SurfaceError::Invalid)?;
+        let changed = crate::evidence::ImageChanged {
+            from: from.to_string(),
+            to: crate::evidence::digest_of(&bytes),
+            width,
+            height,
+        };
+        Ok(CommandOutcome::ImagePreview { changed })
+    }
+
+    #[cfg(not(feature = "web"))]
+    async fn preview_change(
+        &self,
+        _request: &ApprovalRequest,
+        _from: &str,
+        _change: &crate::evidence::ImageChange,
+    ) -> Result<CommandOutcome> {
+        Err(SurfaceError::unsupported("changing an image before it leaves"))
     }
 
     /// Holds `request`'s call again with the edited `args` (spec 3.7 V-I5).
