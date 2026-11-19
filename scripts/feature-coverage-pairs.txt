@@ -442,6 +442,9 @@
 6 adk-vision guardrail doc
 # The default redactors over RF-DETR and PP-OCRv6, failing closed without their weights.
 6 adk-vision onnx,ocr,guardrail doc
+# The Qwen3-VL describer over mistral.rs (§7.6) against a scripted in-process model, with its
+# conformance run; the weight-backed runs are ignored.
+6 adk-vision mistralrs,conformance doc
 # Document readers (spec 3.7 §7.6, §7.7): PP-OCRv6 through oar-ocr on ort, PaddleOCR-VL-1.6
 # on Candle, and NVIDIA NIM's CV endpoints against their recorded answers, each with its
 # conformance run; the weight-backed and live runs are ignored.

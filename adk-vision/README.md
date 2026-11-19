@@ -47,6 +47,8 @@ adk-vision = { version = "3.0.0", features = ["fetch"] }
 | `ocr` | `PpOcrReader`: PP-OCRv6 text lines and words through `oar-ocr` on ONNX Runtime |
 | `ocr-vl` | `PaddleOcrVlReader`: PaddleOCR-VL-1.6 with PP-DocLayoutV3 through `oar-ocr-vl` on Candle |
 | `ocr-vl-metal` | `ocr-vl` on Apple GPUs through Candle's Metal backend |
+| `mistralrs` | `LlmDescriber::mistralrs`: Qwen3-VL (`qwen3-vl-2b-instruct`, built in) or another mistral.rs vision model in this process, verified before load, regions in Qwen3-VL's own 0–1000 frame; implies `cloud`, `fetch` |
+| `mistralrs-metal`, `mistralrs-cuda` | `mistralrs` on Apple GPUs or CUDA |
 
 ## Quick Start
 
