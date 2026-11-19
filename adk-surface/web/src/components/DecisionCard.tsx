@@ -273,6 +273,11 @@ export function DecisionCard({
           {details}
           {detail}
         </DecidedLine>
+        {note && (
+          <p className="decision-note" role="status">
+            {note}
+          </p>
+        )}
       </article>
     );
   }
