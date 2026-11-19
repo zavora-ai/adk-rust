@@ -536,7 +536,7 @@ impl VisionBenchReport {
         }
         let _ = writeln!(out, " Throughput | Peak RSS |");
         let _ = writeln!(out, "|{}", "---|".repeat(6 + edges.len()));
-        for row in self.rows.iter().filter(|r| !r.latency.is_empty() || r.mode == RunMode::Live) {
+        for row in self.rows.iter().filter(|r| !r.latency.is_empty()) {
             let cold =
                 row.cold_load_ms.map_or("—".to_string(), |ms| format!("{:.2} s", ms / 1000.0));
             let _ = write!(out, "| {} | {} | {} | {cold} |", row.backend, row.task, row.runtime);

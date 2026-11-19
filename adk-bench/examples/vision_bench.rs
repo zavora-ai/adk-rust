@@ -11,8 +11,9 @@
 //!     --criteria adk-vision/tests/fixtures/eval/criteria/read.json \
 //!     --agent-cmd "target/ci/examples/vision_bench serve pp-ocrv6-tiny"
 //!
-//! # The backends this build has
+//! # The backends this build has; a JSON report as Markdown
 //! cargo run -p adk-bench --features vision-onnx --example vision_bench -- list
+//! cargo run -p adk-bench --features vision --example vision_bench -- render vision-bench.json
 //! ```
 //!
 //! `run` options: `--backends a,b` (default: every local backend, plus the recorded cloud
@@ -38,6 +39,7 @@ async fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("run") => run(&args[1..]).await,
         Some("serve") => serve(args.get(1).map(String::as_str)).await,
+        Some("render") => render(&args[1..]),
         Some("list") => {
             for spec in backends::local_specs() {
                 println!("{}\t{}", spec.name, spec.workload);
@@ -48,7 +50,10 @@ async fn main() -> ExitCode {
             }
             Ok(())
         }
-        _ => Err("usage: vision_bench run [options] | serve <backend> | list".to_string()),
+        _ => Err(
+            "usage: vision_bench run [options] | serve <backend> | render <report.json> [--out <md>] | list"
+                .to_string(),
+        ),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -171,6 +176,22 @@ async fn run(args: &[String]) -> Result<(), String> {
         std::fs::write(path, json).map_err(|e| format!("{path}: {e}"))?;
     }
     Ok(())
+}
+
+/// Renders a JSON report as Markdown.
+fn render(args: &[String]) -> Result<(), String> {
+    let path = args.first().ok_or("render needs a report.json")?;
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    let report: VisionBenchReport =
+        serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+    let markdown = report.to_markdown();
+    match option(args, "--out") {
+        Some(out) => std::fs::write(out, markdown).map_err(|e| format!("{out}: {e}")),
+        None => {
+            println!("{markdown}");
+            Ok(())
+        }
+    }
 }
 
 async fn serve(name: Option<&str>) -> Result<(), String> {

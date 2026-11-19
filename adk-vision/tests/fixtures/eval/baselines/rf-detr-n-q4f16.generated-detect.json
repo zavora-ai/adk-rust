@@ -1,0 +1,21 @@
+{
+  "timestamp": "2026-11-19T17:29:36.338178Z",
+  "eval_set_id": "vision-generated-detect",
+  "metrics": {
+    "detection_precision": {
+      "scene_stop_sign_clock": 1.0
+    },
+    "region_iou": {
+      "scene_stop_sign_clock": 0.889997670587636
+    },
+    "detection_recall": {
+      "scene_stop_sign_clock": 1.0
+    },
+    "detection_ap": {
+      "scene_stop_sign_clock": 1.0
+    },
+    "pass_rate": {
+      "scene_stop_sign_clock": 1.0
+    }
+  }
+}
