@@ -89,7 +89,8 @@ function cardImage(id: string): EvidenceImage {
 function media(id: string, overrides: Partial<CardMedia> = {}): CardMedia {
   return {
     title: "The exact image that would leave",
-    images: [cardImage(id)],
+    // The images of `overrides` are registered already; the default only when it has none.
+    images: overrides.images ?? [cardImage(id)],
     goesTo: { provider: "Claude", model: "claude-sonnet-5-5", host: "api.anthropic.com" },
     what: "Document crop",
     covered: [

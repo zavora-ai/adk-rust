@@ -55,7 +55,13 @@
   font-weight: 600;
 }
 
+.evidence-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .evidence-switch {
+  flex: none;
   display: inline-flex;
   gap: 2px;
   padding: 2px;

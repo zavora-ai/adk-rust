@@ -307,7 +307,7 @@ export function Decide({
           {!decided && timeline}
           {!decided && (
             <p className="phone-footnote">
-              {[card.riskText, card.reversibilityText, media.keptText].filter(Boolean).map((part) => visible(part ?? "")).join("   ")}
+              {[card.riskText, card.reversibilityText, media.keptText].filter(Boolean).map((part) => visible(part ?? "")).join(" · ")}
             </p>
           )}
           {!decided && <p className="phone-footnote">{visible(media.fixedLine)}</p>}
