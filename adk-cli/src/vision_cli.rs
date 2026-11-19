@@ -69,7 +69,7 @@ pub enum VisionCommands {
     /// Example: `adk-rust vision run read invoice.png --annotate invoice.read.png`.
     Run {
         #[command(subcommand)]
-        task: RunTask,
+        task: Box<RunTask>,
     },
 
     /// What left the machine, and what was held or refused
@@ -270,7 +270,7 @@ pub async fn run(args: VisionArgs) -> Result<()> {
     };
     match args.command {
         VisionCommands::Models { command } => models(&project, command).await,
-        VisionCommands::Run { task } => run_task(&project, task).await,
+        VisionCommands::Run { task } => run_task(&project, *task).await,
         VisionCommands::Egress { command: EgressCommand::Log { since, output } } => {
             egress_log(&project, since.as_deref(), output)
         }
