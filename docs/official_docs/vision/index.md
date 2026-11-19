@@ -7,8 +7,9 @@ that leaves the machine cropped, redacted and recorded first. It implements
 [spec 3.7](../../design/spec-3.7-vision.md).
 
 > **Note:** `adk-vision` is **Experimental**. This release holds the contracts, the runtime,
-> the egress boundary and the conformance suite. Backends — `ort`, OCR, mistral.rs, the
-> cloud providers, Meta `sam-3.1`, NVIDIA NIM — arrive as features in later releases.
+> the egress boundary, the conformance suite, the [local ONNX backends](onnx.md) and the
+> [cloud backends](cloud.md) — Gemini, Claude, Muse and NVIDIA NIM describers and Meta
+> `sam-3.1`. OCR and mistral.rs backends arrive as features in later releases.
 
 ```toml
 [dependencies]
@@ -284,6 +285,7 @@ an approval card can show the exact image; see [Governed Vision Tools](governed-
 - [Governed Vision Tools](governed-tools.md)
 - [Image Privacy](../security/image-privacy.md)
 - [Local ONNX backends](onnx.md)
+- [Cloud vision backends](cloud.md): `LlmDescriber`, NVIDIA NIM and Meta `sam-3.1`
 - [Egress control](../security/egress.md)
 - [Tool authorization](../security/tool-authorization.md)
 - [Artifacts](../artifacts/artifacts.md)

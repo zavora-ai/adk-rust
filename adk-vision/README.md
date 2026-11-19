@@ -8,8 +8,9 @@ Local-first perception for Rust Agent Development Kit (ADK-Rust) agents.
 
 > **Note:** `adk-vision` is **Experimental** (spec 3.7). This release holds the contracts —
 > media, regions, manifests, traits, the runtime, the egress boundary and the conformance
-> suite. Model backends (`ort`, OCR, mistral.rs, the cloud providers, Meta `sam-3.1`,
-> NVIDIA NIM) arrive as features in later releases.
+> suite, the local ONNX backends (`onnx`), and the cloud backends: Gemini, Claude, Muse and
+> NVIDIA NIM describers (`cloud`, `nim`) and Meta `sam-3.1` (`sam`). OCR and mistral.rs
+> backends arrive as features in later releases.
 
 ## Overview
 
@@ -40,6 +41,9 @@ adk-vision = { version = "3.0.0", features = ["fetch"] }
 | `onnx` | Local backends on ONNX Runtime: `RfDetr`, `EfficientSam`, `Sam2`, `SigLip2`; onnxruntime downloaded at build time |
 | `onnx-dynamic` | The same backends against an onnxruntime library loaded from `ORT_DYLIB_PATH` |
 | `onnx-coreml`, `onnx-cuda` | The CoreML and CUDA execution providers for the `onnx` backends |
+| `cloud` | `LlmDescriber`: any `adk_core::Llm` that takes images as a `Describer`, with Gemini (`box_2d`, 0–1000), Claude (pixels of the image as sent) and prompt-fixed 0–1000 region adapters, and provider-formula preflight estimates |
+| `nim` | NVIDIA NIM vision-language models (`NimConfig`), reasoning off, unpriced; implies `cloud` |
+| `sam` | `SamSegmenter`: Meta `sam-3.1` request building, stream parser and mask placement, billed per request at $2.50 per 1,000 images |
 
 ## Quick Start
 
@@ -241,6 +245,7 @@ mod my_detector {
 - [Vision overview](../docs/official_docs/vision/index.md)
 - [Governed vision tools](../docs/official_docs/vision/governed-tools.md)
 - [Image privacy](../docs/official_docs/security/image-privacy.md)
+- [Cloud vision backends](../docs/official_docs/vision/cloud.md)
 - [Spec 3.7](../docs/design/spec-3.7-vision.md)
 
 ## License
