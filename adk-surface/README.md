@@ -126,6 +126,7 @@ under "On this home it can also:" (§5.7).
 |---|---|
 | `GET /surface/decisions` | The caller's open decisions as cards; `?session=` for one session's |
 | `GET /surface/decisions/{id}` | One decision, waiting or decided |
+| `GET /surface/decisions/{id}/evidence/{index}` | One image a decision holds as evidence, served only when its bytes match the card's digest (spec 3.7 §8.2, [Approve with the Image](../docs/official_docs/surfaces/approve-with-image.md)) |
 | `GET /surface/sessions/{session}/thread` | The session's entries |
 | `GET /surface/sessions/{session}/feed` | Server-sent events, resumable with `Last-Event-ID` |
 | `GET /surface/sessions/{session}/queued` | What the caller typed while a decision of the session was open or a turn ran, not yet sent |

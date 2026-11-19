@@ -138,6 +138,11 @@ The signed audit trail links the decision and the image: the call's `tool_call` 
 `approval` records carry `evidenceDigests`, and the `vision.egress.released` record names
 the source and egress digests.
 
+Every surface draws the held call with that image — the web home and the phone show it with
+its regions, the terminal as text with a link, chat attaches it or links to it — and an answer
+that lets the call run names the digest it saw: see
+[Approve with the Image](../surfaces/approve-with-image.md).
+
 ## Egress Rules
 
 The rules come from `.adk/vision.toml`; see [The Egress Gate](index.md#the-egress-gate).
