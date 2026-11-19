@@ -207,6 +207,9 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+For regions in source pixels, verified weights and the governed vision tools, use the model as
+an `adk-vision` describer: see [Local Describer](../vision/local-describer.md).
+
 ---
 
 ## Step 6: Multi-Model Serving
