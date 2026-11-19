@@ -338,7 +338,8 @@ pub struct Region {
 #[serde(rename_all = "camelCase")]
 pub struct RawRegion {
     /// The geometry, in the backend's frame. A mask's size is the frame's raster: the sent
-    /// image for `SentPixels`, the model input for `ModelInput`.
+    /// image for `SentPixels`, `scale` × `scale` for `Normalized`, the model input for
+    /// `ModelInput`.
     pub shape: Shape,
     /// The class or concept.
     #[serde(default, skip_serializing_if = "Option::is_none")]

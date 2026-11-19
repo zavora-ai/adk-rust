@@ -1,0 +1,41 @@
+{
+  "status": 200,
+  "latencyMs": 2954,
+  "headers": {
+    "Date": "Wed, 18 Nov 2026 20:43:21 GMT",
+    "Content-Type": "application/json",
+    "Nvcf-Reqid": "8e2bc715-5806-438a-aa12-02c4714bceca",
+    "Nvcf-Status": "fulfilled",
+    "Server": "Python/3.12 aiohttp/3.14.5",
+    "X-Request-Id": "f1b6afba-3b78-44ac-978a-e7cd97653fe3"
+  },
+  "body": {
+    "id": "chatcmpl-96f81329-29aa-4eae-9063-fd013977168b",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "content": "{\"objects\": [{\"label\": \"the red rectangle\", \"bbox_2d\": [80, 75, 345, 355]}, {\"label\": \"the blue circle\", \"bbox_2d\": [565, 75, 755, 355]}, {\"label\": \"the green triangle\", \"bbox_2d\": [156, 535, 345, 815]}, {\"label\": \"the text 'INVOICE 4721'\", \"bbox_2d\": [500, 535, 775, 595]}, {\"label\": \"the text 'TOTAL $58.20'\", \"bbox_2d\": [500, 635, 775, 695]}]}",
+          "refusal": null,
+          "role": "assistant"
+        },
+        "finish_reason": "stop",
+        "logprobs": null
+      }
+    ],
+    "created": 1795034599,
+    "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    "object": "chat.completion",
+    "usage": {
+      "prompt_tokens": 408,
+      "completion_tokens": 190,
+      "total_tokens": 598,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0
+      }
+    }
+  }
+}

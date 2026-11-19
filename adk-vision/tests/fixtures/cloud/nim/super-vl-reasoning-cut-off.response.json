@@ -1,0 +1,42 @@
+{
+  "status": 200,
+  "latencyMs": 14763,
+  "headers": {
+    "Date": "Wed, 18 Nov 2026 20:30:59 GMT",
+    "Content-Type": "application/json",
+    "Nvcf-Reqid": "197ec821-2d01-4d2b-861e-952afcb999c3",
+    "Nvcf-Status": "fulfilled",
+    "Server": "Python/3.12 aiohttp/3.14.5",
+    "X-Request-Id": "efa97bec-1bbe-4698-adb8-f01632b1c2b6"
+  },
+  "body": {
+    "id": "chatcmpl-2b5c73a9-2e35-4c10-b32b-9acd15a03820",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "content": null,
+          "refusal": null,
+          "role": "assistant",
+          "reasoning_content": "The user wants me to locate specific objects in the image and return their bounding boxes in a specific JSON format.\n\n**1. Analyze the image:**\n- It's a white background image with several elements.\n- Top left: A red rectangle.\n- Top right: A blue circle.\n- Bottom left: A green triangle.\n- Bottom right: Two lines of text.\n    - Line 1: \"INVOICE 4721\"\n    - Line 2: \"TOTAL $58.20\"\n\n**2. Determine coordinates:**\n- I need to estimate the bounding boxes [x_min, y_min, x_max, y_max].\n- Let's assume a coordinate system where (0,0) is top-left.\n- Image dimensions look roughly square, maybe 1000x1000 or similar aspect ratio. Let's look at relative positions.\n- Red rectangle: Top left quadrant. x: ~8% to ~33%, y: ~10% to ~40%.\n- Blue circle: Top right quadrant. x: ~56% to ~76%, y: ~10% to ~45%.\n- Green triangle: Bottom left quadrant. x: ~15% to ~31%, y: ~60% to ~90%.\n- Text \"INVOICE 4721\": Middle right. x: ~49% to ~77%, y: ~60% to ~70%.\n- Text \"TOTAL $58.20\": Below the invoice text. x: ~49% to ~77%, y: ~75% to ~85%.\n\nLet's refine the estimates based on visual inspection.\n- Image size seems to be roughly 1000x667 based on typical aspect ratios, but I will just provide normalized-looking coordinates or pixel estimates if I assume a size. The prompt asks for `image_size_seen`. I will estimate the size as roughly 1000x666 based on standard viewing, or just pick a reasonable size like 1000x1000 if it looks square. Wait, looking at the image provided, it looks like a standard screenshot. Let's assume width=1000, height=666 for estimation purposes, or just use relative 0-1000 scale. Let's look at the actual pixel values if possible. Since I can't measure pixels directly, I will estimate based on a 1000x1000 grid for simplicity, or just provide the box.\n- Let's try to be precise.\n- Red rectangle: [78, 96, 333, 262] (approx)\n- Blue circle: [563, 96, 760, 296] (approx)\n- Green triangle: [148, 606, 310, 896] (approx)\n- Text \"INVOICE 4721\": [490, 606, 770, 706] (approx)\n- Text \"TOTAL $58.20\": [490, 756, 770, 856] (approx)\n\nWait, let's look at the image again.\nThe red rectangle is top left.\nThe blue circle is top right.\nThe green triangle is bottom left.\nThe text is bottom right.\n\nLet's define the coordinate system: [x_min, y_min, x_max, y_max] with origin at top-left.\nLet's assume image size is roughly 1000x666 (standard 3:2).\nRed rect: x1=78, y1=96, x2=333, y2=262.\nBlue circle: x1=563, y1=96, x2=760, y2=296.\nGreen triangle: x1=148, y1=606, x2=310, y2=896. Wait, y2 can't be 896 if height is 666.\nLet's assume image size is 1000x1000 for easier estimation, or just output the boxes relative to a hypothetical 1000x1000 canvas.\nActually, looking at the aspect ratio, it's wider than tall. Maybe 1200x800?\nLet's just estimate percentages and convert to a standard 1000x1000 grid or just provide the boxes. The prompt asks for `image_size_seen`. I will guess [1000, 666] or similar. Let's look at the provided image crop hints if any... none.\nLet's assume the image is 1000 pixels wide and roughly 666 pixels high.\nRed rect: [78, 96, 333, 262] -> y_max 262 is within 666.\nBlue circle: [563, 96, 760, 296] -> y_max 296 is within 666.\nGreen triangle: [148, 606, 310, 896] -> y_max 896 is > 666. So height must be larger.\nLet's assume height is 1000.\nRed rect: [78, 96, 333, 262]\nBlue circle: [563, 96, 760, 296]\nGreen triangle: [148, 606, 310, 896] -> fits in 1000 height.\nText 1: [490, 606, 770, 706]\nText 2: [490, 756, 770, 856]\n\nLet's refine the boxes.\nRed rectangle: Left edge ~8%, Top ~10%, Right ~33%, Bottom ~26%.\nBlue circle: Left ~56%, Top ~10%, Right ~76%, Bottom ~30%.\nGreen triangle: Left ~15%, Top ~60%, Right ~31%, Bottom ~90%.\nText \"INVOICE 4721\": Left ~49%, Top ~60%, Right ~77%, Bottom ~70%.\nText \"TOTAL $58.20\": Left ~49%, Top ~75%, Right ~77%, Bottom ~85%.\n\nLet's try to map these to a 1000x1000 grid.\nRed: [78, 96, 333, 262]\nBlue: [563, 96, 760, 296"
+        },
+        "finish_reason": "length",
+        "logprobs": null
+      }
+    ],
+    "created": 1795033845,
+    "model": "private/nvidia/nemotron-3.5-super-120b-a12b",
+    "object": "chat.completion",
+    "usage": {
+      "prompt_tokens": 633,
+      "completion_tokens": 1500,
+      "total_tokens": 2133,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 1500
+      }
+    }
+  }
+}

@@ -1,0 +1,100 @@
+{
+ "recorded": "2026-11-19",
+ "path": "/v1/chat/completions",
+ "request": {
+  "max_completion_tokens": 1500,
+  "messages": [
+   {
+    "content": [
+     {
+      "image_url": {
+       "detail": "auto",
+       "url": "{{image:image/png:sha256:f051bdff044b9b956a4ea50738069c092a8cca45466f42acc5134737c93a3916:151259}}"
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "This is a screenshot of a form. Locate each of these labelled widgets: menu, search, avatar, name-field, email-field, phone-field, country, notes, cancel, save, help, status. Label each region with the widget's name exactly as given (for example `name-field`).\n\nGive each region's `bbox` as [x_min, y_min, x_max, y_max] normalised to 0-1000 (0,0 is the top-left corner, 1000,1000 the bottom-right corner, independent of the image's aspect ratio). Answer with JSON only, in this shape: {\"text\": <the answer>, \"regions\": [...]}.",
+      "type": "text"
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "model": "google/gemma-4-31b-it",
+  "response_format": {
+   "json_schema": {
+    "name": "google_gemma_4_31b_it",
+    "schema": {
+     "additionalProperties": false,
+     "properties": {
+      "regions": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "bbox": {
+          "description": "[x_min, y_min, x_max, y_max] normalized to 0-1000.",
+          "items": {
+           "type": "integer"
+          },
+          "type": "array"
+         },
+         "label": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "label",
+         "bbox"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "text": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "text",
+      "regions"
+     ],
+     "type": "object"
+    },
+    "strict": true
+   },
+   "type": "json_schema"
+  }
+ },
+ "status": 200,
+ "contentType": "application/json",
+ "response": {
+  "id": "aa182a45a1e670d8",
+  "choices": [
+   {
+    "index": 0,
+    "message": {
+     "content": "{\"regions\": [{\"bbox\": [0, 10, 65, 48], \"label\": \"menu\"}, {\"bbox\": [318, 10, 621, 48], \"label\": \"search\"}, {\"bbox\": [935, 10, 1000, 48], \"label\": \"avatar\"}, {\"bbox\": [131, 151, 200, 426], \"label\": \"name-field\"}, {\"bbox\": [495, 151, 695, 200], \"label\": \"country\"}, {\"bbox\": [131, 218, 426, 267], \"label\": \"email-field\"}, {\"bbox\": [131, 285, 426, 334], \"label\": \"phone-field\"}, {\"bbox\": [131, 352, 695, 561], \"label\": \"notes\"}, {\"bbox\": [551, 602, 643, 642], \"label\": \"cancel\"}, {\"bbox\": [634, 602, 695, 642], \"label\": \"save\"}, {\"bbox\": [0, 952, 55, 991], \"label\": \"help\"}, {\"bbox\": [825, 952, 985, 991], \"label\": \"status\"}] , \"text\": \"The form includes fields for name, email, phone, country and notes, as well as a search bar, menu, avatar, help, status and buttons for saving or cancelling.\"}",
+     "refusal": null,
+     "role": "assistant"
+    },
+    "finish_reason": "stop",
+    "logprobs": null
+   }
+  ],
+  "created": 1795039189,
+  "model": "google/gemma-4-31b-it",
+  "object": "chat.completion",
+  "usage": {
+   "prompt_tokens": 434,
+   "completion_tokens": 390,
+   "total_tokens": 824,
+   "prompt_tokens_details": {
+    "cached_tokens": 0
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 0
+   }
+  }
+ }
+}

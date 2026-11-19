@@ -1,0 +1,74 @@
+{
+  "image": "shapes-960x540.png",
+  "width": 960,
+  "height": 540,
+  "frame": "source pixels, origin top-left, x right, y down, x1/y1 exclusive",
+  "objects": [
+    {
+      "label": "red rectangle",
+      "bbox": [
+        80,
+        60,
+        320,
+        220
+      ]
+    },
+    {
+      "label": "blue circle",
+      "bbox": [
+        550,
+        60,
+        730,
+        240
+      ],
+      "center": [
+        640,
+        150
+      ],
+      "radius": 90
+    },
+    {
+      "label": "green triangle",
+      "bbox": [
+        140,
+        330,
+        301,
+        481
+      ],
+      "polygon": [
+        [
+          140,
+          480
+        ],
+        [
+          300,
+          480
+        ],
+        [
+          220,
+          330
+        ]
+      ]
+    },
+    {
+      "label": "text 'INVOICE 4721'",
+      "text": "INVOICE 4721",
+      "bbox": [
+        480,
+        328,
+        744,
+        357
+      ]
+    },
+    {
+      "label": "text 'TOTAL $58.20'",
+      "text": "TOTAL $58.20",
+      "bbox": [
+        480,
+        416,
+        744,
+        451
+      ]
+    }
+  ]
+}

@@ -199,12 +199,13 @@ impl CoordFrame {
         BBox::new(a[0] as f32, a[1] as f32, b[0] as f32, b[1] as f32)
     }
 
-    /// The size of the raster a mask in this frame must have, or `None` when masks are not
-    /// expressed in this frame (an adapter converts normalized masks first).
+    /// The size of the raster a mask in this frame must have: the sent image for
+    /// `SentPixels`, `scale` × `scale` cells for `Normalized` (Gemini's masks, one cell per
+    /// unit of its 0–1000 grid), the model input for `ModelInput`.
     pub fn mask_raster(&self, sent: (u32, u32)) -> Option<(u32, u32)> {
         match self {
             Self::SentPixels => Some(sent),
-            Self::Normalized { .. } => None,
+            Self::Normalized { scale, .. } => Some(((*scale).max(1), (*scale).max(1))),
             Self::ModelInput { width, height, .. } => Some((*width, *height)),
         }
     }

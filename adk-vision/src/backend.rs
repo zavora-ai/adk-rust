@@ -293,6 +293,11 @@ pub struct BackendDescriptor {
     /// budget can refuse it before any image leaves (spec 3.7 §7.9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_estimate: Option<crate::budget::TokenEstimate>,
+    /// The most open-vocabulary concepts one request takes (`sam-3.1` takes one), so a
+    /// call with more is held and metered as one request per that many concepts; `None` for
+    /// no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concepts_per_request: Option<u32>,
 }
 
 impl BackendDescriptor {
@@ -306,6 +311,7 @@ impl BackendDescriptor {
             manifest: None,
             limits: InputLimits::unlimited(),
             token_estimate: None,
+            concepts_per_request: None,
         }
     }
 
@@ -331,5 +337,35 @@ impl BackendDescriptor {
     pub fn with_limits(mut self, limits: InputLimits) -> Self {
         self.limits = limits;
         self
+    }
+
+    /// Takes at most `concepts` open-vocabulary concepts per request.
+    pub fn with_concepts_per_request(mut self, concepts: u32) -> Self {
+        self.concepts_per_request = Some(concepts.max(1));
+        self
+    }
+
+    /// The requests a call with `concepts` concepts and, separately, other prompts makes:
+    /// one per [`concepts_per_request`](Self::concepts_per_request) concepts, and one for
+    /// the other prompts; always 1 for a backend with no limit.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_vision::{BackendDescriptor, CoordFrame, Locality};
+    ///
+    /// let sam = BackendDescriptor::new("sam-3.1", Locality::Remote { hosts: vec![] }, CoordFrame::SentPixels)
+    ///     .with_concepts_per_request(1);
+    /// assert_eq!(sam.requests_for(5, false), 5);
+    /// assert_eq!(sam.requests_for(2, true), 3);
+    /// ```
+    pub fn requests_for(&self, concepts: usize, other_prompts: bool) -> u64 {
+        match self.concepts_per_request {
+            Some(per) => {
+                let per = per.max(1) as usize;
+                (concepts.div_ceil(per) + usize::from(other_prompts)).max(1) as u64
+            }
+            None => 1,
+        }
     }
 }

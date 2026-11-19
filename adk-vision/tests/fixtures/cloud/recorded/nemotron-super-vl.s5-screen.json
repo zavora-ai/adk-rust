@@ -1,0 +1,103 @@
+{
+ "recorded": "2026-11-19",
+ "path": "/v1/chat/completions",
+ "request": {
+  "chat_template_kwargs": {
+   "enable_thinking": false
+  },
+  "max_completion_tokens": 1500,
+  "messages": [
+   {
+    "content": [
+     {
+      "image_url": {
+       "detail": "auto",
+       "url": "{{image:image/png:sha256:f051bdff044b9b956a4ea50738069c092a8cca45466f42acc5134737c93a3916:151259}}"
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "This is a screenshot of a form. Locate each of these labelled widgets: menu, search, avatar, name-field, email-field, phone-field, country, notes, cancel, save, help, status. Label each region with the widget's name exactly as given (for example `name-field`).\n\nGive each region's `bbox` as [x_min, y_min, x_max, y_max] normalised to 0-1000 (0,0 is the top-left corner, 1000,1000 the bottom-right corner, independent of the image's aspect ratio). Answer with JSON only, in this shape: {\"text\": <the answer>, \"regions\": [...]}.",
+      "type": "text"
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "model": "nvidia/nemotron-3.5-super-vl-120b-a12b",
+  "response_format": {
+   "json_schema": {
+    "name": "nvidia_nemotron_3_5_super_vl_120b_a12b",
+    "schema": {
+     "additionalProperties": false,
+     "properties": {
+      "regions": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "bbox": {
+          "description": "[x_min, y_min, x_max, y_max] normalized to 0-1000.",
+          "items": {
+           "type": "integer"
+          },
+          "type": "array"
+         },
+         "label": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "label",
+         "bbox"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "text": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "text",
+      "regions"
+     ],
+     "type": "object"
+    },
+    "strict": true
+   },
+   "type": "json_schema"
+  }
+ },
+ "status": 200,
+ "contentType": "application/json",
+ "response": {
+  "id": "chatcmpl-45921963-bfda-43b8-9427-c0946327072b",
+  "choices": [
+   {
+    "index": 0,
+    "message": {
+     "content": "{\"regions\": [{\"bbox\": [11, 14, 77, 50], \"label\": \"menu\"}, {\"bbox\": [323, 18, 617, 54], \"label\": \"search\"}, {\"bbox\": [945, 14, 989, 54], \"label\": \"avatar\"}, {\"bbox\": [133, 154, 427, 190], \"label\": \"name-field\"}, {\"bbox\": [133, 219, 427, 254], \"label\": \"email-field\"}, {\"bbox\": [133, 287, 427, 323], \"label\": \"phone-field\"}, {\"bbox\": [489, 154, 691, 190], \"label\": \"country\"}, {\"bbox\": [133, 357, 691, 559], \"label\": \"notes\"}, {\"bbox\": [546, 603, 623, 639], \"label\": \"cancel\"}, {\"bbox\": [634, 603, 691, 639], \"label\": \"save\"}, {\"bbox\": [11, 962, 59, 997], \"label\": \"help\"}, {\"bbox\": [824, 961, 989, 997], \"label\": \"status\"}], \"text\": \"{\\n \\\"regions\\\": []\\n}\"}",
+     "refusal": null,
+     "role": "assistant"
+    },
+    "finish_reason": "stop",
+    "logprobs": null
+   }
+  ],
+  "created": 1795039063,
+  "model": "private/nvidia/nemotron-3.5-super-120b-a12b",
+  "object": "chat.completion",
+  "usage": {
+   "prompt_tokens": 3477,
+   "completion_tokens": 363,
+   "total_tokens": 3840,
+   "prompt_tokens_details": {
+    "cached_tokens": 0
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 0
+   }
+  }
+ }
+}

@@ -1561,6 +1561,7 @@ dependencies = [
  "jsonschema",
  "ort",
  "proptest",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -1573,6 +1574,7 @@ dependencies = [
  "tracing",
  "ureq 3.5.2",
  "uuid 1.29.2",
+ "wiremock",
 ]
 
 [[package]]

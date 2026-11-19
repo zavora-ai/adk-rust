@@ -39,6 +39,13 @@ onnx-dynamic = ["fetch", "dep:ort", "dep:tokenizers", "ort/load-dynamic"]
 # `onnx-cuda` downloads the CUDA build of onnxruntime; `onnx-coreml` links only on Apple targets.
 onnx-coreml = ["onnx", "ort/coreml"]
 onnx-cuda = ["onnx", "ort/cuda"]
+# `LlmDescriber` over any `adk_core::Llm` that takes images, with the Gemini, Claude and
+# 0-1000 region adapters and provider-formula preflight estimates (§7.7, §7.9).
+cloud = ["dep:adk-model", "dep:base64", "dep:futures"]
+# NVIDIA NIM vision-language models over adk-model's OpenAI-compatible client (§7.7).
+nim = ["cloud", "adk-model/openai"]
+# The Meta `sam-3.1` client: request building, the stream parser and mask placement (§7.7).
+sam = ["dep:adk-model", "adk-model/muse", "dep:base64", "dep:futures", "dep:reqwest", "tokio/io-util", "tokio/process"]
 
 [dependencies]
 adk-core.workspace = true
@@ -61,8 +68,12 @@ tracing.workspace = true
 uuid.workspace = true
 
 adk-guardrail = { workspace = true, optional = true }
-# Base64 images inside tool results (feature `guardrail`).
+# Provider prices for preflight estimates, and the clients `nim` and `sam` build on.
+adk-model = { workspace = true, optional = true }
+# Base64 images inside tool results (`guardrail`), data URLs and mask payloads (`cloud`, `sam`).
 base64 = { version = "0.22", optional = true }
+futures = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
 
 # Same client configuration as adk-rag: the blocking ureq client, no default TLS stack.
 hf-hub = { version = "0.5", optional = true, default-features = false, features = ["ureq"] }
@@ -78,9 +89,10 @@ tokenizers = { version = "0.22", optional = true, default-features = false, feat
 # Path-only self dependency, so the crate's own tests run the conformance suite.
 adk-vision = { path = ".", features = ["conformance"] }
 # The governed-toolset scenarios (S1–S4, S7) run through `Runner` and `LlmAgent` with a
-# scripted model.
+# scripted model; the cloud contract tests replay recorded responses through the real
+# provider clients.
 adk-agent = { path = "../adk-agent" }
-adk-model = { path = "../adk-model", default-features = false }
+adk-model = { path = "../adk-model", default-features = false, features = ["anthropic", "gemini", "muse", "openai"] }
 adk-runner = { path = "../adk-runner" }
 adk-session = { path = "../adk-session" }
 futures = { workspace = true }
@@ -88,6 +100,7 @@ jsonschema = { workspace = true }
 proptest = "1.5"
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+wiremock = "0.6"
 
 [[test]]
 name = "fetch_tests"
@@ -108,3 +121,23 @@ required-features = ["guardrail"]
 [[test]]
 name = "fetch_live_tests"
 required-features = ["fetch"]
+
+[[test]]
+name = "cloud_tests"
+required-features = ["cloud", "nim"]
+
+[[test]]
+name = "cloud_live_tests"
+required-features = ["cloud", "nim"]
+
+[[test]]
+name = "nim_tests"
+required-features = ["nim"]
+
+[[test]]
+name = "sam_tests"
+required-features = ["sam"]
+
+[[test]]
+name = "sam_live_tests"
+required-features = ["sam"]
