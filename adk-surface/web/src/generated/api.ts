@@ -980,6 +980,11 @@ export interface DecisionCard {
    * (S-I5).
    */
   detail?: CardDetail | null;
+  /**
+   * What an MCP server asks the person, drawn in the home's own controls in place of the
+   * call's arguments (MCP elicitation; spec 3.3 §7.2). Never on a chat card (S-I5).
+   */
+  elicitation?: ElicitationView | null;
   /** What will happen, in plain words. */
   heading: string;
   /** The inbox entry: what a command answers. Never shown. */
@@ -1357,6 +1362,74 @@ export interface DrawnSurface {
   title?: string | null;
   /** This version. Only the latest version of a surface is live. */
   version: number;
+}
+
+/**
+ * What an MCP server asks the person while the agent's call waits (MCP elicitation), drawn
+ * by the home in its own controls, never by the server: a form whose answer is sent as the
+ * decision's edit and checked against the server's schema, or a page the person opens
+ * themselves, shown in full and never opened by the home (spec 3.3 §7.2).
+ */
+export type ElicitationView = {
+  /** The fields, in the schema's order. */
+  fields: ElicitedField[];
+  /** What it asks, in its words. */
+  message: string;
+  mode: "form";
+  /** The server that asks. */
+  server: string;
+} | {
+  /** Its host, shown on its own so a look-alike stands out. */
+  host: string;
+  /** Why, in its words. */
+  message: string;
+  mode: "url";
+  /** The server that asks. */
+  server: string;
+  /** The whole address, as sent. */
+  url: string;
+  /**
+   * Why to look twice, when there is a reason: look-alike characters, a name hidden
+   * before an `@`, no encryption.
+   */
+  warning?: string | null;
+};
+
+/** One field of an elicitation form. */
+export interface ElicitedField {
+  /** The value it starts with. */
+  default?: unknown;
+  /** The schema's description. */
+  description?: string | null;
+  /** What it takes. */
+  kind: ElicitedKind;
+  /** What the field is called: the schema's `title`, else its key. */
+  label: string;
+  /** A text's length bounds, in characters. */
+  maxLength?: number | null;
+  /** A number's bounds. */
+  maximum?: number | null;
+  /** A text's length bounds, in characters. */
+  minLength?: number | null;
+  /** A number's bounds. */
+  minimum?: number | null;
+  /** Its key in the answer. */
+  name: string;
+  /** A choice's options. */
+  options?: ElicitedOption[];
+  /** The answer is refused without it. */
+  required: boolean;
+}
+
+/** What an elicitation field takes. */
+export type ElicitedKind = "text" | "email" | "url" | "date" | "dateTime" | "number" | "integer" | "boolean" | "choice";
+
+/** One option of a choice. */
+export interface ElicitedOption {
+  /** What the person reads. */
+  label: string;
+  /** What the answer carries. */
+  value: string;
 }
 
 /** What removing an agent ends, counted (spec 3.3 §5.7 "Pausing and removing"). */

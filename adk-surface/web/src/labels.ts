@@ -55,6 +55,12 @@ export const labels = {
   cancel: "Cancel",
   notJson: "That is not valid JSON. Check the brackets and quotes.",
   changedSinceSeen: "This decision changed since you saw it. Check it again.",
+  // What an MCP server asks (an elicitation, spec 3.3 §7.2).
+  elicitationHost: "The address goes to",
+  optional: "(optional)",
+  pickOne: "Pick one",
+  fillIn: (field: string) => `Fill in ${field} first.`,
+  sendAnswer: words.ANSWER,
   // Activity in a thread.
   changedNothing: "changed nothing",
   you: "You",

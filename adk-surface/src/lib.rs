@@ -115,8 +115,9 @@ pub use local::{LocalSource, LocalSourceBuilder};
 pub use model::CardDetail;
 pub use model::{
     AgentRef, AgentRow, AgentStatus, Avatar, Briefing, BriefingLine, CallView, CardStatus, Decided,
-    DecidedAnswer, DecisionCard, FeedEntry, Mode, ModeView, Pill, QuietView, Reversibility,
-    Speaker, SpendView, StatusLine, ThreadItem, TimelineStep,
+    DecidedAnswer, DecisionCard, ElicitationView, ElicitedField, ElicitedKind, ElicitedOption,
+    FeedEntry, Mode, ModeView, Pill, QuietView, Reversibility, Speaker, SpendView, StatusLine,
+    ThreadItem, TimelineStep,
 };
 pub use origin::{Caller, Origin, SurfaceKind, Via};
 pub use project::{CALL_TEXT_LIMIT, Place};

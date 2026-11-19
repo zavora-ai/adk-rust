@@ -856,6 +856,59 @@ pre {
   resize: vertical;
 }
 
+/* What an MCP server asks (spec 3.3 §7.2): the home's own fields, and an address shown
+   whole as text, its host on its own line. */
+.elicitation {
+  display: grid;
+  gap: 8px;
+}
+
+.elicitation-message {
+  margin: 0;
+}
+
+.elicitation-field {
+  display: grid;
+  gap: 4px;
+}
+
+.elicitation-field input:not([type="checkbox"]),
+.elicitation-field select {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.elicitation-field input[type="checkbox"] {
+  justify-self: start;
+  width: 20px;
+  height: 20px;
+}
+
+.elicitation-host {
+  margin: 0;
+}
+
+.elicitation-url {
+  display: block;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--code-bg);
+  font-family: var(--mono);
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+
+.elicitation-warning {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--stop);
+  border-radius: 8px;
+  font-weight: 600;
+}
+
 .take-over {
   display: inline-flex;
   flex-wrap: wrap;

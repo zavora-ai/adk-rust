@@ -20,8 +20,9 @@ use crate::answers::AnswerRecord;
 use crate::hints::CardHint;
 use crate::model::{
     AgentRef, AgentRow, AgentStatus, Avatar, BriefingLine, CallView, CardStatus, Decided,
-    DecidedAnswer, DecisionCard, FeedEntry, Mode, ModeView, Pill, QuietView, Reversibility,
-    Speaker, SpendView, ThreadItem, TimelineStep,
+    DecidedAnswer, DecisionCard, ElicitationView, ElicitedField, ElicitedKind, ElicitedOption,
+    FeedEntry, Mode, ModeView, Pill, QuietView, Reversibility, Speaker, SpendView, ThreadItem,
+    TimelineStep,
 };
 use crate::origin::{Caller, SurfaceKind};
 use crate::rules::{self, Answer, DecisionFacts};
@@ -37,6 +38,188 @@ pub const CARD_NAME_LIMIT: usize = 64;
 pub const CARD_HEADING_LIMIT: usize = 160;
 /// The longest summary, step, detail or "also shown" line a decision card shows.
 pub const CARD_LINE_LIMIT: usize = 280;
+
+/// The most fields of an MCP elicitation form a card draws; a longer form is refused there.
+const ELICITED_FIELDS_LIMIT: usize = 24;
+/// The most options of an elicitation field a card draws.
+const ELICITED_OPTIONS_LIMIT: usize = 50;
+
+/// The server of a decision a harness parked for an MCP elicitation
+/// (`mcp:{server}/elicitation`).
+pub(crate) fn elicitation_server(tool: &str) -> Option<&str> {
+    tool.strip_prefix("mcp:")?.strip_suffix("/elicitation")
+}
+
+/// What an MCP server asks in `request`, for the home to draw in its own controls: a form
+/// when every field is one the home draws (text, email, web address, date, number, yes or no,
+/// a choice), the page of a URL elicitation, `None` otherwise (the card then offers Deny).
+pub(crate) fn elicitation_of(request: &ApprovalRequest) -> Option<ElicitationView> {
+    let server = capped(elicitation_server(&request.tool_name)?, CARD_NAME_LIMIT);
+    let shown = &request.args_redacted;
+    let message = capped(shown.get("message").and_then(Value::as_str)?, CARD_LINE_LIMIT);
+    if let Some(url) = shown.get("url").and_then(Value::as_str) {
+        let (host, warning) = address_parts(url)?;
+        return Some(ElicitationView::Url {
+            server,
+            message,
+            url: url.to_string(),
+            host,
+            warning: warning.map(str::to_string),
+        });
+    }
+    let schema = shown.get("schema")?;
+    let properties = schema.get("properties")?.as_object()?;
+    if properties.len() > ELICITED_FIELDS_LIMIT {
+        return None;
+    }
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|names| names.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let fields = properties
+        .iter()
+        .map(|(name, property)| elicited_field(name, property, required.contains(&name.as_str())))
+        .collect::<Option<Vec<_>>>()?;
+    Some(ElicitationView::Form { server, message, fields })
+}
+
+/// One field of an elicitation schema, or `None` for a kind the home does not draw.
+fn elicited_field(name: &str, property: &Value, required: bool) -> Option<ElicitedField> {
+    let text = |key: &str| property.get(key).and_then(Value::as_str);
+    let mut options = Vec::new();
+    if let Some(values) = property.get("enum").and_then(Value::as_array) {
+        let names = property.get("enumNames").and_then(Value::as_array);
+        for (index, value) in values.iter().enumerate() {
+            let value = value.as_str()?;
+            let label = names.and_then(|names| names.get(index)).and_then(Value::as_str);
+            options.push((value, label.unwrap_or(value)));
+        }
+    } else if let Some(choices) =
+        property.get("oneOf").or_else(|| property.get("anyOf")).and_then(Value::as_array)
+    {
+        for choice in choices {
+            let value = choice.get("const").and_then(Value::as_str)?;
+            let label = choice.get("title").and_then(Value::as_str).unwrap_or(value);
+            options.push((value, label));
+        }
+    }
+    if options.len() > ELICITED_OPTIONS_LIMIT {
+        return None;
+    }
+    let kind = if options.is_empty() {
+        match text("type")? {
+            "string" => match text("format") {
+                Some("email") => ElicitedKind::Email,
+                Some("uri") => ElicitedKind::Url,
+                Some("date") => ElicitedKind::Date,
+                Some("date-time") => ElicitedKind::DateTime,
+                _ => ElicitedKind::Text,
+            },
+            "number" => ElicitedKind::Number,
+            "integer" => ElicitedKind::Integer,
+            "boolean" => ElicitedKind::Boolean,
+            _ => return None,
+        }
+    } else {
+        ElicitedKind::Choice
+    };
+    let default = property.get("default").filter(|value| !value.is_object() && !value.is_array());
+    Some(ElicitedField {
+        name: name.to_string(),
+        label: capped(text("title").unwrap_or(name), CARD_NAME_LIMIT),
+        description: text("description").map(|description| capped(description, CARD_LINE_LIMIT)),
+        kind,
+        required,
+        default: default.cloned(),
+        options: options
+            .into_iter()
+            .map(|(value, label)| ElicitedOption {
+                value: value.to_string(),
+                label: capped(label, CARD_NAME_LIMIT),
+            })
+            .collect(),
+        minimum: property.get("minimum").and_then(Value::as_f64),
+        maximum: property.get("maximum").and_then(Value::as_f64),
+        min_length: property.get("minLength").and_then(Value::as_u64),
+        max_length: property.get("maxLength").and_then(Value::as_u64),
+    })
+}
+
+/// Checks the person's answer to an elicitation form against the fields the card drew: an
+/// object of those fields only, every required one present, each of its kind, a choice one of
+/// its options, numbers and lengths within bounds. The harness checks it again against the
+/// server's schema before the server sees it.
+pub(crate) fn check_answer(fields: &[ElicitedField], content: &Value) -> Result<(), String> {
+    let answer = content.as_object().ok_or("the answer is an object of the form's fields")?;
+    if let Some(unknown) = answer.keys().find(|key| !fields.iter().any(|f| &f.name == *key)) {
+        return Err(format!("{unknown} is not a field of the form"));
+    }
+    for field in fields {
+        let Some(value) = answer.get(&field.name) else {
+            if field.required {
+                return Err(format!("{} is required", field.label));
+            }
+            continue;
+        };
+        let fits = match field.kind {
+            ElicitedKind::Number => value.is_number(),
+            ElicitedKind::Integer => value.is_i64() || value.is_u64(),
+            ElicitedKind::Boolean => value.is_boolean(),
+            ElicitedKind::Choice => value
+                .as_str()
+                .is_some_and(|picked| field.options.iter().any(|option| option.value == picked)),
+            _ => value.is_string(),
+        };
+        if !fits {
+            return Err(format!("{} does not take {value}", field.label));
+        }
+        if let Some(number) = value.as_f64()
+            && (field.minimum.is_some_and(|min| number < min)
+                || field.maximum.is_some_and(|max| number > max))
+        {
+            return Err(format!("{} is out of its range", field.label));
+        }
+        if let Some(text) = value.as_str() {
+            let length = text.chars().count() as u64;
+            if field.min_length.is_some_and(|min| length < min)
+                || field.max_length.is_some_and(|max| length > max)
+            {
+                return Err(format!("{} is too short or too long", field.label));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The host of `url`, lowercased, and why to look twice at it: look-alike characters
+/// (punycode or non-ASCII), a name hidden before an `@`, or no encryption.
+fn address_parts(url: &str) -> Option<(String, Option<&'static str>)> {
+    let (scheme, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let (userinfo, host_port) = match authority.rsplit_once('@') {
+        Some((userinfo, host_port)) => (Some(userinfo), host_port),
+        None => (None, authority),
+    };
+    let host = match host_port.strip_prefix('[') {
+        Some(bracketed) => bracketed.split(']').next()?,
+        None => host_port.split(':').next()?,
+    }
+    .to_lowercase();
+    if host.is_empty() {
+        return None;
+    }
+    let warning = if !host.is_ascii() || host.split('.').any(|label| label.starts_with("xn--")) {
+        Some(words::LOOK_ALIKE_ADDRESS)
+    } else if userinfo.is_some() {
+        Some(words::HIDDEN_HOST_ADDRESS)
+    } else if scheme.eq_ignore_ascii_case("http") {
+        Some(words::UNENCRYPTED_ADDRESS)
+    } else {
+        None
+    };
+    Some((host, warning))
+}
 
 /// `text` cut to `limit` characters, with an ellipsis when cut.
 fn capped(text: &str, limit: usize) -> String {
@@ -215,6 +398,7 @@ impl Projector {
         // over is answered with the secret the person types, or refused (§8.2, §10 H2).
         let own_args = shows_own_arguments(request);
         let take_over = request.tool_name == TAKE_OVER_TOOL;
+        let answers_a_form = matches!(elicitation_of(request), Some(ElicitationView::Form { .. }));
         let risk = if (self.rates_high)(request) {
             request.risk.max(adk_core::ApprovalRisk::High)
         } else {
@@ -230,7 +414,9 @@ impl Projector {
                 .copied()
                 .filter(|action| match action {
                     ApprovalAction::Reject => true,
-                    ApprovalAction::Edit => own_args && !take_over,
+                    // An elicitation form is answered with the person's own values, drawn
+                    // in the home's fields and checked against the server's schema.
+                    ApprovalAction::Edit => (own_args || answers_a_form) && !take_over,
                     ApprovalAction::Approve | ApprovalAction::Respond => !take_over,
                 })
                 .collect(),
@@ -341,6 +527,15 @@ impl Projector {
                 }
             }
         }
+        // What an MCP server asks is drawn in the home's own fields; Edit sends the answer.
+        let elicitation = if chat { None } else { elicitation_of(request) };
+        if matches!(elicitation, Some(ElicitationView::Form { .. })) {
+            for option in &mut allowed.options {
+                if option.answer == Answer::Edit {
+                    option.label = words::ANSWER.to_string();
+                }
+            }
+        }
         if decided.is_some() {
             allowed.options.clear();
             allowed.open_in_home = false;
@@ -409,6 +604,7 @@ impl Projector {
             adds_agent,
             // Like the summary, never on a chat card (S-I5).
             detail: hint.detail.clone().filter(|_| !chat),
+            elicitation,
         };
         // Every line of the card fits: nothing a name or a hint carries can push the call and
         // its answers out of sight, or pass a long text off as the home's own words.

@@ -2943,6 +2943,17 @@
             ],
             "description": "A line under the details from a feature's `CardHint`, such as\n\"From the invoice-run workflow · Open in Runs\" (spec 3.3 §7.1). Never on a chat card\n(S-I5)."
           },
+          "elicitation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ElicitationView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What an MCP server asks the person, drawn in the home's own controls in place of the\ncall's arguments (MCP elicitation; spec 3.3 §7.2). Never on a chat card (S-I5)."
+          },
           "heading": {
             "description": "What will happen, in plain words.",
             "type": "string"
@@ -3877,6 +3888,229 @@
           "drawnText",
           "changedText",
           "earlierText"
+        ],
+        "type": "object"
+      },
+      "ElicitationView": {
+        "description": "What an MCP server asks the person while the agent's call waits (MCP elicitation), drawn\nby the home in its own controls, never by the server: a form whose answer is sent as the\ndecision's edit and checked against the server's schema, or a page the person opens\nthemselves, shown in full and never opened by the home (spec 3.3 §7.2).",
+        "oneOf": [
+          {
+            "description": "Fields to fill in: **Answer** sends them.",
+            "properties": {
+              "fields": {
+                "description": "The fields, in the schema's order.",
+                "items": {
+                  "$ref": "#/components/schemas/ElicitedField"
+                },
+                "type": "array"
+              },
+              "message": {
+                "description": "What it asks, in its words.",
+                "type": "string"
+              },
+              "mode": {
+                "const": "form",
+                "type": "string"
+              },
+              "server": {
+                "description": "The server that asks.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "mode",
+              "server",
+              "message",
+              "fields"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A page the server asks the person to open.",
+            "properties": {
+              "host": {
+                "description": "Its host, shown on its own so a look-alike stands out.",
+                "type": "string"
+              },
+              "message": {
+                "description": "Why, in its words.",
+                "type": "string"
+              },
+              "mode": {
+                "const": "url",
+                "type": "string"
+              },
+              "server": {
+                "description": "The server that asks.",
+                "type": "string"
+              },
+              "url": {
+                "description": "The whole address, as sent.",
+                "type": "string"
+              },
+              "warning": {
+                "description": "Why to look twice, when there is a reason: look-alike characters, a name hidden\nbefore an `@`, no encryption.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "mode",
+              "server",
+              "message",
+              "url",
+              "host"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ElicitedField": {
+        "description": "One field of an elicitation form.",
+        "properties": {
+          "default": {
+            "description": "The value it starts with."
+          },
+          "description": {
+            "description": "The schema's description.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ElicitedKind",
+            "description": "What it takes."
+          },
+          "label": {
+            "description": "What the field is called: the schema's `title`, else its key.",
+            "type": "string"
+          },
+          "maxLength": {
+            "description": "A text's length bounds, in characters.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maximum": {
+            "description": "A number's bounds.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "minLength": {
+            "description": "A text's length bounds, in characters.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "minimum": {
+            "description": "A number's bounds.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Its key in the answer.",
+            "type": "string"
+          },
+          "options": {
+            "description": "A choice's options.",
+            "items": {
+              "$ref": "#/components/schemas/ElicitedOption"
+            },
+            "type": "array"
+          },
+          "required": {
+            "description": "The answer is refused without it.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "kind",
+          "required"
+        ],
+        "type": "object"
+      },
+      "ElicitedKind": {
+        "description": "What an elicitation field takes.",
+        "oneOf": [
+          {
+            "const": "text",
+            "description": "A line of text.",
+            "type": "string"
+          },
+          {
+            "const": "email",
+            "description": "An email address.",
+            "type": "string"
+          },
+          {
+            "const": "url",
+            "description": "A web address, shown as text and never opened.",
+            "type": "string"
+          },
+          {
+            "const": "date",
+            "description": "A date.",
+            "type": "string"
+          },
+          {
+            "const": "dateTime",
+            "description": "A date and time.",
+            "type": "string"
+          },
+          {
+            "const": "number",
+            "description": "A number.",
+            "type": "string"
+          },
+          {
+            "const": "integer",
+            "description": "A whole number.",
+            "type": "string"
+          },
+          {
+            "const": "boolean",
+            "description": "Yes or no.",
+            "type": "string"
+          },
+          {
+            "const": "choice",
+            "description": "One of the options.",
+            "type": "string"
+          }
+        ]
+      },
+      "ElicitedOption": {
+        "description": "One option of a choice.",
+        "properties": {
+          "label": {
+            "description": "What the person reads.",
+            "type": "string"
+          },
+          "value": {
+            "description": "What the answer carries.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label"
         ],
         "type": "object"
       },

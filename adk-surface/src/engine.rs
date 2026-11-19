@@ -1720,6 +1720,18 @@ impl SurfaceEngine {
         if answer == Answer::Edit && edited_args.is_none() {
             return Err(SurfaceError::Invalid("an edit needs the changed arguments".into()));
         }
+        // An answer to an MCP server's form is checked against its schema before it is on
+        // record, so the person hears what to fix instead of the server declining it later.
+        if answer == Answer::Edit
+            && let Some(crate::model::ElicitationView::Form { fields, .. }) =
+                crate::project::elicitation_of(&request)
+            && let Some(content) = edited_args.as_ref()
+            && let Err(reason) = crate::project::check_answer(&fields, content)
+        {
+            return Err(SurfaceError::Invalid(format!(
+                "the answer does not fit the form: {reason}"
+            )));
+        }
         if rules::row(caller) == Row::Voice && answer == Answer::AllowOnce {
             // A spoken answer to a decision that changed since it was read is shown again at
             // once, as on every other surface, never promised and then dropped (S-I2).

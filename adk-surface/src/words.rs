@@ -283,6 +283,16 @@ pub fn always_allow_covering(
 }
 /// Changes the arguments, then allows.
 pub const EDIT: &str = "Edit";
+/// Sends the person's answer to what an MCP server asks (an elicitation form).
+pub const ANSWER: &str = "Answer";
+/// Over an elicitation address whose host has look-alike characters.
+pub const LOOK_ALIKE_ADDRESS: &str =
+    "This address uses look-alike characters. Check the host letter by letter before you open it.";
+/// Over an elicitation address that hides a name before an `@`.
+pub const HIDDEN_HOST_ADDRESS: &str =
+    "This address puts a name before an @, so the real host is the part after it.";
+/// Over an elicitation address that is not encrypted.
+pub const UNENCRYPTED_ADDRESS: &str = "This address is not encrypted (http).";
 /// Refuses.
 pub const DENY: &str = "Deny";
 /// Approves a high-risk call.
@@ -1282,6 +1292,10 @@ mod tests {
         ALWAYS_ALLOW_FOR_THIS_COMMAND,
         ALWAYS_ALLOW_FOR_THIS_SITE,
         EDIT,
+        ANSWER,
+        LOOK_ALIKE_ADDRESS,
+        HIDDEN_HOST_ADDRESS,
+        UNENCRYPTED_ADDRESS,
         DENY,
         CONFIRM_ITS_YOU_AND_APPROVE,
         TAKE_OVER,

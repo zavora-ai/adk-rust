@@ -368,6 +368,114 @@ pub struct DecisionCard {
     /// (S-I5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<CardDetail>,
+    /// What an MCP server asks the person, drawn in the home's own controls in place of the
+    /// call's arguments (MCP elicitation; spec 3.3 §7.2). Never on a chat card (S-I5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elicitation: Option<ElicitationView>,
+}
+
+/// What an MCP server asks the person while the agent's call waits (MCP elicitation), drawn
+/// by the home in its own controls, never by the server: a form whose answer is sent as the
+/// decision's edit and checked against the server's schema, or a page the person opens
+/// themselves, shown in full and never opened by the home (spec 3.3 §7.2).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", tag = "mode")]
+pub enum ElicitationView {
+    /// Fields to fill in: **Answer** sends them.
+    #[serde(rename_all = "camelCase")]
+    Form {
+        /// The server that asks.
+        server: String,
+        /// What it asks, in its words.
+        message: String,
+        /// The fields, in the schema's order.
+        fields: Vec<ElicitedField>,
+    },
+    /// A page the server asks the person to open.
+    #[serde(rename_all = "camelCase")]
+    Url {
+        /// The server that asks.
+        server: String,
+        /// Why, in its words.
+        message: String,
+        /// The whole address, as sent.
+        url: String,
+        /// Its host, shown on its own so a look-alike stands out.
+        host: String,
+        /// Why to look twice, when there is a reason: look-alike characters, a name hidden
+        /// before an `@`, no encryption.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        warning: Option<String>,
+    },
+}
+
+/// One field of an elicitation form.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitedField {
+    /// Its key in the answer.
+    pub name: String,
+    /// What the field is called: the schema's `title`, else its key.
+    pub label: String,
+    /// The schema's description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// What it takes.
+    pub kind: ElicitedKind,
+    /// The answer is refused without it.
+    pub required: bool,
+    /// The value it starts with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<Value>,
+    /// A choice's options.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<ElicitedOption>,
+    /// A number's bounds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum: Option<f64>,
+    /// A number's bounds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum: Option<f64>,
+    /// A text's length bounds, in characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_length: Option<u64>,
+    /// A text's length bounds, in characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<u64>,
+}
+
+/// What an elicitation field takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ElicitedKind {
+    /// A line of text.
+    Text,
+    /// An email address.
+    Email,
+    /// A web address, shown as text and never opened.
+    Url,
+    /// A date.
+    Date,
+    /// A date and time.
+    DateTime,
+    /// A number.
+    Number,
+    /// A whole number.
+    Integer,
+    /// Yes or no.
+    Boolean,
+    /// One of the options.
+    Choice,
+}
+
+/// One option of a choice.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitedOption {
+    /// What the answer carries.
+    pub value: String,
+    /// What the person reads.
+    pub label: String,
 }
 
 /// Who wrote a message in a thread.
