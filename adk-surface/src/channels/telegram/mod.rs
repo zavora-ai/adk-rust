@@ -895,8 +895,7 @@ impl ChannelSink for TelegramAdapter {
             // once only beside it (spec 3.7 §8.2, board choice A17).
             let artifacts = self.inner.artifacts.as_deref();
             if let Some(image) =
-                crate::channels::shared::chat_images(request, artifacts, &mut card, &mut heading)
-                    .await
+                wire::chat_images(request, artifacts, &mut card, &mut heading).await
             {
                 let sent =
                     self.inner.api.send_photo(&chat_id(thread), &image, REQUEST_TIMEOUT).await;

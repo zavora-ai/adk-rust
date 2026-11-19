@@ -129,7 +129,7 @@ impl BotApi {
     pub(crate) async fn send_photo(
         &self,
         chat_id: &Value,
-        image: &crate::channels::shared::ChatImage,
+        image: &super::wire::ChatImage,
         timeout: Duration,
     ) -> Result<Value, TelegramError> {
         let method = "sendPhoto";

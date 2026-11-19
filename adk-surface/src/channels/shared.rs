@@ -34,8 +34,8 @@ use tokio::time::Instant;
 #[cfg(any(feature = "whatsapp", feature = "slack", feature = "discord", feature = "teams"))]
 pub(crate) use super::telegram::wire::parse_callback;
 pub(crate) use super::telegram::wire::{
-    ANSWER_NOT_TAKEN, Heading, MESSAGE_NOT_TAKEN, callback_data, heading, hh_mm, is_hidden,
-    is_invisible, split,
+    ANSWER_NOT_TAKEN, Heading, MESSAGE_NOT_TAKEN, callback_data, chat_images, heading, hh_mm,
+    is_hidden, is_invisible, split,
 };
 use crate::answers::{AnswerLog, AnswerRecord, SURFACE_AUDIT_DECIDE};
 use crate::origin::{Origin, SurfaceKind, Via};
@@ -652,63 +652,6 @@ pub(crate) struct Kit {
     pub(crate) answers: Option<Arc<dyn AnswerLog>>,
     pub(crate) audit: Option<AuditTrail>,
     pub(crate) card_hints: Vec<Arc<dyn crate::hints::CardHints>>,
-}
-
-/// An image a chat card attaches: the exact bytes that would leave, their digest checked
-/// (spec 3.7 §8.2, board choice A17).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ChatImage {
-    /// `image/png`.
-    pub(crate) mime_type: String,
-    /// The bytes.
-    pub(crate) bytes: Vec<u8>,
-    /// "The exact image that would leave, after covering 1 face and 3 personal text.
-    /// sha256:c52ca5…ce7550".
-    pub(crate) caption: String,
-}
-
-/// A chat card for a call with images (spec 3.7 §8.2, board choice A17): with `attach`, the
-/// first image's bytes — digest checked — to send with the card, which then keeps Allow once;
-/// otherwise the card loses Allow once, since nobody approves an image they cannot see, and
-/// its heading says to look in the home and names the digest. `None` and no change for a call
-/// without images.
-pub(crate) async fn chat_images(
-    request: &ApprovalRequest,
-    attach: Option<&dyn adk_artifact::ArtifactService>,
-    card: &mut DecisionCard,
-    heading: &mut Heading,
-) -> Option<ChatImage> {
-    let images = crate::evidence::images(request);
-    let first = *images.first()?;
-    let digest = crate::evidence::short_digest(&first.digest);
-    let loaded = match attach {
-        Some(artifacts) => crate::evidence::load_image(artifacts, first).await.unwrap_or_else(|error| {
-            tracing::warn!(error = %error, decision.id = %request.id, "a card's image could not be read; the card links to the home");
-            None
-        }),
-        None => None,
-    };
-    match loaded.filter(|_| images.len() == 1) {
-        Some(bytes) => {
-            let covered = first.caption.as_deref().map(clean_outbound);
-            let caption = match covered {
-                Some(covered) => {
-                    format!("{}: {covered}. {digest}", words::THE_EXACT_IMAGE_THAT_WOULD_LEAVE)
-                }
-                None => format!("{}. {digest}", words::THE_EXACT_IMAGE_THAT_WOULD_LEAVE),
-            };
-            Some(ChatImage { mime_type: first.mime_type.clone(), bytes, caption })
-        }
-        None => {
-            card.answers.retain(|answer| *answer != ChannelAnswer::AllowOnce);
-            let line = format!("{} {digest}", words::SHOW_THE_IMAGE_IN_THE_HOME);
-            heading.detail = Some(match heading.detail.take() {
-                Some(detail) => format!("{detail}\n{line}"),
-                None => line,
-            });
-            None
-        }
-    }
 }
 
 impl Kit {
