@@ -630,8 +630,8 @@ which exports `DrawnView`, `RefusedNotice`, `AppFrame` and the A2UI parser.
 
 An agent draws more than forms, cards and tables in an **extension catalog**: `forms` 1.0 plus
 components another crate defines, under the catalog's own id (A2UI gives a surface one
-catalog). `adk-ui` 3 ships three: `insight` (charts, sparklines, metrics, key-value lists,
-progress, badges), `studio` (insight, plus apps of pages, regions and primitive 3D scenes) and
+catalog). `adk-ui` 3 ships three: `insight` (charts, Vega-Lite charts, sparklines, metrics,
+key-value lists, progress, badges), `studio` (insight, plus apps of pages, regions and primitive 3D scenes) and
 `spatial` (studio, plus 3D charts, networks, globes, scenes and cards with depth; see
 [Scenes and depth](#scenes-and-depth)).
 
@@ -779,8 +779,9 @@ the `forms` catalog leaves out:
 | The `adk_ui` profile of `adk-server` | Still served for existing clients, deprecated, with a sunset target of 2026-12-31 (`GET /api/ui/capabilities`) |
 
 The catalog ids are `https://adk-rust.com/a2ui/catalogs/forms/1.0/catalog.json` and `adk-ui`
-3's `https://zavora.ai/a2ui/catalogs/adk-ui-insight/1.0/catalog.json` and
-`https://zavora.ai/a2ui/catalogs/adk-ui-studio/1.0/catalog.json`, in place of
+3's `https://zavora.ai/a2ui/catalogs/adk-ui-insight/1.0/catalog.json`,
+`https://zavora.ai/a2ui/catalogs/adk-ui-studio/1.0/catalog.json` and
+`https://zavora.ai/a2ui/catalogs/adk-ui-spatial/1.0/catalog.json`, in place of
 `zavora.ai:adk-ui/extended@0.2.0`.
 
 ## Related
