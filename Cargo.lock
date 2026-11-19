@@ -1433,6 +1433,7 @@ version = "3.0.0"
 dependencies = [
  "adk-action",
  "adk-agent",
+ "adk-artifact",
  "adk-core",
  "adk-devtools",
  "adk-graph",
@@ -1446,6 +1447,7 @@ dependencies = [
  "adk-session",
  "adk-site",
  "adk-tool",
+ "adk-vision",
  "adk-website",
  "async-trait",
  "awp-types",
@@ -1466,6 +1468,7 @@ dependencies = [
  "jsonwebtoken 11.1.0",
  "mime_guess",
  "p256",
+ "png",
  "proptest",
  "pulldown-cmark",
  "qrcode",
