@@ -304,6 +304,7 @@ dependencies = [
  "futures",
  "image",
  "libc",
+ "ort",
  "serde",
  "serde_json",
  "tempfile",

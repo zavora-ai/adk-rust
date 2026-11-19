@@ -355,10 +355,7 @@ pub async fn run_backend(
                 peak_rss_bytes = peak_rss_bytes.max(peak);
             }
         }
-        (Some(_), RunMode::Recorded) => {
-            notes.push("latency not measured: recorded responses".to_string());
-        }
-        (Some(_), RunMode::Live) | (None, _) => {}
+        (Some(_), RunMode::Recorded | RunMode::Live) | (None, _) => {}
     }
     if cost_per_1k_images_usd.is_none() && backend.mode != RunMode::Local {
         notes.push("no metered images".to_string());
@@ -591,8 +588,9 @@ impl VisionBenchReport {
         }
 
         let _ = writeln!(out, "\n| Backend | Model | Revision | Licence |\n|---|---|---|---|");
+        let mut listed = std::collections::HashSet::new();
         for row in &self.rows {
-            for model in &row.models {
+            for model in row.models.iter().filter(|m| listed.insert((&row.backend, &m.id))) {
                 let revision = model
                     .revision
                     .as_deref()
@@ -659,13 +657,22 @@ mod tests {
         machine.cpu = "Test CPU".to_string();
         let mut report = VisionBenchReport::new(
             machine,
-            vec![row("efficientsam-ti", RunMode::Local), {
-                let mut r = row("sam-3.1", RunMode::Recorded);
-                r.latency.clear();
-                r.notes.push("latency not measured: recorded responses".to_string());
-                r.cost_per_1k_images_usd = Some(2.5);
-                r
-            }],
+            vec![
+                row("efficientsam-ti", RunMode::Local),
+                {
+                    let mut r = row("sam-3.1", RunMode::Recorded);
+                    r.latency.clear();
+                    r.notes.push("latency not measured: recorded responses".to_string());
+                    r.cost_per_1k_images_usd = Some(2.5);
+                    r
+                },
+                {
+                    // The same backend on a second eval set lists its model once.
+                    let mut r = row("efficientsam-ti", RunMode::Local);
+                    r.workload = "shapes-concepts".to_string();
+                    r
+                },
+            ],
         );
         report.config.long_edges = vec![512, 1024];
         let md = report.to_markdown();
@@ -685,9 +692,8 @@ mod tests {
             ),
             "{md}"
         );
-        assert!(
-            md.contains("| efficientsam-ti | `efficientsam-ti` | `1cf49585c395` | Apache-2.0 |")
-        );
+        let model_row = "| efficientsam-ti | `efficientsam-ti` | `1cf49585c395` | Apache-2.0 |";
+        assert_eq!(md.matches(model_row).count(), 1, "{md}");
     }
 
     #[test]
