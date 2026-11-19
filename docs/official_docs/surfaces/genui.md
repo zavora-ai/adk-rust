@@ -22,6 +22,7 @@ adk-surface = { version = "3.0.0", features = ["web", "genui"] }
 | Part | Feature | What it is |
 |---|---|---|
 | `DrawToolset` | `genui` | The render tools: `render_form`, `render_card`, `render_table`, `render_screen`, `patch_surface`, `delete_surface` |
+| `DrawnEnvelope::delta_from`, `MAX_PATCHES_PER_MINUTE` | `genui` | Incremental A2UI messages between two versions; the patch budget. See [Drawing](#drawing) |
 | `Validator`, `Catalog::forms` | `genui` | Rule 5, and the `forms` 1.0 catalog the tools draw in |
 | The A2UI v0.9.1 model (`A2uiMessage`, `encode_jsonl`, `decode_jsonl`) | `genui` | The internal form a drawing is stored and checked in |
 | `A2uiVersion`, `to_wire`, `from_wire`, `components_in` | `genui` | A2UI 1.0 (the default) and v0.9.1 on the wire. See [A2UI versions](#a2ui-versions) |
@@ -124,6 +125,20 @@ the agent lacks is refused when it is drawn, never after the person sends it:
 Drawing a surface again under its id makes its next version. The thread collapses an earlier
 version to "Earlier version · 10:02" and says "Finance changed this form at 10:05" over the
 new one.
+
+**Live updates.** `patch_surface`'s result says what changed (`"changed": {"components": [...],
+"data": ["/total"]}`), so the agent can tell a real change from an empty one. A surface takes at
+most `MAX_PATCHES_PER_MINUTE` (30) patches a minute; past that the patch is refused and the
+agent is told to put its changes in one patch, so a view refreshed every two seconds fits and a
+model patching in a loop does not redraw the person's thread faster than it can be read.
+
+Each version's envelope keeps the whole drawing, so its digest and what a person approves stay
+whole. A transport that knows which version a renderer holds (a socket, an A2A task) can send
+`DrawnEnvelope::delta_from(&previous)` instead: one `updateComponents` with the new or changed
+components and an `updateDataModel` per changed data path, written in 1.0 or v0.9.1 by
+`to_wire` like any drawing. `None` means there is no sound base (a removal, another surface or
+catalog, or an older version), and the whole drawing is sent. AG-UI activities stay whole
+snapshots, because an extension cannot know which version a client holds.
 
 ### A2UI versions
 

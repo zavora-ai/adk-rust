@@ -81,7 +81,10 @@ pub use catalog::{
     FORMS_CATALOG_ID, HomeNode, HomePanel, HomeScene, HomeText, ResolvedComponent,
 };
 #[cfg(feature = "genui")]
-pub use draw::{DRAWN_STATE_KEY, DrawToolset, DrawnEnvelope, DrawnRecord, REFUSED_STATE_KEY};
+pub use draw::{
+    DRAWN_STATE_KEY, DrawToolset, DrawnEnvelope, DrawnRecord, MAX_PATCHES_PER_MINUTE,
+    REFUSED_STATE_KEY,
+};
 pub use drawn::{
     ChartAxis, ChartKind, ChartSeries, ChartTick, DrawnAccessibility, DrawnActionView, DrawnArg,
     DrawnChart, DrawnCheck, DrawnExtension, DrawnField, DrawnInput, DrawnKind, DrawnNode,
