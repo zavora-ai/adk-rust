@@ -208,3 +208,47 @@ describe("the microphone in the message box", () => {
     }
   });
 });
+
+describe("realtime and vision", () => {
+  it("captions what it heard, and when the person spoke over it", async () => {
+    const { devices } = await connected();
+    act(() => devices.say({ type: "heard", text: "Is checkout still slow?" }));
+    act(() => devices.say({ type: "bargeIn" }));
+    act(() => devices.say({ type: "heard", text: "allow once" }));
+    const captions = await screen.findByRole("list", { name: "Captions" });
+    const lines = within(captions).getAllByRole("listitem").map((line) => line.textContent?.replace(/^\d\d:\d\d/, ""));
+    expect(lines).toEqual(["You · Is checkout still slow?", "You spoke over it, so it stopped.", "You · allow once"]);
+  });
+
+  it("shows exactly the frames sent to the model, keeping the last three", async () => {
+    let made = 0;
+    const revoked: string[] = [];
+    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => `blob:frame-${++made}`, revokeObjectURL: (url: string) => revoked.push(url) }));
+    try {
+      const { devices } = await connected();
+      await userEvent.click(screen.getByRole("button", { name: "Camera off" }));
+      await waitFor(() => expect(devices.frameTimers.length).toBe(1));
+      for (let frame = 0; frame < 4; frame += 1) act(() => devices.frameTimers[0].jpeg(new Uint8Array([0xff, 0xd8]).buffer));
+      const strip = await screen.findByRole("list", { name: "Sent to the model" });
+      expect(within(strip).getAllByRole("img").map((image) => image.getAttribute("src"))).toEqual(["blob:frame-2", "blob:frame-3", "blob:frame-4"]);
+      expect(within(strip).getAllByRole("img")[0].getAttribute("alt")).toMatch(/^Camera frame sent at \d\d:\d\d:\d\d$/);
+      expect(revoked).toEqual(["blob:frame-1"]);
+      expect(screen.getByText("Camera live · 1 frame a second")).toBeTruthy();
+      // Off takes the camera's thumbnails away with it, at once.
+      await userEvent.click(screen.getByRole("button", { name: "Camera on" }));
+      expect(screen.queryByRole("list", { name: "Sent to the model" })).toBeNull();
+      expect(revoked).toEqual(["blob:frame-1", "blob:frame-2", "blob:frame-3", "blob:frame-4"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("moves the presence with what the mic really hears", async () => {
+    const { devices } = await connected();
+    const view = document.querySelector<HTMLElement>(".voice")!;
+    act(() => devices.captures[0].chunk(new Int16Array(160).buffer));
+    expect(Number(view.style.getPropertyValue("--in"))).toBe(0);
+    act(() => devices.captures[0].chunk(new Int16Array(160).fill(12_000).buffer));
+    expect(Number(view.style.getPropertyValue("--in"))).toBeGreaterThan(0.4);
+  });
+});

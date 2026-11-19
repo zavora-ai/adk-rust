@@ -40,6 +40,40 @@ export interface VoiceState {
   inputs: Record<InputSource, boolean>;
   /** What "What it can see" shows: the screen, else the camera. */
   preview?: MediaStream;
+  /** The captions, oldest first: what it heard, and each time the person spoke over the model. */
+  captions: Caption[];
+  /** The last frames sent to the model, oldest first: exactly what it saw. */
+  sent: SentFrame[];
+}
+
+/** A camera or screen frame as it was sent, for the person to see what the model saw. */
+export interface SentFrame {
+  source: "camera" | "screen";
+  at: number;
+  /** A `blob:` URL of the JPEG, revoked when the frame leaves the list. */
+  url: string;
+}
+
+/** A caption: what it heard, or that the person spoke over the model, which then stopped. */
+export type Caption = { at: number } & ({ kind: "heard"; text: string } | { kind: "spokeOver" });
+
+/** Loudness of what the mic hears and of what the model says, 0 to 1. */
+export type Levels = { input: number; output: number };
+
+/** How many sent frames the view keeps. */
+const FRAMES_KEPT = 3;
+
+/** How many captions the view keeps. */
+const CAPTIONS_KEPT = 4;
+
+/** The loudness of PCM16 mono, 0 to 1, on a curve that suits speech. */
+export function loudness(pcm: ArrayBuffer): number {
+  const samples = new Int16Array(pcm, 0, Math.floor(pcm.byteLength / 2));
+  if (samples.length === 0) return 0;
+  let sum = 0;
+  for (let index = 0; index < samples.length; index += 4) sum += samples[index] * samples[index];
+  const rms = Math.sqrt(sum / Math.ceil(samples.length / 4)) / 32768;
+  return Math.min(1, Math.sqrt(rms) * 1.6);
 }
 
 /** Where a ticket comes from: `POST /api/surface/voice/sessions`. */
@@ -52,7 +86,7 @@ interface Live {
 }
 
 export function initialState(): VoiceState {
-  return { phase: "connecting", needsScreen: [], actions: [], inputs: { mic: false, camera: false, screen: false } };
+  return { phase: "connecting", needsScreen: [], actions: [], inputs: { mic: false, camera: false, screen: false }, captions: [], sent: [] };
 }
 
 export class VoiceSession {
@@ -62,6 +96,9 @@ export class VoiceSession {
   private inputRate = 16_000;
   private live: Partial<Record<InputSource, Live>> = {};
   private closed = false;
+  private levels: Levels = { input: 0, output: 0 };
+  /** Hears the loudness as it changes, outside React's renders. */
+  onLevels?: (levels: Levels) => void;
 
   constructor(
     private readonly tickets: TicketSource,
@@ -73,6 +110,32 @@ export class VoiceSession {
   private set(change: Partial<VoiceState>) {
     this.state = { ...this.state, ...change };
     this.onState(this.state);
+  }
+
+  /** Eases toward `value` quickly when louder, slowly when quieter, so the meter reads calm. */
+  private level(which: keyof Levels, value: number) {
+    const previous = this.levels[which];
+    const next = value > previous ? previous + (value - previous) * 0.6 : previous + (value - previous) * 0.15;
+    this.levels = { ...this.levels, [which]: next };
+    this.onLevels?.(this.levels);
+  }
+
+  private caption(line: Caption, change: Partial<VoiceState> = {}) {
+    this.set({ ...change, captions: [...this.state.captions, line].slice(-CAPTIONS_KEPT) });
+  }
+
+  /** Keeps the frame sent last, and lets go of the oldest. */
+  private keep(source: "camera" | "screen", jpeg: ArrayBuffer) {
+    // The frame is already sent; a thumbnail the browser can't make is only left out.
+    let url: string;
+    try {
+      url = URL.createObjectURL(new Blob([jpeg], { type: "image/jpeg" }));
+    } catch {
+      return;
+    }
+    const sent = [...this.state.sent, { source, at: Date.now(), url }];
+    for (const old of sent.splice(0, Math.max(0, sent.length - FRAMES_KEPT))) URL.revokeObjectURL(old.url);
+    this.set({ sent });
   }
 
   /** Opens the conversation on `model`, continuing the voice session `sessionId` when given. */
@@ -93,7 +156,11 @@ export class VoiceSession {
       text: (text) => this.receive(JSON.parse(text) as VoiceUpdate, ticket.outputRate),
       binary: (data) => {
         const bytes = new Uint8Array(data);
-        if (bytes[0] === FRAME_AUDIO) this.player?.play(data.slice(1));
+        if (bytes[0] === FRAME_AUDIO) {
+          const pcm = data.slice(1);
+          this.level("output", loudness(pcm));
+          this.player?.play(pcm);
+        }
       },
       close: (code) => {
         this.release();
@@ -110,13 +177,14 @@ export class VoiceSession {
         void this.switch("mic", true);
         break;
       case "listening":
+        this.level("output", 0);
         this.set({ phase: "listening" });
         break;
       case "speaking":
         this.set({ phase: "speaking" });
         break;
       case "heard":
-        this.set({ heard: update.text });
+        this.caption({ at: Date.now(), kind: "heard", text: update.text }, { heard: update.text });
         break;
       case "prompted":
         this.set({
@@ -175,6 +243,8 @@ export class VoiceSession {
       }
       case "bargeIn":
         this.player?.flush();
+        this.level("output", 0);
+        this.caption({ at: Date.now(), kind: "spokeOver" });
         break;
       case "ended":
         this.set({ phase: "ended" });
@@ -208,7 +278,11 @@ export class VoiceSession {
     if (!on) {
       const live = this.live[source];
       delete this.live[source];
-      this.set({ inputs: { ...this.state.inputs, [source]: false }, preview: this.preview() });
+      // Its thumbnails go with it: what was shown stops being shown.
+      const sent = this.state.sent.filter((frame) => frame.source !== source);
+      for (const frame of this.state.sent) if (frame.source === source) URL.revokeObjectURL?.(frame.url);
+      this.set({ inputs: { ...this.state.inputs, [source]: false }, preview: this.preview(), sent });
+      if (source === "mic") this.level("input", 0);
       this.text({ type: "switch", source, on: false });
       live?.stop?.();
       live?.stream.getTracks().forEach((track) => track.stop());
@@ -243,12 +317,16 @@ export class VoiceSession {
     this.set({ inputs: { ...this.state.inputs, [source]: true }, preview: this.preview() });
     if (source === "mic") {
       live.stop = await this.devices.capture(stream, this.inputRate, (pcm) => {
-        if (this.live.mic === live) this.frame(FRAME_AUDIO, pcm);
+        if (this.live.mic !== live) return;
+        this.frame(FRAME_AUDIO, pcm);
+        this.level("input", loudness(pcm));
       });
     } else {
       const tag = source === "camera" ? FRAME_CAMERA : FRAME_SCREEN;
       live.stop = this.devices.frames(stream, FRAME_EVERY_MS, (jpeg) => {
-        if (this.live[source] === live) this.frame(tag, jpeg);
+        if (this.live[source] !== live) return;
+        this.frame(tag, jpeg);
+        this.keep(source, jpeg);
       });
     }
   }
@@ -277,6 +355,9 @@ export class VoiceSession {
     }
     this.player?.close();
     this.player = undefined;
-    this.state = { ...this.state, inputs: { mic: false, camera: false, screen: false }, preview: undefined };
+    for (const frame of this.state.sent) URL.revokeObjectURL?.(frame.url);
+    this.levels = { input: 0, output: 0 };
+    this.onLevels?.(this.levels);
+    this.state = { ...this.state, inputs: { mic: false, camera: false, screen: false }, preview: undefined, sent: [] };
   }
 }
