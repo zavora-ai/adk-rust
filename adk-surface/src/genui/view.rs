@@ -198,6 +198,32 @@ type Texts<'a> = HashMap<(&'a str, &'a str, &'a str), &'a str>;
 /// The drawing's tree from `root`, templates expanded and strings resolved; `catalog` is the
 /// one `validated` was checked against.
 pub(crate) fn tree(catalog: &'static Catalog, validated: &ValidatedSurface) -> DrawnNode {
+    drawn_tree(catalog, validated)
+}
+
+/// What a renderer draws of a drawing [`Validator::validate`] accepted: its tree from `root`,
+/// templates expanded, every binding and text function resolved and every string already
+/// checked by rule 5, each extension component with what the home shows for it. `catalog` is
+/// the one `validated` was checked against. The home projects every drawing this way; a host
+/// that shows a drawing elsewhere, such as in an MCP App, uses it too.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::genui::{Catalog, SurfaceDraft, Validator, drawn_tree, DrawnKind};
+/// use serde_json::json;
+///
+/// let draft = SurfaceDraft {
+///     surface_id: "s".into(), kind: DrawnKind::Screen, title: None,
+///     components: vec![json!({ "id": "root", "component": "Text", "text": { "path": "/greeting" } })],
+///     data_model: json!({ "greeting": "Hello" }), actions: Vec::new(),
+/// };
+/// let validated = Validator::new(Catalog::forms()).validate(&draft)?;
+/// let tree = drawn_tree(Catalog::forms(), &validated);
+/// assert_eq!(tree.text.as_deref(), Some("Hello"));
+/// # Ok::<(), adk_surface::genui::DrawRefusal>(())
+/// ```
+pub fn drawn_tree(catalog: &'static Catalog, validated: &ValidatedSurface) -> DrawnNode {
     let mut texts: Texts<'_> = HashMap::new();
     for text in &validated.texts {
         if let Some(id) = &text.component_id {

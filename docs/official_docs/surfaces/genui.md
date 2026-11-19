@@ -26,6 +26,7 @@ adk-surface = { version = "3.0.0", features = ["web", "genui"] }
 | `Validator`, `Catalog::forms` | `genui` | Rule 5, and the `forms` 1.0 catalog the tools draw in |
 | The A2UI v0.9.1 model (`A2uiMessage`, `encode_jsonl`, `decode_jsonl`) | `genui` | The internal form a drawing is stored and checked in |
 | `A2uiVersion`, `to_wire`, `from_wire`, `components_in` | `genui` | A2UI 1.0 (the default) and v0.9.1 on the wire. See [A2UI versions](#a2ui-versions) |
+| `drawn_tree` | `genui` | What a renderer draws of a validated drawing: its `DrawnNode` tree, resolved and checked, as the home projects it |
 | `slack_blocks`, `adaptive_card`, `submit_from_slack`, `submit_from_teams` | `genui` | Drawings as Slack Block Kit and Teams Adaptive Cards, and their presses as `SubmitDrawn`. See [In Slack and Teams](#in-slack-and-teams) |
 | `read_function_message`, `FunctionInvocation`, `FunctionResponse`, `INVALID_FUNCTION_CALL` | `genui` | A2UI 1.0 function calls read, and answered `INVALID_FUNCTION_CALL`. See [A2UI versions](#a2ui-versions) |
 | `ValidationResult`, `Severity` | `genui` | A refusal, or a warning, in A2UI 1.0's `ValidationResult` shape |

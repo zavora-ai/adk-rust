@@ -133,7 +133,7 @@ pub use validate::{
     ValidationResult, Validator, reserved,
 };
 #[cfg(feature = "genui")]
-pub use view::SHOWN_ROWS;
+pub use view::{SHOWN_ROWS, drawn_tree};
 #[cfg(feature = "genui")]
 pub use wire::{
     A2uiVersion, DISPLAY_ONLY_EXTENSION, DISPLAY_ONLY_EXTENSION_VERSION, WireError,
