@@ -386,7 +386,25 @@ drawings with their technical reasons.
 | MCP Apps | Fullscreen and picture-in-picture | Planned |
 
 The phone app shows the decision a form asks for, as any decision; it has no thread view, so the drawing itself is shown in the web home and the terminal. Chat
-cards and push notifications never carry a drawing.
+cards and push notifications never carry a drawing (a host can post one with
+[`slack_blocks` or `adaptive_card`](#in-slack-and-teams)).
+
+### A native renderer
+
+An iOS, Android or desktop app draws agent UI from the same contract the web home does, and
+needs no A2UI parser of its own:
+
+| Step | What to use |
+|---|---|
+| What it may draw | `GET /api/surface/genui/catalogs?version=1.0`: the `forms` catalog and every extension catalog the home registers, as A2UI 1.0 catalog documents (with `homeDrawn` naming the components the home draws as charts, scenes or depth) |
+| What to draw | `ThreadItem::Drawn` in `GET /api/surface/sessions/{session}/thread` and its feed: a `DrawnSurface`, already checked by rule 5, every binding and text function resolved, templates expanded. The OpenAPI document (`adk-surface/web/src/generated/openapi.json`) types it |
+| Charts and scenes | `DrawnNode.chart` and `DrawnNode.scene` carry the series and objects; a renderer without charts or 3D shows `summary`, which the server wrote |
+| A send | `POST /api/surface/commands` with `submitDrawn` (surface, the version shown, the action, the fields' values by data path); the call is held, and the decision comes back as a `DecisionCard` like any other |
+
+A native renderer keeps the rules the home keeps: it draws the engine's line under each
+button (`DrawnActionView.note`), never a decision's controls; it opens nothing a drawing names;
+it shows a newer version over an older one and sends the version it showed; and it draws a
+`DecisionCard` in its own controls, never from the drawing.
 
 ## In the terminal
 
