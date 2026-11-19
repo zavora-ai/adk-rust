@@ -481,8 +481,7 @@
   user-select: none;
 }
 
-.editor-cover-mode,
-.editor-cover {
+.editor-mode-cover {
   cursor: crosshair;
 }
 

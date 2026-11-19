@@ -246,7 +246,7 @@ export function ImageEditor({
           <div className="editor-left">
             <div
               ref={stage}
-              className={`editor-stage editor-${mode}`}
+              className={`editor-stage editor-mode-${mode}`}
               style={{ aspectRatio: `${image.width} / ${image.height}` }}
               onPointerDown={down}
               onPointerMove={moved}
