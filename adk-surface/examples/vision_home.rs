@@ -33,7 +33,9 @@ use adk_runner::Runner;
 use adk_server::auth_bridge::{RequestContextError, RequestContextExtractor};
 use adk_server::{ServerBuilder, ServerConfig};
 use adk_session::{InMemorySessionService, SessionService};
-use adk_surface::{CardHint, CardHints, LocalSource, MediaFacts, Place, SurfaceEngine};
+use adk_surface::{
+    CardHint, CardHints, LocalSource, MediaFacts, Place, Reversibility, SurfaceEngine,
+};
 use adk_vision::{
     BBox, BackendDescriptor, Block, BlockKind, CoordFrame, DecodedImage, DescribeRequest,
     Describer, Description, DetectQuery, Detector, Digest, DocumentPage, DocumentReader,
@@ -298,6 +300,7 @@ impl CardHints for VisionCards {
             CardHint::new()
                 .with_heading("Send this image to Claude")
                 .with_chat_heading("Send an image to Claude")
+                .with_reversibility(Reversibility::CantBeUnsent)
                 .with_media(
                     MediaFacts::new()
                         .to("Claude", PROVIDER_MODEL, ["api.anthropic.com"])

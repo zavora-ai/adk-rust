@@ -84,6 +84,7 @@ impl FakeTelegram {
             send_delay: Mutex::new(Duration::ZERO),
         });
         let app = Router::new()
+            .route("/{bot}/sendPhoto", post(photo))
             .route("/{bot}/{method}", post(call))
             .route("/file/{bot}/{*path}", get(file))
             .with_state(shared.clone());
@@ -263,6 +264,35 @@ impl FakeTelegram {
     pub fn all_read(&self) -> bool {
         self.shared.updates.lock().unwrap_or_else(PoisonError::into_inner).is_empty()
     }
+}
+
+/// `sendPhoto`, an upload: kept as a call whose body says how many bytes came, whether they
+/// are a PNG, and the caption.
+async fn photo(
+    State(shared): State<Arc<Shared>>,
+    Path(bot): Path<String>,
+    body: axum::body::Bytes,
+) -> Response {
+    if bot != format!("bot{}", shared.token) {
+        let body = json!({ "ok": false, "error_code": 401, "description": "Unauthorized" });
+        return (StatusCode::UNAUTHORIZED, Json(body)).into_response();
+    }
+    let text = String::from_utf8_lossy(&body);
+    let caption = text
+        .split("name=\"caption\"\r\n\r\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\r\n--").next())
+        .unwrap_or_default()
+        .to_string();
+    let png = body.windows(8).any(|window| window == [137, 80, 78, 71, 13, 10, 26, 10]);
+    let message_id = shared.next_message.fetch_add(1, Ordering::SeqCst);
+    let record = Call {
+        method: "sendPhoto".into(),
+        body: json!({ "bytes": body.len(), "png": png, "caption": caption }),
+        message_id: Some(message_id),
+    };
+    shared.calls.lock().unwrap_or_else(PoisonError::into_inner).push(record);
+    Json(json!({ "ok": true, "result": { "message_id": message_id } })).into_response()
 }
 
 async fn call(
