@@ -217,7 +217,9 @@ export function Thread({
   ].filter((card) => !named.has(card.id));
   return (
     <div className="thread" aria-live="polite">
-      {shown.map((line) => {
+      {worklog(shown).map((unit) => {
+        if (unit.kind === "log") return <WorkLog key={unit.key} steps={unit.steps} />;
+        const line = unit.line;
         switch (line.kind) {
           case "message":
             return line.from === "you" ? (
@@ -436,6 +438,62 @@ function AppLine({
         ),
       )}
     />
+  );
+}
+
+/** The fewest steps in a row that fold into one work-log line. */
+export const WORKLOG_FOLD = 3;
+
+type ActivityLine = Extract<Line, { kind: "activity" }>;
+type Unit = { kind: "line"; line: Line } | { kind: "log"; key: string; steps: ActivityLine[] };
+
+/**
+ * The thread's lines with each run of `WORKLOG_FOLD` or more plain tool steps in a row folded
+ * into one work-log line. A run of a command keeps its own card; the last step of a thread
+ * still working stays in view, outside the fold.
+ */
+export function worklog(shown: Line[]): Unit[] {
+  const units: Unit[] = [];
+  let steps: ActivityLine[] = [];
+  const flush = () => {
+    if (steps.length >= WORKLOG_FOLD) {
+      const open = steps[steps.length - 1]?.result === undefined ? steps.pop() : undefined;
+      units.push({ kind: "log", key: `log-${steps[0]!.key}`, steps });
+      if (open) units.push({ kind: "line", line: open });
+    } else {
+      units.push(...steps.map((line) => ({ kind: "line" as const, line })));
+    }
+    steps = [];
+  };
+  for (const line of shown) {
+    if (line.kind === "activity" && !line.run) {
+      steps.push(line);
+      continue;
+    }
+    flush();
+    units.push({ kind: "line", line });
+  }
+  flush();
+  return units;
+}
+
+/** Steps folded into one line: how many, how many failed, the last one; open for the rest. */
+function WorkLog({ steps }: { steps: ActivityLine[] }) {
+  const failed = steps.filter((step) => step.result && !step.result.ok).length;
+  const last = steps[steps.length - 1]!;
+  return (
+    <details className={`work-log${failed ? " work-log-failed" : ""}`}>
+      <summary>
+        <span className="work-log-count">{labels.workSteps(steps.length)}</span>
+        {failed > 0 && <span className="work-log-failed-count">{labels.workFailed(failed)}</span>}
+        <span className="work-log-last">{visible(last.text)}</span>
+      </summary>
+      <div className="work-log-steps">
+        {steps.map((step) => (
+          <ActivityChip key={step.key} line={step} />
+        ))}
+      </div>
+    </details>
   );
 }
 

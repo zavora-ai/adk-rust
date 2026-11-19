@@ -32,6 +32,7 @@ export function Header({
   onTheme,
   onStop,
   onResume,
+  onPalette,
 }: {
   section: Section;
   status?: StatusLine;
@@ -51,6 +52,8 @@ export function Header({
   onTheme: () => void;
   onStop: (origin: Origin) => void;
   onResume: (origin: Origin) => void;
+  /** Opens the command palette (⌘K). */
+  onPalette?: () => void;
 }) {
   // One area's settings change while the kernel runs; the engine's line holds the ones it
   // started with, so the kernel's are shown once read. Quiet time reads on this device's clock.
@@ -106,6 +109,22 @@ export function Header({
         </p>
       )}
       <div className="header-end">
+        {onPalette && (
+          <button
+            type="button"
+            className="palette-open"
+            title={labels.paletteOpen}
+            aria-keyshortcuts="Meta+K Control+K"
+            onClick={onPalette}
+          >
+            <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="6.5" />
+              <path d="M16 16l4.5 4.5" />
+            </svg>
+            <span className="palette-open-text">{labels.search}</span>
+            <kbd aria-hidden="true">⌘K</kbd>
+          </button>
+        )}
         <button
           type="button"
           className="icon-button"

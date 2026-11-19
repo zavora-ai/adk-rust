@@ -97,7 +97,7 @@ const surfaces: Surface[] = [
     prefix: "SHELL",
     command: "bash adk-surface/web/e2e/fixture-server.sh",
     port: 8800,
-    testMatch: ["shell.spec.ts"],
+    testMatch: ["shell.spec.ts", "a11y.spec.ts"],
     ready: "/ui/fixture.html",
   },
   {

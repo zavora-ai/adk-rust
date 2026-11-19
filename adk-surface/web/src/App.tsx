@@ -21,6 +21,9 @@ import type { VoiceClient } from "./screens/Voice";
 import { VoiceEntryContext, voiceOffered } from "./voice/context";
 import type { Seams } from "./seams";
 import { readStored, writeStored } from "./stored";
+import { CommandPalette } from "./components/CommandPalette";
+import { voiceLabels } from "./voice/labels";
+import type { PaletteItem } from "./components/CommandPalette";
 import { applyTheme, nextTheme, storedTheme } from "./theme";
 import type { Theme } from "./theme";
 import type { VerbsClient } from "./verbs/client";
@@ -59,6 +62,18 @@ export function App({
 }) {
   const [section, setSection] = useState<Section>(() => initialSection ?? sectionOf(window.location.pathname));
   const [theme, setTheme] = useState<Theme>(storedTheme);
+  const [palette, setPalette] = useState(false);
+  // ⌘K or Ctrl+K opens the command palette anywhere in the home.
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPalette((shown) => !shown);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const [problem, setProblem] = useState("");
   const [selected, setSelected] = useState<string>();
   const [focusDecision, setFocusDecision] = useState<string>();
@@ -248,8 +263,52 @@ export function App({
     return <Voice client={voice} onEnd={ended} screenActions={screens.value != null} />;
   }
 
+  const themeName = (value: Theme) =>
+    value === "system" ? labels.themeSystem : value === "light" ? labels.themeLight : labels.themeDark;
+  const paletteItems: PaletteItem[] = [
+    ...[
+      { section: "threads" as const, label: labels.threads },
+      { section: "today" as const, label: labels.today },
+      { section: "memory" as const, label: labels.memoryAndRules },
+      { section: "developer" as const, label: labels.developer },
+      ...(site.value ? [{ section: "website" as const, label: websiteLabels.tab }] : []),
+    ].map((tab) => ({ id: `go-${tab.section}`, group: labels.paletteGoTo, label: tab.label, run: () => navigate(tab.section) })),
+    ...rows.map((row) => ({
+      id: `agent-${row.agent.name}`,
+      group: labels.agents,
+      label: labels.paletteOpenThread(row.agent.displayName),
+      hint: row.statusText,
+      keywords: row.agent.name,
+      run: () => {
+        select(row.agent.name);
+        navigate("threads");
+      },
+    })),
+    // Opening a decision shows its card; nothing here answers it (spec 3.3 §7.4).
+    ...(decisions.value ?? []).map((card) => ({
+      id: `decision-${card.id}`,
+      group: labels.paletteDecisions,
+      label: card.heading,
+      hint: `${card.agent.displayName} · ${card.riskText}`,
+      run: () => openDecision(card),
+    })),
+    ...(status.value?.stopped
+      ? []
+      : [{ id: "stop-all", group: labels.paletteActions, label: labels.stopAll, run: () => void act({ type: "stopAll" }, { kind: "keyboard" }) }]),
+    {
+      id: "theme",
+      group: labels.paletteActions,
+      label: labels.paletteTheme(themeName(nextTheme(theme))),
+      keywords: "dark light appearance",
+      run: () => setTheme(nextTheme),
+    },
+    ...(voiceEntry ? [{ id: "voice", group: labels.paletteActions, label: voiceLabels.talk, keywords: "voice microphone", run: voiceEntry.open }] : []),
+    ...(agentsSeam ? [{ id: "add-agent", group: labels.paletteActions, label: labels.paletteAddAgent, keywords: "new agent", run: () => navigate("agents") }] : []),
+  ];
+
   const home = (
     <div className="app">
+      <CommandPalette open={palette} items={paletteItems} onClose={() => setPalette(false)} />
       <a className="skip-link" href="#content">
         {labels.skipToContent}
       </a>
@@ -265,6 +324,7 @@ export function App({
         onTheme={() => setTheme(nextTheme)}
         onStop={(origin) => void act({ type: "stopAll" }, origin)}
         onResume={(origin) => void act({ type: "resumeAll" }, origin)}
+        onPalette={() => setPalette(true)}
       />
       {(problem || unauthorized || unreachable) && (
         <p className="banner" role="alert">

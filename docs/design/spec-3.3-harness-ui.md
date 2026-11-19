@@ -102,6 +102,10 @@ The system of record. Three sections share one header with the status line and *
 
 **Images in a message.** The message box takes images, picked, pasted or dropped: at most four PNG, JPEG, WebP or GIF images of up to 3 MB each. The page shrinks a larger still picture before sending it, and never sends SVG. `send`, `queue` and `newThread` carry them as `images`; the engine checks each image's bytes against the type it claims and refuses anything else before the message reaches an agent. The images reach the agent as parts of the person's message, so a model that sees images reads them with the text. A message with images is never offered to a running turn; it waits for the next one. The thread shows the images the person sent beside their words, and opens one large when pressed. The terminal says `[2 images]`. A send's audit record counts the images; it never holds them.
 
+**Search and jump.** ⌘K or Ctrl+K, or **Search** in the header, opens a palette that finds a section, an agent's thread, a decision waiting for the person, or an action: **Stop all**, the theme, voice, adding an agent. Typing narrows the list, the arrow keys move through it, Enter goes and Esc closes. A decision found there opens on its card; nothing in the palette answers one (§7.4).
+
+**The work log.** Three or more plain tool steps in a row fold into one line of the thread. The line says how many steps there were, how many failed and what the last one was, and it opens to show them all. A command's run keeps its own card, and a step still working stays in view.
+
 **What an agent ran.** A command an agent ran (`bash`) or code it ran in the sandbox (`sandbox_exec`) reads as a run, not a line that says "Done":
 - what ran;
 - how it exited, or why it stopped short (timed out, out of memory, refused by the sandbox, could not run);
