@@ -84,6 +84,7 @@ pub struct LocalSource {
     agents: Option<adk_kernel::agents::AgentsHandle>,
     artifacts: Option<Arc<dyn ArtifactService>>,
     runs: Option<Arc<dyn DurableRunStore>>,
+    eval_fixtures: Option<std::path::PathBuf>,
 }
 
 impl fmt::Debug for LocalSource {
@@ -112,6 +113,7 @@ pub struct LocalSourceBuilder {
     agents: Option<adk_kernel::agents::AgentsHandle>,
     artifacts: Option<Arc<dyn ArtifactService>>,
     runs: Option<Arc<dyn DurableRunStore>>,
+    eval_fixtures: Option<std::path::PathBuf>,
 }
 
 impl fmt::Debug for LocalSourceBuilder {
@@ -229,6 +231,32 @@ impl LocalSourceBuilder {
         self
     }
 
+    /// The folder labelled examples are saved under (spec 3.7 §8.2, board choice V13): the
+    /// annotated viewer writes `adk-eval` cases to the `.test.json` files in it, and each
+    /// case's image beside its file, so `cargo adk eval` reads them. Without it, the viewer
+    /// shows answers and exports them but saves no examples.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_artifact::InMemoryArtifactService;
+    /// use adk_session::InMemorySessionService;
+    ///
+    /// let source = adk_surface::LocalSource::builder("desk")
+    ///     .sessions(Arc::new(InMemorySessionService::new()))
+    ///     .artifacts(Arc::new(InMemoryArtifactService::new()))
+    ///     .eval_fixtures(std::env::temp_dir().join("evals"))
+    ///     .build()
+    ///     .unwrap();
+    /// # let _ = source;
+    /// ```
+    #[must_use]
+    pub fn eval_fixtures(mut self, root: impl Into<std::path::PathBuf>) -> Self {
+        self.eval_fixtures = Some(root.into());
+        self
+    }
+
     /// The source.
     ///
     /// # Errors
@@ -266,6 +294,7 @@ impl LocalSourceBuilder {
             agents: self.agents,
             artifacts: self.artifacts,
             runs: self.runs,
+            eval_fixtures: self.eval_fixtures,
         })
     }
 }
@@ -731,6 +760,194 @@ impl Source for LocalSource {
             });
         }
         kept
+    }
+
+    async fn vision_answers(&self, user: &str, session: &str) -> Result<Vec<serde_json::Value>> {
+        let Some(artifacts) = &self.artifacts else { return Ok(Vec::new()) };
+        let names = artifacts
+            .list(adk_artifact::ListRequest {
+                app_name: self.app.clone(),
+                user_id: user.to_string(),
+                session_id: session.to_string(),
+            })
+            .await?
+            .file_names;
+        let mut records = Vec::new();
+        for name in names.iter().filter(|name| {
+            name.starts_with(crate::viewer::VISION_ANSWER_PREFIX) && name.ends_with(".json")
+        }) {
+            let loaded = artifacts
+                .load(adk_artifact::LoadRequest {
+                    app_name: self.app.clone(),
+                    user_id: user.to_string(),
+                    session_id: session.to_string(),
+                    file_name: name.clone(),
+                    version: None,
+                })
+                .await?;
+            let data = match loaded.part {
+                adk_core::Part::InlineData { data, .. } => data,
+                adk_core::Part::Text { text } => text.into_bytes(),
+                _ => continue,
+            };
+            match serde_json::from_slice::<serde_json::Value>(&data) {
+                Ok(record) => records.push(record),
+                Err(error) => {
+                    tracing::warn!(error = %error, artifact.name = %name, "an answer record is not JSON; it is not shown");
+                }
+            }
+        }
+        records.sort_by(|a, b| {
+            let at = |record: &serde_json::Value| {
+                record.get("at").and_then(serde_json::Value::as_str).unwrap_or_default().to_string()
+            };
+            at(a).cmp(&at(b))
+        });
+        Ok(records)
+    }
+
+    fn keeps_vision_answers(&self) -> bool {
+        self.artifacts.is_some()
+    }
+
+    async fn vision_image(
+        &self,
+        user: &str,
+        session: &str,
+        digest: &str,
+    ) -> Result<Option<EvidenceBytes>> {
+        let artifacts = self
+            .artifacts
+            .as_ref()
+            .ok_or_else(|| SurfaceError::unsupported("showing a session's images"))?;
+        let Some(hex) = digest.strip_prefix("sha256:") else {
+            // An image the session holds by name, as a vision tool was called with it.
+            let loaded = artifacts
+                .load(adk_artifact::LoadRequest {
+                    app_name: self.app.clone(),
+                    user_id: user.to_string(),
+                    session_id: session.to_string(),
+                    file_name: digest.to_string(),
+                    version: None,
+                })
+                .await;
+            return match loaded {
+                Ok(loaded) => Ok(match loaded.part {
+                    adk_core::Part::InlineData { mime_type, data, .. }
+                        if mime_type.starts_with("image/") =>
+                    {
+                        Some(EvidenceBytes { mime_type, bytes: data })
+                    }
+                    _ => None,
+                }),
+                Err(error) if error.is_not_found() => Ok(None),
+                Err(error) => Err(error.into()),
+            };
+        };
+        if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Ok(None);
+        }
+        for (extension, mime) in
+            [("png", "image/png"), ("jpeg", "image/jpeg"), ("webp", "image/webp"), ("gif", "image/gif")]
+        {
+            let loaded = artifacts
+                .load(adk_artifact::LoadRequest {
+                    app_name: self.app.clone(),
+                    user_id: user.to_string(),
+                    session_id: session.to_string(),
+                    file_name: format!("vision-{hex}.{extension}"),
+                    version: None,
+                })
+                .await;
+            let part = match loaded {
+                Ok(loaded) => loaded.part,
+                Err(error) if error.is_not_found() => continue,
+                Err(error) => return Err(error.into()),
+            };
+            let adk_core::Part::InlineData { data, .. } = part else { continue };
+            if crate::evidence::digest_of(&data) != digest {
+                tracing::warn!(image.digest = %digest, "a session image does not match its digest; it is not shown");
+                return Err(SurfaceError::Invalid(
+                    "the stored image does not match its digest; it is not shown".into(),
+                ));
+            }
+            return Ok(Some(EvidenceBytes { mime_type: mime.to_string(), bytes: data }));
+        }
+        Ok(None)
+    }
+
+    async fn example_files(&self, _user: &str) -> Result<Option<Vec<String>>> {
+        let Some(root) = &self.eval_fixtures else { return Ok(None) };
+        let mut files = Vec::new();
+        let mut pending = vec![root.clone()];
+        while let Some(dir) = pending.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    // Fixture images live beside their files; four levels is plenty.
+                    if path.strip_prefix(root).map_or(0, |p| p.components().count()) < 4 {
+                        pending.push(path);
+                    }
+                } else if let Ok(relative) = path.strip_prefix(root) {
+                    let relative = relative.to_string_lossy().replace('\\', "/");
+                    if relative.ends_with(".test.json") {
+                        files.push(relative);
+                    }
+                }
+            }
+        }
+        files.sort();
+        Ok(Some(files))
+    }
+
+    async fn example_set(&self, _user: &str, file: &str) -> Result<Option<serde_json::Value>> {
+        let root = self
+            .eval_fixtures
+            .as_ref()
+            .ok_or_else(|| SurfaceError::unsupported("saving labelled examples"))?;
+        crate::viewer::check_file(file).map_err(SurfaceError::Invalid)?;
+        match std::fs::read(root.join(file)) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(|error| {
+                SurfaceError::Invalid(format!("{file} is not an eval set: {error}"))
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(SurfaceError::Invalid(format!("{file} could not be read: {error}"))),
+        }
+    }
+
+    async fn save_example(
+        &self,
+        _caller: &Caller,
+        file: &str,
+        set: serde_json::Value,
+        image_path: &str,
+        image: &EvidenceBytes,
+    ) -> Result<()> {
+        let root = self
+            .eval_fixtures
+            .as_ref()
+            .ok_or_else(|| SurfaceError::unsupported("saving labelled examples"))?;
+        crate::viewer::check_file(file).map_err(SurfaceError::Invalid)?;
+        let target = root.join(file);
+        let folder = target.parent().unwrap_or(root).to_path_buf();
+        let picture = folder.join(image_path);
+        let io = |what: &str, error: std::io::Error| {
+            SurfaceError::Invalid(format!("{what} could not be written: {error}"))
+        };
+        if let Some(parent) = picture.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| io("the fixtures folder", e))?;
+        }
+        if !picture.exists() {
+            std::fs::write(&picture, &image.bytes).map_err(|e| io(image_path, e))?;
+        }
+        let text = serde_json::to_vec_pretty(&set)
+            .map_err(|error| SurfaceError::Invalid(format!("the eval set: {error}")))?;
+        // Written beside and renamed, so a reader never sees half a file.
+        let partial = target.with_extension("json.partial");
+        std::fs::write(&partial, text).map_err(|e| io(file, e))?;
+        std::fs::rename(&partial, &target).map_err(|e| io(file, e))?;
+        Ok(())
     }
 
     async fn evidence_image(

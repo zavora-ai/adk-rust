@@ -53,6 +53,10 @@ pub const SURFACE_AUDIT_ANSWER: &str = "surface.answer";
 /// one and the change, written before the call is held again (spec 3.7 §9.3 `vision.edit`).
 pub const SURFACE_AUDIT_IMAGE_CHANGE: &str = "surface.image.change";
 
+/// The audit action of a labelled example saved from the annotated viewer (spec 3.7 §8.2):
+/// the session, the answer, the image's digest, the file, the case and the region kept.
+pub const SURFACE_AUDIT_VISION_EXAMPLE: &str = "surface.vision.example";
+
 /// The code an answer is recorded with when the images it names are not the call's.
 const EVIDENCE_CHANGED: &str = "surface.evidence_changed";
 
@@ -1201,10 +1205,18 @@ impl SurfaceEngine {
                 .or_else(|| changed.get(&first))
                 .cloned()
         };
+        // "Open the source image" opens the annotated viewer when the source keeps the
+        // session's images and the feature named no other place (board choice A9).
+        let viewer_facts = hint.media.as_ref().filter(|facts| facts.source_href.is_none()).and_then(|facts| {
+            let named = request.args_redacted.get("image").and_then(Value::as_str)?;
+            self.inner.source.keeps_vision_answers().then(|| {
+                facts.clone().with_source_href(crate::viewer::viewer_path(&request.scope.session_id, named))
+            })
+        });
         crate::evidence::project(
             request,
             &crate::evidence::MediaInput {
-                facts: hint.media.as_ref(),
+                facts: viewer_facts.as_ref().or(hint.media.as_ref()),
                 kept: &kept,
                 decided,
                 agent: agent.to_string(),
@@ -1244,6 +1256,185 @@ impl SurfaceEngine {
             return Err(missing());
         }
         self.inner.source.evidence_image(&request, index).await?.ok_or_else(missing)
+    }
+
+    // -----------------------------------------------------------------------
+    // The annotated viewer (spec 3.7 §8.2, X12)
+    // -----------------------------------------------------------------------
+
+    /// The answer records of `session` for `caller`, parsed; a record that does not parse is
+    /// logged and left out.
+    async fn vision_records(&self, caller: &Caller, session: &str) -> Result<Vec<crate::viewer::Record>> {
+        // Only the caller's own session (S-I8): the inbox's rule for a thread.
+        self.transcript(caller, session).await?;
+        let raw = self.inner.source.vision_answers(caller.user_id(), session).await?;
+        Ok(raw
+            .into_iter()
+            .filter_map(|value| match crate::viewer::Record::parse(value) {
+                Ok(record) => Some(record),
+                Err(error) => {
+                    tracing::warn!(error = %error, session.id = %session, "an answer record is not shown");
+                    None
+                }
+            })
+            .collect())
+    }
+
+    /// The annotated viewer of image `image` — a `sha256:` digest, or the name of an image
+    /// the session holds — in `caller`'s `session` (spec 3.7 §8.2, X12): every answer the
+    /// vision tools gave for it, `answer` shown (the newest otherwise), `compare` beside it.
+    ///
+    /// # Errors
+    ///
+    /// `surface.not_found` when the caller has no such session or the session no such image;
+    /// the source's error.
+    pub async fn viewer(
+        &self,
+        caller: &Caller,
+        session: &str,
+        image: &str,
+        answer: Option<&str>,
+        compare: Option<&str>,
+    ) -> Result<crate::viewer::ViewerView> {
+        let records = self.vision_records(caller, session).await?;
+        let missing = || SurfaceError::not_found(format!("image '{image}' of session '{session}'"));
+        let digest = if image.starts_with("sha256:") {
+            image.to_string()
+        } else if let Some(record) = records.iter().find(|record| {
+            record.image.name.as_deref() == Some(image) || record.image.artifact.as_deref() == Some(image)
+        }) {
+            record.image.digest.clone()
+        } else {
+            let bytes = self.inner.source.vision_image(caller.user_id(), session, image).await?.ok_or_else(missing)?;
+            crate::evidence::digest_of(&bytes.bytes)
+        };
+        let records: Vec<crate::viewer::Record> =
+            records.into_iter().filter(|record| record.image.digest == digest).collect();
+        let agent = records.last().map(|record| record.agent.clone()).unwrap_or_default();
+        let files = self.inner.source.example_files(caller.user_id()).await?;
+        let input = crate::viewer::ViewerInput {
+            session,
+            agent_name: self.inner.projector.agent(&agent).display_name,
+            offset: self.inner.projector.offset,
+            can_save: files.is_some(),
+            files: files.unwrap_or_default(),
+        };
+        if let Some(view) = crate::viewer::view(&records, answer, compare, &input) {
+            return Ok(view);
+        }
+        // Nothing has answered for it yet: the picture alone.
+        let bytes = self.inner.source.vision_image(caller.user_id(), session, &digest).await?;
+        let bytes = match bytes {
+            Some(bytes) => bytes,
+            None => self.inner.source.vision_image(caller.user_id(), session, image).await?.ok_or_else(missing)?,
+        };
+        Ok(crate::viewer::unanswered(session, image, &digest, &bytes, &input))
+    }
+
+    /// The bytes of image `image` (a digest or a name) of `caller`'s `session`, checked
+    /// against its digest (spec 3.7 §8.3).
+    ///
+    /// # Errors
+    ///
+    /// `surface.not_found` when the caller has no such session or image; the source's error.
+    pub async fn viewer_image(
+        &self,
+        caller: &Caller,
+        session: &str,
+        image: &str,
+    ) -> Result<crate::evidence::EvidenceBytes> {
+        self.transcript(caller, session).await?;
+        self.inner
+            .source
+            .vision_image(caller.user_id(), session, image)
+            .await?
+            .ok_or_else(|| SurfaceError::not_found(format!("image '{image}' of session '{session}'")))
+    }
+
+    /// The `RegionSet` of answer `answer` in `caller`'s `session`, as the vision tools
+    /// published it (board choice V14); with `with`, both answers' sets in an array.
+    ///
+    /// # Errors
+    ///
+    /// `surface.not_found` when the caller has no such session or answer.
+    pub async fn viewer_export(
+        &self,
+        caller: &Caller,
+        session: &str,
+        answer: &str,
+        with: Option<&str>,
+    ) -> Result<Value> {
+        let records = self.vision_records(caller, session).await?;
+        let set = |id: &str| {
+            records
+                .iter()
+                .find(|record| record.call_id == id)
+                .map(|record| serde_json::to_value(&record.region_set).unwrap_or(Value::Null))
+                .ok_or_else(|| SurfaceError::not_found(format!("answer '{id}' of session '{session}'")))
+        };
+        match with {
+            Some(other) => Ok(Value::Array(vec![set(answer)?, set(other)?])),
+            None => set(answer),
+        }
+    }
+
+    /// Saves a labelled example from an answer in `caller`'s `session` (board choices V11–V13):
+    /// an `adk-eval` case in the eval set `example.file`, its image beside the file. The run's
+    /// answer is untouched; the example is recorded (`surface.vision.example`).
+    ///
+    /// # Errors
+    ///
+    /// `surface.not_found` when the caller has no such session or answer; `surface.invalid`
+    /// when the example does not fit the answer or the file; `surface.unsupported` when the
+    /// source saves no examples.
+    pub async fn save_example(
+        &self,
+        caller: &Caller,
+        session: &str,
+        example: &crate::viewer::LabelledExample,
+    ) -> Result<crate::viewer::SavedExample> {
+        crate::viewer::check_file(&example.file).map_err(SurfaceError::Invalid)?;
+        let records = self.vision_records(caller, session).await?;
+        let record = records
+            .iter()
+            .find(|record| record.call_id == example.answer)
+            .ok_or_else(|| SurfaceError::not_found(format!("answer '{}' of session '{session}'", example.answer)))?;
+        let case = crate::viewer::example_case(record, example).map_err(SurfaceError::Invalid)?;
+        let image = self
+            .inner
+            .source
+            .vision_image(caller.user_id(), session, &record.image.digest)
+            .await?
+            .ok_or_else(|| SurfaceError::not_found(format!("image '{}'", record.image.digest)))?;
+        let existing = self.inner.source.example_set(caller.user_id(), &example.file).await?;
+        let set = crate::viewer::with_case(existing, &example.file, case);
+        let image_path = crate::viewer::fixture_image_path(&record.image.digest, &image.mime_type);
+        // The example is on record before it is written (spec 3.3 §11).
+        self.record(
+            caller,
+            SURFACE_AUDIT_VISION_EXAMPLE,
+            json!({
+                "sessionId": session,
+                "answer": record.call_id,
+                "tool": record.tool,
+                "imageDigest": record.image.digest,
+                "file": example.file,
+                "caseName": example.case_name,
+                "scope": example.scope,
+                "region": example.region,
+            }),
+        )
+        .await?;
+        self.inner.source.save_example(caller, &example.file, set, &image_path, &image).await?;
+        Ok(crate::viewer::SavedExample {
+            file: example.file.clone(),
+            case_name: example.case_name.clone(),
+            image: image_path,
+            text: format!(
+                "Saved to {} as {}. The run's answer stays as it was.",
+                example.file, example.case_name
+            ),
+        })
     }
 
     async fn always_label(&self, request: &ApprovalRequest) -> Option<String> {
