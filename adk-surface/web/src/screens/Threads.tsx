@@ -267,7 +267,7 @@ export function Threads({
       <aside className="side">
         <MorningBriefing away={awayPage} areas={areas} status={status} onToday={onToday} />
         <DecisionList decisions={decisions} onOpen={onOpenDecision} />
-        <section className="side-section" aria-labelledby="coming-up-heading">
+        <section className="side-section" aria-labelledby="coming-up-heading" data-empty={planned.length === 0 || undefined}>
           <h2 id="coming-up-heading" className="side-heading">
             {labels.comingUp}
           </h2>

@@ -145,6 +145,7 @@ const WORDS: &[(&str, &str)] = listed![
     SUGGEST_A_NEW_AGENT_FOR,
     REMOVED_AGENTS,
     NOT_SENT_YET,
+    EARLIER_VERSIONS,
     SENDING,
     SENT_YOU_SAID_NO,
     SENT_FAILED,

@@ -29,6 +29,11 @@ type Line =
       superseded: boolean;
       /** An earlier version of the surface precedes it. */
       changed: boolean;
+      /**
+       * The earlier versions folded into this, the latest one, oldest first: the versions no
+       * form was sent from, which would otherwise each take a line of the thread.
+       */
+      earlier?: DrawnSurface[];
       /** Its latest send, and that call's result. */
       sent?: DrawnSent;
       result?: Result;
@@ -85,6 +90,7 @@ export function lines(entries: FeedEntry[]): Line[] {
   }
   const claimed = new Set([...sends.values()].map((one) => one.callId));
   const decisions = new Set(sent.flatMap((one) => (one.decisionId ? [one.decisionId] : [])));
+  const folded = new Map<string, DrawnSurface[]>();
   for (const entry of entries) {
     entry.items.forEach((item, index) => {
       const key = `${entry.seq}:${index}`;
@@ -115,12 +121,20 @@ export function lines(entries: FeedEntry[]): Line[] {
         case "drawn": {
           const { surfaceId, version } = item.surface;
           const sent = sends.get(`${surfaceId}@${version}`);
+          const superseded = (latest.get(surfaceId) ?? version) > version;
+          // An earlier version a form was sent from keeps its place, with its decision; the
+          // rest fold into the latest version as one "earlier versions" control.
+          if (superseded && !sent) {
+            folded.set(surfaceId, [...(folded.get(surfaceId) ?? []), item.surface]);
+            break;
+          }
           out.push({
             kind: "drawn",
             key,
             surface: item.surface,
-            superseded: (latest.get(surfaceId) ?? version) > version,
+            superseded,
             changed: (first.get(surfaceId) ?? version) < version,
+            earlier: superseded ? undefined : folded.get(surfaceId),
             sent,
             result: sent ? results.get(sent.callId) : undefined,
           });
@@ -322,6 +336,7 @@ function DrawnLine({
       surface={line.surface}
       superseded={line.superseded}
       changed={line.changed}
+      earlier={line.earlier}
       state={line.sent ? state : undefined}
       onSend={line.superseded ? undefined : onSend}
       sent={

@@ -11,7 +11,7 @@ export function DecisionList({
   onOpen: (card: DecisionCard) => void;
 }) {
   return (
-    <section className="side-section" aria-labelledby="decisions-heading">
+    <section className="side-section" aria-labelledby="decisions-heading" data-empty={decisions.length === 0 || undefined}>
       <h2 id="decisions-heading" className="side-heading">
         {labels.decisions}
         {decisions.length > 0 && (

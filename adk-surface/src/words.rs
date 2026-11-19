@@ -934,6 +934,8 @@ pub fn agent_change(kind: &str, name: &str, place: &str) -> String {
 
 /// A drawn form edited and not yet sent.
 pub const NOT_SENT_YET: &str = "Not sent yet";
+/// The folded earlier versions of a drawing, before their count: "Earlier versions · 3".
+pub const EARLIER_VERSIONS: &str = "Earlier versions";
 /// A drawn form's button while its send is on the way.
 pub const SENDING: &str = "Sending…";
 /// A drawn form sent and denied.

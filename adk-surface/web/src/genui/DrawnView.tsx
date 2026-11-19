@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { DrawnActionView, DrawnField, DrawnNode, DrawnSurface, FormState } from "../generated/api";
-import { FORM_CHANGED_SEND_AGAIN, NOT_SENT_YET, SENDING } from "../generated/words";
+import { EARLIER_VERSIONS, FORM_CHANGED_SEND_AGAIN, NOT_SENT_YET, SENDING } from "../generated/words";
 import { ApiError } from "../client";
 import { Avatar } from "../components/Avatar";
 import { visible } from "../safe";
@@ -55,6 +55,7 @@ export type ExtensionRenderers = Record<string, Record<string, ExtensionRenderer
 export function DrawnView({
   surface,
   superseded = false,
+  earlier,
   changed = false,
   state,
   onSend,
@@ -65,6 +66,8 @@ export function DrawnView({
   surface: DrawnSurface;
   /** A newer version replaces this one: it is drawn collapsed under "Earlier version · 10:02". */
   superseded?: boolean;
+  /** Earlier versions of the surface shown under it as one folded control, oldest first. */
+  earlier?: DrawnSurface[];
   /** An earlier version is in the thread: "Finance changed this form at 10:05" goes above it. */
   changed?: boolean;
   /** The form's state once sent. */
@@ -96,9 +99,40 @@ export function DrawnView({
     <div className="drawn-place">
       {changed && <p className="drawn-changed">{visible(surface.changedText)}</p>}
       <DrawnCard surface={surface} state={state} onSend={onSend} sent={sent} renderers={renderers} />
+      {earlier && earlier.length > 0 && (
+        <details className="drawn-earlier">
+          <summary>
+            {earlier.length === 1 ? visible(earlier[0].earlierText) : `${EARLIER_VERSIONS} · ${earlier.length}`}
+          </summary>
+          {[...earlier].reverse().map((version) => (
+            <div key={version.version} className="drawn-earlier-one">
+              {earlier.length > 1 && <p className="drawn-changed">{visible(version.earlierText)}</p>}
+              <DrawnCard surface={version} renderers={renderers} readOnly />
+            </div>
+          ))}
+        </details>
+      )}
       {below}
     </div>
   );
+}
+
+/** Folds case, spaces and punctuation, so "Release 2026.11" and "release 2026.11" match. */
+const folded = (text: string) => text.toLowerCase().replace(/[\s\p{P}]+/gu, " ").trim();
+
+/**
+ * Whether the drawing's first words already say `title`: its first leaf, following first
+ * children, is text with the same words. The title is then shown once, by the drawing.
+ */
+export function opensWith(root: DrawnNode | null | undefined, title: string): boolean {
+  let node = root ?? undefined;
+  for (let depth = 0; node && depth < 8; depth += 1) {
+    if (node.text && (node.component === "Text" || (node.children?.length ?? 0) === 0)) {
+      return folded(node.text) === folded(title);
+    }
+    node = node.children?.[0];
+  }
+  return false;
 }
 
 function DrawnCard({
@@ -185,7 +219,9 @@ function DrawnCard({
         <Avatar agent={surface.agent} size="sm" />
         <span>{visible(surface.drawnText)}</span>
       </header>
-      {surface.title && <h3 className="drawn-title">{visible(surface.title)}</h3>}
+      {surface.title && !opensWith(surface.root, surface.title) && (
+        <h3 className="drawn-title">{visible(surface.title)}</h3>
+      )}
       {surface.root && <div className="drawn-body">{render(surface.root, context, true)}</div>}
       {state && !refused ? (
         <p className="drawn-status" role="status">

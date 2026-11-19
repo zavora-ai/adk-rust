@@ -85,14 +85,28 @@ fn drawn(
     let catalog = known.unwrap_or_else(Catalog::forms);
     let agent = projector.agent(&event.author);
     let at = projector.hh_mm(event.timestamp);
+    // A screen is a form only when the person can fill something in or send it; a dashboard
+    // that only shows is "this".
+    let asks = |envelope: &DrawnEnvelope| {
+        !envelope.actions.is_empty()
+            || envelope.draft().is_some_and(|draft| {
+                draft.components.iter().any(|component| {
+                    component.get("component").and_then(Value::as_str).is_some_and(|name| {
+                        matches!(
+                            name,
+                            "TextField" | "CheckBox" | "ChoicePicker" | "Slider" | "DateTimeInput"
+                        )
+                    })
+                })
+            })
+    };
     let changed_text = match (envelope.deleted, envelope.kind) {
         (true, _) => words::removed_this(&agent.display_name, &at),
-        (false, DrawnKind::Form | DrawnKind::Screen) => {
+        (false, DrawnKind::Form) => words::changed_this_form(&agent.display_name, &at),
+        (false, DrawnKind::Screen) if asks(envelope) => {
             words::changed_this_form(&agent.display_name, &at)
         }
-        (false, DrawnKind::Card | DrawnKind::Table) => {
-            words::changed_this(&agent.display_name, &at)
-        }
+        (false, _) => words::changed_this(&agent.display_name, &at),
     };
     let mut surface = DrawnSurface {
         surface_id: envelope.surface_id.clone(),

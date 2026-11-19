@@ -387,6 +387,15 @@ export function App({
             }}
           />
         )}
+        {section === "agents" && !(agentsSeam && agentsPlace) && (
+          <section className="section-empty" aria-labelledby="agents-off-heading">
+            <h2 id="agents-off-heading">{labels.agentsOffHeading}</h2>
+            <p>{labels.agentsOffText}</p>
+            <button type="button" className="button button-secondary" onClick={() => navigate("threads")}>
+              {labels.backToThreads}
+            </button>
+          </section>
+        )}
       </div>
     </div>
   );

@@ -26,6 +26,10 @@ export const labels = {
   whileYouWereAway: words.WHILE_YOU_WERE_AWAY,
   nothingWaits: "Nothing is waiting for you.",
   nothingComingUp: "Nothing is planned.",
+  // A section this server doesn't offer (spec 3.3 §5.7).
+  agentsOffHeading: "Adding agents isn't set up here",
+  agentsOffText: "This home shows the agents its server runs. Agents of your own appear once the server turns on adding agents.",
+  backToThreads: "Back to threads",
   noAgents: "No agent has worked yet. Send a message to start.",
   yourAgents: "your agents",
   send: "Send",

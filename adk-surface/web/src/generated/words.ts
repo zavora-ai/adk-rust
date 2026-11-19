@@ -130,6 +130,7 @@ export const WHAT_SHOULD_IT_DO = "What should it do?";
 export const SUGGEST_A_NEW_AGENT_FOR = "Suggest a new agent for this: ";
 export const REMOVED_AGENTS = "Removed agents";
 export const NOT_SENT_YET = "Not sent yet";
+export const EARLIER_VERSIONS = "Earlier versions";
 export const SENDING = "Sending…";
 export const SENT_YOU_SAID_NO = "Sent · you said no";
 export const SENT_FAILED = "Sent · failed";

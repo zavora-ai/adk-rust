@@ -114,6 +114,29 @@ async fn items_of(events: Vec<Event>) -> Vec<ThreadItem> {
     engine.thread(&ana(), "s1").await.unwrap().into_iter().flat_map(|entry| entry.items).collect()
 }
 
+/// A newer version says what changed in words that fit it: a screen that only shows is
+/// "this", a screen with a field is "this form".
+#[tokio::test]
+async fn a_changed_screen_is_a_form_only_when_it_asks_something() {
+    let changed_text = |components: Vec<Value>| async move {
+        let shown = envelope("board", DrawnKind::Screen, components, json!({}));
+        let items = items_of(vec![result("render_screen", &shown, Some(record_of(&shown)))]).await;
+        match items.as_slice() {
+            [ThreadItem::Drawn { surface }] => surface.changed_text.clone(),
+            other => panic!("not a drawing: {other:?}"),
+        }
+    };
+    let board =
+        changed_text(vec![json!({ "id": "root", "component": "Text", "text": "p95 790 ms" })])
+            .await;
+    assert!(board.starts_with("Finance changed this at "), "{board}");
+    let form = changed_text(vec![
+        json!({ "id": "root", "component": "TextField", "label": "Why", "value": { "path": "/why" } }),
+    ])
+    .await;
+    assert!(form.starts_with("Finance changed this form at "), "{form}");
+}
+
 /// Provenance: the same envelope is a drawing only with the reserved key and its digest; an
 /// MCP server's `render_form`, or a forged digest, is an ordinary result.
 #[tokio::test]

@@ -1952,6 +1952,16 @@ marker path {
     border-left: 0;
   }
 
+  /* On a phone the conversation comes first: a side section with nothing in it is left out,
+     and the side itself when nothing in it remains (Threads' badge still counts decisions). */
+  .side-section[data-empty] {
+    display: none;
+  }
+
+  .side:not(:has(> :not(.side-section[data-empty]))) {
+    display: none;
+  }
+
   .rail {
     order: 0;
     padding: 12px 16px;
@@ -1965,9 +1975,19 @@ marker path {
     overflow-x: auto;
   }
 
+  /* Agents are chips in a row that scrolls sideways: each keeps its whole name, and the
+     "no agents of your own" note gives way to the New agent chip beside them. */
+  .roster ul > li {
+    flex: 0 0 auto;
+  }
+
   .roster-row {
     width: auto;
     white-space: nowrap;
+  }
+
+  .roster-foot .rail-empty {
+    display: none;
   }
 
   .rail-link {
@@ -2026,4 +2046,24 @@ marker path {
   .briefing-row {
     grid-template-columns: 56px 1fr;
   }
+}
+
+/* A section this server doesn't offer: what is missing, and the way back. */
+.section-empty {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  max-width: 520px;
+  margin: 72px auto;
+  padding: 0 24px;
+}
+
+.section-empty h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.section-empty p {
+  margin: 0;
+  color: var(--text-2);
 }

@@ -97,6 +97,27 @@ describe("a drawing", () => {
     expect(screen.getByText("Earlier version · 10:02")).toBeTruthy();
     expect(screen.getByText("Finance changed this form at 10:05")).toBeTruthy();
   });
+
+  it("folds the earlier versions no form was sent from into one control on the latest", () => {
+    const shown = lines([drawn(1, 1), drawn(2, 2), drawn(3, 3)]);
+    expect(shown.map((line) => line.kind)).toEqual(["drawn"]);
+    const latest = shown[0] as Extract<(typeof shown)[number], { kind: "drawn" }>;
+    expect(latest.surface.version).toBe(3);
+    expect(latest.earlier?.map((surface) => surface.version)).toEqual([1, 2]);
+    render(<DrawnView surface={latest.surface} earlier={latest.earlier} />);
+    expect(screen.getByText("Earlier versions · 2")).toBeTruthy();
+  });
+
+  it("shows its title once when its first words already say it", () => {
+    const surface = { ...invoiceForm(), title: "Invoice INV-10" };
+    const heading = { key: "h", component: "Text", text: "Invoice inv-10", variant: "h2" };
+    const { container, rerender } = render(
+      <DrawnView surface={{ ...surface, root: { key: "root", component: "Column", children: [heading] } }} />,
+    );
+    expect(container.querySelector(".drawn-title")).toBeNull();
+    rerender(<DrawnView surface={surface} />);
+    expect(container.querySelector(".drawn-title")?.textContent).toBe("Invoice INV-10");
+  });
 });
 
 describe("a render call", () => {
