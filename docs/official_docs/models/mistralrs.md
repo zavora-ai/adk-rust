@@ -276,6 +276,10 @@ Any model ID the mistral.rs 0.8 engine supports can be loaded. The examples on t
 | `google/gemma-2-2b-it` | Text |
 | `meta-llama/Llama-3.2-3B-Instruct` | Text, base for LoRA adapters |
 
+Every mistral.rs model runs in this process, so its `Llm::data_locality()` is `InProcess`: a
+guardrail that gates what leaves the machine passes its requests through. See
+[Data locality](providers.md#data-locality).
+
 ---
 
 ## Hardware Acceleration

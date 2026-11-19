@@ -515,6 +515,12 @@ impl Llm for FallbackLlm {
         compactions.all(|compaction| compaction == Some(first)).then_some(first)
     }
 
+    // A call may fall back to any model in the chain, so its data goes as far as the least
+    // local of them.
+    fn data_locality(&self) -> adk_core::DataLocality {
+        adk_core::DataLocality::least_local(self.models.iter().map(|model| model.data_locality()))
+    }
+
     /// Prewarms the first model, which serves the next call; the fallbacks are prewarmed too,
     /// and their failures only logged.
     async fn prewarm(&self) -> Result<()> {

@@ -151,6 +151,7 @@ The chain is built once, before any attempt, so it reports what every model in i
 | `max_cost_micro_usd` | The largest bound (a failed call bills nothing), or their sum with `Refusal`; `None` when a model has no bound |
 | `native_web_search` | The search every model serves, or `None` when they differ |
 | `uses_interactions_api` | `true` when any model uses it |
+| `data_locality` | The least local model's: `Remote` when any model is remote, since a call may reach it |
 
 Each request starts again at the first model. Turns a fallback model produced carry its
 provider origin, so native items such as thinking signatures are replayed only to that provider.

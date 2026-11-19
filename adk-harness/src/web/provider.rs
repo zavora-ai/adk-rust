@@ -455,6 +455,10 @@ impl Llm for ProviderSearchFallback {
     async fn prewarm(&self) -> adk_core::Result<()> {
         self.inner.prewarm().await
     }
+
+    fn data_locality(&self) -> adk_core::DataLocality {
+        self.inner.data_locality()
+    }
 }
 
 /// What a provider reported searching and citing in one model response.

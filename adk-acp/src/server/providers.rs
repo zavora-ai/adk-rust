@@ -278,6 +278,11 @@ impl Llm for SwitchableModel {
     fn native_compaction(&self) -> Option<adk_core::NativeCompaction> {
         self.current().and_then(|model| model.native_compaction())
     }
+
+    // With no model chosen yet, nothing says the data stays here.
+    fn data_locality(&self) -> adk_core::DataLocality {
+        self.current().map_or(adk_core::DataLocality::Remote, |model| model.data_locality())
+    }
 }
 
 /// The schema adapter of whichever model backs a [`SwitchableModel`].

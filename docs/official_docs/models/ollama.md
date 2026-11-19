@@ -183,6 +183,14 @@ zero, such as `prompt_eval_count` when the whole prompt came from its cache; a m
 reads as zero, `eval_count` is still reported, and `UsageMetadata::provider_usage` holds the
 metric fields the line carried.
 
+## Data Locality
+
+`OllamaModel::data_locality()` is `Loopback` when the configured host is `localhost` or a
+loopback address, so a guardrail treats the call as staying on this machine. A cloud model
+(`…-cloud`) is `Remote` at any host, because the local server forwards it to ollama.com, and a
+server on another machine is `Remote` too. See
+[Data locality](providers.md#data-locality).
+
 ---
 
 ## Troubleshooting

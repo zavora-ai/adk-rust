@@ -114,6 +114,10 @@ impl Llm for InstrumentedLlm {
         self.inner.native_compaction()
     }
 
+    fn data_locality(&self) -> adk_core::DataLocality {
+        self.inner.data_locality()
+    }
+
     fn name(&self) -> &str {
         self.inner.name()
     }

@@ -263,6 +263,124 @@ pub trait Llm: Send + Sync {
     async fn prewarm(&self) -> Result<()> {
         Ok(())
     }
+
+    /// Where a call's request data goes: into another machine ([`DataLocality::Remote`]),
+    /// to a server on this machine ([`DataLocality::Loopback`]), or nowhere outside this
+    /// process ([`DataLocality::InProcess`]).
+    ///
+    /// The image privacy guardrail reads it to tell which model calls leave the machine.
+    /// The default is `Remote`, so a model that does not say is treated as remote. Wrappers
+    /// forward the wrapped model's locality; a wrapper over several models answers the
+    /// least local of them ([`DataLocality::least_local`]).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{DataLocality, Llm, LlmRequest, LlmResponseStream};
+    ///
+    /// struct OnDevice;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Llm for OnDevice {
+    ///     fn name(&self) -> &str {
+    ///         "qwen3-vl-2b"
+    ///     }
+    ///     async fn generate_content(&self, _: LlmRequest, _: bool) -> adk_core::Result<LlmResponseStream> {
+    ///         Ok(Box::pin(futures::stream::empty()))
+    ///     }
+    ///     fn data_locality(&self) -> DataLocality {
+    ///         DataLocality::InProcess
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(OnDevice.data_locality(), DataLocality::InProcess);
+    /// assert!(!OnDevice.data_locality().leaves_machine());
+    /// ```
+    fn data_locality(&self) -> DataLocality {
+        DataLocality::Remote
+    }
+}
+
+/// Where a model call's request data goes, from most to least local.
+///
+/// Ordered by how far data travels, so the greater of two localities is the less local one.
+///
+/// | Locality | Request data | Example |
+/// |----------|--------------|---------|
+/// | [`InProcess`](Self::InProcess) | Stays in this process | `adk-mistralrs` models |
+/// | [`Loopback`](Self::Loopback) | Leaves the process for a server on this machine | Ollama or an OpenAI-compatible server at `localhost` |
+/// | [`Remote`](Self::Remote) | Leaves the machine | Every hosted provider |
+///
+/// A loopback server can itself forward a request elsewhere; `Loopback` says only that the
+/// framework sends it no further than this machine.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::DataLocality;
+///
+/// assert_eq!(DataLocality::of_url("http://localhost:11434"), DataLocality::Loopback);
+/// assert_eq!(DataLocality::of_url("http://[::1]:8000/v1"), DataLocality::Loopback);
+/// assert_eq!(DataLocality::of_url("https://api.openai.com/v1"), DataLocality::Remote);
+/// assert_eq!(
+///     DataLocality::least_local([DataLocality::InProcess, DataLocality::Loopback]),
+///     DataLocality::Loopback
+/// );
+/// assert_eq!(serde_json::to_value(DataLocality::InProcess).unwrap(), "inProcess");
+/// ```
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum DataLocality {
+    /// The model runs in this process; request data never leaves it.
+    InProcess,
+    /// The model is served on this machine over the loopback interface.
+    Loopback,
+    /// The model is served by another machine; request data leaves this one.
+    #[default]
+    Remote,
+}
+
+impl DataLocality {
+    /// The locality of a server at `url`: [`Loopback`](Self::Loopback) when its host is
+    /// `localhost` or a loopback address (`127.0.0.0/8`, `::1`), otherwise
+    /// [`Remote`](Self::Remote). A URL that does not parse is `Remote`.
+    pub fn of_url(url: &str) -> Self {
+        let Ok(parsed) = url::Url::parse(url.trim()) else {
+            return Self::Remote;
+        };
+        let loopback = match parsed.host() {
+            Some(url::Host::Domain(domain)) => {
+                let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+                domain == "localhost" || domain.ends_with(".localhost")
+            }
+            Some(url::Host::Ipv4(address)) => address.is_loopback(),
+            Some(url::Host::Ipv6(address)) => {
+                address.is_loopback()
+                    || address.to_ipv4_mapped().is_some_and(|mapped| mapped.is_loopback())
+            }
+            None => false,
+        };
+        if loopback { Self::Loopback } else { Self::Remote }
+    }
+
+    /// The least local of `localities`: where the data of a call that may go to any of
+    /// them can end up. [`Remote`](Self::Remote) when there are none.
+    pub fn least_local(localities: impl IntoIterator<Item = DataLocality>) -> Self {
+        localities.into_iter().max().unwrap_or(Self::Remote)
+    }
+
+    /// Whether request data leaves this machine.
+    pub fn leaves_machine(self) -> bool {
+        self == Self::Remote
+    }
+
+    /// Whether request data leaves this process.
+    pub fn leaves_process(self) -> bool {
+        self != Self::InProcess
+    }
 }
 
 /// Tool declarations keyed by tool name, in the order the agent declares them.
@@ -1136,6 +1254,72 @@ impl LlmResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_loopback_host_is_loopback_and_every_other_host_remote() {
+        for url in [
+            "http://localhost:11434",
+            "http://LOCALHOST.:8000/v1",
+            "http://vllm.localhost/v1",
+            "http://127.0.0.1:1234/v1",
+            "http://127.8.9.10",
+            "http://[::1]:8080",
+            "http://[::ffff:127.0.0.1]:8080",
+            " https://localhost/v1/ ",
+        ] {
+            assert_eq!(DataLocality::of_url(url), DataLocality::Loopback, "{url}");
+        }
+        for url in [
+            "https://api.openai.com/v1",
+            "http://localhost.example.com",
+            "http://0.0.0.0:11434",
+            "http://10.0.0.5:11434",
+            "http://[::2]",
+            "localhost:11434",
+            "not a url",
+            "",
+        ] {
+            assert_eq!(DataLocality::of_url(url), DataLocality::Remote, "{url}");
+        }
+    }
+
+    #[test]
+    fn the_least_local_of_several_localities_wins() {
+        use DataLocality::{InProcess, Loopback, Remote};
+        assert_eq!(DataLocality::least_local([InProcess, InProcess]), InProcess);
+        assert_eq!(DataLocality::least_local([InProcess, Loopback]), Loopback);
+        assert_eq!(DataLocality::least_local([Loopback, Remote, InProcess]), Remote);
+        assert_eq!(DataLocality::least_local([]), Remote);
+        assert_eq!(DataLocality::default(), Remote);
+        assert!(Remote.leaves_machine() && Remote.leaves_process());
+        assert!(!Loopback.leaves_machine() && Loopback.leaves_process());
+        assert!(!InProcess.leaves_machine() && !InProcess.leaves_process());
+        for locality in [InProcess, Loopback, Remote] {
+            let wire = serde_json::to_value(locality).unwrap();
+            assert_eq!(serde_json::from_value::<DataLocality>(wire).unwrap(), locality);
+        }
+    }
+
+    #[test]
+    fn a_metered_model_reports_the_wrapped_models_locality() {
+        struct Local;
+
+        #[async_trait]
+        impl Llm for Local {
+            fn name(&self) -> &str {
+                "local"
+            }
+            async fn generate_content(&self, _: LlmRequest, _: bool) -> Result<LlmResponseStream> {
+                Ok(Box::pin(futures::stream::empty()))
+            }
+            fn data_locality(&self) -> DataLocality {
+                DataLocality::InProcess
+            }
+        }
+
+        let metered = crate::MeteredLlm::new(std::sync::Arc::new(Local));
+        assert_eq!(metered.data_locality(), DataLocality::InProcess);
+    }
 
     #[test]
     fn tool_names_and_declarations_print_as_lists() {

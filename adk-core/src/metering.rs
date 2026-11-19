@@ -1178,6 +1178,10 @@ impl Llm for MeteredLlm {
         self.inner.context_window()
     }
 
+    fn data_locality(&self) -> crate::DataLocality {
+        self.inner.data_locality()
+    }
+
     fn native_web_search(&self) -> Option<crate::NativeWebSearch> {
         self.inner.native_web_search()
     }

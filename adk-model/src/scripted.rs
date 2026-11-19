@@ -164,6 +164,7 @@ pub struct ScriptedLlm {
     script: Mutex<VecDeque<ScriptedResponse>>,
     requests: Mutex<Vec<LlmRequest>>,
     native_web_search: Option<NativeWebSearch>,
+    data_locality: adk_core::DataLocality,
 }
 
 impl ScriptedLlm {
@@ -180,6 +181,7 @@ impl ScriptedLlm {
             script: Mutex::new(script.into_iter().map(Into::into).collect()),
             requests: Mutex::new(Vec::new()),
             native_web_search: None,
+            data_locality: adk_core::DataLocality::Remote,
         }
     }
 
@@ -199,6 +201,27 @@ impl ScriptedLlm {
     /// ```
     pub fn with_native_web_search(mut self, search: NativeWebSearch) -> Self {
         self.native_web_search = Some(search);
+        self
+    }
+
+    /// Reports `locality` from [`Llm::data_locality`], so a test stands in for a local or
+    /// loopback model. The default is [`DataLocality::Remote`](adk_core::DataLocality::Remote),
+    /// as for any hosted provider.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{DataLocality, Llm};
+    /// use adk_model::{ScriptedLlm, ScriptedResponse};
+    ///
+    /// let remote = ScriptedLlm::new("claude-sonnet-5-5", Vec::<ScriptedResponse>::new());
+    /// assert_eq!(remote.data_locality(), DataLocality::Remote);
+    /// let local = ScriptedLlm::new("qwen3-vl-8b", Vec::<ScriptedResponse>::new())
+    ///     .with_data_locality(DataLocality::InProcess);
+    /// assert_eq!(local.data_locality(), DataLocality::InProcess);
+    /// ```
+    pub fn with_data_locality(mut self, locality: adk_core::DataLocality) -> Self {
+        self.data_locality = locality;
         self
     }
 
@@ -246,6 +269,10 @@ impl Llm for ScriptedLlm {
 
     fn native_web_search(&self) -> Option<NativeWebSearch> {
         self.native_web_search
+    }
+
+    fn data_locality(&self) -> adk_core::DataLocality {
+        self.data_locality
     }
 
     async fn generate_content(

@@ -135,6 +135,32 @@ control. No client turns it into a forced tool call.
 | `OllamaModel` | `format` |
 | `BedrockClient`, `MistralRsModel` | not sent; the prompt asks for the format and the caller validates the reply |
 
+### Data locality
+
+`Llm::data_locality()` says where a call's request data goes, so a guardrail can tell which
+model calls leave the machine — the image privacy guardrail gates every image a remote model
+would receive:
+
+| `DataLocality` | Request data | Clients |
+|----------------|--------------|---------|
+| `InProcess` | Stays in this process | `MistralRsModel`, `MistralRsVisionModel`, `MistralRsMultiModel`, `MistralRsAdapterModel` |
+| `Loopback` | Leaves the process for a server on this machine | `OpenAICompatible`, `OpenAIClient` and `OpenAIResponsesClient` whose base URL is `localhost` or a loopback address; `OllamaModel` at such a host, except cloud models (`…-cloud`), which the server forwards to ollama.com |
+| `Remote` (default) | Leaves the machine | Every hosted provider, and any model that does not say |
+
+Wrappers report the model they wrap: `MeteredLlm`, `OpenCodeClient`, and the harness's model
+wrappers forward it, and `FallbackLlm` reports the least local model of its chain, since a call
+may reach any of them. `DataLocality::of_url` classifies a base URL for a client of your own.
+
+```rust
+use adk_core::{DataLocality, Llm};
+
+fn leaves_the_machine(model: &dyn Llm) -> bool {
+    model.data_locality().leaves_machine()
+}
+
+assert_eq!(DataLocality::of_url("http://127.0.0.1:8000/v1"), DataLocality::Loopback);
+```
+
 ---
 
 ## Gemini
