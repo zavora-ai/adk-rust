@@ -6,12 +6,12 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use adk_artifact::{ArtifactService, LoadRequest, VersionsRequest};
+use adk_artifact::{ArtifactService, VersionsRequest};
 use adk_core::audit_log::AuditActor;
 use adk_core::{
     ApprovalDecision, ApprovalRequest, ApprovalService, ApprovalState, Content, DurableRunStore,
-    ErrorCategory, Event, GovernanceControl, ImageEvidence, InboxQuery, NewRun, Part,
-    RequestContext, RequestedCall, RequestedVia, RunCheckpointRef, RunState, SessionId, UserId,
+    ErrorCategory, Event, GovernanceControl, ImageEvidence, InboxQuery, NewRun, RequestContext,
+    RequestedCall, RequestedVia, RunCheckpointRef, RunState, SessionId, UserId,
 };
 use adk_harness::{
     ArgSpec, Harness, HarnessMode, RuleOwner, RulePredicate, RuleSuggestion, StandingDecision,
@@ -291,32 +291,7 @@ impl LocalSource {
             .artifacts
             .as_ref()
             .ok_or_else(|| SurfaceError::unsupported("showing a decision's images"))?;
-        let at = &image.artifact;
-        let loaded = artifacts
-            .load(LoadRequest {
-                app_name: at.app_name.clone(),
-                user_id: at.user_id.clone(),
-                session_id: at.session_id.clone(),
-                file_name: at.file_name.clone(),
-                version: Some(at.version),
-            })
-            .await;
-        let part = match loaded {
-            Ok(loaded) => loaded.part,
-            Err(error) if error.is_not_found() => return Ok(None),
-            Err(error) => return Err(error.into()),
-        };
-        let Part::InlineData { data, .. } = part else {
-            return Err(SurfaceError::Invalid("an evidence artifact holds no image bytes".into()));
-        };
-        if crate::evidence::digest_of(&data) != image.digest {
-            tracing::warn!(evidence.digest = %image.digest, "an evidence image does not match its digest; it is not shown");
-            return Err(SurfaceError::Invalid(
-                "the stored image does not match the digest the decision names; it is not shown"
-                    .into(),
-            ));
-        }
-        Ok(Some(data))
+        crate::evidence::load_image(artifacts.as_ref(), image).await
     }
 
     fn approvals(&self) -> Result<&Arc<dyn ApprovalService>> {
@@ -838,7 +813,7 @@ impl Source for LocalSource {
                 user_id: at.user_id.clone(),
                 session_id: at.session_id.clone(),
                 file_name: format!("vision-{hex}.png"),
-                part: Part::InlineData {
+                part: adk_core::Part::InlineData {
                     mime_type: "image/png".into(),
                     data: changed,
                     uri: None,

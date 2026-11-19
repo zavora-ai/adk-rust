@@ -121,8 +121,56 @@ impl BotApi {
             .map_err(unreachable)?;
         let status = response.status();
         let text = response.text().await.map_err(unreachable)?;
+        self.reply(method, status, &text)
+    }
+
+    /// Sends `image` to `chat_id` with `sendPhoto`, its caption beside it (spec 3.7 §8.2,
+    /// board choice A17): the bytes go as an upload, never as a link to the home.
+    pub(crate) async fn send_photo(
+        &self,
+        chat_id: &Value,
+        image: &crate::channels::shared::ChatImage,
+        timeout: Duration,
+    ) -> Result<Value, TelegramError> {
+        let method = "sendPhoto";
+        let unreachable = |error: reqwest::Error| TelegramError::Unreachable {
+            method: method.to_string(),
+            reason: self.redact(&error.without_url().to_string()),
+        };
+        let chat = match chat_id {
+            Value::String(name) => name.clone(),
+            other => other.to_string(),
+        };
+        let photo = reqwest::multipart::Part::bytes(image.bytes.clone())
+            .file_name("image.png")
+            .mime_str(&image.mime_type)
+            .map_err(unreachable)?;
+        let form = reqwest::multipart::Form::new()
+            .text("chat_id", chat)
+            .text("caption", image.caption.clone())
+            .part("photo", photo);
+        let response = self
+            .client
+            .post(format!("{}{method}", self.endpoint))
+            .multipart(form)
+            .timeout(timeout)
+            .send()
+            .await
+            .map_err(unreachable)?;
+        let status = response.status();
+        let text = response.text().await.map_err(unreachable)?;
+        self.reply(method, status, &text)
+    }
+
+    /// The `result` of a Bot API answer to `method`, or the error it says.
+    fn reply(
+        &self,
+        method: &str,
+        status: reqwest::StatusCode,
+        text: &str,
+    ) -> Result<Value, TelegramError> {
         let reply: Value =
-            serde_json::from_str(&text).map_err(|error| TelegramError::InvalidResponse {
+            serde_json::from_str(text).map_err(|error| TelegramError::InvalidResponse {
                 method: method.to_string(),
                 reason: format!("HTTP {status}, {error}"),
             })?;

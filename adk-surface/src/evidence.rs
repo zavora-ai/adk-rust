@@ -954,6 +954,46 @@ pub(crate) fn coverage(regions: &[EvidenceRegion], width: u32, height: u32) -> f
     (union / area).clamp(0.0, 1.0)
 }
 
+/// The bytes of an evidence image from `artifacts`, read at its exact version and checked
+/// against its digest; `None` when it is no longer kept.
+///
+/// # Errors
+///
+/// `surface.invalid` when the stored bytes are not an image or do not match the digest, or
+/// the artifact service's error.
+pub(crate) async fn load_image(
+    artifacts: &dyn adk_artifact::ArtifactService,
+    image: &adk_core::ImageEvidence,
+) -> crate::Result<Option<Vec<u8>>> {
+    let at = &image.artifact;
+    let loaded = artifacts
+        .load(adk_artifact::LoadRequest {
+            app_name: at.app_name.clone(),
+            user_id: at.user_id.clone(),
+            session_id: at.session_id.clone(),
+            file_name: at.file_name.clone(),
+            version: Some(at.version),
+        })
+        .await;
+    let part = match loaded {
+        Ok(loaded) => loaded.part,
+        Err(error) if error.is_not_found() => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let adk_core::Part::InlineData { data, .. } = part else {
+        return Err(crate::SurfaceError::Invalid(
+            "an evidence artifact holds no image bytes".into(),
+        ));
+    };
+    if digest_of(&data) != image.digest {
+        tracing::warn!(evidence.digest = %image.digest, "an evidence image does not match its digest; it is not shown");
+        return Err(crate::SurfaceError::Invalid(
+            "the stored image does not match the digest the decision names; it is not shown".into(),
+        ));
+    }
+    Ok(Some(data))
+}
+
 /// `sha256:<hex>` of `bytes`, as evidence digests are written.
 pub(crate) fn digest_of(bytes: &[u8]) -> String {
     use sha2::Digest as _;
