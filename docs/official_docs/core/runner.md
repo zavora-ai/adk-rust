@@ -540,8 +540,8 @@ In `Auto` mode, the dispatch loop queries both `is_read_only()` and `is_concurre
 
 ## Run Budgets
 
-A `RunBudget` limits model calls, total tokens, cost, wall time and tool calls
-for one run. The runner creates a fresh `BudgetTracker` for every run and stores
+A `RunBudget` limits model calls, total tokens, cost, wall time, tool calls and
+usage per unit (images, frames, pages, …) for one run. The runner creates a fresh `BudgetTracker` for every run and stores
 it in `RunConfig::budget_tracker`; transfer targets, workflow sub-agents and
 agents behind an `AgentTool` inherit the run config, so they all count against
 the same `Arc`.
@@ -550,7 +550,7 @@ the same `Arc`.
 use std::sync::Arc;
 use std::time::Duration;
 
-use adk_core::RunBudget;
+use adk_core::{RunBudget, UsageUnit};
 use adk_runner::Runner;
 use adk_session::InMemorySessionService;
 
@@ -564,6 +564,7 @@ fn build(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<Runner> {
                 .max_cost_usd(50.0)
                 .max_model_calls(200)
                 .max_tool_calls(100)
+                .max_units(UsageUnit::Images, 20)
                 .max_wall_time(Duration::from_secs(600)),
         )
         .build()
@@ -575,6 +576,7 @@ fn build(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<Runner> {
 | Before every model call, compaction summaries and MCP sampling included | model calls, total tokens, cost, wall time; tool calls already over the limit |
 | Before every model request | built-in tools are withheld when no tool calls are left |
 | Before every tool dispatch | tool calls, total tokens, cost, wall time |
+| Before every call billed in units | total tokens, cost, wall time; the per-unit caps of the units the call declares |
 | After every event | usage from agents that call models directly |
 
 - **Reached, not exceeded**: a limit blocks new work once usage equals it. A
@@ -601,6 +603,14 @@ fn build(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<Runner> {
   (`BudgetTracker::units`) and count against the cost and token limits. A media
   call with no known price is refused before it is sent under a cost cap — see
   [Calls billed in units](../security/spend-ledger.md#calls-billed-in-units).
+- **Per-unit caps hold before the call**: `RunBudget::max_units(unit, max)` caps a
+  unit across the run. A call billed in units declares the most it can use
+  (`UsageCall::with_units`); the tracker holds that amount before the request and
+  refuses a call that would pass the cap with `budget.units`, naming the unit and
+  the cap (`adk.budget.limit` is `units.<unit>`, such as `units.images`). The call
+  commits what it used and returns the rest; a failed call returns all of it. A
+  call that declares no units is not held back, and its units count once it
+  commits. A tracker resumed from recorded usage counts units from the resume.
 
 A run that reaches a limit yields a final event explaining why — persisted with
 the session, with `llm_response.error_code` set to the `budget.*` code and the

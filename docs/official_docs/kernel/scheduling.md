@@ -84,7 +84,7 @@ fn main() -> anyhow::Result<()> {
 | `KernelConfig::quotas` | none | Applies to each partition separately; partitions with their own quotas are phase 3 |
 | `KernelConfig::quiet_hours` | none | Applies beside `ProactivityPolicy::quiet_hours`; a process waits out both |
 | `QuietHours` | — | `HH:MM-HH:MM` in the host's time zone, or `with_utc_offset_minutes`; a start after the end wraps midnight; equal times make no window |
-| `Quotas::daily_caps` | none | Per `UsageUnit` (`images`, `audioMillis`, `inputTokens`, …; `dailyCaps` in JSON): the partition's daily usage of the unit; reached means held |
+| `Quotas::daily_caps` | none | Per `UsageUnit` (`images`, `frames`, `audioMillis`, `inputTokens`, …; `dailyCaps` in JSON): the partition's daily usage of the unit; reached means held |
 | `ProactivityPolicy::daily_budget` | unlimited | Its `max_cost_micro_usd`, `max_model_calls` and `max_total_tokens` cap the partition's proactive spend, model calls and tokens per UTC day |
 
 Spend and usage come from the kernel's own daily totals per process and partition

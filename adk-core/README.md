@@ -422,7 +422,7 @@ Every run has an acting agent. `AgentId`, `AgentPrincipal`, and `ActingContext` 
 
 ## Run Budgets and Spend
 
-`RunBudget` limits model calls, total tokens, cost (micro-USD), wall time, and tool calls; `RunConfig::budget` carries it and `RunConfig::budget_tracker` carries the shared `BudgetTracker`. A violation converts to an `AdkError` with category `ResourceExhausted` and a `budget.*` code.
+`RunBudget` limits model calls, total tokens, cost (micro-USD), wall time, tool calls, and usage per unit (`max_units`); `RunConfig::budget` carries it and `RunConfig::budget_tracker` carries the shared `BudgetTracker`. A violation converts to an `AdkError` with category `ResourceExhausted` and a `budget.*` code.
 
 ```rust
 use adk_core::{BudgetTracker, RunBudget};
@@ -444,7 +444,7 @@ let ledger = InMemorySpendLedger::new(
 
 `ModelCallScope` applies the run budget and the spend ledger to model calls made outside an agent's own loop — compaction summaries, LLM routing, MCP sampling. `generate_metered` and `MeteredLlm` meter against the scope made current with `ModelCallScope::within`. `LlmResponse` carries `model` and `provider` so usage and cost are attributable.
 
-Calls billed in units rather than tokens — images, audio, characters — go through `ModelCallScope::meter` or `meter_usage`: the spend hold covers `UsageCall::max_cost_micro_usd` before the call is sent, and `MeteredUsage` commits the cost in micro-USD and counts its `UsageVector` (`UsageUnit::Images`, `AudioMillis`, `Characters`, …) in `BudgetTracker::units`. A unit call with no known price is refused under a cost cap. Agents make the run's scope current around every tool call (`ModelCallScope::within_tool`), so media calls in tools count against the run. `UnitRate` prices a unit in integer micro-USD.
+Calls billed in units rather than tokens — images, audio, characters — go through `ModelCallScope::meter` or `meter_usage`: the spend hold covers `UsageCall::max_cost_micro_usd` before the call is sent, and `MeteredUsage` commits the cost in micro-USD and counts its `UsageVector` (`UsageUnit::Images`, `AudioMillis`, `Characters`, …) in `BudgetTracker::units`. A unit call with no known price is refused under a cost cap. A call that declares its units (`UsageCall::with_units`) is held against `RunBudget::max_units` before it is sent and refused with `budget.units`, naming the unit and the cap, when it would pass one. Agents make the run's scope current around every tool call (`ModelCallScope::within_tool`), so media calls in tools count against the run. `UnitRate` prices a unit in integer micro-USD, with an optional per-request minimum (`with_minimum_per_request`); `UsageUnit::Frames` counts video frames.
 
 ## Typed Decisions
 

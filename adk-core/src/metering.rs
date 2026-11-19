@@ -37,9 +37,9 @@
 //!
 //! | Step | Budget | Spend ledger |
 //! |------|--------|--------------|
-//! | Before the call | refuses when a limit is reached, or when the call has no known price under a cost cap | reserves [`UsageCall::max_cost_micro_usd`], or [`UNBOUNDED_HOLD_MICRO_USD`] without a price |
-//! | After the call | counts its cost, tokens and [`UsageVector`] | commits [`MeteredUsage::cost_micro_usd`] |
-//! | Call failed | — | the hold is released |
+//! | Before the call | refuses when a limit is reached, when the call has no known price under a cost cap, or when [`UsageCall::units`] would take a unit past its cap ([`RunBudget::max_units`](crate::RunBudget::max_units)); otherwise holds those units | reserves [`UsageCall::max_cost_micro_usd`], or [`UNBOUNDED_HOLD_MICRO_USD`] without a price |
+//! | After the call | counts its cost, tokens and [`UsageVector`] in place of the units it held | commits [`MeteredUsage::cost_micro_usd`] |
+//! | Call failed | returns the units it held | the hold is released |
 //!
 //! Units are counted in the budget ([`BudgetTracker::units`]) and never in the ledger,
 //! whose amounts are micro-USD only. A unit call is not a model call.
@@ -775,15 +775,17 @@ impl ModelCallScope {
     /// Reserves [`UsageCall::max_cost_micro_usd`] in the spend ledger — or
     /// [`UNBOUNDED_HOLD_MICRO_USD`] when the call has no known price, which every covering
     /// cap refuses — then checks the run budget, which refuses a call with no known price
-    /// under a cost cap. Settle the returned hold with [`UsageHold::commit`] once the call
-    /// completes; a hold released or dropped unsettled records nothing.
+    /// under a cost cap, and holds [`UsageCall::units`] against its per-unit caps. Settle
+    /// the returned hold with [`UsageHold::commit`] once the call completes; a hold released
+    /// or dropped unsettled records nothing and returns the units it held.
     ///
     /// # Errors
     ///
     /// Returns the frozen control's `governance.frozen` error while a kill switch is frozen,
     /// the ledger's error when the reservation is refused, or a
     /// [`ResourceExhausted`](crate::ErrorCategory::ResourceExhausted) error when the
-    /// budget refuses the call. Nothing has been sent when any of them refuses.
+    /// budget refuses the call — `budget.units`, naming the unit and its cap, when a
+    /// declared unit does not fit. Nothing has been sent when any of them refuses.
     pub async fn begin_usage(&self, call: &UsageCall) -> Result<UsageHold> {
         self.check_governance()?;
         let spend = match (&self.spend, self.vendor_spend_key(&call.vendor)) {
@@ -799,14 +801,19 @@ impl ModelCallScope {
         };
         if let Some(tracker) = &self.budget
             && let Err(exceeded) =
-                tracker.begin_usage(&call.model, call.max_cost_micro_usd.is_some())
+                tracker.begin_usage(&call.model, call.max_cost_micro_usd.is_some(), &call.units)
         {
             if let Some(hold) = spend {
                 hold.settle().await;
             }
             return Err(exceeded.into());
         }
-        Ok(UsageHold { spend, budget: self.budget.clone(), model: call.model.clone() })
+        Ok(UsageHold {
+            spend,
+            budget: self.budget.clone(),
+            model: call.model.clone(),
+            held: call.units.clone(),
+        })
     }
 
     /// Runs one call billed in units under this scope.
@@ -870,16 +877,19 @@ impl ModelCallScope {
     }
 }
 
-/// One call billed in units: the vendor and model it is billed under, and the most it
-/// can cost.
+/// One call billed in units: the vendor and model it is billed under, the most it can
+/// cost, and the most it can use of each unit.
 ///
 /// # Example
 ///
 /// ```
-/// use adk_core::UsageCall;
+/// use adk_core::{UsageCall, UsageUnit, UsageVector};
 ///
-/// let call = UsageCall::new("muse", "muse-image-1.0").with_max_cost_micro_usd(40_000);
+/// let call = UsageCall::new("muse", "muse-image-1.0")
+///     .with_max_cost_micro_usd(40_000)
+///     .with_units(UsageVector::new().with(UsageUnit::Images, 4));
 /// assert_eq!(call.max_cost_micro_usd, Some(40_000));
+/// assert_eq!(call.units.get(UsageUnit::Images), 4);
 /// assert_eq!(UsageCall::new("deepgram", "nova-3").max_cost_micro_usd, None);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -891,17 +901,33 @@ pub struct UsageCall {
     pub model: String,
     /// Upper bound on the call's cost, or `None` when no price is known.
     pub max_cost_micro_usd: Option<u64>,
+    /// The most the call can use of each unit, held against the run budget's per-unit caps
+    /// ([`RunBudget::max_units`](crate::RunBudget::max_units)) before the call starts. Empty
+    /// when the call declares none, in which case no cap holds it back.
+    pub units: UsageVector,
 }
 
 impl UsageCall {
-    /// A call to `model`, billed by `vendor`, with no known price.
+    /// A call to `model`, billed by `vendor`, with no known price and no declared units.
     pub fn new(vendor: impl Into<String>, model: impl Into<String>) -> Self {
-        Self { vendor: vendor.into(), model: model.into(), max_cost_micro_usd: None }
+        Self {
+            vendor: vendor.into(),
+            model: model.into(),
+            max_cost_micro_usd: None,
+            units: UsageVector::new(),
+        }
     }
 
     /// Sets the most the call can cost.
     pub fn with_max_cost_micro_usd(mut self, max_cost_micro_usd: u64) -> Self {
         self.max_cost_micro_usd = Some(max_cost_micro_usd);
+        self
+    }
+
+    /// Declares the most the call can use of each unit. The run budget holds these before
+    /// the call starts and refuses the call when a unit would pass its cap.
+    pub fn with_units(mut self, units: UsageVector) -> Self {
+        self.units = units;
         self
     }
 }
@@ -945,13 +971,14 @@ impl MeteredUsage {
 ///
 /// | Settled with | Spend ledger | Budget |
 /// |--------------|--------------|--------|
-/// | [`commit`](Self::commit) | the reported cost, or the reserved bound (the scope's per-call estimate for an unpriced call) when none is reported | cost, tokens and units counted; an unknown cost under a cost cap stops the run |
-/// | [`release`](Self::release), or dropped | hold released | nothing counted |
+/// | [`commit`](Self::commit) | the reported cost, or the reserved bound (the scope's per-call estimate for an unpriced call) when none is reported | cost, tokens and units counted in place of the units held; an unknown cost under a cost cap stops the run |
+/// | [`release`](Self::release), or dropped | hold released | nothing counted; the units held are returned |
 #[must_use = "an unsettled usage hold records nothing"]
 pub struct UsageHold {
     spend: Option<ModelSpendHold>,
     budget: Option<Arc<BudgetTracker>>,
     model: String,
+    held: UsageVector,
 }
 
 impl fmt::Debug for UsageHold {
@@ -959,15 +986,16 @@ impl fmt::Debug for UsageHold {
         f.debug_struct("UsageHold")
             .field("spend", &self.spend)
             .field("model", &self.model)
+            .field("held", &self.held)
             .finish_non_exhaustive()
     }
 }
 
 impl UsageHold {
-    /// Records what the call used.
+    /// Records what the call used, in place of the units it held.
     pub async fn commit(mut self, usage: MeteredUsage) {
-        if let Some(tracker) = &self.budget {
-            tracker.record_units(&self.model, &usage.units, usage.cost_micro_usd);
+        if let Some(tracker) = self.budget.take() {
+            tracker.record_units(&self.model, &self.held, &usage.units, usage.cost_micro_usd);
         }
         if let Some(mut hold) = self.spend.take() {
             hold.observe_cost(usage.cost_micro_usd);
@@ -975,10 +1003,23 @@ impl UsageHold {
         }
     }
 
-    /// Releases the hold of a call that failed, recording nothing.
+    /// Releases the hold of a call that failed, recording nothing and returning the units
+    /// it held.
     pub async fn release(mut self) {
+        if let Some(tracker) = self.budget.take() {
+            tracker.release_units(&self.held);
+        }
         if let Some(hold) = self.spend.take() {
             hold.settle().await;
+        }
+    }
+}
+
+impl Drop for UsageHold {
+    fn drop(&mut self) {
+        // An abandoned call — its future dropped mid-flight — returns the units it held.
+        if let Some(tracker) = self.budget.take() {
+            tracker.release_units(&self.held);
         }
     }
 }
