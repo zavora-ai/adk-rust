@@ -1,12 +1,13 @@
 //! The NVIDIA NIM document reader, live on `ai.api.nvidia.com`, through the egress gate:
-//! the report page as it is, and the invoice after its personal fields are found by local
-//! PP-OCRv6 and filled before release (spec 3.7 §7.7, §7.8, S1–S3).
+//! the report page as it is, and the invoice after `PersonalTextRedactor` over local
+//! PP-OCRv6 found its labelled personal fields and the gate filled them before release
+//! (spec 3.7 §7.7, §7.8, S1–S3).
 //!
 //! Needs `NVIDIA_API_KEY` and the PP-OCRv6 tiny weights (for the redactor):
 //!
 //! ```text
 //! NVIDIA_API_KEY=... HF_HUB_CACHE=/path/to/cache cargo test -p adk-vision \
-//!     --features nim,ocr,fetch,conformance --test nim_live_tests -- --ignored --nocapture
+//!     --features nim,ocr,guardrail,fetch,conformance --test nim_live_tests -- --ignored --nocapture
 //! ```
 
 mod doc_support;
@@ -16,52 +17,12 @@ use std::time::Instant;
 
 use adk_core::egress::EgressPolicy;
 use adk_vision::{
-    BBox, BlockKind, CallOptions, DocumentReader, EgressAction, EgressConfig, EgressGate,
-    FetchConfig, InMemoryAcceptanceStore, InMemoryEgressRecorder, ModelFetcher, NimCvConfig,
-    NimDocumentReader, PpOcrReader, PpOcrV6Size, ReadOptions, RedactionClass, Redactor, SentImage,
-    VisionCx, VisionRuntime,
+    BlockKind, CallOptions, EgressAction, EgressConfig, EgressGate, FetchConfig,
+    InMemoryAcceptanceStore, InMemoryEgressRecorder, ModelFetcher, NimCvConfig, NimDocumentReader,
+    PersonalTextRedactor, PpOcrReader, PpOcrV6Size, ReadOptions, RedactionClass, VisionCx,
+    VisionRuntime,
 };
-use async_trait::async_trait;
 use doc_support::{DOC_PAGE, INVOICE, box_error, char_accuracy, page, text_lines, truth};
-
-/// Personal text found by local OCR: emails, phone numbers, and the fields the invoice's
-/// schema marks personal (the name and the address).
-struct PersonalText {
-    ocr: PpOcrReader,
-    schema_fields: Vec<String>,
-}
-
-fn looks_like_email(text: &str) -> bool {
-    text.split_whitespace().any(|w| w.contains('@') && w.contains('.'))
-}
-
-fn looks_like_phone(text: &str) -> bool {
-    let digits = text.chars().filter(char::is_ascii_digit).count();
-    digits >= 7 && text.chars().all(|c| c.is_ascii_digit() || " +-().".contains(c))
-}
-
-#[async_trait]
-impl Redactor for PersonalText {
-    fn class(&self) -> RedactionClass {
-        RedactionClass::personal_text()
-    }
-
-    async fn find(&self, cx: &VisionCx, image: &SentImage) -> adk_vision::Result<Vec<BBox>> {
-        // PP-OCRv6 answers in the pixels of the image it is handed: the gate's image.
-        let page = self.ocr.read(cx, image, &ReadOptions::default()).await?;
-        Ok(page
-            .blocks
-            .iter()
-            .filter(|b| {
-                let text = b.text.trim();
-                looks_like_email(text)
-                    || looks_like_phone(text)
-                    || self.schema_fields.iter().any(|f| text.contains(f.as_str()))
-            })
-            .filter_map(|b| b.region.shape.bbox())
-            .collect())
-    }
-}
 
 fn reader() -> NimDocumentReader {
     let key = std::env::var("NVIDIA_API_KEY").expect("NVIDIA_API_KEY");
@@ -83,22 +44,22 @@ async fn runtime(redact: bool) -> (VisionRuntime, Arc<InMemoryEgressRecorder>) {
         &["document_page"],
         EgressAction::Allow,
     );
-    let mut gate_redactors = Vec::new();
+    let mut redactor = None;
     if redact {
         config = config.redacting(RedactionClass::personal_text());
         let fetcher =
             ModelFetcher::new(FetchConfig::from_env(), Arc::new(InMemoryAcceptanceStore::new()));
-        let schema_fields = truth(INVOICE)
-            .into_iter()
-            .filter(|o| o.personal && o.label != "email" && o.label != "phone")
-            .filter_map(|o| o.text)
-            .collect();
+        // The local reader finds the text; the redactor matches PII patterns and the fields
+        // the invoice's schema labels personal.
         let ocr = PpOcrReader::fetch(&fetcher, PpOcrV6Size::Tiny).await.unwrap();
-        gate_redactors.push(Arc::new(PersonalText { ocr, schema_fields }));
+        redactor = Some(
+            PersonalTextRedactor::new(Arc::new(ocr))
+                .with_labelled_fields(["Name", "Address", "Email", "Phone"]),
+        );
     }
     let mut gate = EgressGate::new(EgressPolicy::public_only(), config, recorder.clone());
-    for redactor in gate_redactors {
-        gate = gate.with_redactor(redactor);
+    if let Some(redactor) = redactor {
+        gate = gate.with_redactor(Arc::new(redactor));
     }
     let runtime = VisionRuntime::builder()
         .remote_reader(Arc::new(reader()))
@@ -175,8 +136,8 @@ async fn nim_never_sees_the_invoices_personal_fields() {
         let b = &out.value.blocks[i];
         println!("    {:?} {:?}", b.kind, b.text.replace('\n', " / "));
     }
-    let personal: Vec<String> =
-        truth(INVOICE).into_iter().filter(|o| o.personal).filter_map(|o| o.text).collect();
+    let personal: Vec<String> = truth(INVOICE).into_iter().filter_map(|o| o.value).collect();
+    assert_eq!(personal.len(), 4);
     for value in &personal {
         for part in value.split_whitespace().filter(|p| p.len() > 3) {
             assert!(!text.contains(part), "`{part}` of a personal field reached NVIDIA: {text}");
@@ -185,6 +146,8 @@ async fn nim_never_sees_the_invoices_personal_fields() {
     for kept in ["INVOICE INV-4721", "Torque sensor", "58.20"] {
         assert!(text.contains(kept), "`{kept}` is missing: {text}");
     }
-    assert_eq!(receipt.redactions.get(&RedactionClass::personal_text()).copied(), Some(4));
+    // One box per covered word of the personal values.
+    let covered = receipt.redactions.get(&RedactionClass::personal_text()).copied().unwrap_or(0);
+    assert!(covered >= 4, "{covered}");
     assert_eq!(receipt.hosts, vec!["ai.api.nvidia.com".to_string()]);
 }

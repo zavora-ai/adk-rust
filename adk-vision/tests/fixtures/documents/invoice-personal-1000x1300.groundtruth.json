@@ -29,47 +29,51 @@
   },
   {
    "label": "name",
-   "text": "Amara Okafor",
+   "text": "Name: Amara Okafor",
    "bbox": [
-    79,
+    80,
     215,
-    241,
+    324,
     234
    ],
-   "personal": true
+   "personal": true,
+   "value": "Amara Okafor"
   },
   {
    "label": "address",
-   "text": "14 Larch Street, Springfield 62704",
+   "text": "Address: 14 Larch Street, Springfield 62704",
    "bbox": [
-    80,
+    79,
     255,
-    466,
+    574,
     279
    ],
-   "personal": true
+   "personal": true,
+   "value": "14 Larch Street, Springfield 62704"
   },
   {
    "label": "email",
-   "text": "amara.okafor@example.com",
+   "text": "Email: amara.okafor@example.com",
    "bbox": [
     80,
     295,
-    410,
+    489,
     319
    ],
-   "personal": true
+   "personal": true,
+   "value": "amara.okafor@example.com"
   },
   {
    "label": "phone",
-   "text": "+1 415 555 0142",
+   "text": "Phone: +1 415 555 0142",
    "bbox": [
     80,
     335,
-    270,
+    357,
     354
    ],
-   "personal": true
+   "personal": true,
+   "value": "+1 415 555 0142"
   },
   {
    "label": "date",

@@ -104,17 +104,24 @@ manifest does not pin, because Candle would load every one it finds.
 
 ```toml
 [dependencies]
-adk-vision = { version = "3.0.0", features = ["nim"] }
+adk-vision = { version = "3.0.0", features = ["nim", "ocr", "guardrail", "fetch"] }
 ```
+
+The page leaves only through the egress gate; here local PP-OCRv6 finds the personal text
+(`PersonalTextRedactor`, feature `guardrail`) and the gate fills it before release:
 
 ```rust,ignore
 use std::sync::Arc;
 use adk_core::egress::EgressPolicy;
 use adk_vision::{
     CallOptions, EgressAction, EgressConfig, EgressGate, InMemoryEgressRecorder, NimCvConfig,
-    NimDocumentReader, RedactionClass, VisionRuntime,
+    NimDocumentReader, PersonalTextRedactor, PpOcrReader, PpOcrV6Size, RedactionClass,
+    VisionRuntime,
 };
 
+let ocr = PpOcrReader::fetch(&fetcher, PpOcrV6Size::Tiny).await?;
+let personal_text = PersonalTextRedactor::new(Arc::new(ocr))
+    .with_labelled_fields(["Name", "Address", "Email", "Phone"]);
 let reader = NimDocumentReader::new(
     NimCvConfig::new("https://ai.api.nvidia.com/v1/cv").with_api_key_from_env(),
 )?;
@@ -125,7 +132,7 @@ let gate = EgressGate::new(
         .with_rule("ai.api.nvidia.com", &["document_page"], EgressAction::Allow),
     Arc::new(InMemoryEgressRecorder::new()),
 )
-.with_redactor(personal_text_redactor);
+.with_redactor(Arc::new(personal_text));
 let runtime = VisionRuntime::builder().remote_reader(Arc::new(reader)).egress_gate(gate).build()?;
 let read = runtime
     .read_with(&cx, &page, &ReadOptions::default(), &CallOptions::new().with_data_class("document_page"))
@@ -192,7 +199,7 @@ reader does not run.
 | The page shape across the three backends (S8) | `cargo test -p adk-vision --test s8_document_schema_tests` |
 | PP-OCRv6 live, with its conformance run | `cargo test -p adk-vision --features ocr,fetch,conformance --test ocr_live_tests -- --ignored` |
 | PaddleOCR-VL-1.6 live, with its conformance run | `cargo test -p adk-vision --features ocr-vl,fetch,conformance --test ocr_vl_live_tests -- --ignored` |
-| NIM live through the egress gate, with redaction | `cargo test -p adk-vision --features nim,ocr,fetch,conformance --test nim_live_tests -- --ignored` |
+| NIM live through the egress gate, with redaction | `cargo test -p adk-vision --features nim,ocr,guardrail,fetch,conformance --test nim_live_tests -- --ignored` |
 
 ## Related
 

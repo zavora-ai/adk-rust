@@ -173,7 +173,7 @@ required-features = ["nim", "conformance"]
 
 [[test]]
 name = "nim_live_tests"
-required-features = ["nim", "ocr", "fetch", "conformance"]
+required-features = ["nim", "ocr", "guardrail", "fetch", "conformance"]
 
 [[test]]
 name = "ocr_vl_live_tests"

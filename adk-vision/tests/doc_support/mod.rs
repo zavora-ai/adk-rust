@@ -29,6 +29,9 @@ pub struct Object {
     pub bbox: [f32; 4],
     #[serde(default)]
     pub personal: bool,
+    /// The personal part of the line, after its label.
+    #[serde(default)]
+    pub value: Option<String>,
 }
 
 impl Object {

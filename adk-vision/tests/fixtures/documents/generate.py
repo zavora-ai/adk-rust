@@ -26,18 +26,25 @@ draw = ImageDraw.Draw(image)
 objects = []
 
 
-def text(xy, value, font, label, personal=False):
+def text(xy, value, font, label, personal=None):
+    """Draws one line; `personal` is the part of it that is personal data, if any."""
     draw.text(xy, value, fill=(0, 0, 0), font=font)
     x0, y0, x1, y1 = draw.textbbox(xy, value, font=font)
-    objects.append({"label": label, "text": value, "bbox": [x0, y0, x1, y1], "personal": personal})
+    entry = {"label": label, "text": value, "bbox": [x0, y0, x1, y1], "personal": personal is not None}
+    if personal is not None:
+        entry["value"] = personal
+    objects.append(entry)
 
 
 text((80, 70), "INVOICE INV-4721", title, "title")
 text((80, 170), "Bill to", bold, "bill-to-heading")
-text((80, 210), "Amara Okafor", regular, "name", personal=True)
-text((80, 250), "14 Larch Street, Springfield 62704", regular, "address", personal=True)
-text((80, 290), "amara.okafor@example.com", regular, "email", personal=True)
-text((80, 330), "+1 415 555 0142", regular, "phone", personal=True)
+# Labelled the way a document schema names its personal fields.
+for y, (label, value) in zip(
+    (210, 250, 290, 330),
+    (("Name", "Amara Okafor"), ("Address", "14 Larch Street, Springfield 62704"),
+     ("Email", "amara.okafor@example.com"), ("Phone", "+1 415 555 0142")),
+):
+    text((80, y), f"{label}: {value}", regular, label.lower(), personal=value)
 text((620, 210), "Date: 2026-11-19", regular, "date")
 text((620, 250), "Due: 2026-12-19", regular, "due")
 
