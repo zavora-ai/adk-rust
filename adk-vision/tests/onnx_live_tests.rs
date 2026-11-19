@@ -10,6 +10,7 @@
 //! | Backend | Manifest | Proof |
 //! |---------|----------|-------|
 //! | `RfDetr` | `rf-detr-n` (threshold 0.5), `rf-detr-n-q4f16` (0.3) | every COCO ground-truth object found with IoU ≥ 0.75 |
+//! | `RfDetr` (instance masks) | `rf-detr-seg-preview` | every object's mask, its bounding box at IoU ≥ 0.75 |
 //! | `EfficientSam` | `efficientsam-ti` | drawn shapes segmented with mask IoU ≥ 0.9 |
 //! | `Sam2` | `sam2.1-hiera-tiny-q4` | the same |
 //! | `SigLip2` | `siglip2-base-patch16-256-quantized` | each caption ranks its photo first, and each photo its caption |
@@ -20,7 +21,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use adk_vision::onnx::{EfficientSam, OnnxOptions, RfDetr, Sam2, SigLip2};
+use adk_vision::onnx::{EfficientSam, OnnxExecutionProvider, OnnxOptions, RfDetr, Sam2, SigLip2};
 use adk_vision::{
     BBox, DecodeLimits, DecodedImage, DetectQuery, FetchConfig, InMemoryAcceptanceStore,
     ManifestSet, Mask, ModelFetcher, SegmentPrompt, Shape, SourceImage, VerifiedModel, VisionCx,
@@ -64,6 +65,17 @@ const SHEEP: Photo = Photo {
 const MIN_BOX_IOU: f32 = 0.75;
 /// The mask IoU every drawn shape must reach.
 const MIN_MASK_IOU: f32 = 0.9;
+
+/// The execution provider from `ADK_VISION_ONNX_EP` (`cpu`, `coreml`, `cuda`), the CPU when
+/// unset.
+fn options() -> OnnxOptions {
+    let provider = match std::env::var("ADK_VISION_ONNX_EP").as_deref() {
+        Ok("coreml") => OnnxExecutionProvider::CoreMl,
+        Ok("cuda") => OnnxExecutionProvider::Cuda,
+        _ => OnnxExecutionProvider::Cpu,
+    };
+    OnnxOptions::default().with_execution_provider(provider)
+}
 
 fn models() -> ManifestSet {
     ManifestSet::builtin().unwrap()
@@ -117,14 +129,14 @@ fn detector(id: &str, threshold: f32) -> Arc<RfDetr> {
     }
     let model = fetch(id);
     let started = Instant::now();
-    let d =
-        Arc::new(RfDetr::new(&model, &OnnxOptions::default()).unwrap().with_threshold(threshold));
+    let d = Arc::new(RfDetr::new(&model, &options()).unwrap().with_threshold(threshold));
     eprintln!("{id}: session loaded in {:?}", started.elapsed());
     cache.push((id.to_string(), Arc::clone(&d)));
     d
 }
 
 async fn detects_coco_objects(id: &str, threshold: f32) {
+    let segments = detector(id, threshold).segments();
     let runtime = VisionRuntime::builder().detector(detector(id, threshold)).build().unwrap();
     let cx = VisionCx::new();
     let mut timings = Vec::new();
@@ -146,6 +158,12 @@ async fn detects_coco_objects(id: &str, threshold: f32) {
             let Some((iou, b, score)) = best else {
                 panic!("{id} found no {label} in {}: {found:?}", p.id);
             };
+            if segments {
+                assert!(
+                    found.iter().all(|r| matches!(r.shape, Shape::Mask(_))),
+                    "{id} is a segmenting export and answered without masks"
+                );
+            }
             eprintln!(
                 "{id} | {} | {label} | truth [{x0:.1}, {y0:.1}, {x1:.1}, {y1:.1}] | found [{:.1}, {:.1}, {:.1}, {:.1}] | IoU {iou:.3} | score {:.3}",
                 p.id,
@@ -166,13 +184,21 @@ async fn detects_coco_objects(id: &str, threshold: f32) {
         timings.push(started.elapsed());
     }
     let (p50, p95) = percentiles(timings);
-    eprintln!("{id}: per image p50 {p50:?}, p95 {p95:?} (CPU)");
+    eprintln!("{id}: per image p50 {p50:?}, p95 {p95:?} ({})", options().execution_provider);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs RF-DETR Nano (108 MB) and three COCO photos"]
 async fn live_rf_detr_nano_finds_coco_ground_truth() {
     detects_coco_objects("rf-detr-n", 0.5).await;
+}
+
+/// RF-DETR-Seg's preview checkpoint: every detection is an instance mask, whose bounding box
+/// is held to the same IoU as a detector's box.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs RF-DETR-Seg preview (134 MB) and three COCO photos"]
+async fn live_rf_detr_seg_preview_finds_coco_ground_truth() {
+    detects_coco_objects("rf-detr-seg-preview", 0.5).await;
 }
 
 /// The 4-bit export scores the same objects lower (the bear at 0.43 against 0.97), so it
@@ -258,9 +284,10 @@ async fn segments_shapes(runtime: &VisionRuntime, id: &str) {
         timings.push(started.elapsed());
     }
     eprintln!(
-        "{id}: first call (encoder and decoder) {:?}; cached-image calls p50 {:?} (CPU)",
+        "{id}: first call (encoder and decoder) {:?}; cached-image calls p50 {:?} ({})",
         timings[0],
-        percentiles(timings[2..].to_vec()).0
+        percentiles(timings[2..].to_vec()).0,
+        options().execution_provider
     );
 }
 
@@ -269,7 +296,7 @@ fn efficient_sam() -> Arc<EfficientSam> {
     Arc::clone(CACHE.get_or_init(|| {
         let model = fetch("efficientsam-ti");
         let started = Instant::now();
-        let s = Arc::new(EfficientSam::new(&model, &OnnxOptions::default()).unwrap());
+        let s = Arc::new(EfficientSam::new(&model, &options()).unwrap());
         eprintln!("efficientsam-ti: sessions loaded in {:?}", started.elapsed());
         s
     }))
@@ -280,7 +307,7 @@ fn sam2() -> Arc<Sam2> {
     Arc::clone(CACHE.get_or_init(|| {
         let model = fetch("sam2.1-hiera-tiny-q4");
         let started = Instant::now();
-        let s = Arc::new(Sam2::new(&model, &OnnxOptions::default()).unwrap());
+        let s = Arc::new(Sam2::new(&model, &options()).unwrap());
         eprintln!("sam2.1-hiera-tiny-q4: sessions loaded in {:?}", started.elapsed());
         s
     }))
@@ -291,7 +318,7 @@ fn siglip() -> Arc<SigLip2> {
     Arc::clone(CACHE.get_or_init(|| {
         let model = fetch("siglip2-base-patch16-256-quantized");
         let started = Instant::now();
-        let s = Arc::new(SigLip2::new(&model, &OnnxOptions::default()).unwrap());
+        let s = Arc::new(SigLip2::new(&model, &options()).unwrap());
         eprintln!("siglip2-base-patch16-256-quantized: sessions loaded in {:?}", started.elapsed());
         s
     }))
@@ -352,7 +379,8 @@ async fn live_siglip2_ranks_the_right_photo_first() {
         assert_eq!(best, i, "photo {i} ranked caption {best} first");
     }
     eprintln!(
-        "siglip2: 3 images in {image_time:?}, 3 texts in {text_time:?} (CPU, one batch each)"
+        "siglip2: 3 images in {image_time:?}, 3 texts in {text_time:?} ({}, one batch each)",
+        options().execution_provider
     );
 }
 

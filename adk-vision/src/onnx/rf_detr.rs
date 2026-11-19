@@ -35,7 +35,7 @@ use crate::traits::{DetectQuery, Detector};
 /// | input | `pixel_values`, `input`, `images` (else the first input) |
 /// | boxes | `pred_boxes`, `dets`, `boxes` (else the output whose last dimension is 4) |
 /// | logits | `logits`, `labels`, `scores` |
-/// | masks | `pred_masks`, `masks` (RF-DETR-Seg) |
+/// | masks | `pred_masks`, `masks`, else any other rank-4 output (RF-DETR-Seg) |
 ///
 /// # Example
 ///
@@ -117,7 +117,13 @@ impl RfDetr {
                 ),
             ));
         };
-        let masks = named(&["pred_masks", "masks"]);
+        // RF-DETR's own export leaves the mask output unnamed: any other rank-4 output.
+        let masks = named(&["pred_masks", "masks"]).or_else(|| {
+            outputs
+                .iter()
+                .find(|(n, s)| s.len() == 4 && *n != boxes && *n != logits)
+                .map(|(n, _)| n.clone())
+        });
         let input_name = session.input_named(&["pixel_values", "input", "images"], 0)?;
         let normalize =
             Normalize::from_io(&manifest.io, (input.width, input.height), input.letterbox);
