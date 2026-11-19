@@ -35,6 +35,8 @@ uuid.workspace = true
 chrono.workspace = true
 futures.workspace = true
 tracing.workspace = true
+# Image fixtures are pinned by SHA-256 and verified on load.
+sha2.workspace = true
 # The online evaluator's worker, queue and JSONL store.
 tokio = { workspace = true, features = ["sync", "rt", "fs", "io-util"] }
 quick-xml = { version = "0.41", optional = true }

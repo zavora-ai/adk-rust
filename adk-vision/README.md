@@ -37,6 +37,7 @@ adk-vision = { version = "3.0.0", features = ["fetch"] }
 | (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor`, `VisionToolset`, `PersonRedactor`, the `vision.*` audit records |
 | `fetch` | `ModelFetcher`: Hugging Face downloads by revision through `hf-hub` 0.5, SHA-256 checked before load, `HF_HUB_OFFLINE` honoured |
 | `conformance` | The conformance suite and its per-trait test macros |
+| `eval` | `VisionEvalAgent`: any runtime task answering `adk-eval` cases in the vision tools' response form, in process or over the `cargo adk eval` protocol (`serve_eval_protocol`) |
 | `guardrail` | `ImagePrivacyGuardrail` (a `BeforeModelCallback`, an `adk-guardrail` `Guardrail` and `ToolGuardrail`) and `PersonalTextRedactor` over `PiiRedactor`'s byte ranges |
 | `onnx` | Local backends on ONNX Runtime: `RfDetr`, `EfficientSam`, `Sam2`, `SigLip2`; onnxruntime downloaded at build time |
 | `onnx-dynamic` | The same backends against an onnxruntime library loaded from `ORT_DYLIB_PATH` |
@@ -263,6 +264,8 @@ mod my_detector {
 - [Governed vision tools](../docs/official_docs/vision/governed-tools.md)
 - [Image privacy](../docs/official_docs/security/image-privacy.md)
 - [Cloud vision backends](../docs/official_docs/vision/cloud.md)
+- [Vision evals](../docs/official_docs/vision/evals.md)
+- [Vision benchmarks](../docs/official_docs/vision/benchmarks.md)
 - [Spec 3.7](../docs/design/spec-3.7-vision.md)
 
 ## License

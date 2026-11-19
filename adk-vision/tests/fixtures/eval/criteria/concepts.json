@@ -1,0 +1,6 @@
+{
+  "vision": {
+    "region_iou": 0.9,
+    "detection_recall": 1.0
+  }
+}

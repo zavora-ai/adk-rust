@@ -58,6 +58,10 @@ pub enum BenchError {
     /// An I/O error occurred.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// A vision benchmark could not load a backend or fixture, or a backend call failed.
+    #[error("Vision benchmark failed: {0}")]
+    Vision(String),
 }
 
 /// A specialized Result type for benchmark operations.

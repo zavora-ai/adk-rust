@@ -371,6 +371,7 @@ dependencies = [
  "libm",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror",
  "tokio",
  "tracing",
@@ -877,6 +878,7 @@ dependencies = [
 name = "adk-surface"
 version = "3.0.0"
 dependencies = [
+ "adk-artifact",
  "adk-core",
  "adk-harness",
  "adk-kernel",
@@ -894,6 +896,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "mime_guess",
+ "png",
  "reqwest",
  "rust-embed",
  "schemars",

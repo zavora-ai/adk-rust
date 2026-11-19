@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-11-19T17:29:41.598626Z",
+  "eval_set_id": "vision-shapes-segment",
+  "metrics": {
+    "mask_iou": {
+      "shapes_boxes": 0.9880044819787744
+    },
+    "pass_rate": {
+      "shapes_boxes": 1.0
+    },
+    "region_iou": {
+      "shapes_boxes": 0.9918272783087065
+    },
+    "count_accuracy": {
+      "shapes_boxes": 1.0
+    }
+  }
+}

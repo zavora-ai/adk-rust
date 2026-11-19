@@ -366,6 +366,9 @@
 1 adk-eval experiments doc
 # The tau2-bench and BFCL adapters: nothing in the workspace enables either feature.
 1 adk-bench tau2,bfcl
+# The vision benchmark harness, its adapter and example, and the recorded cloud rows (spec 3.7
+# §7.17), with the doctests; the weight-backed local rows run in the nightly vision-bench job.
+1 adk-bench vision,vision-cloud doc
 # `cargo adk bench` and its adk-bench dependency are off in cargo-adk's default build.
 1 cargo-adk bench
 # Agent Engine deployment client: golden DTO and mock contract tests.
@@ -451,6 +454,9 @@
 6 adk-vision ocr,fetch,conformance doc
 6 adk-vision ocr-vl,fetch,conformance doc
 6 adk-vision nim,conformance doc
+# Vision evals (spec 3.7 §7.16): the eval agent scoring the committed eval sets through adk-eval
+# in process and over the cargo adk eval protocol, with the doctests.
+6 adk-vision eval doc
 6 adk-site gen-astro
 # `awp verify` against the preview in the launch gate (spec 3.5 §7.8.1), without `migrate`.
 6 adk-site verify doc

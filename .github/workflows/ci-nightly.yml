@@ -17,6 +17,9 @@ name: CI Nightly
 #   • site-hosts, site-generators — adk-site's host adapters against MinIO, Azurite
 #     and an SSH server, the CalDAV driver against Radicale, and the real site
 #     generators under bubblewrap and the Windows restricted token (spec 3.5 §11).
+#   • vision-bench — every local adk-vision backend's latency, accuracy and cost on
+#     Apple Silicon and Linux CPU, published as an artifact, and each backend's eval
+#     scores gated against its committed baseline (spec 3.7 §7.17, Q10).
 #
 # This is an INFORMATIONAL tier: per the spec's required-check policy these jobs
 # are NOT branch-protection-required. A nightly failure is a signal to triage,
@@ -37,7 +40,7 @@ on:
         description: The job to run; `all` runs every job
         type: choice
         default: all
-        options: [all, feature-combinations, feature-coverage-isolated, supply-chain, durable-stores, integration-tests, harness-eval-live, site-soak, website-wordpress, website-soak, site-hosts, site-generators]
+        options: [all, feature-combinations, feature-coverage-isolated, supply-chain, durable-stores, integration-tests, harness-eval-live, site-soak, website-wordpress, website-soak, site-hosts, site-generators, vision-bench]
 
 permissions:
   contents: read
@@ -885,3 +888,77 @@ jobs:
       run: |
         echo "### ⏭️ harness eval (${{ matrix.provider }}) skipped" >> "$GITHUB_STEP_SUMMARY"
         echo "No ${{ matrix.secret }} configured." >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Vision benchmark ──────────────────────────────────────────
+  # Spec 3.7 §7.17 and Q10: every local adk-vision backend's cold load, latency at three
+  # input sizes, throughput, peak RSS, accuracy on the committed vision eval sets and cost,
+  # beside the recorded cloud rows, on Apple Silicon and Linux CPU. The table and its JSON
+  # are published as an artifact with the machine and versions; CUDA joins when a runner
+  # exists. Weights come through the fetcher, verified against the built-in manifest.
+  # Each local backend then runs its eval set through `cargo adk eval` against the
+  # baseline committed in adk-vision/tests/fixtures/eval/baselines.
+  vision-bench:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'vision-bench' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: apple-silicon
+            os: macos-latest
+            neutralize-wild: 'false'
+          - name: linux-cpu
+            os: ubuntu-24.04
+            neutralize-wild: 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      HF_HUB_CACHE: ${{ github.workspace }}/.hf-cache
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        cache-key: vision-bench-${{ matrix.name }}
+        neutralize-wild: ${{ matrix.neutralize-wild }}
+
+    - name: Build the benchmark and cargo-adk
+      run: |
+        cargo build --locked -p adk-bench --profile ci --features vision-onnx,vision-ocr,vision-cloud --example vision_bench
+        cargo build --locked -p cargo-adk --profile ci
+
+    - name: Benchmark every local backend and the recorded cloud rows
+      run: target/ci/examples/vision_bench run --out vision-bench-${{ matrix.name }}.md --json vision-bench-${{ matrix.name }}.json
+
+    - name: Gate each local backend against its baseline
+      shell: bash
+      run: |
+        eval_dir=adk-vision/tests/fixtures/eval
+        status=0
+        for row in rf-detr-n:generated-detect:detect rf-detr-n-q4f16:generated-detect:detect \
+                   efficientsam-ti:shapes-segment:segment sam2.1-hiera-tiny-q4:shapes-segment:segment \
+                   pp-ocrv6-tiny:documents-read:read pp-ocrv6-small:documents-read:read; do
+          IFS=: read -r backend set criteria <<< "$row"
+          target/ci/cargo-adk adk eval "$eval_dir/$set.test.json" \
+            --criteria "$eval_dir/criteria/$criteria.json" \
+            --agent-cmd "target/ci/examples/vision_bench serve $backend" \
+            --baseline "$eval_dir/baselines/$backend.$set.json" \
+            --check-regression --tolerance 0.02 || status=1
+        done
+        exit $status
+
+    - name: Publish the table
+      if: always()
+      shell: bash
+      run: |
+        if [ -f vision-bench-${{ matrix.name }}.md ]; then
+          { echo "### Vision benchmark (${{ matrix.name }})"; cat vision-bench-${{ matrix.name }}.md; } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+    - name: Upload the table
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: vision-bench-${{ matrix.name }}
+        path: vision-bench-${{ matrix.name }}.*
+        if-no-files-found: ignore

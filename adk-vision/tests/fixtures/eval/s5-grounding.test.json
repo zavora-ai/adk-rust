@@ -1,0 +1,256 @@
+{
+  "eval_set_id": "vision-s5-grounding",
+  "name": "S5 screen, twelve targets",
+  "description": "The 3024x1964 screenshot of a 1512x982-point display at device pixel ratio 2: every located widget's centre must fall inside its target (spec 3.7 S5).",
+  "eval_cases": [
+    {
+      "eval_id": "s5_targets",
+      "description": "Locate the twelve labelled widgets",
+      "conversation": [
+        {
+          "invocation_id": "t0",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "image": {
+                  "path": "../s5/s5-screen.png",
+                  "digest": "sha256:9738662ca11f7037e91b9226ab692bc797661af8519aa721008b9593a159f84f"
+                }
+              },
+              {
+                "text": "This is a screenshot of a form. Locate each of these labelled widgets: menu, search, avatar, name-field, email-field, phone-field, country, notes, cancel, save, help, status. Label each region with the widget's name exactly as given (for example `name-field`)."
+              }
+            ]
+          },
+          "expected_vision": {
+            "regions": [
+              {
+                "label": "menu",
+                "box": [
+                  24,
+                  18,
+                  220,
+                  86
+                ]
+              },
+              {
+                "label": "search",
+                "box": [
+                  980,
+                  30,
+                  1880,
+                  110
+                ]
+              },
+              {
+                "label": "avatar",
+                "box": [
+                  2860,
+                  20,
+                  2990,
+                  112
+                ]
+              },
+              {
+                "label": "name-field",
+                "box": [
+                  400,
+                  300,
+                  1300,
+                  380
+                ]
+              },
+              {
+                "label": "email-field",
+                "box": [
+                  400,
+                  430,
+                  1300,
+                  510
+                ]
+              },
+              {
+                "label": "phone-field",
+                "box": [
+                  400,
+                  560,
+                  1300,
+                  640
+                ]
+              },
+              {
+                "label": "country",
+                "box": [
+                  1500,
+                  300,
+                  2100,
+                  380
+                ]
+              },
+              {
+                "label": "notes",
+                "box": [
+                  400,
+                  700,
+                  2100,
+                  1100
+                ]
+              },
+              {
+                "label": "cancel",
+                "box": [
+                  1660,
+                  1180,
+                  1880,
+                  1260
+                ]
+              },
+              {
+                "label": "save",
+                "box": [
+                  1920,
+                  1180,
+                  2100,
+                  1260
+                ]
+              },
+              {
+                "label": "help",
+                "box": [
+                  40,
+                  1880,
+                  160,
+                  1950
+                ]
+              },
+              {
+                "label": "status",
+                "box": [
+                  2500,
+                  1880,
+                  2990,
+                  1950
+                ]
+              }
+            ],
+            "targets": [
+              {
+                "label": "menu",
+                "box": [
+                  24,
+                  18,
+                  220,
+                  86
+                ]
+              },
+              {
+                "label": "search",
+                "box": [
+                  980,
+                  30,
+                  1880,
+                  110
+                ]
+              },
+              {
+                "label": "avatar",
+                "box": [
+                  2860,
+                  20,
+                  2990,
+                  112
+                ]
+              },
+              {
+                "label": "name-field",
+                "box": [
+                  400,
+                  300,
+                  1300,
+                  380
+                ]
+              },
+              {
+                "label": "email-field",
+                "box": [
+                  400,
+                  430,
+                  1300,
+                  510
+                ]
+              },
+              {
+                "label": "phone-field",
+                "box": [
+                  400,
+                  560,
+                  1300,
+                  640
+                ]
+              },
+              {
+                "label": "country",
+                "box": [
+                  1500,
+                  300,
+                  2100,
+                  380
+                ]
+              },
+              {
+                "label": "notes",
+                "box": [
+                  400,
+                  700,
+                  2100,
+                  1100
+                ]
+              },
+              {
+                "label": "cancel",
+                "box": [
+                  1660,
+                  1180,
+                  1880,
+                  1260
+                ]
+              },
+              {
+                "label": "save",
+                "box": [
+                  1920,
+                  1180,
+                  2100,
+                  1260
+                ]
+              },
+              {
+                "label": "help",
+                "box": [
+                  40,
+                  1880,
+                  160,
+                  1950
+                ]
+              },
+              {
+                "label": "status",
+                "box": [
+                  2500,
+                  1880,
+                  2990,
+                  1950
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "tags": [
+        "describe",
+        "grounding"
+      ]
+    }
+  ]
+}

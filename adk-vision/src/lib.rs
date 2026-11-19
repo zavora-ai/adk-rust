@@ -22,6 +22,7 @@
 //! | (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor` |
 //! | `fetch` | `ModelFetcher`: Hugging Face downloads by revision, SHA-256 checked before load, `HF_HUB_OFFLINE` honoured |
 //! | `conformance` | `conformance`: the suite every backend runs, and its test macros |
+//! | `eval` | `eval`: any runtime task as an `adk-eval` agent, in process or behind `cargo adk eval --agent-cmd` |
 //! | `guardrail` | `ImagePrivacyGuardrail` on model calls, tool results and user input, and `PersonalTextRedactor` (OCR words matched by `adk-guardrail`'s PII patterns) |
 //! | `onnx` | `onnx`: RF-DETR, EfficientSAM, SAM 2.1 and SigLIP 2 on ONNX Runtime, the runtime downloaded at build time |
 //! | `onnx-dynamic` | The same backends against an onnxruntime library loaded from `ORT_DYLIB_PATH` |
@@ -101,6 +102,8 @@ mod digest;
 mod edit;
 mod egress;
 mod error;
+#[cfg(feature = "eval")]
+pub mod eval;
 #[cfg(feature = "fetch")]
 mod fetch;
 mod geometry;

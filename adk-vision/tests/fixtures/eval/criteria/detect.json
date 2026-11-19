@@ -1,0 +1,9 @@
+{
+  "vision": {
+    "iou_threshold": 0.5,
+    "region_iou": 0.75,
+    "detection_precision": 1.0,
+    "detection_recall": 1.0,
+    "detection_ap": 0.9
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "timestamp": "2026-11-19T17:29:47.066872Z",
+  "eval_set_id": "vision-documents-read",
+  "metrics": {
+    "ocr_word_accuracy": {
+      "report_page": 1.0,
+      "invoice": 1.0
+    },
+    "ocr_char_accuracy": {
+      "report_page": 1.0,
+      "invoice": 1.0
+    },
+    "field_normalized_match": {
+      "invoice": 1.0
+    },
+    "pass_rate": {
+      "invoice": 1.0,
+      "report_page": 1.0
+    }
+  }
+}

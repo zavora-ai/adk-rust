@@ -17,7 +17,7 @@ exclude = ["tests/"]
 [package.metadata.docs.rs]
 # docs.rs has no CUDA or Metal toolchain, so the GPU features are left out; ort-sys skips
 # linking on docs.rs.
-features = ["fetch", "conformance", "guardrail", "onnx", "ocr", "ocr-vl", "cloud", "nim", "sam", "mistralrs"]
+features = ["fetch", "conformance", "eval", "guardrail", "onnx", "ocr", "ocr-vl", "cloud", "nim", "sam", "mistralrs"]
 
 # Spec 3.7 §7.1: media, geometry, manifests, the traits, `VisionRuntime`, the egress boundary
 # and the deterministic `Editor` always build; each runtime and provider is a feature, added
@@ -28,6 +28,9 @@ default = []
 fetch = ["dep:hf-hub", "dep:ureq"]
 # The conformance suite every backend runs, and its test macros (§7.18).
 conformance = ["tokio/rt-multi-thread"]
+# `VisionEvalAgent`: a runtime task answering `adk-eval` cases in the governed tools' response
+# form, in process or over the `cargo adk eval` agent protocol (§7.16).
+eval = ["dep:futures", "tokio/io-util"]
 # `ImagePrivacyGuardrail` as an adk-guardrail `Guardrail` and `ToolGuardrail` and a
 # `BeforeModelCallback`, and `PersonalTextRedactor` over `PiiRedactor`'s byte ranges (§7.8).
 guardrail = ["dep:adk-guardrail", "dep:base64"]
@@ -121,6 +124,8 @@ adk-vision = { path = ".", features = ["conformance"] }
 # scripted model; the cloud contract tests replay recorded responses through the real
 # provider clients.
 adk-agent = { path = "../adk-agent" }
+# The eval agent scored by `adk-eval`'s vision criteria, in process.
+adk-eval = { path = "../adk-eval" }
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic", "gemini", "muse", "openai"] }
 adk-runner = { path = "../adk-runner" }
 adk-session = { path = "../adk-session" }
@@ -134,6 +139,10 @@ wiremock = "0.6"
 [[test]]
 name = "fetch_tests"
 required-features = ["fetch"]
+
+[[test]]
+name = "eval_agent_tests"
+required-features = ["eval"]
 
 [[test]]
 name = "privacy_guardrail_tests"
