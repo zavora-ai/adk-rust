@@ -270,9 +270,9 @@
      "value": "347.50",
      "box": [
       580,
-      588,
-      702,
-      614
+      570,
+      713,
+      612
      ],
      "personal": false,
      "hard": "handwriting"
@@ -792,10 +792,10 @@
      "name": "total",
      "value": "29.80",
      "box": [
-      387.0,
-      433,
-      480.0,
-      464
+      360,
+      416,
+      465,
+      447
      ],
      "personal": false,
      "hard": "handwriting"
@@ -961,10 +961,10 @@
      "name": "total",
      "value": "32.80",
      "box": [
-      386.0,
-      433,
-      480.0,
-      454
+      360,
+      416,
+      457,
+      450
      ],
      "personal": false,
      "hard": "handwriting"

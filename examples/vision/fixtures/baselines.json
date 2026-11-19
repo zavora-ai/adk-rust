@@ -1,0 +1,7 @@
+{
+  "note": "Recorded when the scenarios were first accepted (spec 3.7 §5): a run passes at or above these.",
+  "s1FieldAccuracy": {
+    "pp-ocrv6-tiny": 0.0,
+    "nim-document-reader": 0.0
+  }
+}

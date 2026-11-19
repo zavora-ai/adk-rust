@@ -16,6 +16,7 @@ SCOPED_JOBS = [
     "templates",
     "kernel-scenarios",
     "website-scenarios",
+    "vision-scenarios",
     "windows",
     "surface-e2e",
 ]
@@ -116,6 +117,7 @@ class CiScopeTests(unittest.TestCase):
     def test_an_example_change_runs_only_that_examples_scenarios(self) -> None:
         self.assertEqual(jobs("examples/website/src/main.rs"), ["website-scenarios"])
         self.assertEqual(jobs("examples/harness_kernel/Cargo.toml"), ["kernel-scenarios"])
+        self.assertEqual(jobs("examples/vision/src/main.rs"), ["vision-scenarios"])
         self.assertEqual(jobs("examples/desktop_audio/src/main.rs"), [])
 
     def test_an_example_runs_when_a_crate_it_names_by_path_changes(self) -> None:
@@ -150,6 +152,7 @@ class CiScopeTests(unittest.TestCase):
         )
         self.assertEqual(rows["kernel-scenarios"], {"examples/harness_kernel"})
         self.assertEqual(rows["website-scenarios"], {"examples/website"})
+        self.assertEqual(rows["vision-scenarios"], {"examples/vision"})
 
 
 if __name__ == "__main__":

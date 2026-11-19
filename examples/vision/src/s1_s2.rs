@@ -34,7 +34,7 @@ use crate::replay::{
 };
 
 /// A block read below this goes to the cloud as its crop.
-pub const THRESHOLD: f32 = 0.85;
+pub const THRESHOLD: f32 = 0.8;
 /// Pixels of context kept around an escalated block.
 pub const MARGIN: f32 = 8.0;
 const LOCAL: &str = "pp-ocrv6-tiny";
@@ -103,9 +103,14 @@ fn extract(page: &Page, digest: Digest, answer: &Value) -> Vec<Extracted> {
         .iter()
         .map(|field| {
             let want = field.bbox();
+            // A block that covers the field, or one centred on it: a reader may split a
+            // scrawled value into pieces.
             let hits: Vec<&Value> = blocks
                 .iter()
-                .filter(|b| bbox_of(&b["box"]).is_some_and(|b| covered(&want, &b) >= 0.5))
+                .filter(|b| {
+                    bbox_of(&b["box"])
+                        .is_some_and(|b| covered(&want, &b) >= 0.5 || centred(&b, &want))
+                })
                 .collect();
             let read = hits
                 .iter()
@@ -132,6 +137,12 @@ fn extract(page: &Page, digest: Digest, answer: &Value) -> Vec<Extracted> {
             }
         })
         .collect()
+}
+
+/// Whether `inner`'s centre lies on `field`, within 10 px.
+fn centred(inner: &BBox, field: &BBox) -> bool {
+    let [x, y] = inner.center();
+    x >= field.x0 - 10.0 && x <= field.x1 + 10.0 && y >= field.y0 - 10.0 && y <= field.y1 + 10.0
 }
 
 /// One CSV per document kind: each value with its page, region and backend.
@@ -394,12 +405,14 @@ pub async fn s2(shared: &Shared) -> Result<Checks> {
         };
         let Some(field) = hard.iter().find(|f| f.page == page.file) else { return false };
         let (w, h) = receipt.chain.output_size();
+        let sent = receipt.chain.bbox_to_source(&BBox::new(0.0, 0.0, w as f32, h as f32));
         let want = page.fields.iter().find(|f| f.name == field.field).map(|f| f.bbox());
-        let inside = want.is_some_and(|b| {
-            let mapped = receipt.chain.bbox_to_target(&b);
-            covered(&mapped, &BBox::new(0.0, 0.0, w as f32, h as f32)) >= 0.9
+        let on_field = want.is_some_and(|b| {
+            centred(&sent, &b)
+                && sent.width() <= b.width() + 2.0 * MARGIN + 2.0
+                && sent.height() <= b.height() + 2.0 * MARGIN + 2.0
         });
-        inside && w < page.width / 2 && h < page.height / 4
+        on_field && w < page.width / 2 && h < page.height / 4
     });
     checks.check("each sent image is its field's crop plus margin, never the page", crops);
 

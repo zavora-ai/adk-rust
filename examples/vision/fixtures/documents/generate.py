@@ -15,6 +15,7 @@ for identity cards, the portrait box.
 """
 
 import json
+import math
 import os
 import random
 from pathlib import Path
@@ -48,8 +49,8 @@ ITEMS = ["Torque sensor", "Fiducial card", "Seal kit", "Gasket set", "Cable ties
 # The draw of each hard field, chosen so PP-OCRv6 tiny reads it as one block below the
 # desk's 0.8 threshold while every printed block on every page stays above 0.85.
 SEEDS = json.loads(os.environ.get("DOC_SEEDS", "null")) or {
-    "invoice-05.png": 0, "invoice-09.png": 0, "receipt-03.png": 0, "receipt-07.png": 0,
-    "contract-04.png": 0,
+    "invoice-05.png": 0, "invoice-09.png": 15, "receipt-03.png": 4, "receipt-07.png": 26,
+    "contract-04.png": 18,
 }
 GOODS = ["Bread", "Coffee", "Notebook", "Batteries", "Tape", "Apples", "Soap", "Pens", "Rice"]
 
@@ -107,13 +108,24 @@ class Page:
         return box
 
     def stamp(self, word, name):
-        """A red rubber stamp, turned and half transparent, over the field `name`."""
+        """A red rubber stamp, turned and half transparent, over the field `name`: a word in a
+        frame, or with no word a company seal's double ring."""
         rnd = random.Random(f"{word}:{SEEDS.get(self.file, 0)}")
-        layer = Image.new("RGBA", (420, 160), (0, 0, 0, 0))
-        d = ImageDraw.Draw(layer)
-        d.rectangle([6, 6, 413, 153], outline=(200, 20, 30, 225), width=10)
-        w = d.textlength(word, font=STAMP)
-        d.text(((420 - w) / 2, 34), word, fill=(200, 20, 30, 215), font=STAMP)
+        if word:
+            layer = Image.new("RGBA", (420, 160), (0, 0, 0, 0))
+            d = ImageDraw.Draw(layer)
+            d.rectangle([6, 6, 413, 153], outline=(200, 20, 30, 225), width=10)
+            w = d.textlength(word, font=STAMP)
+            d.text(((420 - w) / 2, 34), word, fill=(200, 20, 30, 215), font=STAMP)
+        else:
+            layer = Image.new("RGBA", (150, 150), (0, 0, 0, 0))
+            d = ImageDraw.Draw(layer)
+            d.ellipse([4, 4, 146, 146], outline=(40, 60, 170, 210), width=9)
+            d.ellipse([26, 26, 124, 124], outline=(40, 60, 170, 210), width=6)
+            for k in range(8):
+                a = k * 3.14159 / 4
+                cx, cy = 75 + 50 * math.cos(a), 75 + 50 * math.sin(a)
+                d.regular_polygon((cx, cy, 6), 5, fill=(40, 60, 170, 210))
         layer = layer.rotate(rnd.uniform(-20, -6), expand=True, resample=Image.BICUBIC)
         field = next(f for f in self.fields if f["name"] == name)
         x0, y0, x1, y1 = field["box"]
@@ -230,7 +242,7 @@ def contract(n, i):
     page.personal.append(email)
     page.text((60, 900), "Signed for Zavoria Parts Ltd", SMALL)
     if n == 4:
-        page.stamp("APPROVED", "fee")
+        page.stamp("PAID", "fee")
     return page.save()
 
 

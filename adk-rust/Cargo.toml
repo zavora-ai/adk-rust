@@ -78,6 +78,8 @@ full = [
     "adk-kernel?/proc-baselines",
     # The AWP 2.0 website product (spec 3.5 §7.1, D-14).
     "website",
+    # Local-first perception, pure Rust (spec 3.7 §8.3, Q11).
+    "vision",
 ]
 
 # Gemini Enterprise Agent Platform — every Vertex/EAP integration except
@@ -209,6 +211,16 @@ surface = ["dep:adk-surface", "adk-surface/web", "adk-cli?/surface"]
 # releases, hosts), the AWP edge on the server and AWP signing; with `cli`, `adk-rust site`
 # and `adk-rust awp`. In `full`.
 website = ["dep:adk-website", "dep:adk-site", "harness-kernel", "awp", "adk-awp/signing", "server", "adk-server/awp", "adk-cli?/website"]
+
+# Local-first perception (spec 3.7 §8.3, Q11): `adk_rust::vision` (adk-vision) with the model
+# fetcher, the cloud describers (Gemini, Claude, Muse, NVIDIA NIM), Meta `sam-3.1`'s client and
+# the image privacy guardrail; with `harness`, the vision pack (`pack_vision`); with `cli`,
+# `adk-rust vision`. Pure Rust, no native runtime: in `full`.
+vision = ["dep:adk-vision", "adk-vision/fetch", "adk-vision/cloud", "adk-vision/nim", "adk-vision/sam", "adk-vision/guardrail", "adk-harness?/vision", "adk-cli?/vision"]
+# The on-device backends (spec 3.7 §7.6, Q11): RF-DETR, EfficientSAM, SAM 2.1 and SigLIP 2 on
+# ONNX Runtime (downloaded at build time), PP-OCRv6, and PaddleOCR-VL-1.6 on Candle. Native
+# runtimes and a heavy build: in no tier.
+vision-local = ["vision", "adk-vision/onnx", "adk-vision/ocr", "adk-vision/ocr-vl", "adk-cli?/vision-local"]
 
 # Managed agent runtime (feature-gated, experimental). The provider features below also
 # let its `DefaultModelResolver` construct that provider's models.
@@ -427,6 +439,7 @@ adk-kernel = { workspace = true, optional = true }
 adk-surface = { workspace = true, optional = true }
 adk-site = { workspace = true, optional = true }
 adk-website = { workspace = true, optional = true }
+adk-vision = { workspace = true, optional = true }
 adk-mistralrs = { workspace = true, optional = true }
 
 # Re-export common dependencies

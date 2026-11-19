@@ -470,6 +470,8 @@
 //! | `harness` | The governed, durable harness agent (`adk-harness`) | enterprise |
 //! | `harness-kernel` | The agent kernel, the harness's always-on form (`adk-kernel`) | enterprise |
 //! | `website` | The AWP website product (`adk-website`, `adk-site`) | full |
+//! | `vision` | Local-first perception (`adk-vision`): regions, manifests, the egress gate, cloud describers, `sam-3.1`, the image privacy guardrail | full |
+//! | `vision-local` | `vision` + the on-device backends: RF-DETR, EfficientSAM, SAM 2.1, SigLIP 2, PP-OCRv6, PaddleOCR-VL-1.6 | opt-in |
 //! | `surface` | Agent surfaces: the engine and the web home (`adk-surface`) | opt-in |
 //! | `harness-browser`, `harness-computer-use`, `harness-payments`, `harness-voice`, `harness-managed` | Harness packs | opt-in |
 //! | `cli` | CLI launcher with serve mode | opt-in |
@@ -1230,6 +1232,42 @@ pub mod harness {
 #[cfg_attr(docsrs, doc(cfg(feature = "harness-kernel")))]
 pub mod kernel {
     pub use adk_kernel::*;
+}
+
+/// Local-first perception for agents (spec 3.7).
+///
+/// Everything `adk-vision` exports: artifact-backed images, regions in source pixels with
+/// their transform chains, model manifests pinned by revision and SHA-256, the perception
+/// traits and [`VisionRuntime`](vision::VisionRuntime), the [`EgressGate`](vision::EgressGate)
+/// a remote backend's every image passes, the governed [`VisionToolset`](vision::VisionToolset),
+/// the cloud describers and Meta `sam-3.1`. With `harness`, `pack_vision` gives a harness the
+/// vision pack.
+///
+/// Available with feature: `vision` (included in `full`); the on-device backends with
+/// `vision-local`
+///
+/// # Example
+///
+/// ```rust
+/// use adk_rust::vision::{BBox, DecodedImage, SourceImage, Transform, TransformChain};
+///
+/// // A 3024×1964 screenshot, cropped and downscaled before a model sees it: a box the model
+/// // answers in its own pixels maps back to the screenshot's.
+/// let chain = TransformChain::new(3024, 1964)
+///     .then(Transform::Crop { x: 1000, y: 500, width: 800, height: 600 })
+///     .unwrap()
+///     .then(Transform::Resize { width: 400, height: 300 })
+///     .unwrap();
+/// let source = chain.bbox_to_source(&BBox::new(10.0, 10.0, 110.0, 60.0));
+/// assert_eq!(source, BBox::new(1020.0, 520.0, 1220.0, 620.0));
+///
+/// let page = SourceImage::from_pixels(DecodedImage::filled(64, 64, [255; 4])).unwrap();
+/// assert!(page.digest().to_string().starts_with("sha256:"));
+/// ```
+#[cfg(feature = "vision")]
+#[cfg_attr(docsrs, doc(cfg(feature = "vision")))]
+pub mod vision {
+    pub use adk_vision::*;
 }
 
 /// Agent surfaces: the engine every surface runs on, and the web home (spec 3.3).
