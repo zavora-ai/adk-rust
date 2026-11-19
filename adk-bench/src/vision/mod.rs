@@ -554,9 +554,13 @@ impl VisionBenchReport {
                 .join(", ");
             let cost =
                 row.cost_per_1k_images_usd.map_or("—".to_string(), |usd| format!("${usd:.2}"));
+            let mut notes = row.notes.clone();
+            if let Some(runs) = row.latency.first().map(|l| l.runs).filter(|r| *r != c.runs) {
+                notes.push(format!("{runs} timed runs per size"));
+            }
             let mut mode = row.mode.label().to_string();
-            if !row.notes.is_empty() {
-                mode = format!("{mode} ({})", row.notes.join("; "));
+            if !notes.is_empty() {
+                mode = format!("{mode} ({})", notes.join("; "));
             }
             let _ = writeln!(
                 out,

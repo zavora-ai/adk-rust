@@ -54,43 +54,61 @@ pub struct LocalSpec {
     pub scores: &'static [&'static str],
 }
 
-/// The local backends compiled into this build.
-pub fn local_specs() -> Vec<LocalSpec> {
-    let mut specs = Vec::new();
-    #[cfg(feature = "vision-onnx")]
-    specs.extend([
+/// Every local backend, and whether this build compiles it.
+const LOCAL: &[(LocalSpec, bool)] = &[
+    (
         LocalSpec { name: "rf-detr-n", workload: "generated-detect", scores: DETECT_SCORES },
+        cfg!(feature = "vision-onnx"),
+    ),
+    (
         LocalSpec { name: "rf-detr-n-q4f16", workload: "generated-detect", scores: DETECT_SCORES },
+        cfg!(feature = "vision-onnx"),
+    ),
+    (
         LocalSpec { name: "efficientsam-ti", workload: "shapes-segment", scores: SEGMENT_SCORES },
+        cfg!(feature = "vision-onnx"),
+    ),
+    (
         LocalSpec {
             name: "sam2.1-hiera-tiny-q4",
             workload: "shapes-segment",
             scores: SEGMENT_SCORES,
         },
+        cfg!(feature = "vision-onnx"),
+    ),
+    (
         LocalSpec {
             name: "siglip2-base-patch16-256-quantized",
             workload: "captioned-fixtures",
             scores: &[],
         },
-    ]);
-    #[cfg(feature = "vision-ocr")]
-    specs.extend([
+        cfg!(feature = "vision-onnx"),
+    ),
+    (
         LocalSpec { name: "pp-ocrv6-tiny", workload: "documents-read", scores: READ_SCORES },
+        cfg!(feature = "vision-ocr"),
+    ),
+    (
         LocalSpec { name: "pp-ocrv6-small", workload: "documents-read", scores: READ_SCORES },
-    ]);
-    #[cfg(feature = "vision-ocr-vl")]
-    specs.push(LocalSpec {
-        name: "paddleocr-vl-1.6-cpu",
-        workload: "documents-read",
-        scores: READ_SCORES,
-    });
-    #[cfg(feature = "vision-ocr-vl-metal")]
-    specs.push(LocalSpec {
-        name: "paddleocr-vl-1.6-metal",
-        workload: "documents-read",
-        scores: READ_SCORES,
-    });
-    specs
+        cfg!(feature = "vision-ocr"),
+    ),
+    (
+        LocalSpec { name: "paddleocr-vl-1.6-cpu", workload: "documents-read", scores: READ_SCORES },
+        cfg!(feature = "vision-ocr-vl"),
+    ),
+    (
+        LocalSpec {
+            name: "paddleocr-vl-1.6-metal",
+            workload: "documents-read",
+            scores: READ_SCORES,
+        },
+        cfg!(feature = "vision-ocr-vl-metal"),
+    ),
+];
+
+/// The local backends compiled into this build.
+pub fn local_specs() -> Vec<LocalSpec> {
+    LOCAL.iter().filter(|(_, built)| *built).map(|(spec, _)| *spec).collect()
 }
 
 /// The built-in manifest entries a backend loads, as report rows.

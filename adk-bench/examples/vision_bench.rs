@@ -17,8 +17,10 @@
 //!
 //! `run` options: `--backends a,b` (default: every local backend, plus the recorded cloud
 //! rows with `vision-cloud`), `--runs N`, `--warmup N`, `--edges 512,1024,2048`,
-//! `--no-recorded`, and `--live claude,nvidia,sam` for one live call per named provider
-//! (`ANTHROPIC_API_KEY`, `NVIDIA_API_KEY`, `META_API_KEY`). Logs go to stderr.
+//! `--no-recorded`, `--live claude,nvidia,sam` for one live call per named provider
+//! (`ANTHROPIC_API_KEY`, `NVIDIA_API_KEY`, `META_API_KEY`), and `--append report.json` to add
+//! this run's rows to an earlier report, so a slow backend can run with fewer iterations.
+//! Logs go to stderr.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -170,6 +172,13 @@ async fn run(args: &[String]) -> Result<(), String> {
         }
     }
 
+    if let Some(path) = option(args, "--append") {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+        let earlier: VisionBenchReport =
+            serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+        config = earlier.config;
+        rows = earlier.rows.into_iter().chain(rows).collect();
+    }
     let mut report = VisionBenchReport::new(runtime_versions(MachineInfo::detect()), rows);
     report.config = config;
     let markdown = report.to_markdown();
