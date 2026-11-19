@@ -1,0 +1,70 @@
+{
+  "path": "/v1/messages",
+  "request": {
+    "max_tokens": 300,
+    "messages": [
+      {
+        "content": [
+          {
+            "type": "image",
+            "source": {
+              "type": "base64",
+              "data": "{{image:base64:sha256:7ce0b9b26d561e543cd67227e81ad142206b8121cc8071c7614e0aa7f80eba2f:31116}}",
+              "media_type": "image/png"
+            }
+          },
+          {
+            "type": "text",
+            "text": "What kind of document is this?"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "model": "claude-haiku-5-5",
+    "stream": false,
+    "cache_control": {
+      "type": "ephemeral"
+    }
+  },
+  "status": 200,
+  "contentType": "application/json",
+  "response": {
+    "model": "claude-haiku-5-5",
+    "id": "msg_011ChCgd7yM3v3V8YSeyfqdp",
+    "type": "message",
+    "role": "assistant",
+    "content": [
+      {
+        "type": "thinking",
+        "thinking": "",
+        "signature": "CAQS5QcKEAgUGAI4AUIIdGhpbmtpbmcSDGFrF25qQmgFuKEv/hoMXE5ttFInz+7xoecqIjBK88kETUBJ7f/+Q8UHcJ9t5ZpKgGuhFlmcO95S8QD6SedDxEbelXfrdqw2FupePOwqggcL4Hd73PyxZvPmQMoCYSQE1SHt/n7/6Q6ATB57Ck3NOmP3kWU74XfZeLYZlh0BA5SJkLp0TVEXiJIHKSnxlawlBpubSKqNV5u+1z7S47mXH/RMkIB+zxM3BrNtZsjTqnO5lH22fZpnBynzvI+IYTprcvvI8TQK34tJ8c71OunttS9SgWwQwOhpB2LFRHbHpWXVNFUUpPk+RQdM3sGBIrb+2qJMdfTmtJHIT/Za5/AtbQqy/VqgfoxX0w6HF/PNL594manEp0JRUqJIAmED9AJEcdEDK38Qokop6t6YcU3z5IzhtHhNfvP24+IHOXL/RlHNuJn5ThkRCDDtHF5ygHwc/NM1eaQXDp2NAn6/2naXh/W4lM69oVqLlkWk4z3vk6lwMtz6R8EkX+KRXMKf38xRA0M7WVADtfVew3XWx7Kf/BSoTD7UpBJZI12mxq+bCb60j+uvemwjnXJ/9uDYv5XwldavaJcwjJizFe/u/UaQFFpJRBHYqLfdqxgoejeUxlh4ZYzPHLq3dJKJRNhl1oXOrSN2wNkU3iA4RJGGPRJoaEAUaM8auOFc5OVxG/b8DtjHSdSC4W/uWuqSlysS20Ds9f/ynn15hXtDyGfW61LX6hymB7NwtvUrbrR2rPlE10x1SwuKXDyk/NizgUKGRou9nbokFcZmNkCq+lxugTK1rtuJ+SQVI1l1FuRO81u7GEBb6sR8dzwzSc4e1xZKCXpRvQ6APuwenv9InMr/wXaXZZIIONnuyuzVjbHahHHPfqiDEIm8z0VCP6JEaEymVZuje+lrbheqZkXub+6ZJ1mye6Z+1JKHC7TD/ZNSjP0XNcxwxFvlU3Ygmzhi2l29+vRIppMiz2edyy2XdUmDfVbQPbfBnkm5nAY6kSTtGuDvBbAAcLOphKLzqaXcarS8tjnaLUkxDp37gYscN5WPJEmtSg6Js9EORo+s1OOTS1qipT4aCPy5wIOTkEx+cD4M3F2UY+kh9YtJnTWblyR1vnOw2rC6xEDZ+3FtOxbfh7Eo2TgyY8VcGeU17A4pOvGwCAEZ/23NyVRH4g8pXxYvWJqmCDJT46LKqxi79X1wTyyT7yB9szvALZLflYIiRb8YDx/yZUg+Ue+LKTCjJXTcs+ZPcm1JEiMAA7IXhNllqYouph0Dr4ywajPUCTYytn6IJg2A+6uZ4Z8VoSjpO8SzwJegTJFUGAE="
+      },
+      {
+        "type": "text",
+        "text": "This is a **specimen identity card** from the \"Republic of Zavoria,\" a fictional country. It's a sample for testing, not a real government-issued document.\n\nThe card has these fields:\n- **Portrait photo** (replaced by a black box and labeled \"Generated portrait, not a real person\")\n- **Name**, **Email**, **Phone**, and **ID number** (all redacted)\n- **Expiry year:** 2031\n\nThe footer says \"Specimen for testing. All personal data"
+      }
+    ],
+    "container": null,
+    "stop_reason": "max_tokens",
+    "stop_sequence": null,
+    "stop_details": null,
+    "usage": {
+      "input_tokens": 364,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 0
+      },
+      "output_tokens": 300,
+      "output_tokens_details": {
+        "thinking_tokens": 148
+      },
+      "service_tier": "standard",
+      "inference_geo": "global",
+      "speed": "standard"
+    },
+    "diagnostics": null
+  }
+}

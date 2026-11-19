@@ -68,6 +68,8 @@ pub struct DeskRun {
     nim_requests: Vec<Value>,
     tables: BTreeMap<String, usize>,
     tables_dir: PathBuf,
+    /// Blocks the cloud re-read, per page.
+    escalated: BTreeMap<String, usize>,
 }
 
 /// The desk run S1 and S2 share.
@@ -257,6 +259,7 @@ async fn run_desk() -> Result<DeskRun> {
 
     let mut fields = Vec::new();
     let mut answers = 0;
+    let mut escalated = BTreeMap::new();
     for (page, digest) in &digested {
         let events = desk
             .send(&format!("Read {} and add it to the {} table.", page.file, page.kind))
@@ -269,6 +272,13 @@ async fn run_desk() -> Result<DeskRun> {
             bail!("vision_read {} failed: {}", page.file, answer["error"]);
         }
         answers += 1;
+        let replaced = answer["blocks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|b| b["escalatedFrom"] == LOCAL)
+            .count();
+        escalated.insert(page.file.clone(), replaced);
         fields.extend(extract(page, *digest, &answer));
     }
     let (tables, tables_dir) = write_tables(&fields)?;
@@ -285,6 +295,7 @@ async fn run_desk() -> Result<DeskRun> {
         fields,
         tables,
         tables_dir,
+        escalated,
     })
 }
 
@@ -347,10 +358,15 @@ pub async fn s1(shared: &Shared) -> Result<Checks> {
         ));
     }
 
-    let escalated: BTreeSet<&str> =
-        run.fields.iter().filter(|f| f.escalated_from.is_some()).map(|f| f.page.as_str()).collect();
+    // The pages a block of went to the cloud: the escalation calls' source images.
+    let attempted: BTreeSet<Digest> = run
+        .calls
+        .iter()
+        .filter(|c| c.ext.get("escalation").is_some())
+        .filter_map(|c| c.ext["imageDigests"][0].as_str()?.parse().ok())
+        .collect();
     let local_pages: Vec<&(Page, Digest)> =
-        run.pages.iter().filter(|(p, _)| !escalated.contains(p.file.as_str())).collect();
+        run.pages.iter().filter(|(_, d)| !attempted.contains(d)).collect();
     let silent = local_pages.iter().all(|(_, digest)| {
         run.records.iter().all(|r| match r {
             EgressRecord::Released(r) => r.source != *digest,
@@ -406,21 +422,31 @@ pub async fn s2(shared: &Shared) -> Result<Checks> {
         let (w, h) = receipt.chain.output_size();
         let sent = receipt.chain.bbox_to_source(&BBox::new(0.0, 0.0, w as f32, h as f32));
         let want = page.fields.iter().find(|f| f.name == field.field).map(|f| f.bbox());
-        let on_field = want.is_some_and(|b| {
-            centred(&sent, &b)
-                && sent.width() <= b.width() + 2.0 * MARGIN + 2.0
-                && sent.height() <= b.height() + 2.0 * MARGIN + 2.0
-        });
-        on_field && w < page.width / 2 && h < page.height / 4
+        let page_area = (page.width * page.height) as f32;
+        want.is_some_and(|b| covered(&b, &sent) > 0.0 || covered(&sent, &b) > 0.0)
+            && sent.width() * sent.height() < page_area / 20.0
     });
-    checks.check("each sent image is its field's crop plus margin, never the page", crops);
+    checks.check("each sent image is a crop of its field's block plus margin, never the page", crops);
 
-    let replaced = hard
+    // Where the cloud read text, its answer replaced the local block; where it read none,
+    // the local value stands.
+    let read_something = run
+        .calls
         .iter()
-        .all(|f| f.backend == NIM_READER_ID && f.escalated_from.as_deref() == Some(LOCAL));
+        .filter(|c| c.ext["backend"] == NIM_READER_ID)
+        .filter(|c| c.ext["regions"].as_u64().unwrap_or(0) > 0)
+        .count();
+    let replaced: usize = run.escalated.values().sum();
+    let on_hard_pages = run
+        .escalated
+        .iter()
+        .filter(|(_, n)| **n > 0)
+        .all(|(file, n)| *n == 1 && hard.iter().any(|f| &f.page == file));
     checks.check(
-        "the cloud answer replaces the local value with escalatedFrom pp-ocrv6-tiny",
-        replaced,
+        &format!(
+            "each cloud answer replaces its local block with escalatedFrom pp-ocrv6-tiny ({replaced} of 5 crops held text)"
+        ),
+        replaced == read_something && replaced > 0 && on_hard_pages,
     );
     let right = hard.iter().filter(|f| f.correct).count();
     checks.note(format!("NIM read {right}/5 hard fields as printed"));

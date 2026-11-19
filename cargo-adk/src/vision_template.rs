@@ -269,9 +269,9 @@ use adk_rust::model::{ScriptedLlm, ScriptedResponse};
 use adk_rust::serde_json::json;
 use adk_rust::session::InMemorySessionService;
 use adk_rust::vision::{
-    BBox, BackendDescriptor, CoordFrame, DecodedImage, DetectQuery, Detector, LlmDescriber,
-    Locality, MediaStore, PersonRedactor, RawRegion, SentImage, VisionConfig, VisionCx,
-    VisionRuntime,
+    BBox, BackendDescriptor, CoordFrame, DecodedImage, DetectQuery, Detector, DocumentPage,
+    DocumentReader, LlmDescriber, Locality, MediaStore, PersonRedactor, PersonalTextRedactor,
+    RawRegion, ReadOptions, SentImage, VisionConfig, VisionCx, VisionRuntime,
 };
 use adk_rust::{Part, UserId};
 
@@ -295,6 +295,29 @@ impl Detector for Portrait {
     }
 }
 
+/// Reads no text: the card holds none here.
+struct Blank(BackendDescriptor);
+
+#[adk_rust::async_trait]
+impl DocumentReader for Blank {
+    fn descriptor(&self) -> &BackendDescriptor {
+        &self.0
+    }
+
+    async fn read(
+        &self,
+        _cx: &VisionCx,
+        _page: &SentImage,
+        _options: &ReadOptions,
+    ) -> adk_rust::vision::Result<DocumentPage<RawRegion>> {
+        Ok(DocumentPage::default())
+    }
+}
+
+fn on_device(id: &str) -> BackendDescriptor {
+    BackendDescriptor::new(id, Locality::InProcess, CoordFrame::SentPixels)
+}
+
 /// Says no, and remembers being asked.
 #[derive(Default)]
 struct Refuses(Mutex<usize>);
@@ -309,7 +332,7 @@ impl std::fmt::Debug for Refuses {
 impl ApprovalPrompter for Refuses {
     async fn prompt(&self, _prompt: ApprovalPrompt) -> adk_rust::Result<PromptAnswer> {
         *self.0.lock().unwrap() += 1;
-        Ok(PromptAnswer::Deny)
+        Ok(PromptAnswer::Deny { message: Some("not this one".into()) })
     }
 }
 
@@ -340,11 +363,8 @@ async fn a_cloud_describe_waits_for_a_person_and_nothing_leaves_on_no() -> anyho
             .build()
     })
     .config(VisionConfig::from_toml_str(&rules)?)
-    .redactor(Arc::new(PersonRedactor::new(Arc::new(Portrait(BackendDescriptor::new(
-        "portrait",
-        Locality::InProcess,
-        CoordFrame::SentPixels,
-    ))))))
+    .redactor(Arc::new(PersonRedactor::new(Arc::new(Portrait(on_device("portrait"))))))
+    .redactor(Arc::new(PersonalTextRedactor::new(Arc::new(Blank(on_device("blank"))))))
     .model_hosts(["api.anthropic.com"]);
     let planner = ScriptedLlm::new(
         "planner",
@@ -402,6 +422,12 @@ redact = ["faces", "personal_text"]
 
 # A crop of a document to the desk's cloud model: ask each time. Change `ask` to `allow` to
 # send crops without asking; the harness counts an `allow` here only when you trust it.
+# A whole page never leaves: rules match in order.
+[[egress.rule]]
+host = "api.anthropic.com"
+classes = ["document"]
+action = "deny"
+
 [[egress.rule]]
 host = "api.anthropic.com"
 classes = ["document_crop"]
@@ -409,14 +435,23 @@ action = "ask"
 
 [[egress.rule]]
 host = "generativelanguage.googleapis.com"
+classes = ["document"]
+action = "deny"
+
+[[egress.rule]]
+host = "generativelanguage.googleapis.com"
 classes = ["document_crop"]
 action = "ask"
 
-# A whole page never leaves.
 [[egress.rule]]
-host = "*"
+host = "api.openai.com"
 classes = ["document"]
 action = "deny"
+
+[[egress.rule]]
+host = "api.openai.com"
+classes = ["document_crop"]
+action = "ask"
 "##;
 
 /// `AGENTS.md` for the desk.
@@ -494,3 +529,96 @@ it needs no key and no model download.
 - [Vision getting started](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/vision/getting-started.md)
 - [The `adk-rust vision` CLI](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/vision/cli.md)
 "##;
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen::generate_project_with_registry;
+    use crate::composition::resolve_composition;
+    use crate::registry::TemplateRegistry;
+
+    fn generate(name: &str, provider: &str) -> Vec<(String, String)> {
+        let registry = TemplateRegistry::builtin();
+        let manifest = resolve_composition(&registry, "vision", &[], provider).unwrap();
+        generate_project_with_registry(&registry, &manifest, name)
+            .into_iter()
+            .map(|file| (file.path, file.content))
+            .collect()
+    }
+
+    fn file<'a>(files: &'a [(String, String)], path: &str) -> &'a str {
+        files
+            .iter()
+            .find(|(p, _)| p == path)
+            .map(|(_, c)| c.as_str())
+            .unwrap_or_else(|| panic!("{path}"))
+    }
+
+    #[test]
+    fn the_vision_template_generates_a_document_desk_on_one_dependency() {
+        let files = generate("claims-desk", "anthropic");
+        let paths: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
+        for path in [
+            "Cargo.toml",
+            "src/main.rs",
+            "src/desk.rs",
+            "tests/desk_smoke.rs",
+            ".adk/vision.toml",
+            "AGENTS.md",
+            "inbox/README.md",
+            ".gitignore",
+            "README.md",
+        ] {
+            assert!(paths.contains(&path), "{path} in {paths:?}");
+        }
+        let cargo = file(&files, "Cargo.toml");
+        for feature in ["\"harness\"", "\"vision-local\"", "\"artifacts\"", "\"cli\"", "\"anthropic\""] {
+            assert!(cargo.contains(feature), "missing {feature} in:\n{cargo}");
+        }
+        assert!(!cargo.contains("adk-vision ="), "the desk depends on adk-rust only: {cargo}");
+        let main = file(&files, "src/main.rs");
+        for wiring in [
+            "HarnessAgent::builder(\"claims-desk\")",
+            ".pack_vision(desk::pack(",
+            ".mode(HarnessMode::Auto)",
+            "ConsolePrompter::new(",
+            "desk::Local::fetch()",
+        ] {
+            assert!(main.contains(wiring), "missing `{wiring}` in:\n{main}");
+        }
+        assert!(!main.contains("Launcher::new(agent)"), "the desk runs its own loop: {main}");
+        let desk = file(&files, "src/desk.rs");
+        assert!(desk.contains("PersonRedactor::new") && desk.contains("PersonalTextRedactor::new"));
+        assert!(desk.contains("LlmDescriber::remote"));
+        for (path, content) in &files {
+            assert!(!content.contains("{name}"), "{path} keeps a placeholder");
+        }
+    }
+
+    #[test]
+    fn the_desk_rules_ask_for_crops_and_never_send_a_page() {
+        let files = generate("desk", "anthropic");
+        let rules: toml::Value = file(&files, ".adk/vision.toml").parse().unwrap();
+        let egress = &rules["egress"];
+        assert_eq!(egress["default"].as_str(), Some("ask"));
+        let redact: Vec<&str> =
+            egress["redact"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+        assert_eq!(redact, vec!["faces", "personal_text"]);
+        for rule in egress["rule"].as_array().unwrap() {
+            let class = rule["classes"][0].as_str().unwrap();
+            let action = rule["action"].as_str().unwrap();
+            match class {
+                "document" => assert_eq!(action, "deny", "{rule}"),
+                "document_crop" => assert_eq!(action, "ask", "{rule}"),
+                other => panic!("unexpected class {other}"),
+            }
+        }
+    }
+
+    #[test]
+    fn addons_that_serve_cannot_join_the_desk() {
+        let registry = TemplateRegistry::builtin();
+        for addon in ["server", "docker"] {
+            assert!(resolve_composition(&registry, "vision", &[addon], "anthropic").is_err(), "{addon}");
+        }
+    }
+}

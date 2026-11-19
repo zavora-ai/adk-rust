@@ -1,0 +1,27 @@
+{
+  "path": "/v1/cv/nvidia/nemotron-ocr-v1",
+  "request": {
+    "input": [
+      {
+        "type": "image_url",
+        "url": "{{image:image/png:sha256:40388605b37ceedfc4fbba3b80d94c57ab08b342fb077448fdf0672cab01db3f:3327}}"
+      }
+    ],
+    "merge_levels": [
+      "word"
+    ]
+  },
+  "status": 200,
+  "contentType": "application/json",
+  "response": {
+    "data": [
+      {
+        "index": 0,
+        "text_detections": []
+      }
+    ],
+    "usage": {
+      "images_size_mb": 0.0031728744506835938
+    }
+  }
+}

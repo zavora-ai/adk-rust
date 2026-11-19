@@ -32,6 +32,10 @@ Local-first perception for Rust Agent Development Kit (ADK-Rust) agents.
 adk-vision = { version = "3.0.0", features = ["fetch"] }
 ```
 
+Through the umbrella crate, `adk-rust` feature `vision` (in `full`) brings the pure-Rust
+features — `fetch`, `cloud`, `nim`, `sam`, `guardrail` — as `adk_rust::vision`, and
+`vision-local` (in no tier) adds the on-device backends: `onnx`, `ocr` and `ocr-vl`.
+
 | Feature | Contents |
 |---------|----------|
 | (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor`, `VisionToolset`, `PersonRedactor`, the `vision.*` audit records |
@@ -260,6 +264,12 @@ mod my_detector {
 
 ## Documentation
 
+- [Getting started: a Document desk](../docs/official_docs/vision/getting-started.md), from
+  `cargo adk new <name> --template vision`
+- [The `adk-rust vision` CLI](../docs/official_docs/vision/cli.md): manifests, licences, one
+  call through the egress gate, the egress log
+- [Scenarios S1–S8](../examples/vision): the Document desk on local backends and recorded
+  cloud responses
 - [Vision overview](../docs/official_docs/vision/index.md)
 - [Governed vision tools](../docs/official_docs/vision/governed-tools.md)
 - [Image privacy](../docs/official_docs/security/image-privacy.md)

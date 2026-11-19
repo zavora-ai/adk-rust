@@ -283,6 +283,8 @@ an approval card can show the exact image; see [Governed Vision Tools](governed-
 
 ## Related
 
+- [Getting started: a Document desk](getting-started.md)
+- [The `adk-rust vision` CLI](cli.md)
 - [Governed Vision Tools](governed-tools.md)
 - [Image Privacy](../security/image-privacy.md)
 - [Local ONNX backends](onnx.md)

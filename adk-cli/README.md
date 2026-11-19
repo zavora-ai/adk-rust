@@ -97,6 +97,8 @@ See [The harness in your terminal](../docs/official_docs/harness/cli.md),
 | `mongodb`, `neo4j`, `firestore` | no | `--checkpointer mongodb://…`, `neo4j://…` or `firestore://…` |
 | `secrets-gcp`, `secrets-aws` | no | `--store-key secret:<provider>/<name>` through `adk-auth`'s secret providers |
 | `scripted-model` | no | Hidden `--model-script` and `--approval-fixture` flags for end-to-end tests: a scripted model and a `record_note` tool that needs approval; with `website`, a hidden `--dns-fixture` for domain claims |
+| `vision` | no | `adk-rust vision …` (spec 3.7 §8.1): the model manifest with licence classes, fetches by revision with SHA-256 checks, licence acceptance from a terminal, `vision run detect\|segment\|read\|describe` through the egress gate of `.adk/vision.toml`, and the egress log; cloud describers and `sam-3.1`; see [the `adk-rust vision` CLI](../docs/official_docs/vision/cli.md) |
+| `vision-local` | no | `vision` with the on-device backends (RF-DETR, EfficientSAM, SAM 2.1, PP-OCRv6, PaddleOCR-VL-1.6) and the face and personal-text redactors; ONNX Runtime is downloaded at build time |
 | `website` | no | `adk-rust website …`, `adk-rust site …` and `adk-rust awp …` (spec 3.5 §8.1): the product spun up and run from the terminal on `adk-website`; an AWP 2.0 site's releases, content, migration and freeze on `adk-site`, and verification, conformance, keys and `business.toml` migration on `adk-awp`; see [Sites and AWP from the command line](../docs/official_docs/deployment/site-cli.md) |
 
 `cargo install adk-cli` builds the default features, offline; add `--features all-providers` for every provider.
@@ -184,6 +186,7 @@ adk-rust deploy       Deployment commands
 adk-rust registry     Agent Registry registration and search (`vertex-agent-registry`)
 adk-rust site         An AWP 2.0 site: build/publish/rollback/log, content new, schedule/correct/withdraw/revert, batches/feeds, migrate/freeze (`website`)
 adk-rust awp          AWP 2.0: verify a domain, conformance, keys rotate/delegate, migrate-config (`website`)
+adk-rust vision       Models fetch/verify/accept, run detect/segment/read/describe, egress log (`vision`)
 adk-rust website      An AWP 2.0 website: new (serve, setup code, onboarding), status, review, charter, jobs promote/demote (`website`)
 ```
 
