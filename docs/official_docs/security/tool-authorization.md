@@ -612,6 +612,10 @@ impl Tool for SendCrop {
 Surfaces load an evidence image through the artifact service with the viewer's own
 authorisation; a channel that cannot show an image shows the digest.
 
+`adk-vision`'s `VisionToolset` is the reference user: a call that would send an image to a
+remote backend is held with the redacted copy that would leave, stored as an artifact, and
+approval releases exactly that digest — see [Governed Vision Tools](../vision/governed-tools.md).
+
 ### Approval Store
 
 An `ApprovalStore` keeps held requests and decisions between runs, scoped to the app,
