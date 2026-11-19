@@ -724,11 +724,17 @@ impl Renderer {
         if !regions.is_empty() {
             let count = format!("{}, in the image's pixels (x0,y0 → x1,y1)", regions.len());
             line(&mut rows, "regions", count, t.text());
+            // The tag column fits the longest tag, so "face · whole person" reads in full.
+            let tag_width =
+                regions.iter().map(|region| region.tag.width()).max().unwrap_or(0).min(24);
             for (number, region) in regions.iter().enumerate() {
                 rows.push((
                     vec![
                         Span::styled(format!("  {:>2}  ", number + 1), t.label()),
-                        Span::styled(format!("{:<15}", fit(&region.tag, 15)), t.accent()),
+                        Span::styled(
+                            format!("{:<tag_width$}  ", fit(&region.tag, tag_width)),
+                            t.accent(),
+                        ),
                         Span::styled(
                             format!(
                                 "covered  {},{} → {},{}",
@@ -751,7 +757,7 @@ impl Renderer {
         }
         let path = crate::evidence::decision_path(&card.id);
         let link = match &self.home {
-            Some(home) => format!("{home}{path}  (o opens it)"),
+            Some(home) => format!("{home}{path} (o opens it)"),
             None => format!("{path} in the home"),
         };
         line(&mut rows, "see it", link, t.fg(t.palette().brand));

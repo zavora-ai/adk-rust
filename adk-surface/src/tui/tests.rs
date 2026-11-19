@@ -2681,10 +2681,10 @@ fn a_decision_with_an_image_shows_its_digest_regions_and_link() {
         "Claude claude-sonnet-5-5 → api.anthropic.com · document crop",
         "1 face · 1 personal text",
         "2, in the image's pixels (x0,y0 → x1,y1)",
-        "face · whole pe",
+        "face · whole person  covered  6,72 → 190,304",
         "covered  6,72 → 190,304",
         "up to $0.0070 · 308 image tokens",
-        "http://127.0.0.1:8080/ui/decisions/dec-7c41e0  (o opens it)",
+        "http://127.0.0.1:8080/ui/decisions/dec-7c41e0 (o opens it)",
         "open image",
     ] {
         assert!(text.contains(expected), "{expected:?} is not on screen:\n{text}");
