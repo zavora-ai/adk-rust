@@ -89,6 +89,22 @@ which picks the Qwen3-VL adapter from a Hugging Face model id such as
 `Qwen/Qwen3-VL-2B-Instruct`; for a model loaded from a local path, give it with
 `with_adapter(Arc::new(Normalized1000::qwen3_vl(id)))`.
 
+## Measured
+
+`Qwen/Qwen3-VL-2B-Instruct` on an Apple M4 CPU (10 cores, 24 GB), F16, the `dev` profile with
+dependencies at `opt-level = 1`, `MistralRsConfig::default()`; from the crate's live tests
+(`adk-vision/tests/mistralrs_tests.rs`):
+
+| Run | Result | Time |
+|-----|--------|------|
+| `LlmDescriber::mistralrs` after the fetcher verified the files | loaded, `InProcess` | 2.4–9.9 s |
+| Conformance shapes, Qwen's own grounding prompt | `bbox_2d` `[127, 144, 398, 420]` and `[558, 514, 868, 874]`: IoU 0.79 and 0.80 read as 0–1000, 0.09 and 0.00 read as pixels | 29–35 s |
+| Conformance shapes through the describer | IoU 0.83 (red) and 0.80 (blue) in source pixels | 19 s |
+| COCO 2017 val `000000000785`, "Give a box for every person" | "the person is skiing"; person box IoU 0.985 against COCO's ground truth | 28 s |
+
+A release build, `isq` quantisation or `mistralrs-metal` shortens the calls; they were not
+measured here.
+
 ## Related
 
 - [Cloud vision backends](cloud.md) — `LlmDescriber` over remote models and the region adapters
