@@ -636,6 +636,7 @@ impl GovernedExecutor {
             args: record.input.clone(),
             acting: Some(Box::new(acting.clone())),
             origin: Some(ToolOrigin::of(tool.as_ref() as &dyn Tool)),
+            evidence: Vec::new(),
         };
         let fingerprint = request.fingerprint();
         match adk_core::confirmation_decision_available(&gate, &request).await {

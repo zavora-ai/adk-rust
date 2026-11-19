@@ -393,6 +393,51 @@ pub trait Tool: Send + Sync {
         crate::egress::ToolEgress::Undeclared
     }
 
+    /// What an approver sees with a call with `args` when it is held, such as the exact image
+    /// it would send ([`Evidence`](crate::Evidence)).
+    ///
+    /// [`GovernedCall::for_tool`](crate::GovernedCall::for_tool) records it on the call, the
+    /// held request carries it, and its digests are part of the call's
+    /// [fingerprint](crate::ToolConfirmationRequest::fingerprint): a decision applies only to
+    /// a call with the same evidence, so an image that changes before the call runs holds it
+    /// again. The default is no evidence. A wrapper forwards its inner tool's evidence.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use adk_core::{ArtifactLocator, Evidence, ImageEvidence, Result, Tool, ToolContext};
+    /// use serde_json::{Value, json};
+    ///
+    /// struct SendCrop;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Tool for SendCrop {
+    ///     fn name(&self) -> &str {
+    ///         "send_crop"
+    ///     }
+    ///     fn description(&self) -> &str {
+    ///         "Sends a redacted crop to a cloud model"
+    ///     }
+    ///     fn approval_evidence(&self, args: &Value) -> Vec<Evidence> {
+    ///         let digest = args["digest"].as_str().unwrap_or_default();
+    ///         let file = args["file"].as_str().unwrap_or_default();
+    ///         let locator = ArtifactLocator::new("desk", "ana", "s1", file, 1);
+    ///         vec![ImageEvidence::new(digest, locator, "image/png", 640, 180).into()]
+    ///     }
+    ///     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    ///         Ok(json!({ "sent": args["digest"] }))
+    ///     }
+    /// }
+    ///
+    /// let evidence = SendCrop.approval_evidence(&json!({ "digest": "sha256:aa", "file": "crop.png" }));
+    /// assert_eq!(evidence[0].digest(), "sha256:aa");
+    /// ```
+    fn approval_evidence(&self, _args: &Value) -> Vec<crate::Evidence> {
+        Vec::new()
+    }
+
     /// Executes the tool with the given context and arguments.
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
 }

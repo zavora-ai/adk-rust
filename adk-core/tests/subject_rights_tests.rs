@@ -370,6 +370,7 @@ async fn a_visitor_cannot_decide_an_approval() {
         args: json!({ "amount": 5 }),
         acting: None,
         origin: None,
+        evidence: Vec::new(),
     };
     store.record_pending(&scope, &call).await.unwrap();
     let policy = ApprovalPolicy::new([ApproverSelector::group("support")]);

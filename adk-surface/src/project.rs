@@ -1305,6 +1305,7 @@ mod tests {
             args,
             origin: None,
             acting: None,
+            evidence: Vec::new(),
         };
         ApprovalRequest::new(
             "apr_1",

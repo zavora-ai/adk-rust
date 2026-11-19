@@ -325,6 +325,7 @@ async fn a_voice_decision_on_a_freeze_parked_process_is_refused() {
         args: json!({}),
         acting: None,
         origin: None,
+        evidence: Vec::new(),
     };
     let request = service
         .submit(

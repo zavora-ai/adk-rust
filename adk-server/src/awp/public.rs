@@ -761,6 +761,10 @@ impl Tool for CapabilityProxy {
         self.capability.egress(args)
     }
 
+    fn approval_evidence(&self, args: &serde_json::Value) -> Vec<adk_core::Evidence> {
+        self.capability.approval_evidence(args)
+    }
+
     fn is_read_only(&self) -> bool {
         self.capability.is_read_only()
     }

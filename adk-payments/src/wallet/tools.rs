@@ -95,6 +95,7 @@ impl WalletPayTool {
             args: args.clone(),
             acting: Some(Box::new(acting.clone())),
             origin: Some(ToolOrigin::of(self)),
+            evidence: Vec::new(),
         };
         let reason = record.hold.as_ref().map(ToString::to_string).unwrap_or_default();
         if let Some(config) = ctx.run_config() {

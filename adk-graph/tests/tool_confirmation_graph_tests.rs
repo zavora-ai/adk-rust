@@ -59,6 +59,7 @@ impl Agent for ConfirmationAgent {
                     args: json!({ "path": "/tmp/report.txt" }),
                     acting: None,
                     origin: None,
+                    evidence: Vec::new(),
                 });
                 yield Ok(event);
             }

@@ -79,6 +79,7 @@ async fn a_spoken_allow_once_on_gemini_live() {
         args: json!({ "to": "[CLIENT]", "subject": "October invoice" }),
         origin: None,
         acting: None,
+        evidence: Vec::new(),
     };
     let mut request = ApprovalRequest::new(
         "apr-finance",

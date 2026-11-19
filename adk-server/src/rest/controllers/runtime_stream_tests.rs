@@ -103,6 +103,7 @@ fn held_call_events() -> Vec<adk_core::Event> {
         args: json!({ "invoice": "INV-10" }),
         origin: None,
         acting: None,
+        evidence: Vec::new(),
     };
     let mut call = response(
         vec![Part::FunctionCall {

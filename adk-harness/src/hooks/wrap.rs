@@ -227,6 +227,10 @@ impl Tool for HookedTool {
         self.inner.egress(args)
     }
 
+    fn approval_evidence(&self, args: &serde_json::Value) -> Vec<adk_core::Evidence> {
+        self.inner.approval_evidence(args)
+    }
+
     fn batch_group(&self) -> Option<adk_core::BatchGroup> {
         self.inner.batch_group()
     }

@@ -467,6 +467,7 @@ pub async fn assert_tool_call_rules(service: &dyn SessionService, app_name: &str
         args: json!({ "sku": "A1" }),
         acting: None,
         origin: None,
+        evidence: Vec::new(),
     });
     append(service, &target, hold).await;
     let held = service.rewind_steps(&target, 1).await.err().expect("a held call blocks a rewind");

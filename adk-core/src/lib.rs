@@ -161,6 +161,8 @@ pub mod event;
 mod event_stream;
 /// The LLM summarizer that session and in-run compaction share.
 pub mod event_summarizer;
+/// Evidence an approver sees with a held call: images by digest and artifact.
+pub mod evidence;
 /// Governed tool execution: kill switch, durable approvals, and the authorization path.
 pub mod governance;
 /// Durable freeze state for the kill switch, shared by every replica.
@@ -291,6 +293,7 @@ pub use event::{
 };
 pub use event_stream::EventTextDeltas;
 pub use event_summarizer::LlmEventSummarizer;
+pub use evidence::{ArtifactLocator, Evidence, ImageEvidence};
 pub use governance::{
     ApprovalScope, ApprovalStore, BUILTIN_TOOLS_WITHHELD_KEY, BuiltinToolGovernor,
     BuiltinToolWithholding, CONFIRMATION_PENDING_STATUS, DEFAULT_TOOL_CONFIRMATION_TIMEOUT,

@@ -1213,6 +1213,7 @@ mod tests {
             args: json!({ "amount": 10 }),
             acting: None,
             origin: None,
+            evidence: Vec::new(),
         });
         events.push(hold);
         let start = chrono::Utc::now();

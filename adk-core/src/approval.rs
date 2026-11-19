@@ -42,6 +42,7 @@
 //!     args: json!({ "amount": 900 }),
 //!     origin: None,
 //!     acting: None,
+//!     evidence: Vec::new(),
 //! };
 //! let policy = ApprovalPolicy::new([ApproverSelector::group("finance")]).with_quorum(2);
 //! let request = service
@@ -535,6 +536,7 @@ impl ApprovalDecision {
 ///     args: json!({ "amount": 500, "card": "4242424242424242" }),
 ///     origin: None,
 ///     acting: None,
+///     evidence: Vec::new(),
 /// };
 /// let request = ApprovalRequest::new(
 ///     "req-1",
@@ -566,6 +568,13 @@ pub struct ApprovalRequest {
     pub origin: Option<ToolOrigin>,
     /// The call's arguments as shown to approvers, with secrets removed.
     pub args_redacted: Value,
+    /// What approvers see with the call, such as the exact image it would send: the held
+    /// call's own [`evidence`](ToolConfirmationRequest::evidence), whose digests its
+    /// [`fingerprint`](Self::fingerprint) binds, then any the route added
+    /// ([`ApprovalRoute::evidence`]). Surfaces load each image through the artifact service
+    /// with the viewer's own authorisation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<crate::Evidence>,
     /// The agent making the call and on whose behalf.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acting: Option<ActingContext>,
@@ -627,6 +636,7 @@ impl ApprovalRequest {
             tool_name: call.tool_name.clone(),
             origin: call.origin.clone(),
             args_redacted: call.args.clone(),
+            evidence: call.evidence.clone(),
             acting: None,
             requester: None,
             summary: format!("Approve a call to '{}'", call.tool_name),
@@ -712,6 +722,47 @@ impl ApprovalRequest {
     #[must_use]
     pub fn with_redacted_args(mut self, args: Value) -> Self {
         self.args_redacted = args;
+        self
+    }
+
+    /// Shows approvers `evidence` after the call's own. Only the call's own evidence is part
+    /// of its [`fingerprint`](Self::fingerprint).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{
+    ///     ApprovalPolicy, ApprovalRequest, ApprovalScope, ApproverSelector, ArtifactLocator,
+    ///     Evidence, ImageEvidence, ToolConfirmationRequest,
+    /// };
+    /// use serde_json::json;
+    ///
+    /// let image = |digest: &str, file: &str| {
+    ///     Evidence::from(ImageEvidence::new(
+    ///         digest,
+    ///         ArtifactLocator::new("desk", "ana", "s1", file, 1),
+    ///         "image/png",
+    ///         640,
+    ///         180,
+    ///     ))
+    /// };
+    /// let crop = image("sha256:aa", "egress/crop.png");
+    /// let call = ToolConfirmationRequest::new("vision_describe", json!({ "question": "Total?" }))
+    ///     .with_evidence([crop.clone()]);
+    /// let overlay = image("sha256:bb", "egress/crop-regions.png");
+    /// let request = ApprovalRequest::new(
+    ///     "apr-1",
+    ///     ApprovalScope::new("desk", "ana", "s1"),
+    ///     &call,
+    ///     ApprovalPolicy::new([ApproverSelector::human("ana")]),
+    /// )
+    /// .with_evidence([overlay.clone()]);
+    /// assert_eq!(request.evidence, vec![crop, overlay]);
+    /// assert_eq!(request.fingerprint, call.fingerprint());
+    /// ```
+    #[must_use]
+    pub fn with_evidence(mut self, evidence: impl IntoIterator<Item = crate::Evidence>) -> Self {
+        self.evidence.extend(evidence);
         self
     }
 
@@ -1601,6 +1652,10 @@ pub struct ApprovalRoute {
     pub redacted_args: Option<Value>,
     /// What approvers may do; defaults to every action.
     pub allowed_actions: Option<Vec<ApprovalAction>>,
+    /// Evidence shown to approvers after the call's own, such as an overlay the router drew.
+    /// The decision binds only to the call's own evidence
+    /// ([`ToolConfirmationRequest::evidence`]).
+    pub evidence: Vec<crate::Evidence>,
 }
 
 impl ApprovalRoute {
@@ -1612,6 +1667,7 @@ impl ApprovalRoute {
             risk: ApprovalRisk::default(),
             redacted_args: None,
             allowed_actions: None,
+            evidence: Vec::new(),
         }
     }
 
@@ -1643,6 +1699,13 @@ impl ApprovalRoute {
         actions: impl IntoIterator<Item = ApprovalAction>,
     ) -> Self {
         self.allowed_actions = Some(actions.into_iter().collect());
+        self
+    }
+
+    /// Shows approvers `evidence` after the call's own.
+    #[must_use]
+    pub fn with_evidence(mut self, evidence: impl IntoIterator<Item = crate::Evidence>) -> Self {
+        self.evidence.extend(evidence);
         self
     }
 }
@@ -2471,6 +2534,7 @@ impl ApprovalService for StoreApprovalService {
         if let Some(actions) = route.allowed_actions {
             request = request.with_allowed_actions(actions);
         }
+        request = request.with_evidence(route.evidence);
         if let Some(acting) = call.acting {
             request = request.with_acting(acting);
         }
@@ -2613,6 +2677,11 @@ impl ApprovalService for StoreApprovalService {
                 .ext("sessionId", Value::String(request.scope.session_id.clone()));
             if let Some(acting) = &request.acting {
                 draft = draft.ext("actingAgent", Value::String(acting.agent.id.to_string()));
+            }
+            // The images the decision was made on, by digest.
+            if !request.evidence.is_empty() {
+                let digests = request.evidence.iter().map(|item| Value::from(item.digest()));
+                draft = draft.ext("evidenceDigests", Value::Array(digests.collect()));
             }
             if let Some(edited) = &decision.edited_args {
                 draft = draft.ext("editedArgsDigest", Value::String(trail.digest(edited)));
@@ -2828,6 +2897,7 @@ impl ApprovalService for StoreApprovalService {
         if let Some(actions) = route.allowed_actions {
             request = request.with_allowed_actions(actions);
         }
+        request = request.with_evidence(route.evidence);
         if let Some(acting) = call.acting {
             request = request.with_acting(acting);
         }
@@ -2867,6 +2937,11 @@ impl ApprovalService for StoreApprovalService {
                 .ext("sessionId", Value::String(request.scope.session_id.clone()));
             if let Some(acting) = &request.acting {
                 draft = draft.ext("actingAgent", Value::String(acting.agent.id.to_string()));
+            }
+            // The images the decision was made on, by digest.
+            if !request.evidence.is_empty() {
+                let digests = request.evidence.iter().map(|item| Value::from(item.digest()));
+                draft = draft.ext("evidenceDigests", Value::Array(digests.collect()));
             }
             trail.record(draft).await?;
         }
@@ -3092,6 +3167,7 @@ mod tests {
             args: json!({ "amount": 5 }),
             origin: None,
             acting: None,
+            evidence: Vec::new(),
         };
         let scope = ApprovalScope::new("app", "u", "s");
         let request = service
@@ -3271,6 +3347,7 @@ mod tests {
             args: json!({ "to": "acct-secret", "amount": 5 }),
             origin: None,
             acting: None,
+            evidence: Vec::new(),
         };
         let scope = ApprovalScope::new("app", "u", "s");
         let request = |id: &str| {

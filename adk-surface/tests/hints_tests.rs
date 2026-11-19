@@ -198,6 +198,7 @@ fn call(tool: &str, args: Value, origin: Option<&str>) -> ToolConfirmationReques
         args,
         origin: origin.map(|source| ToolOrigin::new(source, &json!({ "name": tool }), None)),
         acting: None,
+        evidence: Vec::new(),
     }
 }
 

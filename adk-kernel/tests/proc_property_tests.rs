@@ -36,6 +36,7 @@ fn events(p: &str) -> Vec<KernelEvent> {
         args: json!({ "path": p, "content": format!("secret {p}") }),
         acting: None,
         origin: None,
+        evidence: Vec::new(),
     };
     let outcomes = [
         None,

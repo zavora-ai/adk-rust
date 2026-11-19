@@ -507,6 +507,7 @@ narrows what the decision authorizes:
 | Tool origin | `ToolOrigin::source`, from `Tool::origin()` — `static` for a tool attached to the agent, `mcp:{toolset name}` for an MCP tool; `realtime` for a native handler on a `RealtimeRunner` (`ToolDefinition::handler_origin`) | A tool of the same name another MCP server or toolset publishes is not authorized, and neither is a native handler of a `Tool`'s name |
 | Declaration digest | `ToolOrigin::declaration_digest` — SHA-256 of the tool's declaration and annotations; for a native handler, of its `ToolDefinition` | A tool redefined after the approval (new description, parameters, or annotations) is not authorized |
 | Tool name and arguments | `tool_call_fingerprint(tool_name, args)`, canonical over key order | A call with other arguments needs its own decision |
+| Evidence digests | `ToolConfirmationRequest::evidence`, from `Tool::approval_evidence` — present only when the call is held with evidence | A call whose image changed between the hold and the run is held again; see [Approving with Evidence](#approving-with-evidence) |
 
 Keying by tool name would make one approval authorize every call of that tool, so an
 approval for `delete_file` on a scratch path would also authorize a call targeting
@@ -555,6 +556,61 @@ looks a decision up under names that agent. A fingerprint built without one
 | `RunConfigBuilder::tool_approval` | Refused: the approval is not recorded, and `tracing::warn!` reports it |
 | `RunConfigBuilder::tool_confirmation_fingerprints` | Kept, so the call-ID decision it binds is never applied; `tracing::warn!` names the call ID |
 | `ApprovalStore::decide`, `ApprovalService` | Kept, since the store and the service also hold decisions that are not tool calls, but never taken by a governed call |
+
+### Approving with Evidence
+
+A call that sends, keeps or acts on an image is held with the exact image, so the approver
+decides on what will happen rather than on a description of it. A tool declares the
+evidence for a call with `Tool::approval_evidence`; `GovernedCall::for_tool` records it, and
+the held `ToolConfirmationRequest`, its `PendingApproval` and its `ApprovalRequest` carry it.
+Evidence travels by reference and digest, never as pixels:
+
+| Field | Holds |
+|-------|-------|
+| `Evidence::Image(ImageEvidence)` | `digest` (`sha256:` of the encoded bytes), `artifact` (an `ArtifactLocator`: app, user, session, file name and version), `mime_type`, `width`, `height`, optional `regions` (a `RegionSet` as JSON) and `caption` |
+
+```rust
+use std::sync::Arc;
+
+use adk_core::{ArtifactLocator, Evidence, ImageEvidence, Result, Tool, ToolContext};
+use serde_json::{Value, json};
+
+struct SendCrop;
+
+#[async_trait::async_trait]
+impl Tool for SendCrop {
+    fn name(&self) -> &str {
+        "send_crop"
+    }
+
+    fn description(&self) -> &str {
+        "Sends a redacted crop to a cloud model"
+    }
+
+    fn approval_evidence(&self, args: &Value) -> Vec<Evidence> {
+        let digest = args["digest"].as_str().unwrap_or_default();
+        let file = args["file"].as_str().unwrap_or_default();
+        let crop = ArtifactLocator::new("desk", "ana", "s1", file, 1);
+        vec![ImageEvidence::new(digest, crop, "image/png", 640, 180).into()]
+    }
+
+    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        Ok(json!({ "sent": args["digest"] }))
+    }
+}
+```
+
+| Behaviour | Detail |
+|-----------|--------|
+| Binding | The evidence digests are part of the call's fingerprint, so a decision applies only to the call with the same images. A call without evidence keeps the fingerprint it had before evidence existed |
+| A changed image | A call whose evidence changed between the hold and the run is a different call: it is held again, and the earlier decision stays unspent until it expires |
+| Route evidence | `ApprovalRoute::with_evidence` shows approvers more images after the call's own, such as an overlay; only the call's own evidence is part of the fingerprint |
+| Audit | Every governed record of the call, and every decision the `ApprovalService` records, carries `evidenceDigests` — the digests, never the pixels |
+| Storage | Every `ApprovalStore` keeps the evidence of pending calls and requests (conformance case `evidence_round_trips`) |
+| Wrappers | A tool wrapper forwards `approval_evidence` with the other declarations, so a wrapped tool is held with its evidence |
+
+Surfaces load an evidence image through the artifact service with the viewer's own
+authorisation; a channel that cannot show an image shows the digest.
 
 ### Approval Store
 
@@ -1515,7 +1571,8 @@ kill switch), or held for approval, and each approval decision with its source. 
 record cannot be written is not executed under the default `AuditFailureMode::Block`.
 `freeze_recorded` and `unfreeze_recorded` record kill-switch changes with the acting
 administrator. Each governed record carries the tool's `toolSource` and `declarationDigest`
-when the call's tool is known, and a call a callback or plugin answered before the governed
+when the call's tool is known, and `evidenceDigests` when the call is held with
+[evidence](#approving-with-evidence), and a call a callback or plugin answered before the governed
 path is recorded as `tool.short_circuit`. See
 [Audit Log](audit-log.md#what-the-runtime-records).
 

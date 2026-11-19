@@ -612,6 +612,7 @@ mod tests {
             args: serde_json::json!({ "amount": 10 }),
             acting: None,
             origin: None,
+            evidence: Vec::new(),
         });
         events.extend([call, pending, hold]);
         events.extend(make_events(after));

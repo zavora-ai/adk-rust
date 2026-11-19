@@ -287,6 +287,7 @@ impl PaymentApprover for ToolCallApprover {
             args: self.args.clone(),
             acting: Some(Box::new(acting.clone())),
             origin: Some(self.origin.clone()),
+            evidence: Vec::new(),
         };
         // A caller outside a run has no decision sources; its event carries the request.
         if let Some(config) = self.ctx.run_config() {

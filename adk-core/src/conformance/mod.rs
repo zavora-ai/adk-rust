@@ -295,6 +295,11 @@ macro_rules! approval_store_conformance_tests {
             $crate::conformance::approval_store::approval_requests_survive_a_restart(&$harness)
                 .await;
         }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_evidence_round_trips() {
+            $crate::conformance::approval_store::evidence_round_trips(&$harness).await;
+        }
     };
 }
 

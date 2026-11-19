@@ -232,6 +232,10 @@ impl Tool for PermissionTool {
         self.inner.egress(args)
     }
 
+    fn approval_evidence(&self, args: &serde_json::Value) -> Vec<adk_core::Evidence> {
+        self.inner.approval_evidence(args)
+    }
+
     fn batch_group(&self) -> Option<adk_core::BatchGroup> {
         self.inner.batch_group()
     }
@@ -606,6 +610,10 @@ impl Tool for CredentialedTool {
 
     fn egress(&self, args: &serde_json::Value) -> adk_core::egress::ToolEgress {
         self.inner.egress(args)
+    }
+
+    fn approval_evidence(&self, args: &serde_json::Value) -> Vec<adk_core::Evidence> {
+        self.inner.approval_evidence(args)
     }
 
     fn batch_group(&self) -> Option<adk_core::BatchGroup> {

@@ -162,6 +162,10 @@ impl Tool for PublicCapability {
         self.inner.egress(args)
     }
 
+    fn approval_evidence(&self, args: &serde_json::Value) -> Vec<adk_core::Evidence> {
+        self.inner.approval_evidence(args)
+    }
+
     fn is_long_running(&self) -> bool {
         self.inner.is_long_running()
     }

@@ -1221,6 +1221,14 @@ pub struct ToolConfirmationRequest {
     /// origins were, and in requests for calls the governed path saw without their tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<ToolOrigin>,
+    /// What the approver sees with the call, such as the exact image it would send
+    /// ([`Tool::approval_evidence`](crate::Tool::approval_evidence)).
+    ///
+    /// The digests are part of the [`fingerprint`](Self::fingerprint), so a decision binds
+    /// to these images. Empty for a call held without evidence, and in requests recorded
+    /// before evidence was.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<crate::Evidence>,
 }
 
 impl ToolConfirmationRequest {
@@ -1243,6 +1251,7 @@ impl ToolConfirmationRequest {
             args,
             acting: None,
             origin: None,
+            evidence: Vec::new(),
         }
     }
 
@@ -1308,6 +1317,36 @@ impl ToolConfirmationRequest {
         self
     }
 
+    /// Holds the call with `evidence`, whose digests become part of its
+    /// [`fingerprint`](Self::fingerprint).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{ArtifactLocator, Evidence, ImageEvidence, ToolConfirmationRequest};
+    /// use serde_json::json;
+    ///
+    /// let image = |digest: &str| {
+    ///     Evidence::from(ImageEvidence::new(
+    ///         digest,
+    ///         ArtifactLocator::new("desk", "ana", "s1", "egress/crop.png", 1),
+    ///         "image/png",
+    ///         320,
+    ///         200,
+    ///     ))
+    /// };
+    /// let call = ToolConfirmationRequest::new("vision_describe", json!({ "question": "Total?" }));
+    /// let held = call.clone().with_evidence([image("sha256:aa")]);
+    /// let swapped = call.clone().with_evidence([image("sha256:bb")]);
+    /// assert_ne!(held.fingerprint(), call.fingerprint());
+    /// assert_ne!(held.fingerprint(), swapped.fingerprint());
+    /// ```
+    #[must_use]
+    pub fn with_evidence(mut self, evidence: impl IntoIterator<Item = crate::Evidence>) -> Self {
+        self.evidence.extend(evidence);
+        self
+    }
+
     /// The call's fingerprint: the acting agent's id, the tool's [`ToolOrigin`], the tool
     /// name, and the canonical arguments.
     ///
@@ -1315,9 +1354,14 @@ impl ToolConfirmationRequest {
     /// [`RunConfig::tool_confirmation_fingerprints`], and in an
     /// [`ApprovalStore`](crate::ApprovalStore), so the decision applies to the same call
     /// re-issued under a new call ID by the same agent to the same tool. It never applies to
-    /// another agent's call, to a tool of the same name another publisher answers, or to a
-    /// tool whose declaration changed. The parts are separated by U+001F; a missing agent or
-    /// origin leaves its part empty.
+    /// another agent's call, to a tool of the same name another publisher answers, to a
+    /// tool whose declaration changed, or to a call held with different evidence. The parts
+    /// are separated by U+001F; a missing agent or origin leaves its part empty.
+    ///
+    /// A call held with [`evidence`](Self::evidence) adds the evidence digests, in order, to
+    /// the declaration part: U+001E, `evidence:`, then the digests as a JSON array. The five
+    /// parts and their order stay as they are, and a call without evidence keeps the
+    /// fingerprint it had before evidence existed.
     ///
     /// The governed path records the acting agent on every request it builds, so a
     /// fingerprint without one never matches a governed call.
@@ -1355,6 +1399,13 @@ impl ToolConfirmationRequest {
             push_clean(&mut out, &origin.declaration_digest);
         } else {
             out.push('\u{1f}');
+        }
+        if !self.evidence.is_empty() {
+            // JSON escapes every control character, so no digest can forge a separator.
+            let digests: Vec<&str> = self.evidence.iter().map(crate::Evidence::digest).collect();
+            out.push('\u{1e}');
+            out.push_str("evidence:");
+            out.push_str(&serde_json::to_string(&digests).unwrap_or_default());
         }
         out.push('\u{1f}');
         out.push_str(&call);

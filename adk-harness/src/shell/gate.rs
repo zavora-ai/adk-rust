@@ -113,6 +113,10 @@ impl Tool for GatedFileTool {
         self.inner.egress(args)
     }
 
+    fn approval_evidence(&self, args: &serde_json::Value) -> Vec<adk_core::Evidence> {
+        self.inner.approval_evidence(args)
+    }
+
     fn timeout_override(&self) -> Option<Option<Duration>> {
         self.inner.timeout_override()
     }

@@ -93,6 +93,7 @@ async fn a_resolved_approval_wakes_once_keyed_by_its_request_id() {
         args: json!({ "amount": 900 }),
         origin: None,
         acting: None,
+        evidence: Vec::new(),
     };
     let policy = ApprovalPolicy::new([ApproverSelector::group("finance")]).with_quorum(2);
     let request = service

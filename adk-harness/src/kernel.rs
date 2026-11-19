@@ -1009,6 +1009,7 @@ mod tests {
             args: serde_json::json!({ "amount": 10 }),
             acting: None,
             origin: None,
+            evidence: Vec::new(),
         };
         store.record_pending(&scope, &call).await.unwrap();
         let policy = ApprovalPolicy::new([ApproverSelector::human("bob")]);
