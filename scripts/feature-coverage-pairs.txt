@@ -77,6 +77,8 @@
 7 adk-harness voice
 # The vision pack (spec 3.7 X15): per-call classes, egress rules, the privacy guardrail.
 7 adk-harness vision
+# The vision pack's default redactors (RF-DETR, PP-OCRv6); the real-weights S3 run is ignored.
+7 adk-harness vision-local
 # The harness's ACP standing permissions (spec 3.3 §10 A1): adk-acp's server enters only here.
 7 adk-harness acp-server
 # The crate docs' examples under the default tier: an `artifacts` example once compiled only
@@ -438,6 +440,8 @@
 6 adk-vision fetch doc
 # The image privacy guardrail, the personal-text redactor and the governed scenarios (S1–S4, S7).
 6 adk-vision guardrail doc
+# The default redactors over RF-DETR and PP-OCRv6, failing closed without their weights.
+6 adk-vision onnx,ocr,guardrail doc
 # Document readers (spec 3.7 §7.6, §7.7): PP-OCRv6 through oar-ocr on ort, PaddleOCR-VL-1.6
 # on Candle, and NVIDIA NIM's CV endpoints against their recorded answers, each with its
 # conformance run; the weight-backed and live runs are ignored.

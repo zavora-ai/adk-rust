@@ -178,3 +178,7 @@ required-features = ["nim", "ocr", "guardrail", "fetch", "conformance"]
 [[test]]
 name = "ocr_vl_live_tests"
 required-features = ["ocr-vl", "fetch", "conformance"]
+
+[[test]]
+name = "local_redactor_tests"
+required-features = ["onnx", "ocr", "guardrail"]

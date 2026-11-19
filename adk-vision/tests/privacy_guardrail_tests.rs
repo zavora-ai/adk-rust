@@ -268,3 +268,78 @@ async fn user_input_is_transformed_and_a_released_part_passes_again() {
     );
     assert!(matches!(guarded.guardrail.validate(&forged).await, GuardrailResult::Transform { .. }));
 }
+
+/// A reader that returns fixed blocks, without words.
+struct BlocksReader {
+    descriptor: adk_vision::BackendDescriptor,
+    blocks: Vec<(&'static str, adk_vision::BBox)>,
+}
+
+#[async_trait::async_trait]
+impl adk_vision::DocumentReader for BlocksReader {
+    fn descriptor(&self) -> &adk_vision::BackendDescriptor {
+        &self.descriptor
+    }
+
+    async fn read(
+        &self,
+        _cx: &adk_vision::VisionCx,
+        _page: &adk_vision::SentImage,
+        _options: &adk_vision::ReadOptions,
+    ) -> adk_vision::Result<adk_vision::DocumentPage<adk_vision::RawRegion>> {
+        let blocks: Vec<adk_vision::Block<adk_vision::RawRegion>> = self
+            .blocks
+            .iter()
+            .map(|(text, bbox)| adk_vision::Block {
+                kind: adk_vision::BlockKind::Text,
+                region: adk_vision::RawRegion::shape(adk_vision::Shape::Box(*bbox)),
+                text: (*text).to_string(),
+                confidence: Some(0.9),
+                words: Vec::new(),
+                cells: Vec::new(),
+            })
+            .collect();
+        let reading_order = (0..blocks.len()).collect();
+        Ok(adk_vision::DocumentPage { blocks, reading_order, markdown: None })
+    }
+}
+
+/// A form whose reader returns a label and its value as separate blocks: the value beside
+/// the bare label is covered, the label and the next line are not.
+#[tokio::test]
+async fn the_value_beside_a_bare_label_is_covered() {
+    use adk_vision::{
+        BBox, BackendDescriptor, CoordFrame, DataClass, EgressConfig, Locality, ReleaseRequest,
+        SourceImage, VisionCx,
+    };
+    let value = BBox::new(300.0, 20.0, 420.0, 44.0);
+    let reader = BlocksReader {
+        descriptor: BackendDescriptor::new("blocks", Locality::InProcess, CoordFrame::SentPixels),
+        blocks: vec![
+            ("Name:", BBox::new(20.0, 22.0, 80.0, 42.0)),
+            ("Ana Diaz", value),
+            ("Issued: 2026", BBox::new(20.0, 70.0, 160.0, 90.0)),
+            ("Wanjiru", BBox::new(300.0, 70.0, 380.0, 90.0)),
+        ],
+    };
+    let gate = EgressGate::new(
+        EgressPolicy::public_only(),
+        EgressConfig::default().redacting(adk_vision::RedactionClass::personal_text()),
+        Arc::new(InMemoryEgressRecorder::new()),
+    )
+    .with_redactor(Arc::new(
+        PersonalTextRedactor::new(Arc::new(reader)).with_labelled_fields(["Name"]),
+    ));
+    let page = SourceImage::from_pixels(DecodedImage::filled(480, 120, [255; 4])).unwrap();
+    let backend = BackendDescriptor::new(
+        "claude",
+        Locality::Remote { hosts: vec!["api.anthropic.com".into()] },
+        CoordFrame::SentPixels,
+    );
+    let request = ReleaseRequest::new(&page, &backend, DataClass::new("document"));
+
+    let preview = gate.preview(&VisionCx::new(), &request).await.unwrap();
+
+    let filled: Vec<BBox> = preview.filled().iter().map(|(_, bbox)| *bbox).collect();
+    assert_eq!(filled, vec![value.expanded(adk_vision::REDACTION_MARGIN).clamped(480, 120)]);
+}

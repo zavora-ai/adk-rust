@@ -25,7 +25,7 @@ Local-first perception for Rust Agent Development Kit (ADK-Rust) agents.
 | Runtime | `VisionRuntime` | Local-first routing, metering, cancellation, mapping to source pixels, crop escalation |
 | Egress | `EgressGate`, `ReleasedImage` | A remote backend only ever receives an image the gate cropped, redacted, approved and recorded |
 | Tools | `VisionToolset` | `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`, `vision_crop`, `vision_redact`, `vision_annotate` on the governed path; a remote call is held with the exact egress image and releases only that digest |
-| Privacy | `PersonRedactor`, `PersonalTextRedactor`, `ImagePrivacyGuardrail` | Faces and personal text filled solid black on the device; the same gate on model requests, tool results and user input |
+| Privacy | `PersonRedactor`, `PersonalTextRedactor`, `ImagePrivacyGuardrail` | Faces and personal text filled solid black on the device — by default RF-DETR Nano (`onnx`) and PP-OCRv6 (`ocr`), loaded on first use; the same gate on model requests, tool results and user input |
 
 ```toml
 [dependencies]
@@ -161,7 +161,9 @@ for `ReleasedImage`, so handing a remote backend an unreleased image does not co
 1. **Destination** — the adk-core `EgressPolicy` decides each host.
 2. **Minimise** — crop to the region the call needs, downscale to the backend's limit.
 3. **Redact** — every class in the policy (`faces`, `personal_text`, ...) is filled with
-   solid colour by its `Redactor`; a class with no redactor refuses the release.
+   solid colour by its `Redactor`; a class with no redactor, or a redactor whose default
+   weights cannot load (`PersonRedactor::rf_detr`, `PersonalTextRedactor::pp_ocr`), refuses
+   the release.
 4. **Decide** — the rule for the host and data class says `deny`, `ask` or `allow`; `ask`
    holds until a person approves that exact egress digest.
 5. **Record** — the receipt (source and egress digests, chain, redactions, decision) goes to

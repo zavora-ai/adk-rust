@@ -234,9 +234,31 @@ fn harness(
 |-------|----------|
 | Classes | On the device `Read`; off it `External`, trusted read-only under an `allow` rule — so an `ask` call is held in Ask and Auto and denied in ReadOnly and Plan |
 | Rules | `.adk/vision.toml`, or `VisionPack::config`; faces and personal text are always redacted, and a workspace file's `allow` rules ask until the operator calls `trust_workspace_rules` |
+| Redactors | The operator's `VisionPack::redactor`s; with feature `vision-local`, a default for each required class none covers (below) |
 | Approvals | The egress policy joins the operator policy; the harness prompter or inbox sees the egress image on the held call |
 | Privacy guardrail | On every request to a remote harness model; no agent tool removes it ([Image Privacy](../security/image-privacy.md)) |
 | Text | `vision_read` and `vision_describe` deliver recognised text inside an `<untrusted-content source="vision">` block, screened as fetched text is |
+
+### Default Redactors
+
+With `adk-harness` feature `vision-local`, the pack installs a default redactor for each class
+the rules require that no `VisionPack::redactor` covers, so a pack needs no redactor wiring:
+
+```toml
+[dependencies]
+adk-harness = { version = "3.0.0", features = ["vision-local"] }
+```
+
+| Class | `vision-local` | Without it |
+|-------|----------------|------------|
+| `faces` | `PersonRedactor::rf_detr` — RF-DETR Nano | No redactor: every remote release is refused |
+| `personal_text` | `PersonalTextRedactor::pp_ocr` — PP-OCRv6 small, with `PERSONAL_FIELD_LABELS` | No redactor: every remote release is refused |
+
+The weights load on the first release through `VisionPack::model_fetcher`, or a fetcher built
+from `HF_HUB_CACHE`, `HF_HUB_OFFLINE` and `HF_TOKEN`, each file checked against the built-in
+manifest. When they cannot load, that release is refused and recorded at the redact step.
+Calls that stay on the device never load them. `vision-local` builds ONNX Runtime, downloaded
+at build time as `adk-vision`'s `onnx` feature does.
 
 ## Related
 

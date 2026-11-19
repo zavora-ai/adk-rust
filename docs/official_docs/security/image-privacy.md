@@ -26,8 +26,39 @@ image about to be released:
 
 `PiiRedactor::find` reports each match as a byte range of the text it searched;
 `PersonalTextRedactor` joins each block's words with single spaces, so every range maps to
-the words it covers and their boxes. A class the rules require with no redactor installed
-refuses every release, and a redactor refuses a remote backend.
+the words it covers and their boxes. A labelled field's value is covered whether the reader
+returns it on the label's line or as the next block to its right. A class the rules require
+with no redactor installed refuses every release, and a redactor refuses a remote backend.
+
+### The Default Redactors
+
+Each redactor takes any on-device backend, or builds the default one from `adk-vision`'s
+built-in manifest:
+
+| Constructor | Feature | Backend | Weights |
+|-------------|---------|---------|---------|
+| `PersonRedactor::rf_detr(fetcher)` | `onnx` | RF-DETR Nano, COCO `person` at a score of 0.25 or more | `rf-detr-n`, 108 MB, Apache-2.0 |
+| `PersonalTextRedactor::pp_ocr(fetcher, size)` | `guardrail`, `ocr` | PP-OCRv6 tiny, small or medium | `pp-ocrv6-{size}-det` and `-rec`; small is 31 MB, Apache-2.0 |
+
+The default backend loads on the redactor's first use, through the `ModelFetcher`, with every
+file checked against its SHA-256 before it loads. A load that fails — `HF_HUB_OFFLINE` with the
+weights not cached, a digest mismatch, no network — fails that call, so the gate refuses the
+release at its redact step and records why; the next call tries the load again.
+`PERSONAL_FIELD_LABELS` lists the field labels the harness vision pack covers by default.
+
+> **Note:** RF-DETR is trained on photographs. A drawn or cartoon portrait is not a `person` to
+> it — the generated portrait of the test identity card scores 0.11 — so `faces` redaction
+> covers people in photographs, not illustrations. Mark such regions on the call instead.
+
+Measured on the identity-card fixture and two COCO photographs, with the harness vision pack's
+default redactors and the same backends reading the bytes the provider received
+(`adk-harness` test `s3_the_default_redactors_leave_no_person_and_no_personal_string`):
+
+| Image | Redactions | People found before → after | Seeded strings read before → after (PP-OCRv6 tiny, small, medium) |
+|-------|------------|-----------------------------|----------------------------------------------------------------|
+| Identity card, drawn portrait | `personal_text` 6 | none (0.11) → none | 9 of 9 → 0 |
+| Identity card, photograph in the portrait | `faces` 1, `personal_text` 6 | 0.94 → none | 9 of 9 → 0 |
+| Two baseball players | `faces` 3 | 0.93, 0.57, 0.39 → none | — |
 
 ## The Guardrail
 
