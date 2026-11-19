@@ -98,7 +98,8 @@ pub async fn run() -> Result<Checks> {
         &format!("sam-3.1 received {sent} requests: the refusals came before any request"),
         sent == CAP as usize && desk.recorder.released().len() == CAP as usize,
     );
-    let spent = desk.ledger.spent(&SpendKey::org(APP).with_vendor("meta"), SpendPeriod::Day).await?;
+    // Meta's sam-3.1 is reached with the Muse key and billed under Muse.
+    let spent = desk.ledger.spent(&SpendKey::org(APP).with_vendor("muse"), SpendPeriod::Day).await?;
     let commits: Vec<u64> = desk
         .records("vision.call")
         .iter()
@@ -110,9 +111,9 @@ pub async fn run() -> Result<Checks> {
         commits.len() == CAP as usize && commits.iter().all(|c| *c == 2_500) && spent == CAP * 2_500,
     );
 
-    let before = desk.ledger.spent(&SpendKey::org(APP), SpendPeriod::Day).await?;
+    let before = desk.vision_spend().await?;
     desk.send("Is anyone in the picture?").await?;
-    let after = desk.ledger.spent(&SpendKey::org(APP), SpendPeriod::Day).await?;
+    let after = desk.vision_spend().await?;
     let local = desk.records("vision.call").into_iter().filter(|c| c.ext["backend"] == "rf-detr-n").collect::<Vec<_>>();
     checks.check(
         "an on-device call records its image at zero cost",

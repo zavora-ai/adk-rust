@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use adk_artifact::InMemoryArtifactService;
 use adk_core::audit_log::AuditRecordDraft;
-use adk_core::{SpendKey, SpendLedger, SpendPeriod};
 use adk_harness::HarnessMode;
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_vision::{
@@ -26,7 +25,7 @@ use wiremock::MockServer;
 
 use crate::Checks;
 use crate::fixtures::{
-    APP, DeskSpec, Factory, Page, bbox_of, covered, desk, documents, fixtures, models, normalise,
+    DeskSpec, Factory, Page, bbox_of, covered, desk, documents, fixtures, models, normalise,
     read_json, save, tool_responses,
 };
 use crate::replay::{
@@ -273,7 +272,7 @@ async fn run_desk() -> Result<DeskRun> {
         fields.extend(extract(page, *digest, &answer));
     }
     let (tables, tables_dir) = write_tables(&fields)?;
-    let ledger_total = desk.ledger.spent(&SpendKey::org(APP), SpendPeriod::Day).await?;
+    let ledger_total = desk.vision_spend().await?;
     Ok(DeskRun {
         pages: digested,
         answers,

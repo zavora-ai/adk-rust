@@ -99,6 +99,22 @@ fn serve(stream: TcpStream, files: &HashMap<String, Vec<u8>>) {
     let _ = out.write_all(part);
 }
 
+/// Copies `from` to `to`, following symbolic links, as the Hugging Face cache stores files
+/// as links into its blobs.
+fn copy_resolved(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let path = entry?.path();
+        let target = to.join(path.file_name().context("a named entry")?);
+        if std::fs::metadata(&path)?.is_dir() {
+            copy_resolved(&path, &target)?;
+        } else {
+            std::fs::copy(&path, &target)?;
+        }
+    }
+    Ok(())
+}
+
 fn restricted_manifest() -> Result<ModelManifest> {
     Ok(ModelManifest::from_json(
         &json!({
@@ -161,13 +177,11 @@ pub async fn run() -> Result<Checks> {
     };
     let file = &det.files[0].path;
     let cached = online.cached(repo, revision, file).context("the detection model is cached")?;
+    // A copy of the model's cache entry, `refs` and snapshot, with one byte of the file flipped.
     let cache = tempfile::tempdir()?;
-    let snapshot = cache
-        .path()
-        .join(format!("models--{}", repo.replace('/', "--")))
-        .join("snapshots")
-        .join(revision);
-    std::fs::create_dir_all(&snapshot)?;
+    let entry = format!("models--{}", repo.replace('/', "--"));
+    copy_resolved(&FetchConfig::from_env().cache_dir.join(&entry), &cache.path().join(&entry))?;
+    let snapshot = cache.path().join(&entry).join("snapshots").join(revision);
     let mut bytes = std::fs::read(&cached)?;
     bytes[1_000] ^= 0x01;
     std::fs::write(snapshot.join(file), &bytes)?;

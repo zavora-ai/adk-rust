@@ -6,7 +6,10 @@ use std::sync::{Arc, Mutex};
 
 use adk_artifact::{ArtifactService, InMemoryArtifactService, SaveRequest};
 use adk_core::audit_log::{AuditRecordDraft, InMemoryAuditRecorder};
-use adk_core::{Event, InMemorySpendLedger, Llm, Part, RunBudget, SessionId, SpendLimits, UserId};
+use adk_core::{
+    Event, InMemorySpendLedger, Llm, Part, RunBudget, SessionId, SpendKey, SpendLedger, SpendLimits,
+    SpendPeriod, UserId,
+};
 use adk_harness::packs::vision::VisionPack;
 use adk_harness::{
     ApprovalPrompt, ApprovalPrompter, Harness, HarnessAgent, HarnessMode, PromptAnswer, Workspace,
@@ -294,6 +297,15 @@ impl Desk {
             events.push(event?);
         }
         Ok(events)
+    }
+
+    /// What the vision calls committed to the ledger. The scripted planner's own model calls
+    /// are committed at the harness's estimate for an unpriced model, under vendor `unknown`.
+    pub async fn vision_spend(&self) -> Result<u64> {
+        let all = self.ledger.spent(&SpendKey::org(APP), SpendPeriod::Day).await?;
+        let planner =
+            self.ledger.spent(&SpendKey::org(APP).with_vendor("unknown"), SpendPeriod::Day).await?;
+        Ok(all - planner)
     }
 
     pub fn records(&self, action: &str) -> Vec<AuditRecordDraft> {
