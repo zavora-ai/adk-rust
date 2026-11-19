@@ -8,9 +8,9 @@ that leaves the machine cropped, redacted and recorded first. It implements
 
 > **Note:** `adk-vision` is **Experimental**. This release holds the contracts, the runtime,
 > the egress boundary, the conformance suite, the [local ONNX backends](onnx.md), the
-> [document readers](document-readers.md) (`ocr`, `ocr-vl`, `nim`) and the [cloud backends](cloud.md) —
-> Gemini, Claude, Muse and NVIDIA NIM describers and Meta `sam-3.1`. mistral.rs backends arrive
-> as a feature in a later release.
+> [document readers](document-readers.md) (`ocr`, `ocr-vl`, `nim`), the [cloud backends](cloud.md) —
+> Gemini, Claude, Muse and NVIDIA NIM describers and Meta `sam-3.1` — and a
+> [local describer](local-describer.md) over mistral.rs (`mistralrs`, Qwen3-VL).
 
 ```toml
 [dependencies]
@@ -287,6 +287,7 @@ an approval card can show the exact image; see [Governed Vision Tools](governed-
 - [Image Privacy](../security/image-privacy.md)
 - [Local ONNX backends](onnx.md)
 - [Cloud vision backends](cloud.md): `LlmDescriber`, NVIDIA NIM and Meta `sam-3.1`
+- [Local describer](local-describer.md): Qwen3-VL in this process over mistral.rs
 - [Document readers](document-readers.md)
 - [Egress control](../security/egress.md)
 - [Tool authorization](../security/tool-authorization.md)

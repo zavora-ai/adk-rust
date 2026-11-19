@@ -18,7 +18,7 @@ use adk_core::{
     Content, DataLocality, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part, UsageUnit,
 };
 use adk_mistralrs::MistralRsConfig;
-use adk_vision::cloud::{Normalized1000, RegionAdapter};
+use adk_vision::cloud::Normalized1000;
 use adk_vision::conformance::{DescriberTarget, Fixture};
 use adk_vision::mistralrs::QWEN3_VL_2B;
 use adk_vision::{
@@ -33,8 +33,8 @@ use serde_json::json;
 /// `(380, 260)–(560, 420)` on 640×480), in its native form and frame.
 const QWEN_ANSWER: &str = r#"```json
 [
-  {"bbox_2d": [156, 167, 406, 417], "label": "red box"},
-  {"bbox_2d": [594, 542, 875, 875], "label": "blue box"}
+  {"bbox_2d": [156, 167, 406, 417], "label": "red"},
+  {"bbox_2d": [594, 542, 875, 875], "label": "blue"}
 ]
 ```"#;
 
@@ -141,7 +141,7 @@ async fn regions_reach_the_caller_in_source_pixels_without_a_schema() {
         })
         .collect();
     assert!(prompt.contains("normalised to 0-1000"), "{prompt}");
-    assert_eq!(out.calls[0].units.get(&UsageUnit::Images).copied(), Some(1));
+    assert_eq!(out.calls[0].units.get(UsageUnit::Images), 1);
     assert_eq!(out.calls[0].cost_micro_usd, Some(0));
 }
 
