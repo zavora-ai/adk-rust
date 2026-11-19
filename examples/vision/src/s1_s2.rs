@@ -197,10 +197,9 @@ async fn run_desk() -> Result<DeskRun> {
     // NVIDIA NIM: the five crops' recorded answers, in the order the desk escalates them.
     let server = MockServer::start().await;
     let (address, key) = match recording_proxy("NIM") {
-        Some(proxy) => (
-            proxy.parse().context("VISION_RECORD_NIM is host:port")?,
-            live_key("NVIDIA_API_KEY"),
-        ),
+        Some(proxy) => {
+            (proxy.parse().context("VISION_RECORD_NIM is host:port")?, live_key("NVIDIA_API_KEY"))
+        }
         None => {
             let recorded = Recording::all(&fixtures().join("recorded").join("nim-crops"))?;
             serve_in_order(&server, &recorded).await;
@@ -332,7 +331,8 @@ pub async fn s1(shared: &Shared) -> Result<Checks> {
             && !f.backend.is_empty()
             && page.is_some_and(|(_, d)| *d == f.digest)
     });
-    checks.check("each value carries its page digest, region in source pixels and backend", carried);
+    checks
+        .check("each value carries its page digest, region in source pixels and backend", carried);
 
     let baselines = baselines()?;
     let mut accuracy = Vec::new();
@@ -341,10 +341,8 @@ pub async fn s1(shared: &Shared) -> Result<Checks> {
         let correct = mine.iter().filter(|f| f.correct).count();
         let share = if mine.is_empty() { 0.0 } else { correct as f64 / mine.len() as f64 };
         let floor = baselines.get(backend).copied().unwrap_or(1.0);
-        accuracy.push(format!(
-            "{backend} {correct}/{} = {share:.3} (baseline {floor:.3})",
-            mine.len()
-        ));
+        accuracy
+            .push(format!("{backend} {correct}/{} = {share:.3} (baseline {floor:.3})", mine.len()));
         checks.check(
             &format!("{backend} field accuracy at or above its recorded baseline"),
             share + 1e-9 >= floor,
@@ -426,7 +424,8 @@ pub async fn s2(shared: &Shared) -> Result<Checks> {
         want.is_some_and(|b| covered(&b, &sent) > 0.0 || covered(&sent, &b) > 0.0)
             && sent.width() * sent.height() < page_area / 20.0
     });
-    checks.check("each sent image is a crop of its field's block plus margin, never the page", crops);
+    checks
+        .check("each sent image is a crop of its field's block plus margin, never the page", crops);
 
     // Where the cloud read text, its answer replaced the local block; where it read none,
     // the local value stands.

@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use adk_artifact::{ArtifactService, InMemoryArtifactService, SaveRequest};
 use adk_core::audit_log::{AuditRecordDraft, InMemoryAuditRecorder};
 use adk_core::{
-    Event, InMemorySpendLedger, Llm, Part, RunBudget, SessionId, SpendKey, SpendLedger, SpendLimits,
-    SpendPeriod, UserId,
+    Event, InMemorySpendLedger, Llm, Part, RunBudget, SessionId, SpendKey, SpendLedger,
+    SpendLimits, SpendPeriod, UserId,
 };
 use adk_harness::packs::vision::VisionPack;
 use adk_harness::{
@@ -148,8 +148,8 @@ pub async fn models() -> Result<&'static Models> {
                 .cloned()
                 .context("RF-DETR Nano is in the built-in manifest")?;
             let verified = fetcher.fetch(&manifest).await.context("fetching RF-DETR Nano")?;
-            let detector = RfDetr::new(&verified, &OnnxOptions::default())?
-                .with_threshold(PERSON_THRESHOLD);
+            let detector =
+                RfDetr::new(&verified, &OnnxOptions::default())?.with_threshold(PERSON_THRESHOLD);
             Ok::<_, anyhow::Error>(Models {
                 reader: Arc::new(reader),
                 detector: Arc::new(detector),

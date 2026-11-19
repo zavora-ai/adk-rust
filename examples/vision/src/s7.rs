@@ -15,9 +15,7 @@ use serde_json::{Value, json};
 use wiremock::MockServer;
 
 use crate::Checks;
-use crate::fixtures::{
-    APP, DeskSpec, Factory, crate_fixtures, desk, models, save, tool_responses,
-};
+use crate::fixtures::{APP, DeskSpec, Factory, crate_fixtures, desk, models, save, tool_responses};
 use crate::replay::{Recording, requests, serve_always};
 
 const CAP: u64 = 20;
@@ -25,7 +23,9 @@ const CALLS: usize = 30;
 
 pub async fn run() -> Result<Checks> {
     let mut checks = Checks::default();
-    checks.note("sam-3.1 on a recorded live response through the real client; RF-DETR Nano on the device");
+    checks.note(
+        "sam-3.1 on a recorded live response through the real client; RF-DETR Nano on the device",
+    );
     let artifacts = Arc::new(InMemoryArtifactService::new());
     let part = std::fs::read(crate_fixtures().join("cloud/shapes-960x540.png"))?;
     save(&artifacts, "part.png", part).await?;
@@ -51,7 +51,10 @@ pub async fn run() -> Result<Checks> {
     )?;
     let calls: Vec<(String, Value)> = (0..CALLS)
         .map(|i| {
-            ("vision_segment".to_string(), json!({ "image": "part.png", "concepts": [format!("red part {i}")] }))
+            (
+                "vision_segment".to_string(),
+                json!({ "image": "part.png", "concepts": [format!("red part {i}")] }),
+            )
         })
         .collect();
     let planner = ScriptedLlm::new(
@@ -59,7 +62,10 @@ pub async fn run() -> Result<Checks> {
         [
             ScriptedResponse::function_calls(calls),
             ScriptedResponse::text("Segmented."),
-            ScriptedResponse::function_call("vision_detect", json!({ "image": "part.png", "classes": ["person"] })),
+            ScriptedResponse::function_call(
+                "vision_detect",
+                json!({ "image": "part.png", "classes": ["person"] }),
+            ),
             ScriptedResponse::text("Detected."),
         ],
     );
@@ -99,7 +105,8 @@ pub async fn run() -> Result<Checks> {
         sent == CAP as usize && desk.recorder.released().len() == CAP as usize,
     );
     // Meta's sam-3.1 is reached with the Muse key and billed under Muse.
-    let spent = desk.ledger.spent(&SpendKey::org(APP).with_vendor("muse"), SpendPeriod::Day).await?;
+    let spent =
+        desk.ledger.spent(&SpendKey::org(APP).with_vendor("muse"), SpendPeriod::Day).await?;
     let commits: Vec<u64> = desk
         .records("vision.call")
         .iter()
@@ -108,13 +115,19 @@ pub async fn run() -> Result<Checks> {
         .collect();
     checks.check(
         &format!("the ledger holds {} commits of 2,500 µUSD ({spent} µUSD)", commits.len()),
-        commits.len() == CAP as usize && commits.iter().all(|c| *c == 2_500) && spent == CAP * 2_500,
+        commits.len() == CAP as usize
+            && commits.iter().all(|c| *c == 2_500)
+            && spent == CAP * 2_500,
     );
 
     let before = desk.vision_spend().await?;
     desk.send("Is anyone in the picture?").await?;
     let after = desk.vision_spend().await?;
-    let local = desk.records("vision.call").into_iter().filter(|c| c.ext["backend"] == "rf-detr-n").collect::<Vec<_>>();
+    let local = desk
+        .records("vision.call")
+        .into_iter()
+        .filter(|c| c.ext["backend"] == "rf-detr-n")
+        .collect::<Vec<_>>();
     checks.check(
         "an on-device call records its image at zero cost",
         local.len() == 1

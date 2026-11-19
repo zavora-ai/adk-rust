@@ -14,9 +14,9 @@ use adk_harness::HarnessMode;
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_vision::conformance::{AnyProbe, DetectorTarget, Expected, Fixture, ReaderTarget};
 use adk_vision::{
-    BackendDescriptor, Block, CoordFrame, DetectQuery, DocumentPage, DocumentReader,
-    Locality, NIM_READER_ID, NimCvConfig, NimDocumentReader, RawRegion, ReadOptions, Route,
-    SamConfig, SamSegmenter, SentImage, VisionConfig, VisionCx, VisionRuntime,
+    BackendDescriptor, Block, CoordFrame, DetectQuery, DocumentPage, DocumentReader, Locality,
+    NIM_READER_ID, NimCvConfig, NimDocumentReader, RawRegion, ReadOptions, Route, SamConfig,
+    SamSegmenter, SentImage, VisionConfig, VisionCx, VisionRuntime,
 };
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
@@ -25,8 +25,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::Checks;
 use crate::fixtures::{
-    DeskSpec, Factory, crate_fixtures, desk, load_image, models, normalise, page,
-    read_json, save, tool_responses,
+    DeskSpec, Factory, crate_fixtures, desk, load_image, models, normalise, page, read_json, save,
+    tool_responses,
 };
 use crate::replay::{Recording, client_to, serve_always};
 
@@ -132,13 +132,30 @@ async fn suite(target: impl Fn() -> AnyProbe, fixture: &Fixture) -> (usize, usiz
     use adk_vision::conformance as c;
     let mut passed = 0;
     let cases = 7;
-    passed += usize::from(conform(target(), fixture.clone(), |p, f| async move { c::coordinates(&p, &f).await }).await);
-    passed += usize::from(conform(target(), fixture.clone(), |p, f| async move { c::usage(&p, &f).await }).await);
-    passed += usize::from(conform(target(), fixture.clone(), |p, f| async move { c::cancellation(&p, &f).await }).await);
-    passed += usize::from(conform(target(), fixture.clone(), |p, f| async move { c::kill_switch(&p, &f).await }).await);
-    passed += usize::from(conform(target(), fixture.clone(), |p, f| async move { c::egress(&p, &f).await }).await);
-    passed += usize::from(conform(target(), fixture.clone(), |p, f| async move { c::unreleased(&p, &f).await }).await);
-    passed += usize::from(conform(target(), fixture.clone(), |p, f| async move { c::oversized(&p, &f).await }).await);
+    passed += usize::from(
+        conform(target(), fixture.clone(), |p, f| async move { c::coordinates(&p, &f).await })
+            .await,
+    );
+    passed += usize::from(
+        conform(target(), fixture.clone(), |p, f| async move { c::usage(&p, &f).await }).await,
+    );
+    passed += usize::from(
+        conform(target(), fixture.clone(), |p, f| async move { c::cancellation(&p, &f).await })
+            .await,
+    );
+    passed += usize::from(
+        conform(target(), fixture.clone(), |p, f| async move { c::kill_switch(&p, &f).await })
+            .await,
+    );
+    passed += usize::from(
+        conform(target(), fixture.clone(), |p, f| async move { c::egress(&p, &f).await }).await,
+    );
+    passed += usize::from(
+        conform(target(), fixture.clone(), |p, f| async move { c::unreleased(&p, &f).await }).await,
+    );
+    passed += usize::from(
+        conform(target(), fixture.clone(), |p, f| async move { c::oversized(&p, &f).await }).await,
+    );
     (passed, cases)
 }
 
@@ -166,7 +183,10 @@ pub async fn run() -> Result<Checks> {
     let factory: Factory = Box::new(move |gate, store| {
         VisionRuntime::builder()
             .reader(reader)
-            .reader(Arc::new(RecordedVl::load().map_err(|e| adk_vision::VisionError::InvalidInput(e.to_string()))?))
+            .reader(Arc::new(
+                RecordedVl::load()
+                    .map_err(|e| adk_vision::VisionError::InvalidInput(e.to_string()))?,
+            ))
             .remote_reader(Arc::new(nim))
             .detector(detector)
             .remote_detector(Arc::new(sam))
@@ -210,7 +230,9 @@ pub async fn run() -> Result<Checks> {
     )
     .await?;
 
-    let truth: Vec<String> = read_json(&crate_fixtures().join("documents/doc-page-1000x1300.groundtruth.json"))?["objects"]
+    let truth: Vec<String> = read_json(
+        &crate_fixtures().join("documents/doc-page-1000x1300.groundtruth.json"),
+    )?["objects"]
         .as_array()
         .context("the report page's ground truth")?
         .iter()
@@ -219,13 +241,15 @@ pub async fn run() -> Result<Checks> {
     let mut read_answers = Vec::new();
     for backend in readers {
         let events = desk.send(&format!("Read the report with {backend}.")).await?;
-        let answer = tool_responses(&events, "vision_read").into_iter().next().unwrap_or(Value::Null);
+        let answer =
+            tool_responses(&events, "vision_read").into_iter().next().unwrap_or(Value::Null);
         read_answers.push((backend, answer));
     }
     let mut detect_answers = Vec::new();
     for backend in detectors {
         let events = desk.send(&format!("Find the red rectangle with {backend}.")).await?;
-        let answer = tool_responses(&events, "vision_detect").into_iter().next().unwrap_or(Value::Null);
+        let answer =
+            tool_responses(&events, "vision_detect").into_iter().next().unwrap_or(Value::Null);
         detect_answers.push((backend, answer));
     }
 
@@ -259,7 +283,10 @@ pub async fn run() -> Result<Checks> {
     let detect_ok = detect_answers.iter().all(|(_, a)| a.get("error").is_none());
     checks.check(
         "every backend answered with the same output schema",
-        read_ok && detect_ok && shapes(&read_answers).len() == 1 && shapes(&detect_answers).len() == 1,
+        read_ok
+            && detect_ok
+            && shapes(&read_answers).len() == 1
+            && shapes(&detect_answers).len() == 1,
     );
     for (backend, answer) in read_answers.iter().chain(&detect_answers) {
         if let Some(error) = answer.get("error") {
@@ -269,7 +296,11 @@ pub async fn run() -> Result<Checks> {
 
     // The page each reader returns validates against the published DocumentPage schema.
     let schema = read_json(&crate_fixtures().join("../../schema/document-page.json"))?;
-    let validator = jsonschema::validator_for(&schema)?;
+    let region = read_json(&crate_fixtures().join("../../schema/region-set.json"))?;
+    let id = region["$id"].as_str().context("region-set.json names its $id")?.to_string();
+    // The page schema refers to the published region-set schema by its `$id`.
+    let registry = jsonschema::Registry::new().add(id, region)?.prepare()?;
+    let validator = jsonschema::options().with_registry(&registry).build(&schema)?;
     let image = load_image(&crate_fixtures().join("documents").join(DOC_PAGE))?;
     let runtime = VisionRuntime::builder()
         .reader(local.reader.clone())
@@ -284,7 +315,8 @@ pub async fn run() -> Result<Checks> {
     let mut valid = true;
     for backend in readers {
         let options = adk_vision::CallOptions::new().with_route(Route::to(backend));
-        let page = runtime.read_with(&VisionCx::new(), &image, &ReadOptions::default(), &options).await?;
+        let page =
+            runtime.read_with(&VisionCx::new(), &image, &ReadOptions::default(), &options).await?;
         valid &= validator.is_valid(&serde_json::to_value(&page.value)?);
     }
     checks.check("each reader's page validates against schema/document-page.json", valid);
@@ -306,7 +338,10 @@ pub async fn run() -> Result<Checks> {
             "{backend}: text {:.0}%, {} ms, {} µUSD",
             100.0 * text_accuracy(answer, &truth),
             record.and_then(|c| c.ext["durationMs"].as_u64()).unwrap_or(0),
-            record.and_then(|c| c.ext.get("costMicroUsd")).and_then(Value::as_u64).map_or("unpriced".to_string(), |c| c.to_string()),
+            record
+                .and_then(|c| c.ext.get("costMicroUsd"))
+                .and_then(Value::as_u64)
+                .map_or("unpriced".to_string(), |c| c.to_string()),
         ));
     }
     for (backend, answer) in &detect_answers {
@@ -330,7 +365,8 @@ pub async fn run() -> Result<Checks> {
     // The conformance suite, on every backend that runs here.
     let mut doc_fixture = Fixture::shapes();
     doc_fixture.image = image.clone();
-    let objects = read_json(&crate_fixtures().join("documents/doc-page-1000x1300.groundtruth.json"))?;
+    let objects =
+        read_json(&crate_fixtures().join("documents/doc-page-1000x1300.groundtruth.json"))?;
     let expected = |label: &str| -> Option<Expected> {
         objects["objects"].as_array()?.iter().find(|o| o["label"] == label).and_then(|o| {
             let b = crate::fixtures::bbox_of(&o["bbox"])?;
@@ -340,9 +376,11 @@ pub async fn run() -> Result<Checks> {
     doc_fixture.objects = ["title", "footer"].iter().filter_map(|l| expected(l)).collect();
     doc_fixture.tolerance_px = 10.0;
     let ocr = local.reader.clone();
-    let (ocr_pass, cases) = suite(|| AnyProbe::from(ReaderTarget::Local(ocr.clone())), &doc_fixture).await;
+    let (ocr_pass, cases) =
+        suite(|| AnyProbe::from(ReaderTarget::Local(ocr.clone())), &doc_fixture).await;
     let nim = Arc::new(nim_reader(&nim_server)?);
-    let (nim_pass, _) = suite(|| AnyProbe::from(ReaderTarget::Remote(nim.clone())), &doc_fixture).await;
+    let (nim_pass, _) =
+        suite(|| AnyProbe::from(ReaderTarget::Remote(nim.clone())), &doc_fixture).await;
     let mut card_fixture = Fixture::shapes();
     card_fixture.image = card.source()?;
     let portrait = card.portrait().context("the card's portrait")?;
@@ -350,7 +388,8 @@ pub async fn run() -> Result<Checks> {
     card_fixture.tolerance_px = 16.0;
     card_fixture.query = DetectQuery::Classes(vec!["person".into()]);
     let rf = local.detector.clone();
-    let (rf_pass, _) = suite(|| AnyProbe::from(DetectorTarget::Local(rf.clone())), &card_fixture).await;
+    let (rf_pass, _) =
+        suite(|| AnyProbe::from(DetectorTarget::Local(rf.clone())), &card_fixture).await;
     checks.check(
         &format!("conformance: pp-ocrv6-tiny {ocr_pass}/{cases}, {NIM_READER_ID} {nim_pass}/{cases}, rf-detr-n {rf_pass}/{cases}"),
         ocr_pass == cases && nim_pass == cases && rf_pass == cases,

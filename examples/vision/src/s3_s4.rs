@@ -44,8 +44,7 @@ async fn claude(model: &str, recording: &str) -> Result<(LlmDescriber, MockServe
         .allow_insecure_http()
         .with_base_url(base);
     let client: Arc<dyn Llm> = Arc::new(adk_model::AnthropicClient::new(config)?);
-    let describer =
-        LlmDescriber::remote(client, [ANTHROPIC_HOST])?.with_max_output_tokens(400);
+    let describer = LlmDescriber::remote(client, [ANTHROPIC_HOST])?.with_max_output_tokens(400);
     Ok((describer, server))
 }
 
@@ -135,7 +134,12 @@ pub async fn s3() -> Result<Checks> {
             app_name: APP.into(),
             user_id: USER.into(),
             session_id: SESSION.into(),
-            file_name: receipt.artifact.as_ref().context("the egress copy is stored")?.file_name.clone(),
+            file_name: receipt
+                .artifact
+                .as_ref()
+                .context("the egress copy is stored")?
+                .file_name
+                .clone(),
             version: receipt.artifact.as_ref().map(|a| a.version),
         })
         .await?;
@@ -151,7 +155,10 @@ pub async fn s3() -> Result<Checks> {
     checks.check("RF-DETR finds no face in the bytes that left", people_after.is_empty());
     let still = leaked(&card.personal, &text_after);
     checks.check(
-        &format!("PP-OCRv6 reads none of the {} seeded personal strings in them", card.personal.len()),
+        &format!(
+            "PP-OCRv6 reads none of the {} seeded personal strings in them",
+            card.personal.len()
+        ),
         still.is_empty(),
     );
     let audited = audit.records().into_iter().any(|r| {
@@ -185,7 +192,9 @@ fn describe_args() -> Value {
 
 pub async fn s4() -> Result<Checks> {
     let mut checks = Checks::default();
-    checks.note("a harness in Ask mode; Claude Sonnet 5.5 on a recorded response; on-device redactors");
+    checks.note(
+        "a harness in Ask mode; Claude Sonnet 5.5 on a recorded response; on-device redactors",
+    );
     let card = page("id-card-02.png")?;
     let other = page("id-card-03.png")?;
     let artifacts = Arc::new(InMemoryArtifactService::new());
@@ -226,7 +235,8 @@ pub async fn s4() -> Result<Checks> {
 
     let events = desk.send("What kind of document is id-card.png?").await?;
     let prompts = desk.approver.prompts();
-    let held: Vec<_> = prompts.iter().filter(|p| p.request.tool_name == "vision_describe").collect();
+    let held: Vec<_> =
+        prompts.iter().filter(|p| p.request.tool_name == "vision_describe").collect();
     let first = held.first().context("the remote call was held")?;
     let Some(Evidence::Image(evidence)) = first.request.evidence.first() else {
         anyhow::bail!("the held call carries image evidence");
@@ -260,7 +270,8 @@ pub async fn s4() -> Result<Checks> {
     save(&artifacts, "id-card.png", other.png()?).await?;
     desk.send("And now?").await?;
     let prompts = desk.approver.prompts();
-    let again: Vec<_> = prompts.iter().filter(|p| p.request.tool_name == "vision_describe").collect();
+    let again: Vec<_> =
+        prompts.iter().filter(|p| p.request.tool_name == "vision_describe").collect();
     let swapped = again.get(1).and_then(|p| match p.request.evidence.first() {
         Some(Evidence::Image(e)) => Some((e.digest.clone(), p.request.fingerprint())),
         _ => None,
@@ -282,7 +293,8 @@ pub async fn s4() -> Result<Checks> {
         "the audit records link each decision to its image digest",
         decided.iter().any(|d| d == &json!([egress]))
             && releases.iter().any(|r| {
-                r.ext["egressDigest"] == json!(egress) && r.ext["decisionKind"]["kind"] == "approved"
+                r.ext["egressDigest"] == json!(egress)
+                    && r.ext["decisionKind"]["kind"] == "approved"
             }),
     );
     Ok(checks)

@@ -317,10 +317,9 @@ fn lookup<'a>(set: &'a ManifestSet, id: &str) -> Result<&'a ModelManifest> {
 /// Whether every file of `manifest` is in the cache, without opening a socket.
 fn cached(fetcher: &ModelFetcher, manifest: &ModelManifest) -> bool {
     match &manifest.source {
-        ModelSource::HuggingFace { repo, revision } => manifest
-            .files
-            .iter()
-            .all(|file| fetcher.cached(repo, revision, &file.path).is_some()),
+        ModelSource::HuggingFace { repo, revision } => {
+            manifest.files.iter().all(|file| fetcher.cached(repo, revision, &file.path).is_some())
+        }
         ModelSource::Local { dir } => {
             manifest.files.iter().all(|file| dir.join(&file.path).exists())
         }
@@ -601,7 +600,9 @@ async fn register(
 ) -> Result<VisionRuntimeBuilder> {
     let base_url = run_args(task).base_url.clone();
     match (task, id) {
-        (RunTask::Detect { .. }, "sam-3.1") => Ok(builder.remote_detector(Arc::new(sam(base_url)?))),
+        (RunTask::Detect { .. }, "sam-3.1") => {
+            Ok(builder.remote_detector(Arc::new(sam(base_url)?)))
+        }
         (RunTask::Segment { .. }, "sam-3.1") => {
             Ok(builder.remote_segmenter(Arc::new(sam(base_url)?)))
         }
@@ -659,13 +660,14 @@ fn describer(
             (Arc::new(client), "generativelanguage.googleapis.com")
         }
         "nim" => {
-            let url = base_url.or_else(|| std::env::var("NVIDIA_NIM_URL").ok()).ok_or_else(|| {
-                anyhow!(
-                    "NVIDIA NIM has no default URL: pass --base-url or set NVIDIA_NIM_URL \
+            let url =
+                base_url.or_else(|| std::env::var("NVIDIA_NIM_URL").ok()).ok_or_else(|| {
+                    anyhow!(
+                        "NVIDIA NIM has no default URL: pass --base-url or set NVIDIA_NIM_URL \
                      (hosted: https://integrate.api.nvidia.com/v1, under NVIDIA's API Trial \
                      Terms; or your own NIM)"
-                )
-            })?;
+                    )
+                })?;
             let config = adk_vision::cloud::nim::NimConfig::new(
                 url,
                 key(&["NVIDIA_API_KEY"])?,
@@ -740,7 +742,11 @@ async fn local(
 fn model_for<'a>(set: &'a ManifestSet, id: &str, task: VisionTask) -> Result<&'a ModelManifest> {
     let manifest = lookup(set, id)?;
     if manifest.task != task {
-        bail!("model `{id}` is a {} model, not a {} one", task_name(manifest.task), task_name(task));
+        bail!(
+            "model `{id}` is a {} model, not a {} one",
+            task_name(manifest.task),
+            task_name(task)
+        );
     }
     Ok(manifest)
 }
@@ -847,9 +853,8 @@ async fn run_task(project: &Path, task: RunTask) -> Result<()> {
         options = options.with_region(crop);
     }
     for digest in &args.approve {
-        options = options.approving(
-            digest.parse::<Digest>().map_err(|e| anyhow!("--approve `{digest}`: {e}"))?,
-        );
+        options = options
+            .approving(digest.parse::<Digest>().map_err(|e| anyhow!("--approve `{digest}`: {e}"))?);
     }
     // A remote call is released only through the gate; a local one never reaches it.
     let mut builder = register(VisionRuntime::builder(), &task, &id, &set, &fetcher).await?;
@@ -1310,8 +1315,7 @@ mod tests {
         assert_eq!(backend_id(&read), "pp-ocrv6-tiny");
         let detect = RunTask::Detect { run: run.clone(), classes: Vec::new(), threshold: None };
         assert_eq!(backend_id(&detect), "rf-detr-n");
-        let describe =
-            RunTask::Describe { run, question: "?".into(), model: None, regions: false };
+        let describe = RunTask::Describe { run, question: "?".into(), model: None, regions: false };
         assert_eq!(backend_id(&describe), "claude");
     }
 }

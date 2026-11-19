@@ -571,7 +571,9 @@ mod tests {
             assert!(paths.contains(&path), "{path} in {paths:?}");
         }
         let cargo = file(&files, "Cargo.toml");
-        for feature in ["\"harness\"", "\"vision-local\"", "\"artifacts\"", "\"cli\"", "\"anthropic\""] {
+        for feature in
+            ["\"harness\"", "\"vision-local\"", "\"artifacts\"", "\"cli\"", "\"anthropic\""]
+        {
             assert!(cargo.contains(feature), "missing {feature} in:\n{cargo}");
         }
         assert!(!cargo.contains("adk-vision ="), "the desk depends on adk-rust only: {cargo}");
@@ -618,7 +620,10 @@ mod tests {
     fn addons_that_serve_cannot_join_the_desk() {
         let registry = TemplateRegistry::builtin();
         for addon in ["server", "docker"] {
-            assert!(resolve_composition(&registry, "vision", &[addon], "anthropic").is_err(), "{addon}");
+            assert!(
+                resolve_composition(&registry, "vision", &[addon], "anthropic").is_err(),
+                "{addon}"
+            );
         }
     }
 }

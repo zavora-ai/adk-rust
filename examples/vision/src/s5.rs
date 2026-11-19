@@ -13,10 +13,10 @@ use std::sync::Arc;
 use adk_core::Llm;
 use adk_core::egress::EgressPolicy;
 use adk_vision::{
-    BBox, BackendId, CoordFrame, DescribeSpec, EgressAction, EgressConfig,
-    EgressGate, InMemoryEgressRecorder, Letterbox, LlmDescriber, RawRegion, Region,
-    RegionNormalizer, SamConfig, SamSegmenter, ScreenSpace, SegmentPrompt, SourceImage, Transform,
-    TransformChain, VisionCx, VisionRuntime,
+    BBox, BackendId, CoordFrame, DescribeSpec, EgressAction, EgressConfig, EgressGate,
+    InMemoryEgressRecorder, Letterbox, LlmDescriber, RawRegion, Region, RegionNormalizer,
+    SamConfig, SamSegmenter, ScreenSpace, SegmentPrompt, SourceImage, Transform, TransformChain,
+    VisionCx, VisionRuntime,
 };
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
@@ -132,8 +132,10 @@ async fn sam(image: &SourceImage) -> Result<Vec<Region>> {
         SamConfig::new("recorded").with_base_url(format!("{}/v1", server.uri())),
     )?
     .with_hosts(["api.meta.ai"]);
-    let runtime =
-        VisionRuntime::builder().remote_segmenter(Arc::new(sam)).egress_gate(open_gate()).build()?;
+    let runtime = VisionRuntime::builder()
+        .remote_segmenter(Arc::new(sam))
+        .egress_gate(open_gate())
+        .build()?;
     let prompt = [SegmentPrompt::Concept { text: "rectangle".into() }];
     Ok(runtime.segment(&VisionCx::new(), image, &prompt).await?.value)
 }
@@ -193,7 +195,10 @@ fn round_trips(cases: usize) -> Result<(usize, f32)> {
                     let y = rng.next() % (ch - height + 1);
                     Transform::Crop { x, y, width, height }
                 }
-                1 => Transform::Resize { width: 8 + rng.next() % 4000, height: 8 + rng.next() % 4000 },
+                1 => Transform::Resize {
+                    width: 8 + rng.next() % 4000,
+                    height: 8 + rng.next() % 4000,
+                },
                 2 => Transform::Pad {
                     left: rng.next() % 64,
                     top: rng.next() % 64,
@@ -206,7 +211,12 @@ fn round_trips(cases: usize) -> Result<(usize, f32)> {
         }
         let x0 = (rng.next() % w) as f32;
         let y0 = (rng.next() % h) as f32;
-        let b = BBox::new(x0, y0, x0 + 1.0 + (rng.next() % 200) as f32, y0 + 1.0 + (rng.next() % 200) as f32);
+        let b = BBox::new(
+            x0,
+            y0,
+            x0 + 1.0 + (rng.next() % 200) as f32,
+            y0 + 1.0 + (rng.next() % 200) as f32,
+        );
         let back = chain.bbox_to_source(&chain.bbox_to_target(&b));
         worst = worst.max(edge_error(&back, &b));
     }
@@ -236,8 +246,14 @@ pub async fn run() -> Result<Checks> {
     );
 
     let answers = [
-        ("Claude (pixels of the image it processed)", by_label(&claude(&image, &prompt).await?, &targets)),
-        ("Gemini (box_2d on 0–1000)", by_label(&gemini(&image, &prompt, &fixture["gemini"]).await?, &targets)),
+        (
+            "Claude (pixels of the image it processed)",
+            by_label(&claude(&image, &prompt).await?, &targets),
+        ),
+        (
+            "Gemini (box_2d on 0–1000)",
+            by_label(&gemini(&image, &prompt, &fixture["gemini"]).await?, &targets),
+        ),
         ("sam-3.1 (source pixels)", by_overlap(&sam(&image).await?, &targets)),
         ("RF-DETR (640×640 model input, letterboxed)", rf_detr(&image, &fixture, &targets)?),
     ];
@@ -259,7 +275,10 @@ pub async fn run() -> Result<Checks> {
             }
         }
         landed += within;
-        checks.check(&format!("{backend}: {within}/12 within 2 px (worst {worst:.2} px)"), within == 12);
+        checks.check(
+            &format!("{backend}: {within}/12 within 2 px (worst {worst:.2} px)"),
+            within == 12,
+        );
     }
     checks.check("all 48 regions land within 2 px of the truth in source pixels", landed == 48);
     checks.check(

@@ -10,9 +10,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use adk_vision::{
-    AcceptanceStore, Digest, FetchConfig, InMemoryAcceptanceStore, LicenceAcceptance,
-    LicenceClass, ManifestSet, ModelFetcher, ModelManifest, ModelSource, PpOcrReader, PpOcrV6Size,
-    VisionError,
+    AcceptanceStore, Digest, FetchConfig, InMemoryAcceptanceStore, LicenceAcceptance, LicenceClass,
+    ManifestSet, ModelFetcher, ModelManifest, ModelSource, PpOcrReader, PpOcrV6Size, VisionError,
 };
 use anyhow::{Context, Result};
 use serde_json::json;
@@ -75,14 +74,16 @@ fn serve(stream: TcpStream, files: &HashMap<String, Vec<u8>>) {
     let path = request.split_whitespace().nth(1).unwrap_or("/").trim_start_matches('/');
     let mut out = stream;
     let Some(body) = files.get(path) else {
-        let _ = write!(out, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        let _ =
+            write!(out, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         return;
     };
     let commit = path.split('/').nth(3).unwrap_or_default();
     let (start, end) = match range.as_deref().and_then(|r| r.split_once('-')) {
         Some((a, b)) => {
             let start: usize = a.parse().unwrap_or(0);
-            let end = if b.is_empty() { body.len() - 1 } else { b.parse().unwrap_or(body.len() - 1) };
+            let end =
+                if b.is_empty() { body.len() - 1 } else { b.parse().unwrap_or(body.len() - 1) };
             (start, end.min(body.len() - 1))
         }
         None => (0, body.len() - 1),
@@ -195,10 +196,8 @@ pub async fn run() -> Result<Checks> {
             let text = e.to_string();
             text.contains(&det.files[0].sha256.hex()) && text.contains(&Digest::of(&bytes).hex())
         });
-    checks.check(
-        "a file whose SHA-256 differs is refused at fetch, naming both digests",
-        names_both,
-    );
+    checks
+        .check("a file whose SHA-256 differs is refused at fetch, naming both digests", names_both);
     // Verified, then changed on disk before the load: the load checks it again.
     std::fs::write(snapshot.join(file), std::fs::read(&cached)?)?;
     let det_ok = tampered.fetch(det).await?;
@@ -244,7 +243,10 @@ pub async fn run() -> Result<Checks> {
         .map(|m| m.id.as_str())
         .collect();
     checks.check(
-        &format!("the built-in manifest ({} models) lists no non-commercial or copyleft model", builtin.len()),
+        &format!(
+            "the built-in manifest ({} models) lists no non-commercial or copyleft model",
+            builtin.len()
+        ),
         restricted.is_empty(),
     );
     Ok(checks)
