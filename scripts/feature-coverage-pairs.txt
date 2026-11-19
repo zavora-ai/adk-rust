@@ -113,6 +113,9 @@
 7 adk-harness website,postgres,redis
 # Agent surfaces (spec 3.3 §6.1): `adk_rust::surface`, in no tier.
 1 adk-rust surface
+# Local-first perception (spec 3.7 §8.3): `vision` is in `full`; `vision-local`, in no tier,
+# adds the on-device backends.
+1 adk-rust vision-local
 
 # adk-server (shard 3), adk-kernel (2), adk-cli (5, 8 and 10) and adk-surface (9).
 # The background run store and its persistence are behind `background`; nothing compiled
@@ -152,6 +155,10 @@
 # The in-process ONNX embedder for long-term memory, off by default so the default build
 # needs no network (spec 3.1 §7.15.2).
 8 adk-cli memory-local
+# `adk-rust vision` (spec 3.7 §8.1): manifests, licences, the egress log and `vision run`;
+# with `vision-local` the on-device backends and the gate's redactors.
+8 adk-cli vision
+8 adk-cli vision-local
 # The `chat` end-to-end tests in a pseudo-terminal: held calls, Ctrl-C, sessions; with
 # `audit-sql`, "Hire a helper" (spec 3.3 §12 phase 4) checks the kernel's record with `audit verify`.
 10 adk-cli scripted-model,audit-sql solo
@@ -457,6 +464,19 @@
 # Vision evals (spec 3.7 §7.16): the eval agent scoring the committed eval sets through adk-eval
 # in process and over the cargo adk eval protocol, with the doctests.
 6 adk-vision eval doc
+# The local ONNX backends (spec 3.7 §7.6): RF-DETR, EfficientSAM, SAM 2.1 and SigLIP 2 on ort,
+# with the conformance suite; the weight-backed runs are ignored.
+6 adk-vision onnx,fetch,conformance doc
+# The same backends against an onnxruntime loaded from ORT_DYLIB_PATH at run time: linted only.
+6 adk-vision onnx-dynamic lib
+# The cloud describers (spec 3.7 §7.7) on recorded responses, and Meta sam-3.1's request
+# building, stream parser and mask placement on recorded streams.
+6 adk-vision cloud,conformance doc
+6 adk-vision sam doc
+# The conformance suite and its macros on their own.
+6 adk-vision conformance
+# `onnx-coreml`, `onnx-cuda` and `ocr-vl-metal` need GPU toolchains a runner does not have, and
+# stay out as adk-mistralrs's `cuda` and `metal` do.
 6 adk-site gen-astro
 # `awp verify` against the preview in the launch gate (spec 3.5 §7.8.1), without `migrate`.
 6 adk-site verify doc

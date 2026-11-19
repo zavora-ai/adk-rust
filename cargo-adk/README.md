@@ -46,6 +46,7 @@ cargo adk new my-agent --template realtime   # realtime voice/audio agent
 cargo adk new my-agent --template harness    # governed harness: REPL with approvals
 cargo adk new my-agent --template autonomous # unattended agent on the agent kernel
 cargo adk new my-site --template website     # AWP 2.0 website and its edge
+cargo adk new my-desk --template vision      # Document desk with the vision pack
 
 # Compose with addons
 cargo adk new my-agent --template tools --addon telemetry --addon auth
@@ -240,6 +241,7 @@ cargo adk eval --ledger ledger.jsonl --format json --output ledger-report.json
 | `openai` | OpenAI-powered LLM agent |
 | `harness` | The governed harness: `HarnessAgent` over SQLite sessions, approvals, action ledger, standing rules and kernel stores, run by `HarnessLauncher` (`cargo run` is the REPL with approvals, `cargo run -- serve` serves it, `cargo run -- up` runs the agent kernel, `cargo run -- goal` works toward a goal), `.adk/harness.toml`, an `AGENTS.md` skeleton, an example skill, and a scripted smoke test |
 | `autonomous` | An agent that runs unattended ([guide](../docs/official_docs/autonomy/index.md)): `HarnessAgent` in `auto` mode on the `autonomy` feature, with every store in `.adk/state.db`, the OS sandbox for `bash`, an approval-gated `publish_status` side effect, a per-run budget, a daily spend cap, a signed audit log and a weekday cron trigger; `cargo run -- up` runs the agent kernel with its home in `.adk`, `cargo run -- goal` works toward a goal on it, and a scripted test checks that publishing waits for a decision |
+| `vision` | A Document desk ([getting started](../docs/official_docs/vision/getting-started.md)): `HarnessAgent` in `auto` mode with the vision pack on `vision-local` — PP-OCRv6 reads each page in `inbox/` on the device, RF-DETR and PP-OCRv6 cover faces and personal text before any image leaves, a cloud `Describer` over the provider model sees only a field's crop, `.adk/vision.toml` denies whole pages and asks for crops at the terminal, and tables land in `tables/`; a scripted test checks that a describe is held and nothing leaves when the person says no. Takes no addon that serves |
 | `website` | An AWP 2.0 website (spec 3.5 §7.17): the site project `adk-website new` scaffolds — `site.toml`, the `paper` theme, a business draft charter with its own site id, capabilities, public terms, draft legal pages, `data/`, the holding page — and an edge binary: `cargo run` serves the release `adk-rust site publish` puts in `data/host` with `search_site` on the AWP edge, `cargo run -- check` builds and runs the launch gate; a smoke test. Takes no addon |
 | `managed-agents` | Anthropic Managed Agents session with SSE streaming |
 
@@ -333,7 +335,7 @@ cargo adk build         # verify compilation
 | The `api` template and the `server` addon bind `BIND_HOST` (default `127.0.0.1`) | Set `BIND_HOST=0.0.0.0` where the server must be reachable from other machines |
 | `cargo adk bench --suite` is removed; it ran the ordinary workloads whatever suite it named | Drop the flag |
 | `cargo adk bench` is behind the `bench` feature, off by default; without it the subcommand exits 2 with the install command | `cargo install cargo-adk --features bench` |
-| New templates: `harness`, `autonomous` and `website` | — |
+| New templates: `harness`, `autonomous`, `website` and `vision` | — |
 
 See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
 

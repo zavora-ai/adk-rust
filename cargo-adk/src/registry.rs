@@ -766,6 +766,8 @@ pub async fn greet(args: GreetArgs) -> std::result::Result<Value, AdkError> {
         crate::autonomous_template::template(),
         // An AWP 2.0 website project (spec 3.5 §7.17, §8.2).
         crate::website_template::template(),
+        // A Document desk with the vision pack (spec 3.7 §8.3).
+        crate::vision_template::template(),
     ]
 }
 

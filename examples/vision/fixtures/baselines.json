@@ -1,0 +1,7 @@
+{
+  "note": "Recorded when the scenarios were first accepted on 2026-11-19 (spec 3.7 §5): a run passes at or above these. NVIDIA NIM's nemotron-ocr-v1 found text in three of the five escalated crops and read none of the hard fields as printed, so its floor is zero.",
+  "s1FieldAccuracy": {
+    "pp-ocrv6-tiny": 0.97,
+    "nim-document-reader": 0.0
+  }
+}

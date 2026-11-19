@@ -128,6 +128,7 @@ AXES: dict[str, str] = {
     "surface": "surface",
     "website": "website",
     "autonomy": "autonomy",
+    "vision": "vision",
 }
 
 TIERS = {

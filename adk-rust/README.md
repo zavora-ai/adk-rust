@@ -25,6 +25,7 @@ nobody watches:
 | `adk_rust::harness` | `harness` (in `enterprise` and `full`) | The governed harness agent: modes, standing approvals, a sandboxed shell, plans and durable goals |
 | `adk_rust::kernel` | `harness-kernel` (in `enterprise` and `full`) | The agent kernel `adk-rust up` runs: processes, wake sources, the event bus and the control plane |
 | `adk_rust::surface` | `surface` (in no tier) | The surface engine and the web home, over a harness or a kernel |
+| `adk_rust::vision` | `vision` (in `full`); `vision-local` adds the on-device backends | Local-first perception: regions in source pixels, verified weights, the egress gate, cloud describers and `sam-3.1`; with `harness`, the vision pack |
 
 The `autonomy` feature (in `enterprise` and `full`) enables the harness and the kernel together
 with durable and background runs, cron and webhook wake-ups, the approvals service, SQLite
@@ -265,7 +266,7 @@ adk-rust = { version = "3.0.0", features = ["enterprise"] }
 # Autonomy alone — an agent that runs unattended, on any tier
 adk-rust = { version = "3.0.0", features = ["minimal", "anthropic", "autonomy", "cli"] }
 
-# Full — enterprise + audio, code, sandbox, code-tools, the AWP website, and the
+# Full — enterprise + audio, code, sandbox, code-tools, the AWP website, vision, and the
 # graph-functional, graph-node-cache, graph-delta, graph-time-travel, and graph-yaml capabilities
 adk-rust = { version = "3.0.0", features = ["full"] }
 
@@ -294,6 +295,7 @@ Features outside the tiers, composable with any of them:
 | Realtime and audio | `openai-realtime`, `gemini-live`, `vertex-live`, `livekit`, `openai-webrtc`, `video-avatar`, `audio-*` (`audio-onnx` covers Whisper, Distil-Whisper, Moonshine and Chatterbox), `kokoro`, `qwen3-tts`, `all-onnx` |
 | Harness packs | `harness-browser`, `harness-computer-use`, `harness-payments`, `harness-voice`, `harness-managed`, `harness-web`, `harness-mcp`, `harness-hooks`, `harness-encrypted`, `harness-memory-local` |
 | Surfaces | `surface` — the surface engine and the web home |
+| Vision | `vision` — `adk-vision` with the fetcher, cloud describers, `sam-3.1` and the privacy guardrail (in `full`); `vision-local` — the on-device backends on ONNX Runtime and Candle (in no tier) |
 | Graph actions | `action`, `action-http` (with RSS), `action-trigger`, `action-full` |
 | Other | `acp`, `skills-progressive-disclosure`, `sandbox-workspace`, `sandbox-docker`, `aws-secrets`, `azure-keyvault`, `gcp-secrets`, `gcp-model-armor`, `gcs-artifacts`, `vertex-sandbox`, `vertex-eval`, `vertex-rag`, `agent-retrieval`, `vertex-skill-registry`, `gcp-deploy` |
 
@@ -301,7 +303,7 @@ Features outside the tiers, composable with any of them:
 
 ## Modules
 
-Each enabled crate is re-exported as a module: `agent`, `model`, `tool`, `skill`, `session`, `artifact`, `memory`, `runner`, `server`, `telemetry`, `graph`, `realtime`, `browser`, `eval`, `guardrail`, `auth`, `payment`, `plugin`, `audio`, `rag`, `code`, `sandbox`, `computer_use`, `managed`, `harness`, `kernel`, `surface`, `awp`, `acp`, `website`, `site`, `anthropic_client`, `deploy`, and others. `adk_core` is re-exported at the crate root, and `adk_rust::prelude` brings the common types into scope.
+Each enabled crate is re-exported as a module: `agent`, `model`, `tool`, `skill`, `session`, `artifact`, `memory`, `runner`, `server`, `telemetry`, `graph`, `realtime`, `browser`, `eval`, `guardrail`, `auth`, `payment`, `plugin`, `audio`, `rag`, `code`, `sandbox`, `computer_use`, `managed`, `harness`, `kernel`, `surface`, `awp`, `acp`, `website`, `site`, `vision`, `anthropic_client`, `deploy`, and others. `adk_core` is re-exported at the crate root, and `adk_rust::prelude` brings the common types into scope.
 
 ## Changes in 3.0
 

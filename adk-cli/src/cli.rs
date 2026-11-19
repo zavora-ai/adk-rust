@@ -922,6 +922,16 @@ pub enum Commands {
         command: crate::awp_cli::AwpCommands,
     },
 
+    /// Local-first perception: model manifests and licences, one call, the egress log
+    ///
+    /// Detect, segment and read on the device; describe with a cloud model through the
+    /// egress gate of `.adk/vision.toml` (spec 3.7 §8.1).
+    ///
+    /// Example: `adk-rust vision models fetch pp-ocrv6-tiny-det pp-ocrv6-tiny-rec`, then
+    /// `adk-rust vision run read invoice.png`.
+    #[cfg(feature = "vision")]
+    Vision(crate::vision_cli::VisionArgs),
+
     /// An AWP 2.0 website: spin one up and run it
     ///
     /// Its status, the weekly review, the charter, and the jobs' autonomy levels
