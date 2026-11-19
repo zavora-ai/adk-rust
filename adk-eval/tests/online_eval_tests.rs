@@ -723,11 +723,11 @@ async fn judges_see_the_tool_results_the_answer_rests_on() {
     let prompts = prompts.lock().unwrap().clone();
     let grounding = prompts.iter().find(|prompt| prompt.contains("HALLUCINATION_FREE")).unwrap();
     assert!(grounding.contains("When does A1 ship?"), "{grounding}");
+    // Rendered with the same map as the tool result, so the key order follows serde_json's
+    // `preserve_order`, which another crate in the build may enable.
+    let tool_result = serde_json::json!({"sku": "A1", "ships": "Monday"});
     assert!(
-        grounding.contains(
-            r#"Tool results the agent received:
-- lookup: {"ships":"Monday","sku":"A1"}"#
-        ),
+        grounding.contains(&format!("Tool results the agent received:\n- lookup: {tool_result}")),
         "{grounding}"
     );
     assert!(records(&online).await[0].passed);
