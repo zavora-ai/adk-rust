@@ -2733,3 +2733,298 @@ button.segment {
   padding-left: 12px;
   border-left: 1px solid var(--divider);
 }
+
+/* A waiting decision leads with its question and what it costs (spec 3.3 §7.1). */
+.decision-ask .decision-heading {
+  order: 0;
+  font-size: var(--fs-xl);
+}
+
+.decision-ask > .decision-details {
+  margin-top: -8px;
+  color: var(--text-2);
+}
+
+.decision-ask > .decision-who {
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--decision-border) 70%, transparent);
+}
+
+.decision-qmark {
+  color: var(--accent);
+}
+
+/* ── The icon rail of a wide screen (spec 3.3 §5.1) ───────────── */
+/* The section links stand in a rail down the left edge: a mark each, the name on hover and to
+   assistive technology, Developer at the foot. Narrower screens keep them in the header. */
+
+.tab-icon {
+  display: none;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (min-width: 1181px) {
+  :root {
+    --rail-width: 64px;
+  }
+
+  .app {
+    padding-left: var(--rail-width);
+  }
+
+  /* A filter would hold the fixed rail inside the header. */
+  .header {
+    backdrop-filter: none;
+    background: var(--bg);
+  }
+
+  .tabs {
+    position: fixed;
+    z-index: 6;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    width: var(--rail-width);
+    padding: calc(var(--header-height) + 12px) 0 16px;
+    border-right: 1px solid var(--border);
+    border-radius: 0;
+    background: var(--side);
+  }
+
+  .tab {
+    position: relative;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border-radius: var(--radius);
+  }
+
+  .tab:hover:not([aria-current="page"]) {
+    background: color-mix(in srgb, var(--raised) 70%, var(--card));
+  }
+
+  .tab[aria-current="page"] {
+    background: var(--card);
+    box-shadow: var(--shadow);
+  }
+
+  .tab-icon {
+    display: block;
+  }
+
+  .tab-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .tab .badge-tab {
+    position: absolute;
+    top: 1px;
+    right: -1px;
+    display: inline-grid;
+  }
+
+  .tab-developer {
+    margin-top: auto;
+  }
+
+  /* The rail holds Developer; the roster's own link would say it twice. */
+  .rail-link {
+    display: none;
+  }
+}
+
+/* ── The canvas beside a thread (spec 3.3 §5.1) ─────────────── */
+
+.side[hidden] {
+  display: none;
+}
+
+.threads-canvas {
+  grid-template-columns: 248px minmax(0, 1fr) minmax(420px, 46%);
+}
+
+.drawn-line {
+  display: grid;
+  gap: 6px;
+}
+
+.pin-beside {
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--card);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pin-beside:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.pin-beside .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.drawn-beside {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 10px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.drawn-beside strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.canvas {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.canvas-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px 10px;
+}
+
+.canvas-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-version {
+  flex: none;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  color: var(--label);
+  font: 500 11px / 20px var(--mono);
+}
+
+.canvas-close {
+  margin-left: auto;
+}
+
+.canvas-tabs {
+  display: inline-flex;
+  flex: none;
+  align-self: flex-start;
+  gap: 2px;
+  margin: 0 16px 10px;
+  padding: 3px;
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.canvas-tabs button {
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.canvas-tabs button[aria-selected="true"] {
+  background: var(--tab-active);
+  box-shadow: var(--tab-shadow);
+  color: var(--text);
+}
+
+.canvas-body {
+  display: grid;
+  flex: 1;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  padding: 0 16px 20px;
+  overflow-y: auto;
+  overscroll-behavior: none;
+}
+
+.canvas-wire {
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--code-bg);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.canvas-empty {
+  padding: 4px 16px 16px;
+  color: var(--label);
+  font-size: var(--fs-sm);
+}
+
+/* Narrower than the three panes: the canvas slides over from the right. */
+@media (max-width: 1180px) {
+  .threads-canvas {
+    grid-template-columns: 248px minmax(0, 1fr);
+  }
+
+  .canvas {
+    position: fixed;
+    z-index: 7;
+    top: var(--header-height);
+    right: 0;
+    bottom: 0;
+    width: min(560px, 100%);
+    box-shadow: var(--shadow-pop);
+  }
+}
+
+@media (max-width: 640px) {
+  .canvas {
+    top: 0;
+  }
+}

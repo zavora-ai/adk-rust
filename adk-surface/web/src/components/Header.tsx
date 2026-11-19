@@ -16,6 +16,15 @@ const tabs: Array<{ section: Section; label: string }> = [
   { section: "memory", label: labels.memoryAndRules },
 ];
 
+/** Each section's mark in the icon rail of a wide screen (spec 3.3 §5.1). */
+const ICONS: Partial<Record<Section, string>> = {
+  threads: "M4 5.5h16v10H10l-4 3.5v-3.5H4z",
+  today: "M4.5 6h15v13.5h-15zM4.5 10h15M9 3.5v4M15 3.5v4",
+  memory: "M5 4.5h10.5a3 3 0 0 1 3 3v12H8a3 3 0 0 1-3-3zM5 16.5a3 3 0 0 1 3-3h10.5",
+  developer: "M8.5 7 3.5 12l5 5M15.5 7l5 5-5 5",
+  website: "M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17zM3.5 12h17M12 3.5c2.4 2.3 3.5 5.2 3.5 8.5s-1.1 6.2-3.5 8.5c-2.4-2.3-3.5-5.2-3.5-8.5S9.6 5.8 12 3.5z",
+};
+
 /**
  * The header every section shares (spec 3.3 §5.1): the brand, the sections, the status line
  * and Stop all — or, once stopped, Resume all, which only the web home offers (S-I10).
@@ -80,15 +89,23 @@ export function Header({
         {labels.brand}
       </a>
       <nav className="tabs" aria-label={labels.sections}>
-        {(website ? [...tabs, { section: "website" as const, label: website }] : tabs).map((tab) => (
+        {[
+          ...tabs,
+          ...(website ? [{ section: "website" as const, label: website }] : []),
+          { section: "developer" as const, label: labels.developerShort },
+        ].map((tab) => (
           <a
             key={tab.section}
-            className="tab"
+            className={`tab tab-${tab.section}`}
             href={pathOf(tab.section)}
             aria-current={section === tab.section ? "page" : undefined}
+            title={tab.label}
             onClick={go(tab.section)}
           >
-            {tab.label}
+            <svg className="tab-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d={ICONS[tab.section]} />
+            </svg>
+            <span className="tab-label">{tab.label}</span>
             {tab.section === "threads" && decisions > 0 && (
               <span className="badge badge-tab" aria-label={`${labels.decisions}: ${decisions}`}>
                 {decisions}

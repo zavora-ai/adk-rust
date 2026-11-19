@@ -46,6 +46,14 @@ const SCREENS: Array<{ name: string; query: string; size?: { width: number; heig
       await page.getByRole("dialog", { name: "Search and jump" }).waitFor();
     },
   },
+  {
+    name: "canvas beside a thread",
+    query: "screen=genui&genui=display",
+    then: async (page) => {
+      await page.getByRole("button", { name: "Show beside" }).first().click();
+      await page.getByRole("complementary", { name: "Canvas" }).waitFor();
+    },
+  },
   { name: "today", query: "section=today" },
   { name: "memory and rules", query: "section=memory" },
   { name: "developer run view", query: "screen=developer", then: async (page) => void (await page.getByRole("tree").waitFor()) },

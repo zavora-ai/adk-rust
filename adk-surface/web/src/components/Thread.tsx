@@ -8,7 +8,7 @@ import { useFormState } from "../genui/forms";
 import { RefusedNotice } from "../genui/Refused";
 import { labels } from "../labels";
 import { MarkdownResponse } from "../MarkdownResponse";
-import { visible } from "../safe";
+import { visible, visibleJson } from "../safe";
 import { DecisionCard } from "./DecisionCard";
 import type { Send, TakeOverSeam } from "./DecisionCard";
 import { Icon } from "./Icon";
@@ -179,6 +179,8 @@ export function Thread({
   takeOver,
   session,
   shell,
+  pinned,
+  onPin,
 }: {
   entries: FeedEntry[];
   open: Card[];
@@ -191,6 +193,10 @@ export function Thread({
   session?: string;
   /** Where the thread's agent runs commands, for each run's badge (spec 3.3 §5.7). */
   shell?: ShellView;
+  /** The drawing shown beside the thread, by its surface. */
+  pinned?: string;
+  /** Shows a drawing beside the thread, or brings it back (`undefined`). */
+  onPin?: (surfaceId: string | undefined) => void;
 }) {
   const [settled, setSettled] = useState<Card[]>([]);
   const settle = (card: Card) => {
@@ -260,20 +266,45 @@ export function Thread({
                 takeOver={takeOver}
               />
             );
-          case "drawn":
+          case "drawn": {
+            const beside = !line.superseded && onPin !== undefined;
+            // A drawing shown beside the thread is drawn there only; here it leaves a line.
+            if (beside && pinned === line.surface.surfaceId) {
+              return (
+                <p key={line.key} className="drawn-beside">
+                  <span>
+                    <strong>{visible(line.surface.title ?? labels.drawing)}</strong> · {labels.shownBeside}
+                  </span>
+                  <button type="button" className="link" onClick={() => onPin?.(undefined)}>
+                    {labels.bringBack}
+                  </button>
+                </p>
+              );
+            }
             return (
-              <DrawnLine
-                key={line.key}
-                line={line}
-                open={open}
-                client={client}
-                send={send}
-                session={session}
-                onSettled={settle}
-                focusDecision={focusDecision}
-                takeOver={takeOver}
-              />
+              <div key={line.key} className="drawn-line">
+                {beside && (
+                  <button type="button" className="pin-beside" onClick={() => onPin?.(line.surface.surfaceId)}>
+                    <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+                      <path d="M13.5 4.5v15" />
+                    </svg>
+                    {labels.showBeside}
+                  </button>
+                )}
+                <DrawnLine
+                  line={line}
+                  open={open}
+                  client={client}
+                  send={send}
+                  session={session}
+                  onSettled={settle}
+                  focusDecision={focusDecision}
+                  takeOver={takeOver}
+                />
+              </div>
             );
+          }
           case "decision": {
             const card = line.id ? open.find((candidate) => candidate.id === line.id) : undefined;
             return line.id ? (
@@ -314,6 +345,98 @@ export function Thread({
  * decision's own background (spec 3.3 §7.4 rule 5). The form's state is read from the server
  * as the decision and the call's result change.
  */
+/**
+ * The canvas beside a thread (spec 3.3 §5.1): one drawing kept in view while the conversation
+ * goes on, at its latest version as the agent patches it, with its earlier versions and the
+ * A2UI it arrived as. Its form sends and its decisions work here as in the thread.
+ */
+export function CanvasPane({
+  entries,
+  pinned,
+  open,
+  client,
+  send,
+  session,
+  onSettled,
+  focusDecision,
+  takeOver,
+  onClose,
+}: {
+  entries: FeedEntry[];
+  pinned: string;
+  open: Card[];
+  client: HomeClient;
+  send: Send;
+  session?: string;
+  onSettled: (card: Card) => void;
+  focusDecision?: string;
+  takeOver?: TakeOverSeam;
+  onClose: () => void;
+}) {
+  const [tab, setTab] = useState<"drawing" | "versions" | "wire">("drawing");
+  const line = lines(entries).find(
+    (candidate): candidate is Extract<Line, { kind: "drawn" }> =>
+      candidate.kind === "drawn" && candidate.surface.surfaceId === pinned && !candidate.superseded,
+  );
+  const earlier = line?.earlier ?? [];
+  return (
+    <aside className="canvas" aria-label={labels.canvas}>
+      <header className="canvas-head">
+        <h2 className="canvas-title">{line ? visible(line.surface.title ?? labels.drawing) : labels.drawing}</h2>
+        {line && <span className="canvas-version">v{line.surface.version}</span>}
+        <button type="button" className="icon-button canvas-close" aria-label={labels.closeCanvas} onClick={onClose}>
+          <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </header>
+      {line ? (
+        <>
+          <div className="canvas-tabs" role="tablist" aria-label={labels.canvas}>
+            {(
+              [
+                ["drawing", labels.drawing],
+                ["versions", labels.earlierVersions(earlier.length)],
+                ["wire", "A2UI"],
+              ] as const
+            ).map(([key, label]) => (
+              <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="canvas-body" role="tabpanel">
+            {tab === "drawing" && (
+              <DrawnLine
+                line={{ ...line, earlier: undefined }}
+                open={open}
+                client={client}
+                send={send}
+                session={session}
+                onSettled={onSettled}
+                focusDecision={focusDecision}
+                takeOver={takeOver}
+              />
+            )}
+            {tab === "versions" &&
+              (earlier.length === 0 ? (
+                <p className="canvas-empty">{labels.noEarlierVersions}</p>
+              ) : (
+                earlier
+                  .slice()
+                  .reverse()
+                  .map((surface) => <DrawnView key={surface.version} surface={surface} superseded />)
+              ))}
+            {tab === "wire" && <pre className="canvas-wire">{visibleJson(JSON.stringify(line.surface, null, 2))}</pre>}
+          </div>
+        </>
+      ) : (
+        <p className="canvas-empty">{labels.canvasGone}</p>
+      )}
+    </aside>
+  );
+}
+
 function DrawnLine({
   line,
   open,

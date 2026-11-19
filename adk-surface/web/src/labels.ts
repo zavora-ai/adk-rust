@@ -59,6 +59,7 @@ export const labels = {
   paletteTheme: (theme: string) => `Theme: ${theme}`,
   paletteAddAgent: "Add an agent",
   developer: "Developer panel",
+  developerShort: "Developer",
   skipToContent: "Skip to the content",
   keptOnYourComputer: "Kept on your computer",
   // A decision (spec 3.3 §7.1).
@@ -105,6 +106,16 @@ export const labels = {
   },
   lastLines: (shown: number, total: number) => `Showing the last ${shown} lines of ${total}.`,
   output: "Output",
+  // The canvas beside a thread (spec 3.3 §5.1).
+  showBeside: "Show beside",
+  shownBeside: "shown beside the thread",
+  bringBack: "Bring back",
+  canvas: "Canvas",
+  drawing: "Drawing",
+  earlierVersions: (count: number) => `Earlier versions · ${count}`,
+  noEarlierVersions: "This is the drawing's first version.",
+  closeCanvas: "Close the canvas",
+  canvasGone: "This drawing is no longer in the thread.",
   workSteps: (count: number) => `${count} steps`,
   workFailed: (count: number) => (count === 1 ? "1 failed" : `${count} failed`),
   // Today (spec 3.3 §5.1).

@@ -233,11 +233,20 @@ export function DecisionCard({
   }
 
   return (
-    <article ref={root} tabIndex={-1} className="decision" aria-labelledby={heading} data-decision="waiting">
-      {who}
+    // Question first: what the person is asked and what it costs, then who asks and the exact
+    // call (spec 3.3 §7.1), then the answers. The question mark is drawn, not spoken: the card
+    // is named by its heading on every surface.
+    <article ref={root} tabIndex={-1} className="decision decision-ask" aria-labelledby={heading} data-decision="waiting">
       <h3 id={heading} className="decision-heading">
         {visible(card.heading)}
+        {!/[?.!]$/.test(card.heading.trim()) && (
+          <span className="decision-qmark" aria-hidden="true">
+            ?
+          </span>
+        )}
       </h3>
+      {details}
+      {who}
       {summary}
       {call}
       {timeline}
@@ -297,7 +306,6 @@ export function DecisionCard({
           {problem}
         </p>
       )}
-      {details}
       {detail}
     </article>
   );

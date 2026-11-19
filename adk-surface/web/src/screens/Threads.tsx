@@ -9,7 +9,7 @@ import type { Send, TakeOverSeam } from "../components/DecisionCard";
 import { DecisionList } from "../components/DecisionList";
 import { Roster } from "../components/Roster";
 import { ShellBadge } from "../components/RunCard";
-import { Thread } from "../components/Thread";
+import { CanvasPane, Thread } from "../components/Thread";
 import { emptyThread, followFeed, wakeable } from "../feed";
 import type { ThreadState } from "../feed";
 import { briefingDue, briefingShown, quietWindows, rememberBriefing } from "../away";
@@ -106,6 +106,8 @@ export function Threads({
   const [sent, setSent] = useState(0);
   const [trouble, setTrouble] = useState(false);
   const [problem, setProblem] = useState("");
+  // The drawing shown beside the thread, in the session it belongs to (spec 3.3 §5.1).
+  const [beside, setBeside] = useState<{ session: string; surfaceId: string }>();
   const feed = useRef(wakeable());
 
   // Until the person picks one, the first agent waiting for them, else the first; once shown,
@@ -180,10 +182,11 @@ export function Threads({
     }
   }
 
+  const pin = beside && beside.session === session ? beside.surfaceId : undefined;
   const name = reading ? reading.agent.agent.displayName : current?.agent.displayName;
   const shownAgent = reading ? reading.agent.agent : current?.agent;
   return (
-    <div className="threads">
+    <div className={`threads${pin ? " threads-canvas" : ""}`}>
       <aside className="rail">
         <Roster
           agents={agents}
@@ -245,6 +248,8 @@ export function Threads({
             takeOver={takeOver}
             session={session}
             shell={reading ? undefined : current?.shell ?? undefined}
+            pinned={pin}
+            onPin={(surfaceId) => setBeside(surfaceId ? { session, surfaceId } : undefined)}
           />
           {problem && (
             <p className="decision-problem" role="alert">
@@ -275,7 +280,21 @@ export function Threads({
           />
         )}
       </main>
-      <aside className="side">
+      {pin && (
+        <CanvasPane
+          entries={thread.session === session ? thread.entries : []}
+          pinned={pin}
+          open={thread.session === session ? thread.open : []}
+          client={client}
+          send={send}
+          session={session}
+          onSettled={onChanged}
+          focusDecision={focusDecision}
+          takeOver={takeOver}
+          onClose={() => setBeside(undefined)}
+        />
+      )}
+      <aside className="side" hidden={pin !== undefined}>
         <MorningBriefing away={awayPage} areas={areas} status={status} onToday={onToday} />
         <DecisionList decisions={decisions} onOpen={onOpenDecision} />
         <section className="side-section" aria-labelledby="coming-up-heading" data-empty={planned.length === 0 || undefined}>
