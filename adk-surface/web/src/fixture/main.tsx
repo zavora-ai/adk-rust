@@ -18,6 +18,8 @@ import { VerbsFixture, VerbsHomeFixture, snoozeCard, verbsSeams, verbsVoiceDevic
 import { VoiceFixtureClient, fixtureDevices } from "./voice";
 import { WebsiteFixture } from "./website";
 import { workflowFixture } from "./workflow";
+import { VisionHomeFixture, visionPhoneFixture } from "./vision";
+import type { VisionState } from "./vision";
 import "../styles/fonts.css";
 import "../styles/tokens.css";
 import "../styles/app.css";
@@ -61,6 +63,16 @@ const screens: Record<string, () => ReactNode> = {
   ),
   // Agent-drawn UI (spec 3.3 §6.1 `genui`): `&genui=form|sent|display|refused|states|…`.
   genui: () => genuiFixture(params),
+  // Approve with the image (spec 3.7 §8.2):
+  // `&vision=pending|parked|purged|several|allRedacted|decided|changed`.
+  vision: () => {
+    const state = (params.get("vision") ?? "pending") as VisionState;
+    return <App client={new VisionHomeFixture(state)} seams={fixtureSeams()} initialSection="threads" initialAgent="desk" />;
+  },
+  visionPhone: () => {
+    const fixture = visionPhoneFixture((params.get("vision") ?? "pending") as VisionState);
+    return <PhoneApp client={fixture.client} initial={fixture.initial} />;
+  },
 };
 const screen = screens[params.get("screen") ?? ""];
 const root = document.getElementById("root");

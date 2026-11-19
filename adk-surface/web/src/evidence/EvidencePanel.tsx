@@ -56,7 +56,7 @@ export function EvidencePicture({
         image.regions.map((region, index) => (
           <span
             key={index}
-            className={`evidence-region evidence-region-${region.class}`}
+            className={`evidence-region evidence-region-${region.class}${region.y0 < image.height * 0.08 ? " evidence-region-top" : ""}`}
             style={{
               left: `${(region.x0 / image.width) * 100}%`,
               top: `${(region.y0 / image.height) * 100}%`,
