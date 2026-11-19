@@ -63,7 +63,26 @@ through `cargo adk eval --check-regression`.
 
 ## Reading the Results
 
-<!-- vision-bench:reading -->
+| Backend | What the run shows |
+|---------|--------------------|
+| RF-DETR Nano | About 52–59 ms per image at every input size on the M4's CPU: the runtime resizes each image to the model's 384×384 input first. Both drawn objects found, region IoU 0.992 |
+| RF-DETR Nano q4f16 | A 19 MB export against 108 MB, and on the CPU about 2.5 times slower than fp32 (132–142 ms); it finds both objects, with looser boxes (region IoU 0.890, COCO mAP 0.85 against 1.00) |
+| EfficientSAM-Ti, SAM 2.1 Tiny q4 | Each image costs an encoder pass, about 0.6 s and 1.0 s, nearly flat across input sizes. Both segment the drawn shapes at mask IoU 0.98 or better; SAM 2.1's boxes are within 2 px for all three shapes, EfficientSAM's for two |
+| SigLIP 2 base | 124–181 ms per image; every caption ranks its own fixture first, and three of four fixtures rank their own caption first |
+| PP-OCRv6 tiny, small | Tiny reads a page in 80–113 ms, small in 374–471 ms; both read the report page and the invoice exactly and extract all seven invoice fields |
+| Claude Sonnet 5.5, Haiku 5.5 | Every S5 click lands inside its target, at region IoU 0.99; on the drawn shapes, three (Sonnet) and four (Haiku) of five boxes are within 2 px |
+| Nemotron Super VL, Gemma 4 | No box lands within 2 px of the drawn edges (region IoU 0.71–0.87); Nemotron places every S5 click inside its target, Gemma 4 all but one. NVIDIA publishes no price for its hosted endpoints, so the rows say unpriced, not free |
+| Muse Spark 1.3 | Every S5 click inside its target; boxes looser than Claude's (region IoU 0.81–0.90) |
+| `sam-3.1` | Each named shape at region IoU 0.987, $2.50 per 1,000 images as the catalog prices it; one live call took 4.8 s end to end |
+
+The cloud costs are the run's metered spend: a describer's cost follows the tokens the image
+becomes, so the 3024×1964 S5 screenshot costs Claude Sonnet 5.5 $16.06 per 1,000 against
+$4.67 for the 960×540 shapes image. Local backends record their units at zero cost.
+
+The run shared the machine with other work: the latency rows were measured with the
+project's other builds held off, and the load average when the run started is in the
+machine table. Load moves the numbers: an earlier run on the same machine, started at a
+load average of 48, measured RF-DETR Nano at 76 ms p50 against 52 ms here.
 
 ## Related
 
