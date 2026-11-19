@@ -255,6 +255,7 @@ fn decide(request: &ApprovalRequest, answer: Answer) -> Command {
         edited_args: None,
         reason: None,
         expanded: true,
+        evidence: Vec::new(),
     }
 }
 

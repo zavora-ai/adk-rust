@@ -339,6 +339,7 @@ async fn audit_records_carry_the_device_and_the_presence() {
                 edited_args: None,
                 reason: None,
                 expanded: true,
+                evidence: Vec::new(),
             },
         )
         .await
@@ -356,6 +357,7 @@ async fn audit_records_carry_the_device_and_the_presence() {
                 edited_args: None,
                 reason: None,
                 expanded: true,
+                evidence: Vec::new(),
             },
         )
         .await
@@ -409,6 +411,7 @@ async fn an_answers_record_names_the_agent_whose_call_it_decided() {
                 edited_args: None,
                 reason: None,
                 expanded: true,
+                evidence: Vec::new(),
             },
         )
         .await

@@ -880,6 +880,7 @@ mod held {
             edited_args: None,
             reason: None,
             expanded: true,
+            evidence: Vec::new(),
         };
         let outcome = home.engine.execute(&phone(), answer(request.version)).await.unwrap();
         assert!(matches!(outcome, CommandOutcome::Answered { .. }), "{outcome:?}");
@@ -931,6 +932,7 @@ mod held {
                     edited_args: None,
                     reason: None,
                     expanded: true,
+                    evidence: Vec::new(),
                 },
             )
             .await
@@ -954,6 +956,7 @@ mod held {
                     edited_args: None,
                     reason: None,
                     expanded: true,
+                    evidence: Vec::new(),
                 },
             )
             .await
@@ -995,6 +998,7 @@ mod held {
                     edited_args: None,
                     reason: None,
                     expanded: true,
+                    evidence: Vec::new(),
                 },
             )
             .await

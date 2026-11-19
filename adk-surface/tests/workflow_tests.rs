@@ -266,6 +266,7 @@ impl Rig {
                     edited_args: None,
                     reason: None,
                     expanded: true,
+                    evidence: Vec::new(),
                 },
             )
             .await

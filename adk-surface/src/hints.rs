@@ -18,6 +18,7 @@
 //! | `offer_always` | `Some(false)` removes **Always allow** | Any hint that removes it |
 //! | `first_step` | A step of "How it got here" before "Asked at 10:02" | The first hint that sets it |
 //! | `detail` | A line under the details, with an optional link into the home | The first hint that sets it |
+//! | `media` | Where a call's images go, what they are, what they cost and what they were cut from (spec 3.7 §8.2) | Each fact from the first hint that sets it |
 //!
 //! A hint may only make a card stricter or add words. It never adds an answer, never lowers
 //! the risk and never changes it: the risk stays the inbox entry's, set when the call was
@@ -87,6 +88,9 @@ pub struct CardHint {
     /// A line under the details, such as "From the invoice-run workflow · Open in Runs". Never
     /// on a chat card (S-I5).
     pub detail: Option<CardDetail>,
+    /// What the feature knows about the images the call holds as evidence: where they go,
+    /// what they are, the estimated cost and what they were cut from (spec 3.7 §8.2).
+    pub media: Option<crate::evidence::MediaFacts>,
 }
 
 impl CardHint {
@@ -144,6 +148,13 @@ impl CardHint {
         self
     }
 
+    /// Says what the call's images are and where they go (spec 3.7 §8.2).
+    #[must_use]
+    pub fn with_media(mut self, media: crate::evidence::MediaFacts) -> Self {
+        self.media = Some(media);
+        self
+    }
+
     /// This hint with `later`'s fields where this one sets none, keeping the stricter value of
     /// `money` and `offer_always`.
     pub(crate) fn then(self, later: Self) -> Self {
@@ -157,6 +168,10 @@ impl CardHint {
             offer_always,
             first_step: self.first_step.or(later.first_step),
             detail: self.detail.or(later.detail),
+            media: match (self.media, later.media) {
+                (Some(first), Some(second)) => Some(first.then(second)),
+                (first, second) => first.or(second),
+            },
         }
     }
 

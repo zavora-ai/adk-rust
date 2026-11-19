@@ -148,6 +148,7 @@ async fn edit_is_offered_only_over_the_call_s_own_arguments() {
                 edited_args: Some(json!({ "amount": 400, "card": "****4242" })),
                 reason: None,
                 expanded: true,
+                evidence: Vec::new(),
             },
         )
         .await

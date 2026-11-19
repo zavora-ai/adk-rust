@@ -90,6 +90,7 @@ async fn answer(
         edited_args: request.edited_args,
         reason: request.reason,
         expanded: request.expanded,
+        evidence: request.evidence,
     };
     match engine.execute(&caller, command).await {
         Ok(outcome) => Json::<CommandOutcome>(outcome).into_response(),

@@ -143,6 +143,7 @@ fn a_decision_key_does_nothing_until_the_box_is_armed() {
             edited_args: None,
             reason: None,
             expanded: true,
+            evidence: Vec::new(),
         })]
     );
 }

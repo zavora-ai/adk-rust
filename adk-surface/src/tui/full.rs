@@ -44,6 +44,7 @@ async fn full_screen(surface: TerminalSurface) -> io::Result<i32> {
     app.agents_pane.granted = surface.engine.granted().to_vec();
     app.model = surface.model.clone();
     app.place = surface.place.clone();
+    app.home = surface.home.clone();
     app.commands = surface.commands.clone();
     // Without bracketed paste a paste arrives as keys: a decision key with more keys right
     // behind it is typing (§7.4 rule 2).
@@ -52,6 +53,7 @@ async fn full_screen(surface: TerminalSurface) -> io::Result<i32> {
         app.notice_until_key(notice.clone(), Tone::Info);
     }
     let mut renderer = Renderer::new(theme);
+    renderer.home = surface.home.clone();
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut pump = Pump::start(
