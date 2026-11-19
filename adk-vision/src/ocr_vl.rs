@@ -183,7 +183,10 @@ impl PaddleOcrVlReader {
     pub async fn fetch(fetcher: &crate::ModelFetcher, device: VlDevice) -> Result<Self> {
         let manifests = crate::ManifestSet::builtin()?;
         let lookup = |id: &str| {
-            manifests.get(id).cloned().ok_or_else(|| VisionError::BackendNotFound(id.to_string()))
+            manifests.get(id).cloned().ok_or_else(|| VisionError::Manifest {
+                id: id.to_string(),
+                reason: "not in the built-in manifest".into(),
+            })
         };
         let vl = fetcher.fetch(&lookup(PADDLEOCR_VL_MANIFEST)?).await?;
         let layout = fetcher.fetch(&lookup(PP_DOCLAYOUT_MANIFEST)?).await?;

@@ -223,8 +223,12 @@ impl PpOcrReader {
     #[cfg(feature = "fetch")]
     pub async fn fetch(fetcher: &crate::ModelFetcher, size: PpOcrV6Size) -> Result<Self> {
         let manifests = crate::ManifestSet::builtin()?;
-        let lookup =
-            |id: String| manifests.get(&id).cloned().ok_or(VisionError::BackendNotFound(id));
+        let lookup = |id: String| {
+            manifests.get(&id).cloned().ok_or_else(|| VisionError::Manifest {
+                id,
+                reason: "not in the built-in manifest".into(),
+            })
+        };
         let det = fetcher.fetch(&lookup(size.detection_manifest())?).await?;
         let rec = fetcher.fetch(&lookup(size.recognition_manifest())?).await?;
         Self::from_models(size, &det, &rec)
