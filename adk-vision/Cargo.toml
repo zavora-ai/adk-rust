@@ -29,6 +29,16 @@ conformance = ["tokio/rt-multi-thread"]
 # `ImagePrivacyGuardrail` as an adk-guardrail `Guardrail` and `ToolGuardrail` and a
 # `BeforeModelCallback`, and `PersonalTextRedactor` over `PiiRedactor`'s byte ranges (§7.8).
 guardrail = ["dep:adk-guardrail", "dep:base64"]
+# Local `ort` backends (§7.6): RF-DETR, EfficientSAM-Ti, SAM 2.1 Tiny and SigLIP 2, with the
+# onnxruntime binary downloaded at build time over rustls. Their weights come through the fetcher.
+onnx = ["fetch", "dep:ort", "dep:tokenizers", "ort/download-binaries", "ort/tls-rustls", "ort/copy-dylibs"]
+# The same backends against an onnxruntime library loaded at run time from `ORT_DYLIB_PATH`,
+# for offline and production builds.
+onnx-dynamic = ["fetch", "dep:ort", "dep:tokenizers", "ort/load-dynamic"]
+# `OnnxExecutionProvider::CoreMl` and `Cuda`; without them a session warns and runs on the CPU.
+# `onnx-cuda` downloads the CUDA build of onnxruntime; `onnx-coreml` links only on Apple targets.
+onnx-coreml = ["onnx", "ort/coreml"]
+onnx-cuda = ["onnx", "ort/cuda"]
 
 [dependencies]
 adk-core.workspace = true
@@ -58,6 +68,11 @@ base64 = { version = "0.22", optional = true }
 hf-hub = { version = "0.5", optional = true, default-features = false, features = ["ureq"] }
 # Only to read the HTTP status of a refused download (401 and 403 mean licence acceptance).
 ureq = { version = "3", optional = true, default-features = false }
+# The workspace `ort` pin; each `onnx*` feature adds how onnxruntime is linked.
+ort = { workspace = true, optional = true, features = ["std", "tracing", "api-27"] }
+# SigLIP 2's Gemma tokenizer. `onig` alone, as adk-rag: `esaxx_fast` links a static-CRT object
+# that rust-lld refuses next to ort's dynamic-CRT objects on MSVC.
+tokenizers = { version = "0.22", optional = true, default-features = false, features = ["onig"] }
 
 [dev-dependencies]
 # Path-only self dependency, so the crate's own tests run the conformance suite.

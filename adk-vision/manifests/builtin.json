@@ -1,1 +1,984 @@
-[]
+[
+  {
+    "id": "rf-detr-n",
+    "task": "detect",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "onnx-community/rfdetr_nano-ONNX",
+      "revision": "eae21cee0687a91bcf9fa071605c48d7705d2d91"
+    },
+    "files": [
+      {
+        "path": "onnx/model.onnx",
+        "sha256": "sha256:9cbac6b11ce34a03034e4d5a24cfac5f18632fd6761d1311dd640232088d7fee",
+        "size": 108074865
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://github.com/roboflow/rf-detr/blob/develop/LICENSE",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 17
+    },
+    "io": {
+      "input": {
+        "width": 384,
+        "height": 384,
+        "letterbox": "stretch"
+      },
+      "mean": [
+        0.485,
+        0.456,
+        0.406
+      ],
+      "std": [
+        0.229,
+        0.224,
+        0.225
+      ],
+      "labels": [
+        "",
+        "person",
+        "bicycle",
+        "car",
+        "motorcycle",
+        "airplane",
+        "bus",
+        "train",
+        "truck",
+        "boat",
+        "traffic light",
+        "fire hydrant",
+        "",
+        "stop sign",
+        "parking meter",
+        "bench",
+        "bird",
+        "cat",
+        "dog",
+        "horse",
+        "sheep",
+        "cow",
+        "elephant",
+        "bear",
+        "zebra",
+        "giraffe",
+        "",
+        "backpack",
+        "umbrella",
+        "",
+        "",
+        "handbag",
+        "tie",
+        "suitcase",
+        "frisbee",
+        "skis",
+        "snowboard",
+        "sports ball",
+        "kite",
+        "baseball bat",
+        "baseball glove",
+        "skateboard",
+        "surfboard",
+        "tennis racket",
+        "bottle",
+        "",
+        "wine glass",
+        "cup",
+        "fork",
+        "knife",
+        "spoon",
+        "bowl",
+        "banana",
+        "apple",
+        "sandwich",
+        "orange",
+        "broccoli",
+        "carrot",
+        "hot dog",
+        "pizza",
+        "donut",
+        "cake",
+        "chair",
+        "couch",
+        "potted plant",
+        "bed",
+        "",
+        "dining table",
+        "",
+        "",
+        "toilet",
+        "",
+        "tv",
+        "laptop",
+        "mouse",
+        "remote",
+        "keyboard",
+        "cell phone",
+        "microwave",
+        "oven",
+        "toaster",
+        "sink",
+        "refrigerator",
+        "",
+        "book",
+        "clock",
+        "vase",
+        "scissors",
+        "teddy bear",
+        "hair drier",
+        "toothbrush"
+      ]
+    }
+  },
+  {
+    "id": "rf-detr-n-q4f16",
+    "task": "detect",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "onnx-community/rfdetr_nano-ONNX",
+      "revision": "eae21cee0687a91bcf9fa071605c48d7705d2d91"
+    },
+    "files": [
+      {
+        "path": "onnx/model_q4f16.onnx",
+        "sha256": "sha256:42d8072bc00975405531e4e7f20dda40a6cb5ed67e345ecd764f92748463a996",
+        "size": 18996625
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://github.com/roboflow/rf-detr/blob/develop/LICENSE",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 17
+    },
+    "io": {
+      "input": {
+        "width": 384,
+        "height": 384,
+        "letterbox": "stretch"
+      },
+      "mean": [
+        0.485,
+        0.456,
+        0.406
+      ],
+      "std": [
+        0.229,
+        0.224,
+        0.225
+      ],
+      "labels": [
+        "",
+        "person",
+        "bicycle",
+        "car",
+        "motorcycle",
+        "airplane",
+        "bus",
+        "train",
+        "truck",
+        "boat",
+        "traffic light",
+        "fire hydrant",
+        "",
+        "stop sign",
+        "parking meter",
+        "bench",
+        "bird",
+        "cat",
+        "dog",
+        "horse",
+        "sheep",
+        "cow",
+        "elephant",
+        "bear",
+        "zebra",
+        "giraffe",
+        "",
+        "backpack",
+        "umbrella",
+        "",
+        "",
+        "handbag",
+        "tie",
+        "suitcase",
+        "frisbee",
+        "skis",
+        "snowboard",
+        "sports ball",
+        "kite",
+        "baseball bat",
+        "baseball glove",
+        "skateboard",
+        "surfboard",
+        "tennis racket",
+        "bottle",
+        "",
+        "wine glass",
+        "cup",
+        "fork",
+        "knife",
+        "spoon",
+        "bowl",
+        "banana",
+        "apple",
+        "sandwich",
+        "orange",
+        "broccoli",
+        "carrot",
+        "hot dog",
+        "pizza",
+        "donut",
+        "cake",
+        "chair",
+        "couch",
+        "potted plant",
+        "bed",
+        "",
+        "dining table",
+        "",
+        "",
+        "toilet",
+        "",
+        "tv",
+        "laptop",
+        "mouse",
+        "remote",
+        "keyboard",
+        "cell phone",
+        "microwave",
+        "oven",
+        "toaster",
+        "sink",
+        "refrigerator",
+        "",
+        "book",
+        "clock",
+        "vase",
+        "scissors",
+        "teddy bear",
+        "hair drier",
+        "toothbrush"
+      ]
+    }
+  },
+  {
+    "id": "rf-detr-s",
+    "task": "detect",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "onnx-community/rfdetr_small-ONNX",
+      "revision": "63463b68b200177d1fea7015f11f3cebb0ba4eeb"
+    },
+    "files": [
+      {
+        "path": "onnx/model.onnx",
+        "sha256": "sha256:121cc1476a7b69d865ca4bdc2bca59a3239020d227e4c3f35a811bef81aeb7f1",
+        "size": 114680416
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://github.com/roboflow/rf-detr/blob/develop/LICENSE",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 17
+    },
+    "io": {
+      "input": {
+        "width": 512,
+        "height": 512,
+        "letterbox": "stretch"
+      },
+      "mean": [
+        0.485,
+        0.456,
+        0.406
+      ],
+      "std": [
+        0.229,
+        0.224,
+        0.225
+      ],
+      "labels": [
+        "",
+        "person",
+        "bicycle",
+        "car",
+        "motorcycle",
+        "airplane",
+        "bus",
+        "train",
+        "truck",
+        "boat",
+        "traffic light",
+        "fire hydrant",
+        "",
+        "stop sign",
+        "parking meter",
+        "bench",
+        "bird",
+        "cat",
+        "dog",
+        "horse",
+        "sheep",
+        "cow",
+        "elephant",
+        "bear",
+        "zebra",
+        "giraffe",
+        "",
+        "backpack",
+        "umbrella",
+        "",
+        "",
+        "handbag",
+        "tie",
+        "suitcase",
+        "frisbee",
+        "skis",
+        "snowboard",
+        "sports ball",
+        "kite",
+        "baseball bat",
+        "baseball glove",
+        "skateboard",
+        "surfboard",
+        "tennis racket",
+        "bottle",
+        "",
+        "wine glass",
+        "cup",
+        "fork",
+        "knife",
+        "spoon",
+        "bowl",
+        "banana",
+        "apple",
+        "sandwich",
+        "orange",
+        "broccoli",
+        "carrot",
+        "hot dog",
+        "pizza",
+        "donut",
+        "cake",
+        "chair",
+        "couch",
+        "potted plant",
+        "bed",
+        "",
+        "dining table",
+        "",
+        "",
+        "toilet",
+        "",
+        "tv",
+        "laptop",
+        "mouse",
+        "remote",
+        "keyboard",
+        "cell phone",
+        "microwave",
+        "oven",
+        "toaster",
+        "sink",
+        "refrigerator",
+        "",
+        "book",
+        "clock",
+        "vase",
+        "scissors",
+        "teddy bear",
+        "hair drier",
+        "toothbrush"
+      ]
+    }
+  },
+  {
+    "id": "rf-detr-m",
+    "task": "detect",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "onnx-community/rfdetr_medium-ONNX",
+      "revision": "8553cefdd984bbaeb9d9ca8743d6a6a1c3e29dce"
+    },
+    "files": [
+      {
+        "path": "onnx/model.onnx",
+        "sha256": "sha256:768928acf337ac86d069c9d55a929e11e563c1e1d272a3ffc9366248d66b2654",
+        "size": 121015411
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://github.com/roboflow/rf-detr/blob/develop/LICENSE",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 17
+    },
+    "io": {
+      "input": {
+        "width": 576,
+        "height": 576,
+        "letterbox": "stretch"
+      },
+      "mean": [
+        0.485,
+        0.456,
+        0.406
+      ],
+      "std": [
+        0.229,
+        0.224,
+        0.225
+      ],
+      "labels": [
+        "",
+        "person",
+        "bicycle",
+        "car",
+        "motorcycle",
+        "airplane",
+        "bus",
+        "train",
+        "truck",
+        "boat",
+        "traffic light",
+        "fire hydrant",
+        "",
+        "stop sign",
+        "parking meter",
+        "bench",
+        "bird",
+        "cat",
+        "dog",
+        "horse",
+        "sheep",
+        "cow",
+        "elephant",
+        "bear",
+        "zebra",
+        "giraffe",
+        "",
+        "backpack",
+        "umbrella",
+        "",
+        "",
+        "handbag",
+        "tie",
+        "suitcase",
+        "frisbee",
+        "skis",
+        "snowboard",
+        "sports ball",
+        "kite",
+        "baseball bat",
+        "baseball glove",
+        "skateboard",
+        "surfboard",
+        "tennis racket",
+        "bottle",
+        "",
+        "wine glass",
+        "cup",
+        "fork",
+        "knife",
+        "spoon",
+        "bowl",
+        "banana",
+        "apple",
+        "sandwich",
+        "orange",
+        "broccoli",
+        "carrot",
+        "hot dog",
+        "pizza",
+        "donut",
+        "cake",
+        "chair",
+        "couch",
+        "potted plant",
+        "bed",
+        "",
+        "dining table",
+        "",
+        "",
+        "toilet",
+        "",
+        "tv",
+        "laptop",
+        "mouse",
+        "remote",
+        "keyboard",
+        "cell phone",
+        "microwave",
+        "oven",
+        "toaster",
+        "sink",
+        "refrigerator",
+        "",
+        "book",
+        "clock",
+        "vase",
+        "scissors",
+        "teddy bear",
+        "hair drier",
+        "toothbrush"
+      ]
+    }
+  },
+  {
+    "id": "rf-detr-seg-preview",
+    "task": "detect",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "bukuroo/RF-DETR-Seg-ONNX",
+      "revision": "627efc7f5ed9a96da1545dc7d9e3ecb99d30a65c"
+    },
+    "files": [
+      {
+        "path": "rf-detr-seg-preview.onnx",
+        "sha256": "sha256:42e3571cf64d70df6f6acf3c5dcf0fc4ecbf8bab46d819ca8e4e94d4cee4de9b",
+        "size": 134443363
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://github.com/roboflow/rf-detr/blob/develop/LICENSE",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 17
+    },
+    "io": {
+      "input": {
+        "width": 432,
+        "height": 432,
+        "letterbox": "stretch"
+      },
+      "mean": [
+        0.485,
+        0.456,
+        0.406
+      ],
+      "std": [
+        0.229,
+        0.224,
+        0.225
+      ],
+      "labels": [
+        "",
+        "person",
+        "bicycle",
+        "car",
+        "motorcycle",
+        "airplane",
+        "bus",
+        "train",
+        "truck",
+        "boat",
+        "traffic light",
+        "fire hydrant",
+        "",
+        "stop sign",
+        "parking meter",
+        "bench",
+        "bird",
+        "cat",
+        "dog",
+        "horse",
+        "sheep",
+        "cow",
+        "elephant",
+        "bear",
+        "zebra",
+        "giraffe",
+        "",
+        "backpack",
+        "umbrella",
+        "",
+        "",
+        "handbag",
+        "tie",
+        "suitcase",
+        "frisbee",
+        "skis",
+        "snowboard",
+        "sports ball",
+        "kite",
+        "baseball bat",
+        "baseball glove",
+        "skateboard",
+        "surfboard",
+        "tennis racket",
+        "bottle",
+        "",
+        "wine glass",
+        "cup",
+        "fork",
+        "knife",
+        "spoon",
+        "bowl",
+        "banana",
+        "apple",
+        "sandwich",
+        "orange",
+        "broccoli",
+        "carrot",
+        "hot dog",
+        "pizza",
+        "donut",
+        "cake",
+        "chair",
+        "couch",
+        "potted plant",
+        "bed",
+        "",
+        "dining table",
+        "",
+        "",
+        "toilet",
+        "",
+        "tv",
+        "laptop",
+        "mouse",
+        "remote",
+        "keyboard",
+        "cell phone",
+        "microwave",
+        "oven",
+        "toaster",
+        "sink",
+        "refrigerator",
+        "",
+        "book",
+        "clock",
+        "vase",
+        "scissors",
+        "teddy bear",
+        "hair drier",
+        "toothbrush"
+      ]
+    }
+  },
+  {
+    "id": "efficientsam-ti",
+    "task": "segment",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "yunyangx/EfficientSAM",
+      "revision": "1cf49585c39567bfc49e991ab8eb31f491ad4877"
+    },
+    "files": [
+      {
+        "path": "efficientsam_ti_encoder.onnx",
+        "sha256": "sha256:84ed466ffcc5c1f8d08409bc34a23bb364ab2c15e402cb12d4335a42be0e0951",
+        "size": 24799761
+      },
+      {
+        "path": "efficientsam_ti_decoder.onnx",
+        "sha256": "sha256:a62f8fa5ea080447c0689418d69e58f1e83e0b7adf9c142e2bd9bcc8045c0b11",
+        "size": 16565728
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://github.com/yformer/EfficientSAM/blob/main/LICENSE",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 17
+    },
+    "io": {
+      "input": {
+        "width": 1024,
+        "height": 1024,
+        "letterbox": "stretch"
+      }
+    }
+  },
+  {
+    "id": "sam2.1-hiera-tiny",
+    "task": "segment",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "onnx-community/sam2.1-hiera-tiny-ONNX",
+      "revision": "814a066640debee5a91e70aa401fb8e17e030503"
+    },
+    "files": [
+      {
+        "path": "onnx/vision_encoder.onnx",
+        "sha256": "sha256:4f30aacd3aaefbca81a0b7fe4c1fc96345570ea0a6f80ced599493d1b3be2e8c",
+        "size": 354238
+      },
+      {
+        "path": "onnx/vision_encoder.onnx_data",
+        "sha256": "sha256:e83df9866a5afe68ea7f0f721f18f65137fc3acbf0da1c74e946d363e09c69cc",
+        "size": 134084864
+      },
+      {
+        "path": "onnx/prompt_encoder_mask_decoder.onnx",
+        "sha256": "sha256:874414704c5d686db7d206a35f6e15d26563d50c8c4468fccc6739bd7e491dcf",
+        "size": 213114
+      },
+      {
+        "path": "onnx/prompt_encoder_mask_decoder.onnx_data",
+        "sha256": "sha256:e9874d900dd4134ed60eab1e97910327c2419e0b2954485d8fd6e7f1a1470f47",
+        "size": 20958208
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://github.com/facebookresearch/sam2/blob/main/LICENSE",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 18
+    },
+    "io": {
+      "input": {
+        "width": 1024,
+        "height": 1024,
+        "letterbox": "stretch"
+      },
+      "mean": [
+        0.485,
+        0.456,
+        0.406
+      ],
+      "std": [
+        0.229,
+        0.224,
+        0.225
+      ]
+    }
+  },
+  {
+    "id": "sam2.1-hiera-tiny-q4",
+    "task": "segment",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "onnx-community/sam2.1-hiera-tiny-ONNX",
+      "revision": "814a066640debee5a91e70aa401fb8e17e030503"
+    },
+    "files": [
+      {
+        "path": "onnx/vision_encoder_q4.onnx",
+        "sha256": "sha256:c3efeef6c8e5e0cd718d9fea53b760fd09e109dc8f670c7ca592181a1eca6526",
+        "size": 366089
+      },
+      {
+        "path": "onnx/vision_encoder_q4.onnx_data",
+        "sha256": "sha256:ca3afaa983c6fe53449df092b4cf4e8d2442e44ebacf02dc5303ca5299342a9f",
+        "size": 43758848
+      },
+      {
+        "path": "onnx/prompt_encoder_mask_decoder_q4.onnx",
+        "sha256": "sha256:9d07a46ca6035cd22ec29391ed13e19a7c9f5fc3dd5bd6df92c8e2e0a23ba9c1",
+        "size": 226444
+      },
+      {
+        "path": "onnx/prompt_encoder_mask_decoder_q4.onnx_data",
+        "sha256": "sha256:5e912af5533c6ab05330886ba42712f3f9d7ac60e3f1cc39d936a85d958f2d94",
+        "size": 7130112
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://github.com/facebookresearch/sam2/blob/main/LICENSE",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 18
+    },
+    "io": {
+      "input": {
+        "width": 1024,
+        "height": 1024,
+        "letterbox": "stretch"
+      },
+      "mean": [
+        0.485,
+        0.456,
+        0.406
+      ],
+      "std": [
+        0.229,
+        0.224,
+        0.225
+      ]
+    }
+  },
+  {
+    "id": "siglip2-base-patch16-256",
+    "task": "embed",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "onnx-community/siglip2-base-patch16-256-ONNX",
+      "revision": "d1114256522a37ffa257a0a58017348ab0058db2"
+    },
+    "files": [
+      {
+        "path": "onnx/vision_model.onnx",
+        "sha256": "sha256:f5cb16728a704703f05516ded628397e11dbca4de2eb5db04b0c0bcee988aa7a",
+        "size": 371992072
+      },
+      {
+        "path": "onnx/text_model.onnx",
+        "sha256": "sha256:d3de4a6bbbfcb429b6615ac496790353cf4a4fc0f19fbbe7179e523ae60daaef",
+        "size": 1129469657
+      },
+      {
+        "path": "tokenizer.json",
+        "sha256": "sha256:cb9140fae3ac5122c972d37adf83e1248471a38147ad76f8215c8872c6fd8322",
+        "size": 34363039
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://huggingface.co/google/siglip2-base-patch16-256",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 14
+    },
+    "io": {
+      "input": {
+        "width": 256,
+        "height": 256,
+        "letterbox": "stretch"
+      },
+      "mean": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "std": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    }
+  },
+  {
+    "id": "siglip2-base-patch16-256-quantized",
+    "task": "embed",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "onnx-community/siglip2-base-patch16-256-ONNX",
+      "revision": "d1114256522a37ffa257a0a58017348ab0058db2"
+    },
+    "files": [
+      {
+        "path": "onnx/vision_model_q4.onnx",
+        "sha256": "sha256:712064dae0cce3fb4c94497c7dfd65d11f4ad34eadafe09442208474068cf777",
+        "size": 63451786
+      },
+      {
+        "path": "onnx/text_model_int8.onnx",
+        "sha256": "sha256:6f59b39d880c413042314b79302b74d0dd93b273caf8fbfdb1eb2df61a7fefd4",
+        "size": 283438275
+      },
+      {
+        "path": "tokenizer.json",
+        "sha256": "sha256:cb9140fae3ac5122c972d37adf83e1248471a38147ad76f8215c8872c6fd8322",
+        "size": 34363039
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://huggingface.co/google/siglip2-base-patch16-256",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 14
+    },
+    "io": {
+      "input": {
+        "width": 256,
+        "height": 256,
+        "letterbox": "stretch"
+      },
+      "mean": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "std": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    }
+  },
+  {
+    "id": "siglip2-so400m-patch16-256-quantized",
+    "task": "embed",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "onnx-community/siglip2-so400m-patch16-256-ONNX",
+      "revision": "7881d8f282cbd7cdeac1aca6bed493a36d58e713"
+    },
+    "files": [
+      {
+        "path": "onnx/vision_model_q4.onnx",
+        "sha256": "sha256:a28f8ffde39c11620e18bea40253a6ca6e38761eb9b39fc1ac49b13134bd9d4d",
+        "size": 278214740
+      },
+      {
+        "path": "onnx/text_model_int8.onnx",
+        "sha256": "sha256:189f41c153c7a914b67ee3f8aff2b90d6deacf280a504284b4004257cebf9066",
+        "size": 711126655
+      },
+      {
+        "path": "tokenizer.json",
+        "sha256": "sha256:cb9140fae3ac5122c972d37adf83e1248471a38147ad76f8215c8872c6fd8322",
+        "size": 34363039
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://huggingface.co/google/siglip2-so400m-patch16-256",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 14
+    },
+    "io": {
+      "input": {
+        "width": 256,
+        "height": 256,
+        "letterbox": "stretch"
+      },
+      "mean": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "std": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    }
+  }
+]

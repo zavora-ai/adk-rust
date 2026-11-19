@@ -37,6 +37,9 @@ adk-vision = { version = "3.0.0", features = ["fetch"] }
 | `fetch` | `ModelFetcher`: Hugging Face downloads by revision through `hf-hub` 0.5, SHA-256 checked before load, `HF_HUB_OFFLINE` honoured |
 | `conformance` | The conformance suite and its per-trait test macros |
 | `guardrail` | `ImagePrivacyGuardrail` (a `BeforeModelCallback`, an `adk-guardrail` `Guardrail` and `ToolGuardrail`) and `PersonalTextRedactor` over `PiiRedactor`'s byte ranges |
+| `onnx` | Local backends on ONNX Runtime: `RfDetr`, `EfficientSam`, `Sam2`, `SigLip2`; onnxruntime downloaded at build time |
+| `onnx-dynamic` | The same backends against an onnxruntime library loaded from `ORT_DYLIB_PATH` |
+| `onnx-coreml`, `onnx-cuda` | The CoreML and CUDA execution providers for the `onnx` backends |
 
 ## Quick Start
 
@@ -87,6 +90,45 @@ async fn main() -> adk_vision::Result<()> {
     Ok(())
 }
 ```
+
+## Local Backends
+
+Feature `onnx` runs RF-DETR detection (and RF-DETR-Seg instance masks), EfficientSAM-Ti
+and SAM 2.1 Tiny point and box segmentation, and SigLIP 2 image and text embeddings on the
+device. Each backend loads a `VerifiedModel` from the built-in manifest (eleven Apache-2.0
+records pinned by commit and SHA-256) or your own, such as an RF-DETR fine-tune:
+
+```rust,no_run
+use std::sync::Arc;
+use adk_vision::onnx::{OnnxOptions, RfDetr};
+use adk_vision::{
+    DecodeLimits, DetectQuery, FetchConfig, InMemoryAcceptanceStore, ManifestSet,
+    ModelFetcher, SourceImage, VisionCx, VisionRuntime,
+};
+
+#[tokio::main]
+async fn main() -> adk_vision::Result<()> {
+    // RF-DETR Nano: 108 MB, fetched once into the Hugging Face cache and verified.
+    let manifest = ManifestSet::builtin()?.get("rf-detr-n").cloned().expect("built in");
+    let fetcher =
+        ModelFetcher::new(FetchConfig::from_env(), Arc::new(InMemoryAcceptanceStore::new()));
+    let detector = RfDetr::new(&fetcher.fetch(&manifest).await?, &OnnxOptions::default())?;
+    let runtime = VisionRuntime::builder().detector(Arc::new(detector)).build()?;
+
+    let bytes = std::fs::read("street.jpg").expect("a photo");
+    let photo = SourceImage::decode(&bytes, &DecodeLimits::default())?;
+    let people = runtime
+        .detect(&VisionCx::new(), &photo, &DetectQuery::Classes(vec!["person".into()]))
+        .await?;
+    for person in &people.value {
+        println!("{:?} {:?}", person.score, person.shape.bbox());
+    }
+    Ok(())
+}
+```
+
+See [Local ONNX backends](../docs/official_docs/vision/onnx.md) for the models, prompts,
+execution providers and measured latency.
 
 ## Coordinate Frames
 
