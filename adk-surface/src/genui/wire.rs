@@ -121,7 +121,7 @@ pub struct WireError {
 }
 
 impl WireError {
-    fn new(at: &str, reason: impl Into<String>) -> Self {
+    pub(crate) fn new(at: &str, reason: impl Into<String>) -> Self {
         Self {
             at: if at.is_empty() { "/".to_string() } else { at.to_string() },
             reason: reason.into(),
@@ -657,6 +657,13 @@ pub fn from_wire(message: &Value, catalog: &Catalog) -> Result<Vec<A2uiMessage>,
             Ok(vec![A2uiMessage::update_data_model(surface(body)?, path, value)])
         }
         "deleteSurface" => Ok(vec![A2uiMessage::delete_surface(surface(body)?)]),
+        function if super::functions::FUNCTION_MESSAGES.contains(&function) => Err(WireError::new(
+            &format!("/{function}"),
+            format!(
+                "{function} is a function call or its answer, not part of a drawing: read it \
+                 with read_function_message"
+            ),
+        )),
         other => Err(WireError::new(
             &format!("/{other}"),
             format!("{other} is not a message a drawing is made of"),
@@ -817,7 +824,7 @@ mod tests {
             ),
             (
                 json!({ "version": "1.0", "callRendererFunction": { "functionCallId": "1" } }),
-                "not a message",
+                "read_function_message",
             ),
             (json!({ "version": "2.0", "deleteSurface": { "surfaceId": "s" } }), "version"),
         ] {

@@ -25,6 +25,7 @@ adk-surface = { version = "3.0.0", features = ["web", "genui"] }
 | `Validator`, `Catalog::forms` | `genui` | Rule 5, and the `forms` 1.0 catalog the tools draw in |
 | The A2UI v0.9.1 model (`A2uiMessage`, `encode_jsonl`, `decode_jsonl`) | `genui` | The internal form a drawing is stored and checked in |
 | `A2uiVersion`, `to_wire`, `from_wire`, `components_in` | `genui` | A2UI 1.0 (the default) and v0.9.1 on the wire. See [A2UI versions](#a2ui-versions) |
+| `read_function_message`, `FunctionInvocation`, `FunctionResponse`, `INVALID_FUNCTION_CALL` | `genui` | A2UI 1.0 function calls read, and answered `INVALID_FUNCTION_CALL`. See [A2UI versions](#a2ui-versions) |
 | `ValidationResult`, `Severity` | `genui` | A refusal, or a warning, in A2UI 1.0's `ValidationResult` shape |
 | The thread items `drawn`, `drawnRefused` and `drawnSent`, and the `submitDrawn` command | every `web` build | The page and the OpenAPI document are the same on every server; one built without `genui` never projects a drawing and answers `submitDrawn` with `surface.unsupported` |
 | `GET /api/surface/genui/capabilities`, `GET /api/surface/genui/sessions/{session}/forms` | `web` and `genui` | What the home claims of A2UI, AG-UI and MCP Apps, and each sent form's state |
@@ -154,6 +155,14 @@ internal form: an unknown `@` key, a literal object whose only key is `path` or 
 claim. A refusal comes with A2UI 1.0's
 `ValidationResult` (`{"valid": false, "severity": "error", "code": …, "message": …}`) after its
 plain-words message.
+
+**Function calls.** A2UI 1.0 lets an agent ask a renderer to run a catalog function
+(`callRendererFunction`) and a renderer ask the agent (`callAgentFunction`). `genui` offers
+neither: every `forms` function is `rendererOnly` (checks and formatting the renderer evaluates
+while it draws), and the agent offers no functions. `read_function_message` reads a call or an
+answer, and `FunctionInvocation::refusal` writes the answer 1.0 requires, an
+`INVALID_FUNCTION_CALL` error with the reason, to send back with the same `functionCallId`.
+`from_wire` refuses a function message in a drawing and points to `read_function_message`.
 
 ### Accessibility
 

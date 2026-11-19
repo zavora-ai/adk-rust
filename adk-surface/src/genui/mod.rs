@@ -38,6 +38,8 @@ mod catalog;
 mod draw;
 mod drawn;
 #[cfg(feature = "genui")]
+mod functions;
+#[cfg(feature = "genui")]
 mod hints;
 #[cfg(feature = "genui-apps")]
 mod mcp_apps;
@@ -85,6 +87,11 @@ pub use drawn::{
     DrawnChart, DrawnCheck, DrawnExtension, DrawnField, DrawnInput, DrawnKind, DrawnNode,
     DrawnOption, DrawnSent, DrawnSurface, FormState, FormStatus, RefusalKind, RefusedDrawing,
     SentVia,
+};
+#[cfg(feature = "genui")]
+pub use functions::{
+    FunctionCaller, FunctionError, FunctionInvocation, FunctionMessage, FunctionResponse,
+    INVALID_FUNCTION_CALL, read_function_message,
 };
 #[cfg(feature = "genui-apps")]
 pub use mcp_apps::{
