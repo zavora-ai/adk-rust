@@ -167,8 +167,10 @@ adk-devtools = { path = "../adk-devtools" }
 # The kernel's chat channel contract suite, run against the Telegram adapter, and its
 # PostgreSQL process store for the governed form's shared-store leg.
 adk-kernel = { path = "../adk-kernel", features = ["channels", "conformance", "postgres"] }
-# The kernel-hosted harness of the scenario tests.
-adk-harness = { path = "../adk-harness", features = ["kernel"] }
+# The kernel-hosted harness of the scenario tests; `vision` for the approve-with-image example.
+adk-harness = { path = "../adk-harness", features = ["kernel", "vision"] }
+# The vision pack's runtime, egress gate and redactors of `vision_home` (spec 3.7 §8.2).
+adk-vision = { path = "../adk-vision" }
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic", "openai", "gemini"] }
 # The provider-free realtime model the voice tests and `scripted_voice_home` script.
 adk-realtime = { path = "../adk-realtime", features = ["scripted"] }
@@ -214,6 +216,12 @@ webauthn-rs = { version = "=0.5.5", default-features = false, features = ["dange
 # The web home over a scripted kernel, which the end-to-end test in `web/e2e` opens.
 [[example]]
 name = "scripted_home"
+required-features = ["web"]
+
+# Approve with the image (spec 3.7 §8.2): a harness with the vision pack holds a call that
+# would send an identity card to Claude, and the web home shows the exact image that would leave.
+[[example]]
+name = "vision_home"
 required-features = ["web"]
 
 # The tray panel over a scripted kernel with two agents (spec 3.3 §5.5).
