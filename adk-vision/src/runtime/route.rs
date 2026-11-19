@@ -148,6 +148,9 @@ pub struct CallOptions {
     pub approved: Vec<Digest>,
     /// Regions to fill before any release, in source pixels.
     pub marked: Vec<BBox>,
+    /// Only this region of each image, in source pixels: the backend is sent its crop, and
+    /// answers come back in source pixels with the crop in their transform chain.
+    pub region: Option<BBox>,
 }
 
 impl CallOptions {
@@ -177,6 +180,12 @@ impl CallOptions {
     /// Marks regions for redaction.
     pub fn with_marked(mut self, regions: Vec<BBox>) -> Self {
         self.marked = regions;
+        self
+    }
+
+    /// Works on `region` of each image only; a remote backend is sent nothing else.
+    pub fn with_region(mut self, region: BBox) -> Self {
+        self.region = Some(region);
         self
     }
 

@@ -131,7 +131,7 @@ Schema in `adk-vision/schema/region-set.json`. Shapes carry a `kind` tag, transf
 |------|--------------|
 | Route | The call's route, else the task's, else the first registered on-device backend; registration order decides, no backend is privileged |
 | Prepare | An on-device backend gets a `SentImage` downscaled to its `InputLimits` (or a refusal naming the limit); a remote one gets a `ReleasedImage` from the egress gate |
-| Meter | The call runs under the context's `ModelCallScope`: the budget is checked and spend reserved first; images are committed as units, at the unit price for a per-unit backend and zero for a local one |
+| Meter | The budget hold opens before the image is prepared or released, so a call the budget cannot cover sends nothing and leaves no egress record; images (and pages, for reading) are committed as units, at the unit price for a per-unit backend and zero for a local one; a token-billed backend's `TokenEstimate` sizes its hold |
 | Cancel | The `VisionCx` cancellation token ends the call at once; a frozen kill switch refuses it before the backend runs |
 | Normalise | Every answer is mapped to source pixels |
 | Escalate | On a trigger, the uncertain region's crop goes to the escalation backend, whose answer replaces the primary's with `escalatedFrom` |
@@ -158,7 +158,9 @@ cost, region count, duration — the fields of the `vision.call` audit record.
 4. **Decide.** The first `[[egress.rule]]` matching the host and data class, else the
    default, says `deny`, `ask` or `allow`. `ask` holds the release until a person approves
    its exact egress digest; a different image is a different digest and is held again.
-5. **Record.** The `EgressReceipt` goes to the `EgressRecorder` before the image is
+5. **Record.** With a media store (`EgressGate::with_media_store`), the egress copy is
+   stored as an artifact. The `EgressReceipt` goes to the `EgressRecorder`, and a
+   `vision.egress.released` record to the call's audit trail, before the image is
    returned; a refusal is recorded too.
 6. **Release.**
 
@@ -274,8 +276,13 @@ mod my_detector {
 | Oversized | Refused with the limit in the message, or downscaled with the resize recorded |
 | Errors | A rate limit maps to `RateLimited` with a retry hint |
 
+`EgressGate::stage` runs the first three steps and stores the copy without releasing it, so
+an approval card can show the exact image; see [Governed Vision Tools](governed-tools.md).
+
 ## Related
 
+- [Governed Vision Tools](governed-tools.md)
+- [Image Privacy](../security/image-privacy.md)
 - [Egress control](../security/egress.md)
 - [Tool authorization](../security/tool-authorization.md)
 - [Artifacts](../artifacts/artifacts.md)

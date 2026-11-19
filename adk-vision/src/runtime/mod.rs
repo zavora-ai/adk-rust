@@ -13,15 +13,15 @@ mod route;
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
-use adk_core::{AdkError, ErrorComponent, MeteredUsage, UsageCall, UsageUnit, UsageVector};
+use adk_core::{MeteredUsage, UsageCall, UsageHold, UsageUnit, UsageVector};
 
 pub use calls::Edited;
 pub use route::{CallOptions, CallRecord, Escalation, Route, Trigger, VisionOutput};
 
-use crate::backend::{BackendDescriptor, BackendId, Oversize};
+use crate::backend::{BackendDescriptor, BackendId, InputLimits, Oversize};
 use crate::cx::VisionCx;
 use crate::digest::Digest;
 use crate::edit::ops;
@@ -161,6 +161,28 @@ impl Inputs {
     }
 }
 
+/// The budget hold of one call, opened before its images are prepared (V-I6).
+struct Preflight {
+    hold: Option<UsageHold>,
+    units: UsageVector,
+    /// The cost committed on success: zero for local, the unit price for per-unit, `None`
+    /// for token-billed backends, whose model call commits its own cost.
+    cost: Option<u64>,
+}
+
+/// The size a backend is sent for an image of `size`: its crop, fitted to the backend's
+/// limits, as [`VisionRuntime::prepare`] and the egress gate make it.
+fn planned_size(size: (u32, u32), crop: Option<BBox>, limits: &InputLimits) -> (u32, u32) {
+    let base = match crop {
+        Some(crop) => {
+            let (_, _, width, height) = crop.pixel_bounds(size.0, size.1);
+            (width, height)
+        }
+        None => size,
+    };
+    limits.fit(base).unwrap_or(base)
+}
+
 /// Routes vision calls to backends, prepares and releases their images, meters them, maps
 /// their answers to source pixels and escalates.
 ///
@@ -251,6 +273,13 @@ impl VisionRuntimeBuilder {
         self
     }
 
+    /// Installs an egress gate shared with other parts of the application, such as the
+    /// `ImagePrivacyGuardrail` (feature `guardrail`), so every path releases through one gate.
+    pub fn shared_egress_gate(mut self, gate: Arc<EgressGate>) -> Self {
+        self.runtime.gate = Some(gate);
+        self
+    }
+
     /// Stores edited images in `store`.
     pub fn media_store(mut self, store: MediaStore) -> Self {
         self.runtime.store = Some(store);
@@ -320,9 +349,36 @@ impl VisionRuntime {
         }
     }
 
+    /// The route a call of `task` with `options` takes: the call's own route, the task's
+    /// configured route, or the task's default backend (the first on-device one registered,
+    /// else the first remote one).
+    ///
+    /// # Errors
+    ///
+    /// [`VisionError::BackendNotFound`] when no backend serves the task, and
+    /// [`VisionError::InvalidInput`] for a call route that names an unknown backend.
+    pub fn route(&self, task: VisionTask, options: &CallOptions) -> Result<Route> {
+        let default = match task {
+            VisionTask::Detect => self.detectors.default_id(),
+            VisionTask::Segment => self.segmenters.default_id(),
+            VisionTask::Read => self.readers.default_id(),
+            VisionTask::Embed => self.embedders.default_id(),
+            VisionTask::Describe => self.describers.default_id(),
+            VisionTask::Edit => self.editors.default_id(),
+            VisionTask::AnalyzeVideo => None,
+        };
+        self.route_for(task, options, default)
+    }
+
     /// The egress gate, if one is installed.
     pub fn egress_gate(&self) -> Option<&EgressGate> {
         self.gate.as_deref()
+    }
+
+    /// The egress gate as a shared handle, for an `ImagePrivacyGuardrail` that releases
+    /// through the same gate.
+    pub fn shared_egress_gate(&self) -> Option<Arc<EgressGate>> {
+        self.gate.clone()
     }
 
     /// The media store, if one is installed.
@@ -459,80 +515,112 @@ impl VisionRuntime {
         Ok(Prepared::Local(SentImage::new(source.digest(), pixels, chain)))
     }
 
-    /// Runs one backend call under the context's metering scope.
+    /// Opens the budget hold of one call before any image is prepared or released (V-I6):
+    /// the call's images (and pages, for reading) as units, and its cost bound — zero for an
+    /// on-device backend, the unit price for a per-unit one, the [`TokenEstimate`] of a
+    /// token-billed one. A hold the budget or spend ledger cannot cover refuses the call
+    /// here, so nothing is sent and no egress is recorded.
     ///
-    /// The budget is checked and the spend reserved before the call starts; on success the
-    /// call's images are committed as units, at the per-unit price for a priced backend and
-    /// at zero cost for a local one. Cancellation ends the call at once.
+    /// `sizes` are the sizes the backend will be sent, `prompt_chars` the length of any
+    /// prompt, and `max_output_tokens` the call's output cap.
+    ///
+    /// [`TokenEstimate`]: crate::TokenEstimate
+    async fn preflight(
+        &self,
+        cx: &VisionCx,
+        task: VisionTask,
+        descriptor: &BackendDescriptor,
+        sizes: &[(u32, u32)],
+        prompt_chars: usize,
+        max_output_tokens: Option<u32>,
+    ) -> Result<Preflight> {
+        cx.check()?;
+        let images = sizes.len() as u64;
+        let mut units = UsageVector::new().with(UsageUnit::Images, images);
+        if task == VisionTask::Read {
+            units = units.with(UsageUnit::Pages, images);
+        }
+        // X3: frame calls (phase B) count `UsageUnit::Frames`.
+        let (vendor, model, cost, bound) = match &descriptor.price {
+            None => ("local".to_string(), descriptor.id.to_string(), Some(0), 0),
+            Some(price) => match price.unit() {
+                Some(unit) => {
+                    let amount = if unit == UsageUnit::Requests { 1 } else { images };
+                    let cost = price.request_cost(amount);
+                    (price.vendor().to_string(), price.model().to_string(), cost, cost.unwrap_or(0))
+                }
+                // The model call meters its own tokens; the hold only has to fit the estimate.
+                None => {
+                    let estimate = descriptor.token_estimate.map_or(0, |estimate| {
+                        estimate.estimate_micro_usd(sizes, prompt_chars, max_output_tokens)
+                    });
+                    (price.vendor().to_string(), price.model().to_string(), None, estimate)
+                }
+            },
+        };
+        let scope = cx.scope();
+        if scope.is_unmetered() {
+            return Ok(Preflight { hold: None, units, cost });
+        }
+        let call =
+            UsageCall::new(vendor, model).with_max_cost_micro_usd(bound).with_units(units.clone());
+        let hold = scope.begin_usage(&call).await?;
+        Ok(Preflight { hold: Some(hold), units, cost })
+    }
+
+    /// Runs one backend call under the hold [`preflight`](Self::preflight) opened.
+    ///
+    /// On success the call's units are committed, at the per-unit price for a priced
+    /// backend and at zero cost for a local or token-billed one; on failure the hold is
+    /// released. The context's scope is current while the call runs, so a token-billed
+    /// backend's model call meters itself against the same run. Cancellation ends the call
+    /// at once.
     async fn metered<T, F>(
         &self,
         cx: &VisionCx,
         task: VisionTask,
         descriptor: &BackendDescriptor,
         inputs: Inputs,
+        preflight: Preflight,
         work: F,
     ) -> Result<(T, CallRecord)>
     where
         F: Future<Output = Result<T>> + Send,
     {
-        cx.check()?;
-        let images = inputs.sources.len() as u64;
-        // X3: frame calls (phase B) count `UsageUnit::Frames` once adk-core has the unit.
-        let units = UsageVector::new().with(UsageUnit::Images, images);
-        let (vendor, model, cost) = match &descriptor.price {
-            None => ("local".to_string(), descriptor.id.to_string(), Some(0)),
-            Some(price) => {
-                let amount = if price.unit() == Some(UsageUnit::Requests) { 1 } else { images };
-                (price.vendor().to_string(), price.model().to_string(), price.request_cost(amount))
+        let Preflight { hold, units, cost } = preflight;
+        if let Err(err) = cx.check() {
+            if let Some(hold) = hold {
+                hold.release().await;
             }
-        };
-        // X2: chain `.with_units(units.clone())` once adk-core's `UsageCall::with_units` is on
-        // main, so `RunBudget::max_units` refuses the call over a per-unit cap before its
-        // request (spec 3.7 S7).
-        let call = UsageCall::new(vendor, model)
-            .with_max_cost_micro_usd(cost.unwrap_or(0))
-            .with_units(units.clone());
-        let failure: Arc<Mutex<Option<VisionError>>> = Arc::new(Mutex::new(None));
-        let stash = Arc::clone(&failure);
+            return Err(err);
+        }
         let cancel = cx.cancellation().clone();
-        let committed = units.clone();
         let started = Instant::now();
-        let inner = async move {
-            let outcome = tokio::select! {
+        let run = async move {
+            tokio::select! {
                 biased;
                 () = cancel.cancelled() => Err(VisionError::Cancelled),
                 result = work => result,
-            };
-            match outcome {
-                Ok(value) => {
-                    Ok((value, MeteredUsage::new(committed).with_cost_micro_usd(cost.unwrap_or(0))))
-                }
-                Err(err) => {
-                    let adk = AdkError::new(
-                        ErrorComponent::Tool,
-                        err.category(),
-                        err.code(),
-                        err.to_string(),
-                    );
-                    *stash.lock().unwrap_or_else(|e| e.into_inner()) = Some(err);
-                    Err(adk)
-                }
             }
         };
         let scope = cx.scope().clone();
-        let metering = scope.meter(call, inner);
         // An unmetered context leaves the enclosing run's scope current for the model calls a
         // token-billed backend makes.
-        let result = if scope.is_unmetered() {
-            metering.await
-        } else {
-            scope.clone().within(metering).await
-        };
-        let value = match result {
-            Ok(value) => value,
-            Err(adk) => {
-                let original = failure.lock().unwrap_or_else(|e| e.into_inner()).take();
-                return Err(original.unwrap_or(VisionError::Core(adk)));
+        let outcome = if scope.is_unmetered() { run.await } else { scope.within(run).await };
+        let value = match outcome {
+            Ok(value) => {
+                if let Some(hold) = hold {
+                    let usage =
+                        MeteredUsage::new(units.clone()).with_cost_micro_usd(cost.unwrap_or(0));
+                    hold.commit(usage).await;
+                }
+                value
+            }
+            Err(err) => {
+                if let Some(hold) = hold {
+                    hold.release().await;
+                }
+                return Err(err);
             }
         };
         let record = CallRecord {

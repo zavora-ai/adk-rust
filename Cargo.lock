@@ -753,6 +753,7 @@ version = "3.0.0"
 dependencies = [
  "adk-acp",
  "adk-agent",
+ "adk-artifact",
  "adk-auth",
  "adk-awp",
  "adk-browser",
@@ -779,6 +780,7 @@ dependencies = [
  "adk-skill",
  "adk-telemetry",
  "adk-tool",
+ "adk-vision",
  "async-stream",
  "async-trait",
  "awp-types",
@@ -1541,11 +1543,18 @@ dependencies = [
 name = "adk-vision"
 version = "3.0.0"
 dependencies = [
+ "adk-agent",
  "adk-artifact",
  "adk-core",
+ "adk-guardrail",
+ "adk-model",
+ "adk-runner",
+ "adk-session",
  "adk-vision",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
+ "futures",
  "hex",
  "hf-hub 0.5.0",
  "image",

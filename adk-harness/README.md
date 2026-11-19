@@ -286,6 +286,7 @@ See `docs/official_docs/harness/website.md`.
 | `managed` | off | the managed form (spec 3.1 §7.18): `HarnessDef`, `HarnessResolver` on the managed runtime, `Pack::Managed`; with `kernel` also the kernel's managed form, one kernel per tenant (spec 3.2 §7.13) |
 | `browser` | off | the browser pack (spec 3.1 §7.24): `adk-browser`'s tools as `Read`, `Web` and `External` classes under the web rules, `BrowserPack`, `harness.browser.*` |
 | `computer-use` | off | the computer-use pack (spec 3.1 §7.24): `computer_use_observe`, `computer_use_preview` and the never-waivable `computer_use_execute` through `adk-computer-use`'s reference graph, `ComputerUsePack` |
+| `vision` | off | the vision pack (spec 3.7 X15): `adk-vision`'s governed tools as `Read` on the device and `External` off it, the `.adk/vision.toml` egress rules, held calls with the egress image as evidence, and the image privacy guardrail on a remote harness model; `VisionPack` |
 | `voice` | off | the voice surface (spec 3.1 §7.17): `VoiceSurface` runs a harness marked `Pack::Voice` over `adk-realtime`'s `IntegratedRealtimeRunner`, with spoken or inbox approvals and `harness.voice.*` audit records; with `kernel` it also answers kernel processes parked on a held call (spec 3.2 §7.11) |
 | `website` | off | the website runtime (spec 3.5 §7.1): `Preset::Website`, the back-office and public toolsets over `adk-site`, the site's two partitions and their signals, the autonomy ladder compiled to policy, the authoring router, Web Bot Auth signing of crawls, `awp verify` and opted-in `web_fetch`, and the onboarding plan's steps |
 
@@ -314,6 +315,7 @@ The managed form (feature `managed`) is Experimental, as `adk-managed` is.
 | Hooks | [hooks](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/hooks.md) |
 | Web tools and MCP servers | [web and MCP](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/web-and-mcp.md) |
 | Browser and computer-use packs | [packs](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/packs.md) |
+| Vision pack | [governed vision tools](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/vision/governed-tools.md#the-harness-vision-pack) |
 | Payments pack | [payments](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/payments.md) |
 | Voice surface | [voice](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/voice.md) |
 

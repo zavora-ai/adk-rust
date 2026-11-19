@@ -268,7 +268,7 @@ pub use plan_graph::{
     ActivePlan, PLAN_GATE_TOOL, PlanGraphShape, PlanGraphs, PlanRunStatus, compile_plan,
     plan_review_node, plan_step_node,
 };
-pub use policy::OriginClasses;
+pub use policy::{CallClasses, OriginClasses};
 pub use policy::{
     HARNESS_POLICY_REF, HarnessPolicy, Isolation, MODE_TABLE, ModeCell, PolicySwitches,
     TableDecision, TableRow, ToolClassRegistry, ToolKind, apply_rule, decision_cell,

@@ -17,7 +17,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub use config::{EgressAction, EgressConfig, EgressRuleConfig, VisionConfig};
-pub use gate::{EgressGate, EgressPreview, ReleaseRequest};
+pub use gate::{EgressGate, EgressPreview, ReleaseRequest, StagedEgress};
 
 use crate::backend::BackendId;
 use crate::cx::VisionCx;
@@ -160,6 +160,10 @@ pub struct EgressReceipt {
     /// The estimated cost of the call, when the backend is priced per unit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimated_cost_micro_usd: Option<u64>,
+    /// The artifact the egress copy is stored in, when the gate has a media store and the
+    /// call a media scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<crate::media::ArtifactLocator>,
     /// When the image was released.
     pub released_at: DateTime<Utc>,
 }

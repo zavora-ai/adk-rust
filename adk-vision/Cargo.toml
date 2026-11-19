@@ -26,6 +26,9 @@ default = []
 fetch = ["dep:hf-hub", "dep:ureq"]
 # The conformance suite every backend runs, and its test macros (§7.18).
 conformance = ["tokio/rt-multi-thread"]
+# `ImagePrivacyGuardrail` as an adk-guardrail `Guardrail` and `ToolGuardrail` and a
+# `BeforeModelCallback`, and `PersonalTextRedactor` over `PiiRedactor`'s byte ranges (§7.8).
+guardrail = ["dep:adk-guardrail", "dep:base64"]
 
 [dependencies]
 adk-core.workspace = true
@@ -47,6 +50,10 @@ toml.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
+adk-guardrail = { workspace = true, optional = true }
+# Base64 images inside tool results (feature `guardrail`).
+base64 = { version = "0.22", optional = true }
+
 # Same client configuration as adk-rag: the blocking ureq client, no default TLS stack.
 hf-hub = { version = "0.5", optional = true, default-features = false, features = ["ureq"] }
 # Only to read the HTTP status of a refused download (401 and 403 mean licence acceptance).
@@ -55,6 +62,13 @@ ureq = { version = "3", optional = true, default-features = false }
 [dev-dependencies]
 # Path-only self dependency, so the crate's own tests run the conformance suite.
 adk-vision = { path = ".", features = ["conformance"] }
+# The governed-toolset scenarios (S1–S4, S7) run through `Runner` and `LlmAgent` with a
+# scripted model.
+adk-agent = { path = "../adk-agent" }
+adk-model = { path = "../adk-model", default-features = false }
+adk-runner = { path = "../adk-runner" }
+adk-session = { path = "../adk-session" }
+futures = { workspace = true }
 jsonschema = { workspace = true }
 proptest = "1.5"
 tempfile = "3"
@@ -63,6 +77,18 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync
 [[test]]
 name = "fetch_tests"
 required-features = ["fetch"]
+
+[[test]]
+name = "privacy_guardrail_tests"
+required-features = ["guardrail"]
+
+[[test]]
+name = "governed_toolset_tests"
+required-features = ["guardrail"]
+
+[[test]]
+name = "egress_property_tests"
+required-features = ["guardrail"]
 
 [[test]]
 name = "fetch_live_tests"

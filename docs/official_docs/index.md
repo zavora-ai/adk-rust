@@ -141,6 +141,7 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 Local-first perception (`adk-vision`, spec 3.7, Experimental): regions in source pixels, verified weights, and a gate every image passes before it leaves the machine.
 
 - [Overview](vision/index.md) - Concepts and the eight traits, coordinate frames and transform chains, the runtime's routing and crop escalation, the egress gate, model manifests, licences and the fetcher, writing a backend and its conformance suite
+- [Governed Vision Tools](vision/governed-tools.md) - The seven vision tools on the governed path, approval with the exact egress image, egress rules, budget holds before release, `vision.*` audit records, and the harness vision pack
 
 ## Tools
 
@@ -270,6 +271,7 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Durable Stores](security/durable-stores.md) - Spend ledger, action ledger, and approval store backends, their conformance suite, and the no-duplicate guarantee
 - [Audit Log](security/audit-log.md) - Signed, Merkle-hashed audit log with checkpoints, key rotation, and offline verification
 - [Subject Rights](security/subject-rights.md) - Visitor ids, consent records, and one operation to export, erase, or link a person's data across stores
+- [Image Privacy](security/image-privacy.md) - Faces and personal text redacted on the device before any image leaves; the image privacy guardrail on model requests, tool results and user input
 - [Network Egress Policy](security/egress.md) - Host, port and CIDR allowlists, the shared address classifier, and the egress-guarded HTTP client
 - [Web Bot Auth](security/web-bot-auth.md) - Verified identity for automated clients: RFC 9421 request signatures, key directories, signer and verifier
 

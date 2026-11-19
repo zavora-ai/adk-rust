@@ -75,6 +75,8 @@
 1 adk-payments redis lib
 # The voice surface (spec 3.1 §7.17): the harness over adk-realtime's integrated runner.
 7 adk-harness voice
+# The vision pack (spec 3.7 X15): per-call classes, egress rules, the privacy guardrail.
+7 adk-harness vision
 # The harness's ACP standing permissions (spec 3.3 §10 A1): adk-acp's server enters only here.
 7 adk-harness acp-server
 # The crate docs' examples under the default tier: an `artifacts` example once compiled only
@@ -434,6 +436,8 @@
 # without a socket and the licence gate against a local fixture hub, with the doctests; the
 # live huggingface.co fetches are ignored.
 6 adk-vision fetch doc
+# The image privacy guardrail, the personal-text redactor and the governed scenarios (S1–S4, S7).
+6 adk-vision guardrail doc
 6 adk-site gen-astro
 # `awp verify` against the preview in the launch gate (spec 3.5 §7.8.1), without `migrate`.
 6 adk-site verify doc

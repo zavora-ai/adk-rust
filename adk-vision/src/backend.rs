@@ -289,6 +289,10 @@ pub struct BackendDescriptor {
     /// The largest image it takes.
     #[serde(default)]
     pub limits: InputLimits,
+    /// How a token-billed backend's cost is estimated before its request, so the run's
+    /// budget can refuse it before any image leaves (spec 3.7 §7.9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_estimate: Option<crate::budget::TokenEstimate>,
 }
 
 impl BackendDescriptor {
@@ -301,7 +305,14 @@ impl BackendDescriptor {
             price: None,
             manifest: None,
             limits: InputLimits::unlimited(),
+            token_estimate: None,
         }
+    }
+
+    /// Sets the preflight estimate of a token-billed backend.
+    pub fn with_token_estimate(mut self, estimate: crate::budget::TokenEstimate) -> Self {
+        self.token_estimate = Some(estimate);
+        self
     }
 
     /// Sets the price.

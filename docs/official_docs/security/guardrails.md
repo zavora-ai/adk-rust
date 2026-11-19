@@ -85,6 +85,11 @@ let (redacted, found_types) = redactor.redact("Email: test@example.com");
 // found_types = [PiiType::Email]
 ```
 
+`PiiRedactor::find` returns the same data as `PiiMatch`es — the type and its byte range in
+the original text — for callers that hold positions for the text. As a guardrail,
+`PiiRedactor` redacts text parts only; an image part passes through unchanged. `adk-vision`'s
+`ImagePrivacyGuardrail` covers personal text in images: see [Image Privacy](image-privacy.md).
+
 **Supported PII Types:**
 
 | Type | Matches | Redaction | In `new()` |

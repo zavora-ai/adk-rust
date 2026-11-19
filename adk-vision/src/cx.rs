@@ -1,5 +1,6 @@
 //! [`VisionCx`]: what every vision call carries.
 
+use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditTrail};
 use adk_core::{ActingContext, GovernanceControl, ModelCallScope};
 use tokio_util::sync::CancellationToken;
 
@@ -7,8 +8,8 @@ use crate::error::{Result, VisionError};
 use crate::media::MediaScope;
 
 /// What every vision call carries: cancellation, the metering scope (budget, spend ledger
-/// and kill switches), the acting agent, the media scope new images are stored under, and
-/// the tracing span.
+/// and kill switches), the acting agent, the media scope new images are stored under, the
+/// audit trail `vision.*` records go to, and the tracing span.
 ///
 /// # Example
 ///
@@ -28,7 +29,21 @@ pub struct VisionCx {
     scope: ModelCallScope,
     acting: Option<ActingContext>,
     media: Option<MediaScope>,
+    audit: Option<VisionAudit>,
     span: tracing::Span,
+}
+
+/// The audit trail of the run a vision call belongs to, and who acts in it.
+#[derive(Clone)]
+struct VisionAudit {
+    trail: AuditTrail,
+    actor: AuditActor,
+}
+
+impl std::fmt::Debug for VisionAudit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VisionAudit").field("actor", &self.actor).finish_non_exhaustive()
+    }
 }
 
 impl Default for VisionCx {
@@ -45,6 +60,7 @@ impl VisionCx {
             scope: ModelCallScope::new(),
             acting: None,
             media: None,
+            audit: None,
             span: tracing::Span::current(),
         }
     }
@@ -86,6 +102,14 @@ impl VisionCx {
         self
     }
 
+    /// Writes the call's `vision.*` audit records — egress releases and refusals, perception
+    /// calls and edits (spec 3.7 §9.3) — to `trail`, with `actor` as the acting agent. The
+    /// trail is the run's (`RunConfig::audit`), signed when the run's recorder signs.
+    pub fn with_audit(mut self, trail: AuditTrail, actor: AuditActor) -> Self {
+        self.audit = Some(VisionAudit { trail, actor });
+        self
+    }
+
     /// Records the call's spans under `span`.
     pub fn with_span(mut self, span: tracing::Span) -> Self {
         self.span = span;
@@ -110,6 +134,23 @@ impl VisionCx {
     /// The media scope, when one is set.
     pub fn media_scope(&self) -> Option<&MediaScope> {
         self.media.as_ref()
+    }
+
+    /// The audit trail `vision.*` records go to, when one is set.
+    pub fn audit_trail(&self) -> Option<&AuditTrail> {
+        self.audit.as_ref().map(|audit| &audit.trail)
+    }
+
+    /// Writes `draft` to the audit trail as the acting agent; does nothing without a trail.
+    ///
+    /// # Errors
+    ///
+    /// The trail's error, when its failure mode fails closed.
+    pub(crate) async fn audit(&self, draft: AuditRecordDraft) -> Result<()> {
+        if let Some(audit) = &self.audit {
+            audit.trail.record(draft.actor(audit.actor.clone())).await?;
+        }
+        Ok(())
     }
 
     /// The tracing span.

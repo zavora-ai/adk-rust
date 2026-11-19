@@ -164,6 +164,15 @@ never authorizes a desktop action, and a team member never gets a `computer_use_
   (`runtimeApproved`), never a bearer grant. A `computer-use-mcp` server that requires a grant it
   issued itself refuses the action at its own boundary.
 
+## Vision pack
+
+Feature `vision` adds `adk-vision`'s governed tools under the same modes: a call that stays
+on the device is `Read`; one that sends an image off it is `External`, held in Ask and Auto
+with the exact redacted image it would send, and denied in ReadOnly and Plan, unless a
+`.adk/vision.toml` `allow` rule the operator trusts covers its host and data class. The
+image privacy guardrail runs on every request to a remote harness model. See
+[Governed Vision Tools](../vision/governed-tools.md#the-harness-vision-pack).
+
 ## Scenarios
 
 `examples/harness_agent`:
