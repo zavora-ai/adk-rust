@@ -293,6 +293,7 @@ mod tests {
                         offer_always,
                         first_step: step,
                         detail: detail.map(CardDetail::new),
+                        media: None,
                     }
                 },
             )

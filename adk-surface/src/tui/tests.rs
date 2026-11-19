@@ -87,6 +87,8 @@ pub(super) fn card(id: &str, tool: &str, args: Value) -> DecisionCard {
         decided: None,
         adds_agent: None,
         detail: None,
+        media: None,
+        parked: None,
     }
 }
 

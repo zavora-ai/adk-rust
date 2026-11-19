@@ -899,6 +899,15 @@ impl App {
                     self.decided_notice(&card, &decided.text);
                 }
             }
+            // The call was held again with the person's change: the old card goes, and the call
+            // with the new image arrives through the feed (spec 3.7 V-I5).
+            CommandOutcome::HeldAgain { card, .. } => {
+                self.cards.retain(|open| open.card.id != card.id);
+                self.refocus(now);
+                if let Some(decided) = card.decided.clone() {
+                    self.decided_notice(&card, &decided.text);
+                }
+            }
             CommandOutcome::AlreadyDecided { decided, card } => {
                 self.cards.retain(|open| open.card.id != card.id);
                 self.refocus(now);
