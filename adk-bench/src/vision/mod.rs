@@ -570,8 +570,12 @@ impl VisionBenchReport {
                 .map(|(name, value)| format!("{name} {value:.3}"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let cost =
-                row.cost_per_1k_images_usd.map_or("—".to_string(), |usd| format!("${usd:.2}"));
+            let cost = match row.cost_per_1k_images_usd {
+                // A remote backend metered at zero has no published price; it is not free.
+                Some(usd) if usd == 0.0 && row.mode != RunMode::Local => "unpriced".to_string(),
+                Some(usd) => format!("${usd:.2}"),
+                None => "—".to_string(),
+            };
             let mut notes = row.notes.clone();
             if let Some(runs) = row.latency.first().map(|l| l.runs).filter(|r| *r != c.runs) {
                 notes.push(format!("{runs} timed runs per size"));
@@ -692,6 +696,11 @@ mod tests {
             ),
             "{md}"
         );
+        let mut unpriced = row("nemotron-super-vl", RunMode::Recorded);
+        unpriced.cost_per_1k_images_usd = Some(0.0);
+        let md_unpriced =
+            VisionBenchReport::new(MachineInfo::detect(), vec![unpriced]).to_markdown();
+        assert!(md_unpriced.contains("| mask_iou 0.951 | unpriced |"), "{md_unpriced}");
         let model_row = "| efficientsam-ti | `efficientsam-ti` | `1cf49585c395` | Apache-2.0 |";
         assert_eq!(md.matches(model_row).count(), 1, "{md}");
     }
