@@ -468,6 +468,7 @@ async fn a_thread_with_an_agent_stays_with_it() {
                 agent: "finance".into(),
                 session_id: "t-finance".into(),
                 text: "hello".into(),
+                images: Vec::new(),
             },
         )
         .await
@@ -486,12 +487,22 @@ async fn a_thread_with_an_agent_stays_with_it() {
     .await;
     world
         .engine
-        .execute(&web(), Command::Send { session_id: "t-finance".into(), text: "again".into() })
+        .execute(
+            &web(),
+            Command::Send {
+                session_id: "t-finance".into(),
+                text: "again".into(),
+                images: Vec::new(),
+            },
+        )
         .await
         .unwrap();
     world
         .engine
-        .execute(&web(), Command::Send { session_id: "t-other".into(), text: "hi".into() })
+        .execute(
+            &web(),
+            Command::Send { session_id: "t-other".into(), text: "hi".into(), images: Vec::new() },
+        )
         .await
         .unwrap();
     let finance_runs = eventually("both runs of the thread", Duration::from_secs(10), || async {
@@ -522,6 +533,7 @@ async fn the_mode_in_an_agents_thread_never_loosens_past_its_own() {
                 agent: "finance".into(),
                 session_id: "t-f".into(),
                 text: "hello".into(),
+                images: Vec::new(),
             },
         )
         .await
@@ -566,6 +578,7 @@ async fn removing_an_agent_names_what_ends() {
                 agent: "finance".into(),
                 session_id: "t-finance".into(),
                 text: "hello".into(),
+                images: Vec::new(),
             },
         )
         .await
@@ -682,7 +695,14 @@ async fn always_allow_on_an_added_agents_card_pins_the_rule_to_it() {
     add(&world, &web(), finance()).await.unwrap();
     world
         .engine
-        .execute(&web(), Command::Send { session_id: "s-hold".into(), text: "write it".into() })
+        .execute(
+            &web(),
+            Command::Send {
+                session_id: "s-hold".into(),
+                text: "write it".into(),
+                images: Vec::new(),
+            },
+        )
         .await
         .unwrap();
     let approvals = Arc::clone(world.harness.agent().runtime().approval_store());

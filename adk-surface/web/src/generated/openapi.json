@@ -601,6 +601,17 @@
               "null"
             ]
           },
+          "shell": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ShellView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where its commands run, when it has a shell and its source says (spec 3.3 §5.7)."
+          },
           "status": {
             "$ref": "#/components/schemas/AgentStatus",
             "description": "What it is doing."
@@ -1929,6 +1940,13 @@
           {
             "description": "Sends a message; queued instead while a decision of the session is open (S-I4). A\nrunning turn of the session is offered it and takes it at its agent's next safe point;\na turn that ends first leaves it queued as the session's next message.",
             "properties": {
+              "images": {
+                "description": "The images the person sent with it (spec 3.3 §5.1): at most\n`MAX_IMAGES`. A message with images is never offered to a\nrunning turn; it goes as the session's next.",
+                "items": {
+                  "$ref": "#/components/schemas/ImageData"
+                },
+                "type": "array"
+              },
               "sessionId": {
                 "description": "The session.",
                 "type": "string"
@@ -1975,6 +1993,13 @@
           {
             "description": "Queues a message as the session's next, after its open decisions (S-I4): never offered\nto a running turn.",
             "properties": {
+              "images": {
+                "description": "The images the person sent with it (spec 3.3 §5.1): at most\n`MAX_IMAGES`. A message with images is never offered to a\nrunning turn; it goes as the session's next.",
+                "items": {
+                  "$ref": "#/components/schemas/ImageData"
+                },
+                "type": "array"
+              },
               "sessionId": {
                 "description": "The session.",
                 "type": "string"
@@ -2057,6 +2082,13 @@
               "agent": {
                 "description": "The agent: a roster row's name.",
                 "type": "string"
+              },
+              "images": {
+                "description": "The images the person sent with it (spec 3.3 §5.1): at most\n`MAX_IMAGES`. A message with images is never offered to a\nrunning turn; it goes as the session's next.",
+                "items": {
+                  "$ref": "#/components/schemas/ImageData"
+                },
+                "type": "array"
               },
               "sessionId": {
                 "description": "The new session.",
@@ -2698,6 +2730,75 @@
         "required": [
           "origin",
           "command"
+        ],
+        "type": "object"
+      },
+      "CommandRun": {
+        "description": "A command or code an agent ran (spec 3.3 §5.1), from its tool's result: the last lines it\nwrote, how it exited and for how long. Every string is data.",
+        "properties": {
+          "command": {
+            "description": "The command line, when the tool's result repeats it; otherwise the call's own\nactivity line says what ran.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "durationMs": {
+            "description": "How long it ran, when the tool says.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "exitCode": {
+            "description": "How it exited, when it did.",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "language": {
+            "description": "The language of code the sandbox ran: `python`, `javascript`, `command`, ….",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lines": {
+            "description": "How many lines the result holds in all.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output": {
+            "description": "The last lines it wrote, at most `RUN_LINES`.",
+            "items": {
+              "$ref": "#/components/schemas/OutputLine"
+            },
+            "type": "array"
+          },
+          "stopped": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunStop"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it stopped short, when it did."
+          },
+          "truncated": {
+            "description": "The tool cut what it wrote; the agent can read the whole of it.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "output",
+          "lines"
         ],
         "type": "object"
       },
@@ -4437,6 +4538,24 @@
         ],
         "type": "object"
       },
+      "ImageData": {
+        "description": "An image of a person's message (spec 3.3 §5.1): PNG, JPEG, WebP or GIF, base64. A\ncommand carries at most `MAX_IMAGES`, each at most\n`MAX_IMAGE_BYTES` once decoded; the engine checks each image's\nbytes, not only its declared type.",
+        "properties": {
+          "data": {
+            "description": "The image, base64 (standard alphabet, padded).",
+            "type": "string"
+          },
+          "mimeType": {
+            "description": "`image/png`, `image/jpeg`, `image/webp` or `image/gif`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mimeType",
+          "data"
+        ],
+        "type": "object"
+      },
       "InputSource": {
         "description": "One of the three switches of \"What it can see\" (spec 3.3 §5.6).",
         "oneOf": [
@@ -4705,6 +4824,23 @@
             "type": "object"
           }
         ]
+      },
+      "OutputLine": {
+        "description": "A line a run wrote.",
+        "properties": {
+          "stderr": {
+            "description": "It went to standard error. Absent when false.",
+            "type": "boolean"
+          },
+          "text": {
+            "description": "The line, as data.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
       },
       "PasskeyOptions": {
         "description": "`POST /surface/phone/passkey/options` answer: the options for\n`navigator.credentials.create`, as WebAuthn's JSON form gives them (spec 3.3 §8.2).",
@@ -5161,6 +5297,31 @@
           {
             "const": "high",
             "description": "Needs a careful look.",
+            "type": "string"
+          }
+        ]
+      },
+      "RunStop": {
+        "description": "Why a run stopped short.",
+        "oneOf": [
+          {
+            "const": "timeout",
+            "description": "It ran out of time.",
+            "type": "string"
+          },
+          {
+            "const": "memoryExceeded",
+            "description": "It ran out of memory.",
+            "type": "string"
+          },
+          {
+            "const": "policyViolation",
+            "description": "The sandbox refused what it tried.",
+            "type": "string"
+          },
+          {
+            "const": "error",
+            "description": "It could not run.",
             "type": "string"
           }
         ]
@@ -6090,6 +6251,108 @@
           }
         ]
       },
+      "ShellPlace": {
+        "description": "Where an agent's commands run (spec 3.3 §5.7), as its harness reports it.",
+        "oneOf": [
+          {
+            "description": "On this computer, with no sandbox.",
+            "properties": {
+              "kind": {
+                "const": "host",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "In the OS sandbox.",
+            "properties": {
+              "enforcer": {
+                "description": "The enforcer: `seatbelt`, `bubblewrap`; absent when the source does not say.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "sandbox",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "In a container.",
+            "properties": {
+              "image": {
+                "description": "The image.",
+                "type": "string"
+              },
+              "kind": {
+                "const": "container",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "image"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "In an environment from a sandbox provider.",
+            "properties": {
+              "kind": {
+                "const": "remote",
+                "type": "string"
+              },
+              "offHost": {
+                "description": "It runs off this computer, so commands cannot reach its files.",
+                "type": "boolean"
+              },
+              "provider": {
+                "description": "The provider: `e2b`, `daytona`, `modal`, ….",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "provider",
+              "offHost"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A sandbox was asked for and is unavailable, so commands run on this computer.",
+            "properties": {
+              "kind": {
+                "const": "degraded",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Why it is unavailable.",
+                "type": "string"
+              },
+              "requested": {
+                "description": "The sandbox asked for.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "requested",
+              "reason"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "ShellUse": {
         "description": "Where an agent's commands run: nowhere, in the sandbox, or on this computer.",
         "oneOf": [
@@ -6109,6 +6372,24 @@
             "type": "string"
           }
         ]
+      },
+      "ShellView": {
+        "description": "Where an agent's commands run, and the words that say so.",
+        "properties": {
+          "place": {
+            "$ref": "#/components/schemas/ShellPlace",
+            "description": "Where."
+          },
+          "text": {
+            "description": "\"Commands run in the sandbox (Seatbelt)\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "place",
+          "text"
+        ],
+        "type": "object"
       },
       "Speaker": {
         "description": "Who wrote a message in a thread.",
@@ -6363,6 +6644,13 @@
                 "$ref": "#/components/schemas/Speaker",
                 "description": "The person or an agent."
               },
+              "images": {
+                "description": "The images the person sent with it (spec 3.3 §5.1). Absent when none.",
+                "items": {
+                  "$ref": "#/components/schemas/ImageData"
+                },
+                "type": "array"
+              },
               "kind": {
                 "const": "message",
                 "type": "string"
@@ -6442,6 +6730,46 @@
               "tool",
               "ok",
               "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A command or code an agent ran, and what it wrote: the shell's `bash` or the sandbox's\n`sandbox_exec` (spec 3.3 §5.1). It stands for that call's `Result`.",
+            "properties": {
+              "callId": {
+                "description": "The call it answers.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "run",
+                "type": "string"
+              },
+              "ok": {
+                "description": "It succeeded: it exited with 0.",
+                "type": "boolean"
+              },
+              "run": {
+                "$ref": "#/components/schemas/CommandRun",
+                "description": "The run."
+              },
+              "text": {
+                "description": "\"Done\" or \"Failed\".",
+                "type": "string"
+              },
+              "tool": {
+                "description": "The tool.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "tool",
+              "ok",
+              "text",
+              "run"
             ],
             "type": "object"
           },

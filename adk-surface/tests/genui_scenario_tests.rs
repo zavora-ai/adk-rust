@@ -510,7 +510,14 @@ async fn an_approval_of_a_drawn_form_is_sealed_to_its_drawing_and_spent_when_it_
     ));
     let home = home(&lasting, model, false).await;
     home.engine
-        .execute(&web(), Command::Send { session_id: "s1".into(), text: "Invoice ACME".into() })
+        .execute(
+            &web(),
+            Command::Send {
+                session_id: "s1".into(),
+                text: "Invoice ACME".into(),
+                images: Vec::new(),
+            },
+        )
         .await
         .unwrap();
     eventually("the form", || async {
@@ -586,6 +593,7 @@ async fn governed_form(lasting: Lasting) {
             Command::Send {
                 session_id: "s1".into(),
                 text: "Prepare the October invoice for ACME".into(),
+                images: Vec::new(),
             },
         )
         .await
@@ -927,7 +935,14 @@ async fn the_drawing_agents_rules_refuse_a_sent_form_before_and_after_it_is_held
     ));
     let home = home(&lasting, model, false).await;
     home.engine
-        .execute(&web(), Command::Send { session_id: "s1".into(), text: "Prepare them".into() })
+        .execute(
+            &web(),
+            Command::Send {
+                session_id: "s1".into(),
+                text: "Prepare them".into(),
+                images: Vec::new(),
+            },
+        )
         .await
         .unwrap();
     eventually("both forms", || async {
@@ -1037,7 +1052,14 @@ async fn the_terminal_over_the_control_plane_sends_a_drawn_form() {
     let terminal = Caller::human(os_user(), SurfaceKind::Terminal, Origin::Keyboard);
 
     remote
-        .execute(&terminal, Command::Send { session_id: "t1".into(), text: "Prepare it".into() })
+        .execute(
+            &terminal,
+            Command::Send {
+                session_id: "t1".into(),
+                text: "Prepare it".into(),
+                images: Vec::new(),
+            },
+        )
         .await
         .unwrap();
     let version = eventually("the form over the control plane", || async {
@@ -1177,6 +1199,7 @@ async fn a_live_model_draws_a_form_whose_call_waits_for_the_person() {
                        amount, 4200, and a Send action that calls send_invoice with the two \
                        fields and invoice INV-10. Do not call send_invoice yourself."
                     .into(),
+                images: Vec::new(),
             },
         )
         .await
@@ -1208,6 +1231,7 @@ async fn a_live_model_draws_a_form_whose_call_waits_for_the_person() {
         ThreadItem::Message { .. }
         | ThreadItem::Activity { .. }
         | ThreadItem::Result { .. }
+        | ThreadItem::Run { .. }
         | ThreadItem::Decision { .. }
         | ThreadItem::Drawn { .. }
         | ThreadItem::DrawnRefused { .. }

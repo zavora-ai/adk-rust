@@ -57,7 +57,11 @@ async fn two_surfaces_answer_one_held_call_and_it_runs_once() {
         .engine
         .execute(
             &web(),
-            Command::Send { session_id: "s1".into(), text: "Write the October invoice".into() },
+            Command::Send {
+                session_id: "s1".into(),
+                text: "Write the October invoice".into(),
+                images: Vec::new(),
+            },
         )
         .await
         .unwrap();
@@ -236,7 +240,11 @@ async fn the_web_api_checks_the_session_owner() {
     s.engine
         .execute(
             &web(),
-            Command::Send { session_id: "s1".into(), text: "Write the October invoice".into() },
+            Command::Send {
+                session_id: "s1".into(),
+                text: "Write the October invoice".into(),
+                images: Vec::new(),
+            },
         )
         .await
         .unwrap();

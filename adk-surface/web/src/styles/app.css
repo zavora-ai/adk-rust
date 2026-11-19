@@ -1070,10 +1070,7 @@ pre {
 }
 
 .composer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 6px 6px 8px;
+  display: grid;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   background: var(--card);
@@ -1103,6 +1100,323 @@ pre {
 .composer-send {
   min-height: 36px;
   font-size: var(--fs-md);
+}
+
+.composer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 8px;
+}
+
+/* A file dragged over the message box: it takes images. */
+.composer-over {
+  border-color: var(--focus);
+  border-style: dashed;
+  background: color-mix(in srgb, var(--accent-soft) 60%, var(--card));
+}
+
+.composer-attach {
+  flex: none;
+}
+
+/* Images waiting to go with the message (spec 3.3 §5.1). */
+.composer-images {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 12px 2px;
+}
+
+.composer-images li {
+  position: relative;
+  width: 64px;
+  height: 64px;
+}
+
+.composer-images img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius);
+  box-shadow: inset 0 0 0 1px var(--border);
+  background: var(--raised);
+}
+
+.composer-image-remove {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 2px solid var(--card);
+  border-radius: var(--radius-pill);
+  background: var(--stop);
+  color: var(--on-stop);
+  cursor: pointer;
+}
+
+.composer-image-remove svg {
+  width: 9px;
+  height: 9px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.composer-images .composer-images-hint {
+  width: auto;
+  height: auto;
+  color: var(--label);
+  font-size: var(--fs-xs);
+}
+
+.composer-refused {
+  padding: 0 12px 10px;
+  color: var(--failed);
+  font-size: var(--fs-xs);
+}
+
+/* The person's message with its images, at the thread's right. */
+.message-you-group {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+  align-self: flex-end;
+  max-width: 540px;
+}
+
+.message-images {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 160px));
+  gap: 6px;
+}
+
+.message-images-1 {
+  grid-template-columns: minmax(0, 320px);
+}
+
+.message-image {
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--border);
+  cursor: zoom-in;
+}
+
+.message-image img {
+  display: block;
+  width: 100%;
+  max-height: 240px;
+  object-fit: cover;
+}
+
+.message-images-1 .message-image img {
+  max-height: 320px;
+  object-fit: contain;
+}
+
+.image-viewer {
+  max-width: min(92vw, 1200px);
+  max-height: 92vh;
+  padding: 12px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow-pop);
+}
+
+.image-viewer::backdrop {
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
+}
+
+.image-viewer img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(92vh - 80px);
+  margin: 0 auto;
+  border-radius: var(--radius);
+}
+
+.image-viewer form {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+/* Where an agent's commands run (spec 3.3 §5.7). */
+.thread-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.shell-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.shell-badge-isolated {
+  background: var(--pill-decided-bg);
+  color: var(--pill-decided);
+}
+
+.shell-badge-degraded {
+  background: color-mix(in srgb, var(--scene-warning) 12%, var(--card));
+  color: var(--scene-warning);
+  white-space: normal;
+}
+
+.shell-icon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+}
+
+/* A command or code an agent ran (spec 3.3 §5.1). */
+.run {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.run-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.run-head::-webkit-details-marker {
+  display: none;
+}
+
+.run-mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-sm);
+  background: var(--pill-failed-bg);
+  color: var(--pill-failed);
+}
+
+.run-mark-ok {
+  background: var(--pill-decided-bg);
+  color: var(--pill-decided);
+}
+
+.run-mark svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.run-command {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font: 500 var(--fs-sm) / 20px var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-prompt {
+  color: var(--label);
+}
+
+.run-status,
+.run-place {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.run-status-failed {
+  background: var(--pill-failed-bg);
+  color: var(--pill-failed);
+}
+
+.run-place-sandbox {
+  background: var(--pill-decided-bg);
+  color: var(--pill-decided);
+}
+
+.run-place .shell-icon {
+  width: 11px;
+  height: 11px;
+}
+
+.run-time {
+  flex: none;
+  color: var(--label);
+  font: 500 11.5px / 20px var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-output {
+  max-height: 240px;
+  margin: 0;
+  padding: 10px 14px 12px;
+  overflow: auto;
+  border-top: 1px solid var(--divider);
+  background: var(--card);
+  color: var(--text-2);
+  font: 400 12.5px / 19px var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.run-stderr {
+  color: var(--failed);
+}
+
+.run-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--divider);
+  color: var(--label);
+  font-size: var(--fs-xs);
 }
 
 .queued {

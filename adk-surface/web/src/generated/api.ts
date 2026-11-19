@@ -212,6 +212,8 @@ export interface AgentRow {
   mode?: ModeView | null;
   /** The session of its latest work, to open its thread. */
   sessionId?: string | null;
+  /** Where its commands run, when it has a shell and its source says (spec 3.3 §5.7). */
+  shell?: ShellView | null;
   /** What it is doing. */
   status: AgentStatus;
   /** The status word: "Working", "Waiting for you", "Asleep until 07:00", "Done", "Failed". */
@@ -680,6 +682,12 @@ export type Command = {
   decisionId: string;
   type: "cancelAnswer";
 } | {
+  /**
+   * The images the person sent with it (spec 3.3 §5.1): at most
+   * `MAX_IMAGES`. A message with images is never offered to a
+   * running turn; it goes as the session's next.
+   */
+  images?: ImageData[];
   /** The session. */
   sessionId: string;
   /** The message. */
@@ -692,6 +700,12 @@ export type Command = {
   text: string;
   type: "steer";
 } | {
+  /**
+   * The images the person sent with it (spec 3.3 §5.1): at most
+   * `MAX_IMAGES`. A message with images is never offered to a
+   * running turn; it goes as the session's next.
+   */
+  images?: ImageData[];
   /** The session. */
   sessionId: string;
   /** The message. */
@@ -712,6 +726,12 @@ export type Command = {
 } | {
   /** The agent: a roster row's name. */
   agent: string;
+  /**
+   * The images the person sent with it (spec 3.3 §5.1): at most
+   * `MAX_IMAGES`. A message with images is never offered to a
+   * running turn; it goes as the session's next.
+   */
+  images?: ImageData[];
   /** The new session. */
   sessionId: string;
   /** The first message. */
@@ -878,6 +898,32 @@ export interface CommandRequest {
   origin: Origin;
   /** The surface; defaults to the web home. */
   surface?: SurfaceKind;
+}
+
+/**
+ * A command or code an agent ran (spec 3.3 §5.1), from its tool's result: the last lines it
+ * wrote, how it exited and for how long. Every string is data.
+ */
+export interface CommandRun {
+  /**
+   * The command line, when the tool's result repeats it; otherwise the call's own
+   * activity line says what ran.
+   */
+  command?: string | null;
+  /** How long it ran, when the tool says. */
+  durationMs?: number | null;
+  /** How it exited, when it did. */
+  exitCode?: number | null;
+  /** The language of code the sandbox ran: `python`, `javascript`, `command`, …. */
+  language?: string | null;
+  /** How many lines the result holds in all. */
+  lines: number;
+  /** The last lines it wrote, at most `RUN_LINES`. */
+  output: OutputLine[];
+  /** Why it stopped short, when it did. */
+  stopped?: RunStop | null;
+  /** The tool cut what it wrote; the agent can read the whole of it. */
+  truncated?: boolean;
 }
 
 /** A passkey the person set up on a computer for the web home. */
@@ -1546,6 +1592,19 @@ export interface GrantedUse {
   text: string;
 }
 
+/**
+ * An image of a person's message (spec 3.3 §5.1): PNG, JPEG, WebP or GIF, base64. A
+ * command carries at most `MAX_IMAGES`, each at most
+ * `MAX_IMAGE_BYTES` once decoded; the engine checks each image's
+ * bytes, not only its declared type.
+ */
+export interface ImageData {
+  /** The image, base64 (standard alphabet, padded). */
+  data: string;
+  /** `image/png`, `image/jpeg`, `image/webp` or `image/gif`. */
+  mimeType: string;
+}
+
 /** One of the three switches of "What it can see" (spec 3.3 §5.6). */
 export type InputSource = "mic" | "camera" | "screen";
 
@@ -1603,6 +1662,14 @@ export type Origin = {
   agent: string;
   kind: "agent";
 };
+
+/** A line a run wrote. */
+export interface OutputLine {
+  /** It went to standard error. Absent when false. */
+  stderr?: boolean;
+  /** The line, as data. */
+  text: string;
+}
 
 /**
  * `POST /surface/phone/passkey/options` answer: the options for
@@ -1791,6 +1858,9 @@ export type Reversibility = "cantBeUnsent" | "cantBeUndone" | "canBeRemoved" | "
 
 /** How much harm a call can do, as approvers see it (spec 3.3 §7.1). */
 export type Risk = "low" | "medium" | "high";
+
+/** Why a run stopped short. */
+export type RunStop = "timeout" | "memoryExceeded" | "policyViolation" | "error";
 
 /** A scene's axes. */
 export interface SceneAxes {
@@ -2043,8 +2113,41 @@ export interface SceneValues {
 /** What asked for a `DrawnSent` call (spec 3.3 §6.1 `genui`, `genui-apps`). */
 export type SentVia = "form" | "app";
 
+/** Where an agent's commands run (spec 3.3 §5.7), as its harness reports it. */
+export type ShellPlace = {
+  kind: "host";
+} | {
+  /** The enforcer: `seatbelt`, `bubblewrap`; absent when the source does not say. */
+  enforcer?: string | null;
+  kind: "sandbox";
+} | {
+  /** The image. */
+  image: string;
+  kind: "container";
+} | {
+  kind: "remote";
+  /** It runs off this computer, so commands cannot reach its files. */
+  offHost: boolean;
+  /** The provider: `e2b`, `daytona`, `modal`, …. */
+  provider: string;
+} | {
+  kind: "degraded";
+  /** Why it is unavailable. */
+  reason: string;
+  /** The sandbox asked for. */
+  requested: string;
+};
+
 /** Where an agent's commands run: nowhere, in the sandbox, or on this computer. */
 export type ShellUse = "none" | "sandboxed" | "host";
+
+/** Where an agent's commands run, and the words that say so. */
+export interface ShellView {
+  /** Where. */
+  place: ShellPlace;
+  /** "Commands run in the sandbox (Seatbelt)". */
+  text: string;
+}
 
 /** Who wrote a message in a thread. */
 export type Speaker = "you" | "agent";
@@ -2141,6 +2244,8 @@ export type ThreadItem = {
   author: string;
   /** The person or an agent. */
   from: Speaker;
+  /** The images the person sent with it (spec 3.3 §5.1). Absent when none. */
+  images?: ImageData[];
   kind: "message";
   /** The text, as data. */
   text: string;
@@ -2158,6 +2263,18 @@ export type ThreadItem = {
   kind: "result";
   /** It succeeded. */
   ok: boolean;
+  /** "Done" or "Failed". */
+  text: string;
+  /** The tool. */
+  tool: string;
+} | {
+  /** The call it answers. */
+  callId?: string | null;
+  kind: "run";
+  /** It succeeded: it exited with 0. */
+  ok: boolean;
+  /** The run. */
+  run: CommandRun;
   /** "Done" or "Failed". */
   text: string;
   /** The tool. */

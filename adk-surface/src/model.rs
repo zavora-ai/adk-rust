@@ -89,6 +89,9 @@ pub struct AgentRow {
     /// The caller may change it here (spec 3.3 §7.2). Absent when false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub can_change: bool,
+    /// Where its commands run, when it has a shell and its source says (spec 3.3 §5.7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<ShellView>,
 }
 
 /// How much agents act on their own (spec 3.3 §8.1).
@@ -478,6 +481,129 @@ pub struct ElicitedOption {
     pub label: String,
 }
 
+/// An image of a person's message (spec 3.3 §5.1): PNG, JPEG, WebP or GIF, base64. A
+/// command carries at most [`MAX_IMAGES`](crate::MAX_IMAGES), each at most
+/// [`MAX_IMAGE_BYTES`](crate::MAX_IMAGE_BYTES) once decoded; the engine checks each image's
+/// bytes, not only its declared type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageData {
+    /// `image/png`, `image/jpeg`, `image/webp` or `image/gif`.
+    pub mime_type: String,
+    /// The image, base64 (standard alphabet, padded).
+    pub data: String,
+}
+
+/// A command or code an agent ran (spec 3.3 §5.1), from its tool's result: the last lines it
+/// wrote, how it exited and for how long. Every string is data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandRun {
+    /// The command line, when the tool's result repeats it; otherwise the call's own
+    /// activity line says what ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// The language of code the sandbox ran: `python`, `javascript`, `command`, ….
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// How it exited, when it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// How long it ran, when the tool says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// The last lines it wrote, at most [`RUN_LINES`](crate::RUN_LINES).
+    pub output: Vec<OutputLine>,
+    /// How many lines the result holds in all.
+    pub lines: u32,
+    /// The tool cut what it wrote; the agent can read the whole of it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+    /// Why it stopped short, when it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped: Option<RunStop>,
+}
+
+/// A line a run wrote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputLine {
+    /// The line, as data.
+    pub text: String,
+    /// It went to standard error. Absent when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stderr: bool,
+}
+
+/// Why a run stopped short.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum RunStop {
+    /// It ran out of time.
+    Timeout,
+    /// It ran out of memory.
+    MemoryExceeded,
+    /// The sandbox refused what it tried.
+    PolicyViolation,
+    /// It could not run.
+    Error,
+}
+
+/// Where an agent's commands run (spec 3.3 §5.7), as its harness reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ShellPlace {
+    /// On this computer, with no sandbox.
+    Host,
+    /// In the OS sandbox.
+    #[serde(rename_all = "camelCase")]
+    Sandbox {
+        /// The enforcer: `seatbelt`, `bubblewrap`; absent when the source does not say.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        enforcer: Option<String>,
+    },
+    /// In a container.
+    #[serde(rename_all = "camelCase")]
+    Container {
+        /// The image.
+        image: String,
+    },
+    /// In an environment from a sandbox provider.
+    #[serde(rename_all = "camelCase")]
+    Remote {
+        /// The provider: `e2b`, `daytona`, `modal`, ….
+        provider: String,
+        /// It runs off this computer, so commands cannot reach its files.
+        off_host: bool,
+    },
+    /// A sandbox was asked for and is unavailable, so commands run on this computer.
+    #[serde(rename_all = "camelCase")]
+    Degraded {
+        /// The sandbox asked for.
+        requested: String,
+        /// Why it is unavailable.
+        reason: String,
+    },
+}
+
+impl ShellPlace {
+    /// Commands run apart from this computer's files and network: a sandbox, a container
+    /// or a remote environment.
+    pub fn isolated(&self) -> bool {
+        matches!(self, Self::Sandbox { .. } | Self::Container { .. } | Self::Remote { .. })
+    }
+}
+
+/// Where an agent's commands run, and the words that say so.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellView {
+    /// Where.
+    pub place: ShellPlace,
+    /// "Commands run in the sandbox (Seatbelt)".
+    pub text: String,
+}
+
 /// Who wrote a message in a thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -502,6 +628,9 @@ pub enum ThreadItem {
         author: String,
         /// The text, as data.
         text: String,
+        /// The images the person sent with it (spec 3.3 §5.1). Absent when none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<ImageData>,
     },
     /// An agent used a tool.
     #[serde(rename_all = "camelCase")]
@@ -526,6 +655,22 @@ pub enum ThreadItem {
         ok: bool,
         /// "Done" or "Failed".
         text: String,
+    },
+    /// A command or code an agent ran, and what it wrote: the shell's `bash` or the sandbox's
+    /// `sandbox_exec` (spec 3.3 §5.1). It stands for that call's [`Result`](Self::Result).
+    #[serde(rename_all = "camelCase")]
+    Run {
+        /// The tool.
+        tool: String,
+        /// The call it answers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<String>,
+        /// It succeeded: it exited with 0.
+        ok: bool,
+        /// "Done" or "Failed".
+        text: String,
+        /// The run.
+        run: CommandRun,
     },
     /// An agent asked first: a held call. Its card comes from the inbox entry.
     #[serde(rename_all = "camelCase")]

@@ -1607,11 +1607,13 @@ impl App {
                         agent,
                         session_id: self.session.clone(),
                         text: text.to_string(),
+                        images: Vec::new(),
                     })];
                 }
                 vec![Effect::Execute(Command::Send {
                     session_id: self.session.clone(),
                     text: text.to_string(),
+                    images: Vec::new(),
                 })]
             }
         }

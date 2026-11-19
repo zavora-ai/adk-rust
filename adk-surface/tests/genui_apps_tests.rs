@@ -473,6 +473,7 @@ async fn forecast(home: &Home) -> adk_surface::genui::AppView {
             Command::Send {
                 session_id: "s1".into(),
                 text: "Will it rain in Nairobi tomorrow?".into(),
+                images: Vec::new(),
             },
         )
         .await
@@ -973,6 +974,7 @@ async fn a_live_model_shows_an_app_whose_call_waits_for_the_person() {
                 text: "Will it rain in Nairobi tomorrow? Show me the forecast with weather_show, \
                        then answer in one sentence. Do not call any other tool."
                     .into(),
+                images: Vec::new(),
             },
         )
         .await
@@ -1103,7 +1105,11 @@ async fn an_app_whose_showing_call_waited_for_the_person_opens_once_allowed() {
     home.engine
         .execute(
             &web(),
-            Command::Send { session_id: "s1".into(), text: "Alert me if it rains.".into() },
+            Command::Send {
+                session_id: "s1".into(),
+                text: "Alert me if it rains.".into(),
+                images: Vec::new(),
+            },
         )
         .await
         .unwrap();

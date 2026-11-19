@@ -53,11 +53,11 @@ mobile = ["web", "dep:web-push-native", "dep:p256", "dep:qrcode", "dep:base64ct"
 # cancel window, the camera and the screen as input only while their switches are on. The
 # runtime drives the harness's realtime session (`adk-realtime`); hosts pass the provider
 # models, so no provider is compiled in here. With `web`, the voice view's socket.
-voice = ["adk-harness/voice", "dep:adk-realtime", "adk-realtime/integration", "dep:sha2", "dep:base64", "axum?/ws"]
+voice = ["adk-harness/voice", "dep:adk-realtime", "adk-realtime/integration", "dep:sha2", "axum?/ws"]
 # The website's views on the web home (spec 3.5 §7.1, §8.2): the web editor, onboarding, the
 # charter cards, the site view and the weekly review over `adk-website`'s desk, with their own
 # OpenAPI document and generated TypeScript. Implies `web`.
-website = ["web", "dep:adk-website", "dep:base64"]
+website = ["web", "dep:adk-website"]
 # Gemini Live and the OpenAI Realtime API, for the live voice test and the `voice_home`
 # example only: a host builds its own provider models.
 voice-live = ["voice", "adk-realtime/gemini", "adk-realtime/openai"]
@@ -104,7 +104,7 @@ adk-tool = { workspace = true, optional = true }
 async-trait.workspace = true
 axum = { version = "0.8", optional = true }
 # Camera and screen frames go to the realtime provider base64-encoded (`voice`).
-base64 = { version = "0.22", optional = true }
+base64 = "0.22"
 chrono.workspace = true
 crossterm = { version = "0.29", optional = true, features = ["event-stream"] }
 futures.workspace = true

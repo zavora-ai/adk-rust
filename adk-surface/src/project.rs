@@ -19,10 +19,10 @@ use serde_json::Value;
 use crate::answers::AnswerRecord;
 use crate::hints::CardHint;
 use crate::model::{
-    AgentRef, AgentRow, AgentStatus, Avatar, BriefingLine, CallView, CardStatus, Decided,
-    DecidedAnswer, DecisionCard, ElicitationView, ElicitedField, ElicitedKind, ElicitedOption,
-    FeedEntry, Mode, ModeView, Pill, QuietView, Reversibility, Speaker, SpendView, ThreadItem,
-    TimelineStep,
+    AgentRef, AgentRow, AgentStatus, Avatar, BriefingLine, CallView, CardStatus, CommandRun,
+    Decided, DecidedAnswer, DecisionCard, ElicitationView, ElicitedField, ElicitedKind,
+    ElicitedOption, FeedEntry, Mode, ModeView, OutputLine, Pill, QuietView, Reversibility, RunStop,
+    ShellView, Speaker, SpendView, ThreadItem, TimelineStep,
 };
 use crate::origin::{Caller, SurfaceKind};
 use crate::rules::{self, Answer, DecisionFacts};
@@ -31,6 +31,12 @@ use crate::words::{self, SaidWhat};
 
 /// How long a call's text may be before it is shown truncated (spec 3.3 §7.1).
 pub const CALL_TEXT_LIMIT: usize = 2_000;
+
+/// The most lines of a run's output a thread shows: its last ones (spec 3.3 §5.1).
+pub const RUN_LINES: usize = 40;
+
+/// The most characters of one output line a thread shows.
+const RUN_LINE_CHARS: usize = 400;
 
 /// The longest agent name a decision card shows, in characters.
 pub const CARD_NAME_LIMIT: usize = 64;
@@ -836,10 +842,15 @@ impl Projector {
         let requested = crate::genui::requested_via(event);
         if let Some(content) = &event.llm_response.content {
             let mut text = String::new();
+            // The images a person sent with the message (spec 3.3 §5.1).
+            let mut images = Vec::new();
             for part in &content.parts {
                 match part {
                     Part::Text { text: chunk } if !event.llm_response.partial => {
                         text.push_str(chunk);
+                    }
+                    Part::InlineData { mime_type, data, .. } if from_person => {
+                        images.extend(crate::images::shown(mime_type, data));
                     }
                     // The person's own call: its DrawnSent item shows it, not the agent's work.
                     Part::FunctionCall { id, .. }
@@ -902,12 +913,28 @@ impl Projector {
                         } else {
                             words::FAILED.to_string()
                         };
-                        items.push(ThreadItem::Result {
-                            tool: function_response.name.clone(),
-                            call_id: id.clone(),
-                            ok,
-                            text,
-                        });
+                        // A command or code that ran: what it wrote, and how it exited.
+                        match command_run(&function_response.name, &function_response.response) {
+                            Some(run) => {
+                                let ok = ok
+                                    && run.exit_code.is_none_or(|code| code == 0)
+                                    && run.stopped.is_none();
+                                let text = if ok { words::DONE } else { words::FAILED };
+                                items.push(ThreadItem::Run {
+                                    tool: function_response.name.clone(),
+                                    call_id: id.clone(),
+                                    ok,
+                                    text: text.to_string(),
+                                    run,
+                                });
+                            }
+                            None => items.push(ThreadItem::Result {
+                                tool: function_response.name.clone(),
+                                call_id: id.clone(),
+                                ok,
+                                text,
+                            }),
+                        }
                     }
                     _ => {}
                 }
@@ -916,7 +943,9 @@ impl Projector {
             // The event that holds a call carries the runtime's own notice, not the agent's
             // words: its Decision item says it plainly (§8). A requested call's line is for
             // the model; its DrawnSent item says it to the person.
-            if !text.is_empty() && event.actions.tool_confirmation.is_none() && requested.is_none()
+            if (!text.is_empty() || !images.is_empty())
+                && event.actions.tool_confirmation.is_none()
+                && requested.is_none()
             {
                 let message = if from_person {
                     ThreadItem::Message {
@@ -925,12 +954,14 @@ impl Projector {
                         // An app's suggestion the person sent reads as its words and label.
                         text: crate::genui::suggested_message(text)
                             .unwrap_or_else(|| text.to_string()),
+                        images,
                     }
                 } else {
                     ThreadItem::Message {
                         from: Speaker::Agent,
                         author: self.agent(&event.author).display_name,
                         text: text.to_string(),
+                        images: Vec::new(),
                     }
                 };
                 items.insert(0, message);
@@ -1001,6 +1032,10 @@ impl Projector {
             mode: None,
             added: false,
             can_change: false,
+            shell: state
+                .shell
+                .clone()
+                .map(|place| ShellView { text: words::commands_run(&place), place }),
         }
     }
 
@@ -1515,6 +1550,54 @@ fn avatar(display_name: &str) -> Avatar {
     Avatar { monogram, color: COLORS[index].to_string() }
 }
 
+/// The run a tool's result describes, for a shell's `bash` (`command`, `exit_code`, `stdout`,
+/// `stderr`, `truncated`) and the sandbox's `sandbox_exec` (`status`, `stdout`, `stderr`,
+/// `exit_code`, `duration_ms`); `None` for any other result (spec 3.3 §5.1). The call's own
+/// command comes from the result where the tool repeats it.
+fn command_run(tool: &str, response: &serde_json::Value) -> Option<CommandRun> {
+    let object = response.as_object()?;
+    let has_output = object.contains_key("stdout") || object.contains_key("stderr");
+    let shell = object.contains_key("command") && object.contains_key("exit_code");
+    let sandbox = tool == "sandbox_exec" && (has_output || object.contains_key("status"));
+    if !(sandbox || shell && has_output) {
+        return None;
+    }
+    let string = |key: &str| object.get(key).and_then(serde_json::Value::as_str).unwrap_or("");
+    let stopped = match string("status") {
+        "timeout" => Some(RunStop::Timeout),
+        "memory_exceeded" => Some(RunStop::MemoryExceeded),
+        "policy_violation" => Some(RunStop::PolicyViolation),
+        "error" => Some(RunStop::Error),
+        _ => None,
+    };
+    let line = |text: &str, stderr: bool| OutputLine {
+        text: if text.chars().count() > RUN_LINE_CHARS {
+            format!("{}…", text.chars().take(RUN_LINE_CHARS).collect::<String>())
+        } else {
+            text.to_string()
+        },
+        stderr,
+    };
+    let mut all: Vec<OutputLine> = string("stdout").lines().map(|text| line(text, false)).collect();
+    all.extend(string("stderr").lines().map(|text| line(text, true)));
+    let lines = u32::try_from(all.len()).unwrap_or(u32::MAX);
+    let output = all.split_off(all.len().saturating_sub(RUN_LINES));
+    let command = Some(string("command")).filter(|command| !command.is_empty());
+    Some(CommandRun {
+        command: command.map(|command| command.chars().take(CALL_TEXT_LIMIT).collect()),
+        language: object.get("language").and_then(serde_json::Value::as_str).map(str::to_string),
+        exit_code: object
+            .get("exit_code")
+            .and_then(serde_json::Value::as_i64)
+            .and_then(|code| i32::try_from(code).ok()),
+        duration_ms: object.get("duration_ms").and_then(serde_json::Value::as_u64),
+        output,
+        lines,
+        truncated: object.get("truncated").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        stopped,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1754,6 +1837,7 @@ mod tests {
             wake_at,
             suspended,
             subagent: None,
+            shell: None,
         };
         let seven = Some(Utc.with_ymd_and_hms(2026, 10, 24, 7, 0, 0).unwrap());
         let words = |row: AgentRow| (row.agent.display_name, row.status_text);

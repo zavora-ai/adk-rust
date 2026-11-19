@@ -85,7 +85,11 @@ async fn one_decision_makes_a_short_plain_while_you_were_away() {
         .engine
         .execute(
             &web(),
-            Command::Send { session_id: "s1".into(), text: "Write the invoice".into() },
+            Command::Send {
+                session_id: "s1".into(),
+                text: "Write the invoice".into(),
+                images: Vec::new(),
+            },
         )
         .await
         .unwrap();

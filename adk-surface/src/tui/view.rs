@@ -42,6 +42,9 @@ const DETAILS: &str = "Details";
 /// How many rendered agent messages the cache keeps before it starts again.
 const MARKDOWN_CACHE: usize = 512;
 
+/// How many of a run's last lines the terminal shows under it.
+const RUN_TAIL: usize = 6;
+
 /// What marks a line break inside a one-line view of model or tool text, so a multi-line
 /// value never reads as one line (§7.1 "the exact call").
 const NEWLINE_MARK: &str = "⏎";
@@ -385,7 +388,7 @@ impl Renderer {
         let mut lines = Vec::new();
         for (index, item) in entry.items.iter().enumerate() {
             match item {
-                ThreadItem::Message { from, author, text } => {
+                ThreadItem::Message { from, author, text, images } => {
                     lines.push(Line::default());
                     lines.push(Line::from(Span::styled(
                         format!("{} · {}", safe_line(author), entry.at_text),
@@ -399,6 +402,13 @@ impl Renderer {
                                     width,
                                     0,
                                 ));
+                            }
+                            // The terminal cannot show them; it says they are there.
+                            if !images.is_empty() {
+                                lines.push(Line::from(Span::styled(
+                                    format!("[{}]", words::images_attached(images.len())),
+                                    t.label(),
+                                )));
                             }
                         }
                         Speaker::Agent => {
@@ -440,6 +450,33 @@ impl Renderer {
                         Span::raw(" ".repeat(gap)),
                         Span::styled(right, t.label()),
                     ]));
+                }
+                // A run: its line unless its activity shows it, then its last lines.
+                ThreadItem::Run { tool, call_id, ok, text, run } => {
+                    if !(results.is_some() && call_id.is_some()) {
+                        let (mark, style) = if *ok {
+                            ('✓', t.fg(t.palette().working))
+                        } else {
+                            ('✗', t.fg(t.palette().failed))
+                        };
+                        let what = run.command.as_deref().unwrap_or(tool);
+                        lines.push(Line::from(vec![
+                            Span::styled(mark.to_string(), style),
+                            Span::raw(" "),
+                            Span::styled(fit(&safe_line(what), width / 2), t.secondary()),
+                            Span::styled(format!(" · {text}"), t.label()),
+                        ]));
+                    }
+                    for line in run.output.iter().rev().take(RUN_TAIL).rev() {
+                        let style = if line.stderr { t.fg(t.palette().failed) } else { t.label() };
+                        lines.push(Line::from(vec![
+                            Span::styled("  │ ".to_string(), t.label()),
+                            Span::styled(
+                                fit(&safe_line(&line.text), width.saturating_sub(4)),
+                                style,
+                            ),
+                        ]));
+                    }
                 }
                 ThreadItem::Result { tool, call_id, ok, text } => {
                     let shown_on_activity = results.is_some() && call_id.is_some();
@@ -514,8 +551,12 @@ impl Renderer {
         for entry in &app.entries {
             named.extend(named_decisions(entry));
             for item in &entry.items {
-                if let ThreadItem::Result { call_id: Some(id), ok, text, .. } = item {
-                    results.insert(id.clone(), (*ok, text.clone()));
+                match item {
+                    ThreadItem::Result { call_id: Some(id), ok, text, .. }
+                    | ThreadItem::Run { call_id: Some(id), ok, text, .. } => {
+                        results.insert(id.clone(), (*ok, text.clone()));
+                    }
+                    _ => {}
                 }
             }
         }

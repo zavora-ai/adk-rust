@@ -42,6 +42,8 @@ pub struct AgentState {
     /// The background sub-agent the latest run belongs to, by the name its parent gave it,
     /// when it is one: the roster says so beside its status.
     pub subagent: Option<String>,
+    /// Where its commands run, when it has a shell and the source knows (spec 3.3 §5.7).
+    pub shell: Option<crate::model::ShellPlace>,
 }
 
 /// Today's spend and the daily limit, in micro-USD (spec 3.3 §8.1 "Daily spending limit").
@@ -212,6 +214,26 @@ pub trait Source: Send + Sync {
     async fn start_turn(&self, caller: &Caller, session: &str, text: &str) -> Result<()> {
         let _ = (caller, session, text);
         Err(SurfaceError::unsupported("sending a message"))
+    }
+
+    /// Starts a turn of the session on `text` and the images the person sent with it
+    /// (spec 3.3 §5.1). The default sends a message without images through
+    /// [`start_turn`](Self::start_turn) and reports `surface.unsupported` for one with them.
+    ///
+    /// # Errors
+    ///
+    /// `surface.unsupported` when the source cannot send images, or the source's error.
+    async fn start_turn_images(
+        &self,
+        caller: &Caller,
+        session: &str,
+        text: &str,
+        images: &[crate::images::MessageImage],
+    ) -> Result<()> {
+        if images.is_empty() {
+            return self.start_turn(caller, session, text).await;
+        }
+        Err(SurfaceError::unsupported("sending images"))
     }
 
     /// Offers `text` to the turn of the session that runs now (spec 3.3 §6 "steer"): the
@@ -426,6 +448,27 @@ pub trait Source: Send + Sync {
     ) -> Result<()> {
         let _ = agent;
         self.start_turn(caller, session, text).await
+    }
+
+    /// [`start_turn_with`](Self::start_turn_with) with the images the person sent with the
+    /// thread's first message (spec 3.3 §5.1). The default sends a message without images
+    /// through `start_turn_with` and reports `surface.unsupported` for one with them.
+    ///
+    /// # Errors
+    ///
+    /// `surface.unsupported` when the source cannot send images, or the source's error.
+    async fn start_turn_with_images(
+        &self,
+        caller: &Caller,
+        agent: &str,
+        session: &str,
+        text: &str,
+        images: &[crate::images::MessageImage],
+    ) -> Result<()> {
+        if images.is_empty() {
+            return self.start_turn_with(caller, agent, session, text).await;
+        }
+        Err(SurfaceError::unsupported("sending images"))
     }
 }
 

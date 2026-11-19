@@ -163,7 +163,11 @@ fn esc_never_decides_and_switches_to_typing() {
     let effects = app.key(key(KeyCode::Enter), armed);
     assert_eq!(
         effects,
-        vec![Effect::Execute(Command::Send { session_id: SESSION.into(), text: "yes".into() })],
+        vec![Effect::Execute(Command::Send {
+            session_id: SESSION.into(),
+            text: "yes".into(),
+            images: Vec::new()
+        })],
         "typed while a decision is open: sent, and the engine queues it (S-I4)"
     );
 }
@@ -335,6 +339,7 @@ fn the_full_screen_has_the_layout_of_the_concept() {
             mode: None,
             added: false,
             can_change: false,
+            shell: None,
         }]),
         shown,
     );
@@ -344,6 +349,7 @@ fn the_full_screen_has_the_layout_of_the_concept() {
             from: Speaker::Agent,
             author: "Finance".into(),
             text: "The October invoice for [CLIENT] is ready.".into(),
+            images: Vec::new(),
         }],
     );
     app.update(frame(FeedFrame::Entry { entry }), shown);
@@ -489,11 +495,11 @@ proptest! {
             area: None,
             mode: None,
             added: false,
-            can_change: false,
+            can_change: false, shell: None
         }]), shown);
         let entry = thread_entry(1, vec![
-            ThreadItem::Message { from: Speaker::Agent, author: name.clone(), text: message.clone() },
-            ThreadItem::Message { from: Speaker::You, author: "You".into(), text: message.clone() },
+            ThreadItem::Message { from: Speaker::Agent, author: name.clone(), text: message.clone(), images: Vec::new()  },
+            ThreadItem::Message { from: Speaker::You, author: "You".into(), text: message.clone(), images: Vec::new()  },
             ThreadItem::Activity { tool: tool.clone(), text: message.clone(), call_id: Some("c1".into()) },
             ThreadItem::Result { tool: tool.clone(), call_id: None, ok: false, text: "Failed".into() },
             ThreadItem::Decision { decision_id: None, tool: tool.clone(), text: "Waiting for you".into() },
@@ -1002,6 +1008,7 @@ fn each_reply_is_drawn_from_its_own_text() {
                 from: Speaker::Agent,
                 author: "Finance".into(),
                 text: text.into(),
+                images: Vec::new(),
             }],
         )
     };
@@ -1163,6 +1170,7 @@ fn an_answered_decision_shows_once_at_its_place() {
                 from: Speaker::You,
                 author: "You".into(),
                 text: text.into(),
+                images: Vec::new(),
             }],
         )
     };
@@ -1173,6 +1181,7 @@ fn an_answered_decision_shows_once_at_its_place() {
                 from: Speaker::Agent,
                 author: "Finance".into(),
                 text: text.into(),
+                images: Vec::new(),
             }],
         )
     };
@@ -1312,6 +1321,7 @@ fn tab_never_carries_an_edit_to_another_thread() {
         mode: None,
         added: false,
         can_change: false,
+        shell: None,
     });
     for answer in ['e', 'n'] {
         let mut app = app_with(vec![invoice()], shown);
@@ -1461,7 +1471,12 @@ fn decision_keys_never_become_text_while_the_box_waits() {
         let said = format!("message {seq}");
         let entry = thread_entry(
             seq,
-            vec![ThreadItem::Message { from: Speaker::You, author: "You".into(), text: said }],
+            vec![ThreadItem::Message {
+                from: Speaker::You,
+                author: "You".into(),
+                text: said,
+                images: Vec::new(),
+            }],
         );
         app.update(frame(FeedFrame::Entry { entry }), shown);
     }
@@ -1516,7 +1531,7 @@ async fn a_queued_message_is_taken_back() {
     let source = LocalSource::builder("adk-rust").sessions(sessions).approvals(approvals);
     let engine = SurfaceEngine::builder(Arc::new(source.build().unwrap())).build();
     let me = Caller::human("ana", SurfaceKind::Terminal, Origin::Keyboard);
-    let send = Command::Send { session_id: SESSION.into(), text: "y".into() };
+    let send = Command::Send { session_id: SESSION.into(), text: "y".into(), images: Vec::new() };
     assert!(matches!(engine.execute(&me, send).await, Ok(CommandOutcome::Queued { .. })));
     assert_eq!(engine.queued(&me, SESSION), ["y"]);
     assert_eq!(engine.unqueue_last(&me, SESSION), Some("y".into()));
@@ -1809,7 +1824,11 @@ async fn leaving_says_what_was_queued_and_not_sent() {
     let policy = ApprovalPolicy::new([ApproverSelector::human("ana")]);
     fake.pending.push(ApprovalRequest::new("apr_email", scope, &call, policy));
     let surface = fake_terminal(std::sync::Arc::new(fake));
-    let send = Command::Send { session_id: SESSION.into(), text: "also cc my accountant".into() };
+    let send = Command::Send {
+        session_id: SESSION.into(),
+        text: "also cc my accountant".into(),
+        images: Vec::new(),
+    };
     let outcome = surface.engine.execute(&surface.caller, send).await.unwrap();
     assert!(matches!(outcome, CommandOutcome::Queued { .. }), "{outcome:?}");
     let mut out = Vec::new();
@@ -1914,6 +1933,7 @@ fn tab_and_the_arrows_complete_a_command() {
         mode: None,
         added: false,
         can_change: false,
+        shell: None,
     });
     app.update(Update::Agents(rows.to_vec()), now);
     // `/today` and `/todos` share "tod"; Tab takes that, then the chosen name.
@@ -2229,6 +2249,7 @@ fn tab_reaches_an_added_agent_without_a_thread() {
         mode: None,
         added,
         can_change: added,
+        shell: None,
     };
     let rows = vec![
         row("adk-rust", Some(SESSION), false),
@@ -2247,12 +2268,17 @@ fn tab_reaches_an_added_agent_without_a_thread() {
             agent: "finance".into(),
             session_id: "new-1".into(),
             text: "hello".into(),
+            images: Vec::new()
         })]
     );
     type_text(&mut app, "again", now);
     assert_eq!(
         app.key(key(KeyCode::Enter), now),
-        vec![Effect::Execute(Command::Send { session_id: "new-1".into(), text: "again".into() })]
+        vec![Effect::Execute(Command::Send {
+            session_id: "new-1".into(),
+            text: "again".into(),
+            images: Vec::new()
+        })]
     );
     // An agent of the kernel's own without a thread is not reached; Tab comes back round.
     app.switch_session(SESSION.into());
@@ -2314,6 +2340,7 @@ fn tab_never_moves_threads_while_a_command_with_arguments_is_typed() {
         mode: None,
         added: false,
         can_change: false,
+        shell: None,
     });
     app.update(Update::Agents(rows.to_vec()), now);
     type_text(&mut app, "/todo", now);
@@ -2506,6 +2533,7 @@ fn added_row(name: &str, area: &str) -> AgentRow {
         mode: None,
         added: true,
         can_change: true,
+        shell: None,
     }
 }
 

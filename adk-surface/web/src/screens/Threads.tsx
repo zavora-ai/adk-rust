@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AgentRow, DecisionCard, Origin, RemovedAgent, StatusLine } from "../generated/api";
+import type { AgentRow, DecisionCard, ImageData, Origin, RemovedAgent, StatusLine } from "../generated/api";
 import { agentLabels } from "../agents/labels";
 import type { HomeClient } from "../client";
 import { problemText } from "../client";
@@ -8,6 +8,7 @@ import { Composer } from "../components/Composer";
 import type { Send, TakeOverSeam } from "../components/DecisionCard";
 import { DecisionList } from "../components/DecisionList";
 import { Roster } from "../components/Roster";
+import { ShellBadge } from "../components/RunCard";
 import { Thread } from "../components/Thread";
 import { emptyThread, followFeed, wakeable } from "../feed";
 import type { ThreadState } from "../feed";
@@ -156,13 +157,16 @@ export function Threads({
   }, [client, session, thread.open, thread.entries.length, sent]);
   const shownQueued = queued.session === session ? queued.items : [];
 
-  async function message(text: string, origin: Origin) {
+  async function message(text: string, origin: Origin, images?: ImageData[]) {
     setProblem("");
     try {
       // The first message of an added agent's thread goes to that agent (spec 3.3 §5.7).
       const starts = current?.added === true && thread.entries.length === 0;
+      const attached = images && images.length > 0 ? { images } : {};
       await client.command(
-        starts ? { type: "newThread", agent: key, sessionId: own, text } : { type: "send", sessionId: own, text },
+        starts
+          ? { type: "newThread", agent: key, sessionId: own, text, ...attached }
+          : { type: "send", sessionId: own, text, ...attached },
         origin,
       );
       if (!pinned) onFollow(key, own);
@@ -215,7 +219,12 @@ export function Threads({
                 {reading ? (
                   <p className="thread-sub">{reading.agent.removedText}</p>
                 ) : (
-                  status?.mode && <p className="thread-sub">{status.mode.status}</p>
+                  (status?.mode || current?.shell) && (
+                    <p className="thread-sub">
+                      {status?.mode && <span>{status.mode.status}</span>}
+                      {current?.shell && <ShellBadge shell={current.shell} />}
+                    </p>
+                  )
                 )}
               </div>
             </header>
@@ -235,6 +244,7 @@ export function Threads({
             focusDecision={focusDecision}
             takeOver={takeOver}
             session={session}
+            shell={reading ? undefined : current?.shell ?? undefined}
           />
           {problem && (
             <p className="decision-problem" role="alert">
@@ -257,6 +267,7 @@ export function Threads({
           </div>
         ) : (
           <Composer
+            attach
             placeholder={name ? labels.message(name) : labels.messageYourAgents}
             queued={shownQueued}
             disabled={status?.stopped}

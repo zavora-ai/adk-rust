@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AppView, DecisionCard as Card, DrawnSent, DrawnSurface, FeedEntry, RefusedDrawing, ThreadItem } from "../generated/api";
+import type { AppView, DecisionCard as Card, DrawnSent, DrawnSurface, FeedEntry, ImageData, RefusedDrawing, ShellView, ThreadItem } from "../generated/api";
 import type { HomeClient } from "../client";
 import { AppFrame } from "../genui/AppFrame";
 import type { AppsSeam } from "../genui/apps";
@@ -12,14 +12,16 @@ import { visible } from "../safe";
 import { DecisionCard } from "./DecisionCard";
 import type { Send, TakeOverSeam } from "./DecisionCard";
 import { Icon } from "./Icon";
+import { MessageImages, RunCard } from "./RunCard";
 
 type Activity = Extract<ThreadItem, { kind: "activity" }>;
 type Result = Extract<ThreadItem, { kind: "result" }>;
+type Run = Extract<ThreadItem, { kind: "run" }>;
 
 /** One line of a thread, ready to draw. */
 type Line =
-  | { kind: "message"; key: string; from: "you" | "agent"; text: string }
-  | { kind: "activity"; key: string; text: string; result?: Result }
+  | { kind: "message"; key: string; from: "you" | "agent"; text: string; images?: ImageData[] }
+  | { kind: "activity"; key: string; text: string; result?: Result; run?: Run }
   | { kind: "decision"; key: string; id?: string; tool: string; text: string }
   | {
       kind: "drawn";
@@ -96,7 +98,7 @@ export function lines(entries: FeedEntry[]): Line[] {
       const key = `${entry.seq}:${index}`;
       switch (item.kind) {
         case "message":
-          out.push({ kind: "message", key, from: item.from, text: item.text });
+          out.push({ kind: "message", key, from: item.from, text: item.text, images: item.images ?? undefined });
           break;
         case "activity": {
           if (item.callId && drawing.has(item.callId)) break;
@@ -111,6 +113,13 @@ export function lines(entries: FeedEntry[]): Line[] {
           const activity = item.callId ? byCall.get(item.callId) : undefined;
           if (activity) activity.result = item;
           else out.push({ kind: "activity", key, text: item.tool, result: item });
+          break;
+        }
+        case "run": {
+          // A command's run ends on its activity, as a result does (spec 3.3 §5.1).
+          const activity = item.callId ? byCall.get(item.callId) : undefined;
+          if (activity) activity.run = item;
+          else out.push({ kind: "activity", key, text: item.run.command ?? item.tool, run: item });
           break;
         }
         case "decision":
@@ -169,6 +178,7 @@ export function Thread({
   focusDecision,
   takeOver,
   session,
+  shell,
 }: {
   entries: FeedEntry[];
   open: Card[];
@@ -179,6 +189,8 @@ export function Thread({
   takeOver?: TakeOverSeam;
   /** The session shown: what a drawn form is sent in (spec 3.3 §7.4 rule 5). */
   session?: string;
+  /** Where the thread's agent runs commands, for each run's badge (spec 3.3 §5.7). */
+  shell?: ShellView;
 }) {
   const [settled, setSettled] = useState<Card[]>([]);
   const settle = (card: Card) => {
@@ -209,9 +221,14 @@ export function Thread({
         switch (line.kind) {
           case "message":
             return line.from === "you" ? (
-              <div key={line.key} className="message message-you">
-                <span className="visually-hidden">{labels.you}: </span>
-                {line.text}
+              <div key={line.key} className="message-you-group">
+                {line.images && line.images.length > 0 && <MessageImages images={line.images} />}
+                {line.text && (
+                  <div className="message message-you">
+                    <span className="visually-hidden">{labels.you}: </span>
+                    {line.text}
+                  </div>
+                )}
               </div>
             ) : (
               <div key={line.key} className="message message-agent">
@@ -219,7 +236,11 @@ export function Thread({
               </div>
             );
           case "activity":
-            return <ActivityChip key={line.key} line={line} />;
+            return line.run ? (
+              <RunCard key={line.key} tool={line.run.tool} what={line.text} ok={line.run.ok} run={line.run.run} shell={shell} />
+            ) : (
+              <ActivityChip key={line.key} line={line} />
+            );
           case "refused":
             return <RefusedNotice key={line.key} refusal={line.refusal} />;
           case "app":

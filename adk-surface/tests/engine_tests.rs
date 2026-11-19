@@ -375,7 +375,10 @@ async fn typing_while_a_decision_is_open_is_queued_never_an_answer() {
     let request = hold(&home, "ana", "s1", &invoice(), ApprovalRisk::Medium).await;
     let outcome = home
         .engine
-        .execute(&web(), Command::Send { session_id: "s1".into(), text: "yes".into() })
+        .execute(
+            &web(),
+            Command::Send { session_id: "s1".into(), text: "yes".into(), images: Vec::new() },
+        )
         .await
         .unwrap();
     let CommandOutcome::Queued { position, text, .. } = outcome else {
@@ -455,7 +458,8 @@ async fn the_thread_links_a_held_call_to_its_card() {
         [ThreadItem::Message {
             from: adk_surface::Speaker::You,
             author: "You".into(),
-            text: "Invoice the client".into()
+            text: "Invoice the client".into(),
+            images: Vec::new()
         }]
     );
     assert_eq!(

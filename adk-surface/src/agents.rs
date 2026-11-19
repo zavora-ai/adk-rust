@@ -1268,6 +1268,7 @@ pub(crate) fn roster(
                     mode: Some(detail.mode.clone()),
                     added: true,
                     can_change,
+                    shell: None,
                 });
             }
         }
@@ -1416,6 +1417,7 @@ mod tests {
             mode: None,
             added: false,
             can_change: false,
+            shell: None,
         };
         let definitions = [
             detail("zeta", "Zeta", AgentRecordState::Active),

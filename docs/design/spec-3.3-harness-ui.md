@@ -100,6 +100,17 @@ The system of record. Three sections share one header with the status line and *
 |---|---|
 | ![Web home, threads and decisions](images/spec-3.3/web-home-light.png) | ![Web home, threads and decisions, dark](images/spec-3.3/web-home-dark.png) |
 
+**Images in a message.** The message box takes images, picked, pasted or dropped: at most four PNG, JPEG, WebP or GIF images of up to 3 MB each. The page shrinks a larger still picture before sending it, and never sends SVG. `send`, `queue` and `newThread` carry them as `images`; the engine checks each image's bytes against the type it claims and refuses anything else before the message reaches an agent. The images reach the agent as parts of the person's message, so a model that sees images reads them with the text. A message with images is never offered to a running turn; it waits for the next one. The thread shows the images the person sent beside their words, and opens one large when pressed. The terminal says `[2 images]`. A send's audit record counts the images; it never holds them.
+
+**What an agent ran.** A command an agent ran (`bash`) or code it ran in the sandbox (`sandbox_exec`) reads as a run, not a line that says "Done":
+- what ran;
+- how it exited, or why it stopped short (timed out, out of memory, refused by the sandbox, could not run);
+- how long it took;
+- its last 40 lines, with standard error marked;
+- whether the tool cut its output, which the agent can still read in full.
+
+A failed run opens on its output. Each run says where it ran: **Sandbox** for the sandbox's own tool, and for a command, where the agent's commands run.
+
 **Today.** "While you were away": what was spent, whether quiet time was respected, how many things wait, then one line per event since the person left, each with a status pill and a link to its details. Questions from the kernel's `/proc` observations ([`control/mod.rs:136-140`](../../adk-kernel/src/control/mod.rs)) are answered here or on the phone, never assumed.
 
 | Light | Dark |
@@ -157,6 +168,15 @@ Voice through `adk-realtime` (Gemini Live or OpenAI Realtime). A spoken "allow o
 | ![Voice and video](images/spec-3.3/voice-light.png) | ![Voice and video, dark](images/spec-3.3/voice-dark.png) |
 
 ### 5.7 Your agents
+
+**Where commands run.** Each roster row says where the agent's commands run, as its harness reports it:
+- in the OS sandbox, with its enforcer;
+- in a container;
+- in a remote sandbox;
+- on this computer;
+- on this computer because a sandbox was asked for and is unavailable, with the reason.
+
+The thread's header shows it as a badge. It is green when commands are kept apart from this computer, amber when a sandbox was asked for and is unavailable, and quiet when commands run on this computer by choice.
 
 A person adds agents of their own beside the primary agent, by asking or by hand. Each one is kept by the kernel, appears in the roster on the left of the web home and the terminal, keeps working across restarts, and is changed, paused or removed from either surface. An agent may suggest a new agent; only a person adds one.
 

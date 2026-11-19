@@ -144,6 +144,11 @@ pub enum Command {
         session_id: String,
         /// The message.
         text: String,
+        /// The images the person sent with it (spec 3.3 §5.1): at most
+        /// [`MAX_IMAGES`](crate::MAX_IMAGES). A message with images is never offered to a
+        /// running turn; it goes as the session's next.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<crate::model::ImageData>,
     },
     /// Sends a message to the running turn of the caller's own session and waits for what
     /// became of it (§6 "steer"): [`Steered`](CommandOutcome::Steered) when the turn took it,
@@ -164,6 +169,11 @@ pub enum Command {
         session_id: String,
         /// The message.
         text: String,
+        /// The images the person sent with it (spec 3.3 §5.1): at most
+        /// [`MAX_IMAGES`](crate::MAX_IMAGES). A message with images is never offered to a
+        /// running turn; it goes as the session's next.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<crate::model::ImageData>,
     },
     /// Stops every agent (S-I10).
     #[serde(rename_all = "camelCase")]
@@ -192,6 +202,11 @@ pub enum Command {
         session_id: String,
         /// The first message.
         text: String,
+        /// The images the person sent with it (spec 3.3 §5.1): at most
+        /// [`MAX_IMAGES`](crate::MAX_IMAGES). A message with images is never offered to a
+        /// running turn; it goes as the session's next.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<crate::model::ImageData>,
     },
     /// Adds an agent by hand, previewed with `digest` (spec 3.3 §5.7).
     #[serde(rename_all = "camelCase")]
@@ -797,11 +812,21 @@ struct Inner {
     spoken: Mutex<HashMap<String, Spoken>>,
 }
 
+/// A send's audit fields, with how many images the message carries when it carries any.
+fn with_images(mut fields: Value, images: usize) -> Value {
+    if images > 0 {
+        fields["images"] = json!(images);
+    }
+    fields
+}
+
 /// One message of a session's queue.
 struct QueuedInput {
     /// Names the message while it waits, whatever joins or leaves the queue.
     id: u64,
     text: String,
+    /// The images the person sent with it.
+    images: Vec<crate::images::MessageImage>,
     /// The session's running turn holds it (spec 3.3 §6 "steer"): it is sent as the next
     /// message only once the turn hands it back.
     offered: bool,
@@ -1439,12 +1464,14 @@ impl SurfaceEngine {
                 .await
             }
             Command::CancelAnswer { decision_id } => self.cancel_answer(caller, &decision_id).await,
-            Command::Send { session_id, text } => {
-                self.send(caller, session_id, text, false, true).await
+            Command::Send { session_id, text, images } => {
+                let images = crate::images::decode(&images)?;
+                self.send(caller, session_id, text, images, false, true).await
             }
             Command::Steer { session_id, text } => self.steer(caller, session_id, text).await,
-            Command::Queue { session_id, text } => {
-                self.send(caller, session_id, text, true, false).await
+            Command::Queue { session_id, text, images } => {
+                let images = crate::images::decode(&images)?;
+                self.send(caller, session_id, text, images, true, false).await
             }
             Command::StopAll { reason } => {
                 self.may_stop(caller)?;
@@ -1455,8 +1482,9 @@ impl SurfaceEngine {
                 self.resume_all(caller).await
             }
             Command::SetMode { session_id, mode } => self.set_mode(caller, &session_id, mode).await,
-            Command::NewThread { agent, session_id, text } => {
-                self.new_thread(caller, &agent, session_id, text).await
+            Command::NewThread { agent, session_id, text, images } => {
+                let images = crate::images::decode(&images)?;
+                self.new_thread(caller, &agent, session_id, text, images).await
             }
             command @ (Command::AddAgent { .. }
             | Command::ChangeAgent { .. }
@@ -2065,12 +2093,16 @@ impl SurfaceEngine {
         caller: &Caller,
         session: String,
         text: String,
+        images: Vec<crate::images::MessageImage>,
         queue: bool,
         offer: bool,
     ) -> Result<CommandOutcome> {
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && images.is_empty() {
             return Err(SurfaceError::Invalid("the message is empty".into()));
         }
+        // A running turn takes text at its next safe point; images wait for the next turn.
+        let offer = offer && images.is_empty();
+        let pictures = images.len();
         let key = (caller.user_id().to_string(), session.clone());
         let open = self.session_open(caller, &session).await?;
         // Earlier queued input goes first, including a message the delivery loop is starting
@@ -2092,14 +2124,14 @@ impl SurfaceEngine {
             self.audit_command(
                 caller,
                 SURFACE_AUDIT_SEND,
-                json!({ "sessionId": session, "queued": true }),
+                with_images(json!({ "sessionId": session, "queued": true }), pictures),
             )
             .await?;
             let held = match busy && offer && !queue {
                 true => self.offer(caller, &session, &text).await?,
                 false => None,
             };
-            let (id, position) = self.enqueue(&key, text, held.is_some());
+            let (id, position) = self.enqueue(&key, text.clone(), images, held.is_some());
             if let Some(held) = held {
                 self.settle_offer(caller.clone(), session.clone(), id, held, None);
             }
@@ -2118,19 +2150,25 @@ impl SurfaceEngine {
         self.audit_command(
             caller,
             SURFACE_AUDIT_SEND,
-            json!({ "sessionId": session, "queued": false }),
+            with_images(json!({ "sessionId": session, "queued": false }), pictures),
         )
         .await?;
-        self.inner.source.start_turn(caller, &session, &text).await?;
+        self.inner.source.start_turn_images(caller, &session, &text, &images).await?;
         Ok(CommandOutcome::Sent { session_id: session })
     }
 
     /// Adds `text` to the end of the session's queue; returns its id and its place, from 1.
-    fn enqueue(&self, key: &(String, String), text: String, offered: bool) -> (u64, u32) {
+    fn enqueue(
+        &self,
+        key: &(String, String),
+        text: String,
+        images: Vec<crate::images::MessageImage>,
+        offered: bool,
+    ) -> (u64, u32) {
         let id = self.inner.next_input.fetch_add(1, Ordering::Relaxed);
         let mut queues = self.inner.queues.lock().unwrap_or_else(|e| e.into_inner());
         let queued = queues.entry(key.clone()).or_default();
-        queued.push_back(QueuedInput { id, text, offered });
+        queued.push_back(QueuedInput { id, text, images, offered });
         (id, u32::try_from(queued.len()).unwrap_or(u32::MAX))
     }
 
@@ -2268,7 +2306,7 @@ impl SurfaceEngine {
             .get(&key)
             .is_some_and(|queued| queued.iter().any(|input| !input.offered));
         if waiting || self.session_open(caller, &session).await? {
-            return self.send(caller, session, text, false, false).await;
+            return self.send(caller, session, text, Vec::new(), false, false).await;
         }
         // Recorded before the turn holds it: a message whose record failed is never sent.
         self.audit_command(
@@ -2279,9 +2317,9 @@ impl SurfaceEngine {
         .await?;
         let Some(held) = self.offer(caller, &session, &text).await? else {
             // No turn takes it here.
-            return self.send(caller, session, text, false, false).await;
+            return self.send(caller, session, text, Vec::new(), false, false).await;
         };
-        let (id, _) = self.enqueue(&key, text, true);
+        let (id, _) = self.enqueue(&key, text, Vec::new(), true);
         let (done, settled) = oneshot::channel();
         self.settle_offer(caller.clone(), session, id, held, Some(done));
         settled.await.unwrap_or_else(|_| {
@@ -2389,7 +2427,12 @@ impl SurfaceEngine {
                     }
                 };
                 let Some(input) = next else { continue };
-                match engine.inner.source.start_turn(&caller, &session, &input.text).await {
+                match engine
+                    .inner
+                    .source
+                    .start_turn_images(&caller, &session, &input.text, &input.images)
+                    .await
+                {
                     Ok(()) => {
                         wait = poll;
                         // Let the turn begin before looking again.
@@ -2628,8 +2671,9 @@ impl SurfaceEngine {
         agent: &str,
         session: String,
         text: String,
+        images: Vec<crate::images::MessageImage>,
     ) -> Result<CommandOutcome> {
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && images.is_empty() {
             return Err(SurfaceError::Invalid("the message is empty".into()));
         }
         if let Origin::Agent { agent } = &caller.origin {
@@ -2640,10 +2684,13 @@ impl SurfaceEngine {
         self.audit_command(
             caller,
             SURFACE_AUDIT_SEND,
-            json!({ "sessionId": session, "queued": false, "agent": agent }),
+            with_images(
+                json!({ "sessionId": session, "queued": false, "agent": agent }),
+                images.len(),
+            ),
         )
         .await?;
-        self.inner.source.start_turn_with(caller, agent, &session, &text).await?;
+        self.inner.source.start_turn_with_images(caller, agent, &session, &text, &images).await?;
         Ok(CommandOutcome::Sent { session_id: session })
     }
 

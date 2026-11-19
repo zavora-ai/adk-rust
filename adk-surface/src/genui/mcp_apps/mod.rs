@@ -1146,7 +1146,12 @@ impl McpAppsHost {
                 json!({ "sessionId": session, "callId": call_id, "server": app.record.server }),
             )
             .await?;
-        engine.execute(caller, Command::Send { session_id: session.to_string(), text }).await
+        engine
+            .execute(
+                caller,
+                Command::Send { session_id: session.to_string(), text, images: Vec::new() },
+            )
+            .await
     }
 }
 

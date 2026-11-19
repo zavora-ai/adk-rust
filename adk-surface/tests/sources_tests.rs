@@ -88,7 +88,10 @@ async fn a_terminal_decides_through_the_control_plane() {
     let terminal = Caller::human(me.clone(), SurfaceKind::Terminal, Origin::Keyboard);
 
     let sent = remote
-        .execute(&terminal, Command::Send { session_id: "t1".into(), text: "write it".into() })
+        .execute(
+            &terminal,
+            Command::Send { session_id: "t1".into(), text: "write it".into(), images: Vec::new() },
+        )
         .await
         .unwrap();
     assert_eq!(sent, CommandOutcome::Sent { session_id: "t1".into() });
@@ -177,7 +180,10 @@ async fn a_local_terminal_edits_a_call_over_the_kernel_socket() {
     let terminal =
         Caller::human(os_user(), SurfaceKind::Terminal, Origin::Keyboard).with_paired_local();
     remote
-        .execute(&terminal, Command::Send { session_id: "u1".into(), text: "write it".into() })
+        .execute(
+            &terminal,
+            Command::Send { session_id: "u1".into(), text: "write it".into(), images: Vec::new() },
+        )
         .await
         .unwrap();
     let card = eventually("the card over the socket", WITHIN, || async {
@@ -213,7 +219,10 @@ async fn a_harness_without_a_kernel_resumes_the_decided_call() {
             .await;
     let sent = s
         .engine
-        .execute(&web(), Command::Send { session_id: "p1".into(), text: "write it".into() })
+        .execute(
+            &web(),
+            Command::Send { session_id: "p1".into(), text: "write it".into(), images: Vec::new() },
+        )
         .await
         .unwrap();
     assert_eq!(sent, CommandOutcome::Sent { session_id: "p1".into() });
@@ -290,7 +299,10 @@ async fn a_token_given_to_the_client_once_reaches_the_inbox() {
     .await;
     let terminal = Caller::human(os_user(), SurfaceKind::Terminal, Origin::Keyboard);
     remote
-        .execute(&terminal, Command::Send { session_id: "k1".into(), text: "write it".into() })
+        .execute(
+            &terminal,
+            Command::Send { session_id: "k1".into(), text: "write it".into(), images: Vec::new() },
+        )
         .await
         .unwrap();
     let card = eventually("the card through the token-protected inbox", WITHIN, || async {
@@ -338,7 +350,10 @@ async fn a_feed_over_the_control_plane_waits_for_the_kernels_events() {
         tokio::time::timeout(Duration::from_millis(200), source.changed(Duration::from_millis(10)))
             .await;
     remote
-        .execute(&terminal, Command::Send { session_id: "q1".into(), text: "write it".into() })
+        .execute(
+            &terminal,
+            Command::Send { session_id: "q1".into(), text: "write it".into(), images: Vec::new() },
+        )
         .await
         .unwrap();
     eventually("the process to park on its held write", WITHIN, || async {
@@ -380,7 +395,10 @@ async fn an_open_feed_on_a_quiet_kernel_is_not_read_again_and_again() {
             .await;
     let terminal = Caller::human(os_user(), SurfaceKind::Terminal, Origin::Keyboard);
     remote
-        .execute(&terminal, Command::Send { session_id: "i1".into(), text: "write it".into() })
+        .execute(
+            &terminal,
+            Command::Send { session_id: "i1".into(), text: "write it".into(), images: Vec::new() },
+        )
         .await
         .unwrap();
     eventually("the process to park on its held write", WITHIN, || async {
@@ -420,7 +438,10 @@ async fn always_allow_from_a_surface_says_what_it_covers_and_is_on_record() {
         scenario_with(scripted("notes.txt"), ControlPlaneConfig::default().without_socket(), false)
             .await;
     s.engine
-        .execute(&web(), Command::Send { session_id: "r1".into(), text: "write it".into() })
+        .execute(
+            &web(),
+            Command::Send { session_id: "r1".into(), text: "write it".into(), images: Vec::new() },
+        )
         .await
         .unwrap();
     let card = eventually("the held call's card", WITHIN, || async {
@@ -564,7 +585,10 @@ async fn a_terminal_on_a_kernel_writes_its_answers_on_the_kernels_log() {
     let me = os_user();
     let terminal = Caller::human(me.clone(), SurfaceKind::Terminal, Origin::Keyboard);
     remote
-        .execute(&terminal, Command::Send { session_id: "t2".into(), text: "write it".into() })
+        .execute(
+            &terminal,
+            Command::Send { session_id: "t2".into(), text: "write it".into(), images: Vec::new() },
+        )
         .await
         .unwrap();
     let card = eventually("the card over the control plane", WITHIN, || async {

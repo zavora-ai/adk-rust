@@ -938,6 +938,28 @@ pub const NOT_SENT_YET: &str = "Not sent yet";
 pub const EARLIER_VERSIONS: &str = "Earlier versions";
 /// A drawn form's button while its send is on the way.
 pub const SENDING: &str = "Sending…";
+/// The message box's button that picks images to send (spec 3.3 §5.1).
+pub const ATTACH_IMAGES: &str = "Attach images";
+/// The images waiting in the message box.
+pub const IMAGES_TO_SEND: &str = "Images to send";
+/// The button on an image in the message box that takes it out.
+pub const REMOVE_IMAGE: &str = "Remove image";
+/// An image of a message, opened large.
+pub const OPEN_IMAGE: &str = "Open image";
+/// A run's badge when it ran in the sandbox (spec 3.3 §5.1).
+pub const SANDBOX: &str = "Sandbox";
+/// A run's badge when it ran on this computer, with no sandbox.
+pub const ON_THIS_COMPUTER: &str = "On this computer";
+/// Under a run whose output the tool cut: the whole of it is kept for the agent.
+pub const THE_AGENT_CAN_READ_ALL_OF_IT: &str = "The agent can read all of it.";
+/// A run that ran out of time.
+pub const TIMED_OUT: &str = "Timed out";
+/// A run that ran out of memory.
+pub const OUT_OF_MEMORY: &str = "Out of memory";
+/// A run the sandbox stopped.
+pub const REFUSED_BY_THE_SANDBOX: &str = "Refused by the sandbox";
+/// A run that could not start.
+pub const COULD_NOT_RUN: &str = "Could not run";
 /// A drawn form sent and denied.
 pub const SENT_YOU_SAID_NO: &str = "Sent · you said no";
 /// A drawn form sent, allowed, and its call failed.
@@ -1245,6 +1267,48 @@ pub fn from_the_app(app: &str) -> String {
 /// app".
 pub fn suggested_by_the_app(app: &str) -> String {
     format!("Suggested by the {app} app")
+}
+
+/// Where an agent's commands run (spec 3.3 §5.7): "Commands run in the sandbox (Seatbelt)".
+pub fn commands_run(place: &crate::model::ShellPlace) -> String {
+    use crate::model::ShellPlace;
+    match place {
+        ShellPlace::Host => "Commands run on this computer".to_string(),
+        ShellPlace::Sandbox { enforcer: Some(enforcer) } => {
+            format!("Commands run in the sandbox ({})", enforcer_name(enforcer))
+        }
+        ShellPlace::Sandbox { enforcer: None } => "Commands run in the sandbox".to_string(),
+        ShellPlace::Container { image } => format!("Commands run in a container ({image})"),
+        ShellPlace::Remote { provider, off_host: true } => {
+            format!("Commands run in a remote sandbox ({provider})")
+        }
+        ShellPlace::Remote { provider, off_host: false } => {
+            format!("Commands run in a sandbox ({provider})")
+        }
+        ShellPlace::Degraded { reason, .. } => {
+            format!("The sandbox is unavailable, so commands run on this computer: {reason}")
+        }
+    }
+}
+
+/// An OS sandbox enforcer's name as people know it.
+fn enforcer_name(enforcer: &str) -> &str {
+    match enforcer {
+        "seatbelt" => "Seatbelt",
+        "bubblewrap" => "bubblewrap",
+        "landlock" => "Landlock",
+        other => other,
+    }
+}
+
+/// How many images a message carries: "1 image", "3 images".
+pub fn images_attached(count: usize) -> String {
+    if count == 1 { "1 image".to_string() } else { format!("{count} images") }
+}
+
+/// Under a run's output: "Showing the last 40 lines of 214."
+pub fn last_lines(shown: usize, total: usize) -> String {
+    format!("Showing the last {shown} lines of {total}.")
 }
 
 #[cfg(test)]

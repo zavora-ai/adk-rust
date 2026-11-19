@@ -68,6 +68,30 @@ export const labels = {
   // Activity in a thread.
   changedNothing: "changed nothing",
   you: "You",
+  // Images a person sends, and the commands an agent runs (spec 3.3 §5.1).
+  attachImages: words.ATTACH_IMAGES,
+  imagesToSend: words.IMAGES_TO_SEND,
+  removeImage: (n: number) => `${words.REMOVE_IMAGE} ${n}`,
+  openImage: (n: number, of: number) => `${words.OPEN_IMAGE} ${n} of ${of}`,
+  imagesHint: (n: number, most: number) => `${n} of ${most} · paste, drop or pick images`,
+  imageRefused: {
+    type: "Send PNG, JPEG, WebP or GIF images.",
+    size: "That image is larger than 3 MB, even made smaller.",
+    count: "A message carries at most 4 images.",
+  },
+  closeImage: "Close",
+  sandbox: words.SANDBOX,
+  onThisComputer: words.ON_THIS_COMPUTER,
+  agentCanReadAll: words.THE_AGENT_CAN_READ_ALL_OF_IT,
+  exitCode: (code: number) => `Exit ${code}`,
+  runStopped: {
+    timeout: words.TIMED_OUT,
+    memoryExceeded: words.OUT_OF_MEMORY,
+    policyViolation: words.REFUSED_BY_THE_SANDBOX,
+    error: words.COULD_NOT_RUN,
+  },
+  lastLines: (shown: number, total: number) => `Showing the last ${shown} lines of ${total}.`,
+  output: "Output",
   // Today (spec 3.3 §5.1).
   awayLead: "While you were",
   awayAccent: "away",

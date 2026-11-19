@@ -84,6 +84,7 @@ impl Drawings {
                 ThreadItem::Message { .. }
                 | ThreadItem::Activity { .. }
                 | ThreadItem::Result { .. }
+                | ThreadItem::Run { .. }
                 | ThreadItem::Decision { .. }
                 | ThreadItem::DrawnSent { .. } => {}
             }
@@ -955,6 +956,18 @@ pub(crate) fn json_lines(session: &str, entry: &FeedEntry) -> Vec<Value> {
                 "tool": app.tool,
                 "by": app.agent.name,
                 "text": app.result_text,
+            })),
+            // A run's line, for CI: what ran and how it exited.
+            ThreadItem::Run { tool, call_id, ok, run, .. } => Some(json!({
+                "type": "run",
+                "session": session,
+                "tool": tool,
+                "call": call_id,
+                "ok": ok,
+                "command": run.command,
+                "exit": run.exit_code,
+                "durationMs": run.duration_ms,
+                "stopped": run.stopped,
             })),
             ThreadItem::Message { .. }
             | ThreadItem::Activity { .. }

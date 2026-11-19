@@ -65,7 +65,7 @@ pub mod workflow;
 use std::time::Duration;
 
 use adk_core::{AdkError, RequestContext};
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -94,6 +94,11 @@ use crate::engine::{Command, CommandOutcome, FeedFrame, SurfaceEngine};
 use crate::error::SurfaceError;
 use crate::model::{AgentRef, AgentRow, Briefing, DecisionCard, FeedEntry, StatusLine};
 use crate::origin::{Caller, Origin, SurfaceKind};
+
+/// The largest command body: a message's images, each at its largest in base64, and room for
+/// the rest of the command.
+const COMMAND_BODY_MAX: usize =
+    crate::images::MAX_IMAGES * (crate::images::MAX_IMAGE_BYTES / 3 * 4 + 4) + 256 * 1024;
 
 /// The route paths, relative to the `/api` prefix (spec 3.3 §6).
 pub mod paths {
@@ -199,7 +204,8 @@ pub fn router(engine: SurfaceEngine) -> Router {
         .route(paths::AGENT, get(agent))
         .route(paths::STATUS, get(status))
         .route(paths::BRIEFING, get(briefing))
-        .route(paths::COMMANDS, post(command))
+        // A message may carry images (spec 3.3 §5.1): room for each at its largest, base64.
+        .route(paths::COMMANDS, post(command).layer(DefaultBodyLimit::max(COMMAND_BODY_MAX)))
         .route(paths::OPENAPI, get(openapi_document))
         .with_state(engine)
 }

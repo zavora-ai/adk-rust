@@ -68,6 +68,7 @@ mod engine;
 pub mod error;
 pub mod genui;
 mod hints;
+pub mod images;
 mod inbox;
 mod local;
 #[cfg(feature = "mobile")]
@@ -111,6 +112,7 @@ pub use engine::{
 };
 pub use error::{Result, SurfaceError};
 pub use hints::{CardHint, CardHints};
+pub use images::{MAX_IMAGE_BYTES, MAX_IMAGES, MessageImage};
 pub use local::{LocalSource, LocalSourceBuilder};
 pub use model::CardDetail;
 pub use model::{
@@ -119,7 +121,9 @@ pub use model::{
     FeedEntry, Mode, ModeView, Pill, QuietView, Reversibility, Speaker, SpendView, StatusLine,
     ThreadItem, TimelineStep,
 };
+pub use model::{CommandRun, ImageData, OutputLine, RunStop, ShellPlace, ShellView};
 pub use origin::{Caller, Origin, SurfaceKind, Via};
+pub use project::RUN_LINES;
 pub use project::{CALL_TEXT_LIMIT, Place};
 pub use rules::{Allowed, Answer, AnswerOption, Risk};
 pub use source::{AgentState, AlwaysAllowOffer, RuleCommit, Source, SpendToday, Steered, Steering};

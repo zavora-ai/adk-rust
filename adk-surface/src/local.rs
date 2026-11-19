@@ -681,6 +681,33 @@ impl Source for LocalSource {
 
     async fn agents(&self, user: &str) -> Result<Vec<AgentState>> {
         if let Some((kernel, _)) = &self.kernel {
+            // Where each agent's commands run: the harness's own agent as the harness
+            // reports it, an agent the person added from its definition (spec 3.3 §5.7).
+            let views = kernel.agents().list().await?;
+            let own = self.harness.as_ref().map(|harness| {
+                (
+                    harness.agent().info().name.clone(),
+                    harness.agent().info().shell().map(shell_place),
+                )
+            });
+            let shell_of = |target: &str| -> Option<crate::model::ShellPlace> {
+                if let Some((name, place)) = &own
+                    && name == target
+                {
+                    return place.clone();
+                }
+                views.iter().find(|view| view.agent.id == target).and_then(|view| {
+                    match view.agent.uses.shell {
+                        adk_kernel::agents::ShellAccess::None => None,
+                        adk_kernel::agents::ShellAccess::Sandboxed => {
+                            Some(crate::model::ShellPlace::Sandbox { enforcer: None })
+                        }
+                        adk_kernel::agents::ShellAccess::Host => {
+                            Some(crate::model::ShellPlace::Host)
+                        }
+                    }
+                })
+            };
             let mut latest: BTreeMap<String, AgentState> = BTreeMap::new();
             for process in self.processes(user).await? {
                 let run = &process.run;
@@ -692,6 +719,7 @@ impl Source for LocalSource {
                 latest.insert(
                     run.target.clone(),
                     AgentState {
+                        shell: shell_of(&run.target),
                         name: run.target.clone(),
                         session_id: run.session_id.clone(),
                         state: run.state,
@@ -715,10 +743,7 @@ impl Source for LocalSource {
             }
             // A removed agent leaves the roster; its past runs stay in its threads. One
             // listing carries every agent's state (spec 3.3 §5.7).
-            let gone: Vec<String> = kernel
-                .agents()
-                .list()
-                .await?
+            let gone: Vec<String> = views
                 .into_iter()
                 .filter(|view| {
                     matches!(
@@ -732,9 +757,12 @@ impl Source for LocalSource {
             latest.retain(|name, _| !gone.contains(name));
             return Ok(latest.into_values().collect());
         }
-        let name = match (&self.harness, &self.runner) {
-            (Some(harness), _) => harness.agent().info().name.clone(),
-            (None, Some(_)) => self.app.clone(),
+        let (name, shell) = match (&self.harness, &self.runner) {
+            (Some(harness), _) => (
+                harness.agent().info().name.clone(),
+                harness.agent().info().shell().map(shell_place),
+            ),
+            (None, Some(_)) => (self.app.clone(), None),
             (None, None) => return Ok(Vec::new()),
         };
         let active = self.active_sessions(user);
@@ -770,6 +798,7 @@ impl Source for LocalSource {
             wake_at: None,
             suspended: false,
             subagent: None,
+            shell,
         }])
     }
 
@@ -855,6 +884,49 @@ impl Source for LocalSource {
             return Ok(());
         }
         self.run_turn(user, session, text, Some(caller)).await
+    }
+
+    /// A message with images: as the run's `content` on a kernel, else straight to the
+    /// harness or the runner (spec 3.3 §5.1).
+    async fn start_turn_images(
+        &self,
+        caller: &Caller,
+        session: &str,
+        text: &str,
+        images: &[crate::images::MessageImage],
+    ) -> Result<()> {
+        if images.is_empty() {
+            return self.start_turn(caller, session, text).await;
+        }
+        let user = caller.user_id();
+        self.ensure_session(user, session).await?;
+        let content = message_content(text, images);
+        if let Some((kernel, _)) = &self.kernel {
+            let target = self.target_for(user, session).await?;
+            return self.spawn_content(kernel, user, session, target, content).await;
+        }
+        self.run_content(user, session, content, caller).await
+    }
+
+    async fn start_turn_with_images(
+        &self,
+        caller: &Caller,
+        agent: &str,
+        session: &str,
+        text: &str,
+        images: &[crate::images::MessageImage],
+    ) -> Result<()> {
+        if images.is_empty() {
+            return self.start_turn_with(caller, agent, session, text).await;
+        }
+        let Some(target) = self.target_of(agent) else {
+            return self.start_turn_images(caller, session, text, images).await;
+        };
+        let (kernel, _) =
+            self.kernel.as_ref().ok_or_else(|| SurfaceError::unsupported("sending a message"))?;
+        let user = caller.user_id();
+        self.ensure_session(user, session).await?;
+        self.spawn_content(kernel, user, session, target, message_content(text, images)).await
     }
 
     /// The turn this process runs takes the message: a kernel's claim of the session on this
@@ -1278,6 +1350,93 @@ impl Source for LocalSource {
         .with_authenticated_user();
         kernel.processes().spawn(run, ProcessSpec::new(ProcessKind::Interactive)).await?;
         Ok(())
+    }
+}
+
+impl LocalSource {
+    /// Spawns an interactive run of `target` that starts from `content`.
+    async fn spawn_content(
+        &self,
+        kernel: &Kernel,
+        user: &str,
+        session: &str,
+        target: String,
+        content: Content,
+    ) -> Result<()> {
+        let input = serde_json::json!({ "content": content });
+        let run =
+            NewRun::new(QueueClass::Interactive.as_str(), self.app.clone(), user, target, input)
+                .with_session_id(session)
+                .with_authenticated_user();
+        kernel.processes().spawn(run, ProcessSpec::new(ProcessKind::Interactive)).await?;
+        Ok(())
+    }
+
+    /// [`run_turn`](Self::run_turn) on a whole message, as `caller`.
+    async fn run_content(
+        &self,
+        user: &str,
+        session: &str,
+        content: Content,
+        caller: &Caller,
+    ) -> Result<()> {
+        let (user_id, session_id) = Self::ids(user, session)?;
+        let context = RequestContext {
+            user_id: caller.user_id().to_string(),
+            scopes: caller.groups.clone(),
+            metadata: Default::default(),
+        };
+        let stream = if let Some(harness) = &self.harness {
+            harness.send_content_as(&user_id, &session_id, content, context).await
+        } else if let Some(runner) = &self.runner {
+            let config = adk_core::RunConfig {
+                request_context: Some(context),
+                ..runner.run_config().clone()
+            };
+            runner.run_with_config(user_id, session_id.clone(), content, Some(config)).await
+        } else {
+            return Err(SurfaceError::unsupported(
+                "sending a message without a kernel, harness or runner",
+            ));
+        };
+        let stream = stream?;
+        let session = session_id.to_string();
+        tokio::spawn(async move { drain(stream, &session).await });
+        Ok(())
+    }
+}
+
+/// A person's message: its text, then its images.
+fn message_content(text: &str, images: &[crate::images::MessageImage]) -> Content {
+    let mut content = Content::new("user");
+    if !text.trim().is_empty() {
+        content = content.with_text(text);
+    }
+    for image in images {
+        content = content.with_inline_data(image.mime_type.clone(), image.data.clone());
+    }
+    content
+}
+
+/// Where `bash` runs, as the surface shows it (spec 3.3 §5.7).
+fn shell_place(status: &adk_harness::IsolationStatus) -> crate::model::ShellPlace {
+    use crate::model::ShellPlace;
+    match status {
+        adk_harness::IsolationStatus::Host => ShellPlace::Host,
+        adk_harness::IsolationStatus::OsSandbox { enforcer } => {
+            ShellPlace::Sandbox { enforcer: Some(enforcer.clone()) }
+        }
+        adk_harness::IsolationStatus::Container { image } => {
+            ShellPlace::Container { image: image.clone() }
+        }
+        adk_harness::IsolationStatus::Remote { provider, off_host } => {
+            ShellPlace::Remote { provider: provider.clone(), off_host: *off_host }
+        }
+        adk_harness::IsolationStatus::Degraded { requested, reason } => {
+            ShellPlace::Degraded { requested: requested.clone(), reason: reason.clone() }
+        }
+        // An isolation a later harness adds is not claimed as a sandbox.
+        _ => ShellPlace::Host,
     }
 }
 
