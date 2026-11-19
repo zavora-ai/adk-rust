@@ -438,6 +438,12 @@
 6 adk-vision fetch doc
 # The image privacy guardrail, the personal-text redactor and the governed scenarios (S1–S4, S7).
 6 adk-vision guardrail doc
+# Document readers (spec 3.7 §7.6, §7.7): PP-OCRv6 through oar-ocr on ort, PaddleOCR-VL-1.6
+# on Candle, and NVIDIA NIM's CV endpoints against their recorded answers, each with its
+# conformance run; the weight-backed and live runs are ignored.
+6 adk-vision ocr,fetch,conformance doc
+6 adk-vision ocr-vl,fetch,conformance doc
+6 adk-vision nim,conformance doc
 6 adk-site gen-astro
 # `awp verify` against the preview in the launch gate (spec 3.5 §7.8.1), without `migrate`.
 6 adk-site verify doc

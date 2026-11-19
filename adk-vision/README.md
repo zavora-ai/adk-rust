@@ -8,9 +8,9 @@ Local-first perception for Rust Agent Development Kit (ADK-Rust) agents.
 
 > **Note:** `adk-vision` is **Experimental** (spec 3.7). This release holds the contracts —
 > media, regions, manifests, traits, the runtime, the egress boundary and the conformance
-> suite, the local ONNX backends (`onnx`), and the cloud backends: Gemini, Claude, Muse and
-> NVIDIA NIM describers (`cloud`, `nim`) and Meta `sam-3.1` (`sam`). OCR and mistral.rs
-> backends arrive as features in later releases.
+> suite, the local ONNX backends (`onnx`), the document readers (`ocr`, `ocr-vl`, `nim`), and
+> the cloud backends: Gemini, Claude, Muse and NVIDIA NIM describers (`cloud`, `nim`) and Meta
+> `sam-3.1` (`sam`). mistral.rs backends arrive as a feature in a later release.
 
 ## Overview
 
@@ -42,8 +42,11 @@ adk-vision = { version = "3.0.0", features = ["fetch"] }
 | `onnx-dynamic` | The same backends against an onnxruntime library loaded from `ORT_DYLIB_PATH` |
 | `onnx-coreml`, `onnx-cuda` | The CoreML and CUDA execution providers for the `onnx` backends |
 | `cloud` | `LlmDescriber`: any `adk_core::Llm` that takes images as a `Describer`, with Gemini (`box_2d`, 0–1000), Claude (pixels of the image as sent) and prompt-fixed 0–1000 region adapters, and provider-formula preflight estimates |
-| `nim` | NVIDIA NIM vision-language models (`NimConfig`), reasoning off, unpriced; implies `cloud` |
+| `nim` | NVIDIA NIM: vision-language models (`NimConfig`, reasoning off, unpriced) and `NimDocumentReader` for NVIDIA's OCR, page-element, table and chart endpoints, remote, behind the egress gate; implies `cloud` |
 | `sam` | `SamSegmenter`: Meta `sam-3.1` request building, stream parser and mask placement, billed per request at $2.50 per 1,000 images |
+| `ocr` | `PpOcrReader`: PP-OCRv6 text lines and words through `oar-ocr` on ONNX Runtime |
+| `ocr-vl` | `PaddleOcrVlReader`: PaddleOCR-VL-1.6 with PP-DocLayoutV3 through `oar-ocr-vl` on Candle |
+| `ocr-vl-metal` | `ocr-vl` on Apple GPUs through Candle's Metal backend |
 
 ## Quick Start
 
@@ -206,6 +209,16 @@ let runtime = VisionRuntime::builder()
 Every call is metered against the context's `ModelCallScope`: images are recorded as
 units, at the unit price for a per-unit backend and at zero cost for a local one. A frozen
 kill switch refuses every call and every release.
+
+## Document Readers
+
+`PpOcrReader` (`ocr`), `PaddleOcrVlReader` (`ocr-vl`) and `NimDocumentReader` (`nim`) answer
+`VisionRuntime::read` in one `DocumentPage`, published as a JSON Schema in
+[`schema/document-page.json`](schema/document-page.json): blocks with regions in source
+pixels, text, confidence, words and table cells, the reading order, and Markdown. The local
+readers load models from the built-in manifest (`pp-ocrv6-{tiny,small,medium}-{det,rec}`,
+`paddleocr-vl-1.6`, `pp-doclayoutv3`, all Apache-2.0); the NIM reader takes only released
+images. See [Document readers](../docs/official_docs/vision/document-readers.md).
 
 ## Model Manifests and Licences
 

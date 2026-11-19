@@ -15,7 +15,9 @@ categories = ["computer-vision", "asynchronous"]
 exclude = ["tests/"]
 
 [package.metadata.docs.rs]
-all-features = true
+# docs.rs has no CUDA or Metal toolchain, so the GPU features are left out; ort-sys skips
+# linking on docs.rs.
+features = ["fetch", "conformance", "guardrail", "onnx", "ocr", "ocr-vl", "cloud", "nim", "sam"]
 
 # Spec 3.7 §7.1: media, geometry, manifests, the traits, `VisionRuntime`, the egress boundary
 # and the deterministic `Editor` always build; each runtime and provider is a feature, added
@@ -42,10 +44,21 @@ onnx-cuda = ["onnx", "ort/cuda"]
 # `LlmDescriber` over any `adk_core::Llm` that takes images, with the Gemini, Claude and
 # 0-1000 region adapters and provider-formula preflight estimates (§7.7, §7.9).
 cloud = ["dep:adk-model", "dep:base64", "dep:futures"]
-# NVIDIA NIM vision-language models over adk-model's OpenAI-compatible client (§7.7).
-nim = ["cloud", "adk-model/openai"]
+# NVIDIA NIM (§7.7): the vision-language models over adk-model's OpenAI-compatible client, and
+# the document reader over the hosted or self-hosted CV endpoints for OCR, page elements, table
+# structure and chart elements.
+nim = ["cloud", "adk-model/openai", "dep:reqwest", "dep:base64"]
 # The Meta `sam-3.1` client: request building, the stream parser and mask placement (§7.7).
 sam = ["dep:adk-model", "adk-model/muse", "dep:base64", "dep:futures", "dep:reqwest", "tokio/io-util", "tokio/process"]
+# PP-OCRv6 text lines and words through `oar-ocr` on ONNX Runtime (§7.6), the runtime
+# downloaded at build time over rustls as `onnx` does. Weights come through the manifest and
+# fetcher; `oar-ocr`'s own ModelScope `auto-download` stays off.
+ocr = ["fetch", "dep:oar-ocr", "dep:ort", "ort/download-binaries", "ort/tls-rustls", "ort/copy-dylibs", "oar-ocr/simd", "dep:serde-saphyr"]
+# PaddleOCR-VL-1.6 with PP-DocLayoutV3 through `oar-ocr-vl` on Candle (§7.6): layout,
+# reading order, tables, formulas and seals.
+ocr-vl = ["fetch", "dep:oar-ocr-vl"]
+# `ocr-vl` on Apple GPUs through Candle's Metal backend.
+ocr-vl-metal = ["ocr-vl", "oar-ocr-vl/metal"]
 
 [dependencies]
 adk-core.workspace = true
@@ -70,9 +83,10 @@ uuid.workspace = true
 adk-guardrail = { workspace = true, optional = true }
 # Provider prices for preflight estimates, and the clients `nim` and `sam` build on.
 adk-model = { workspace = true, optional = true }
-# Base64 images inside tool results (`guardrail`), data URLs and mask payloads (`cloud`, `sam`).
+# Base64 images inside tool results (`guardrail`), data URLs and mask payloads (`cloud`, `sam`), and NIM data URIs (`nim`).
 base64 = { version = "0.22", optional = true }
 futures = { workspace = true, optional = true }
+# `sam` streams; `nim`'s CV endpoints take JSON bodies with inline data URIs.
 reqwest = { workspace = true, optional = true }
 
 # Same client configuration as adk-rag: the blocking ureq client, no default TLS stack.
@@ -84,6 +98,13 @@ ort = { workspace = true, optional = true, features = ["std", "tracing", "api-27
 # SigLIP 2's Gemma tokenizer. `onig` alone, as adk-rag: `esaxx_fast` links a static-CRT object
 # that rust-lld refuses next to ort's dynamic-CRT objects on MSVC.
 tokenizers = { version = "0.22", optional = true, default-features = false, features = ["onig"] }
+
+# `ocr`: 0.10.x pins `ort` =2.0.0-rc.13, the workspace pin (spec 3.7 Q7).
+oar-ocr = { version = "0.10.3", optional = true, default-features = false }
+# `ocr`: the character dictionary ships inside PaddlePaddle's `inference.yml`.
+serde-saphyr = { workspace = true, optional = true }
+# `ocr-vl`: the release matching `oar-ocr`; no `auto-download`.
+oar-ocr-vl = { version = "0.10.3", optional = true, default-features = false }
 
 [dev-dependencies]
 # Path-only self dependency, so the crate's own tests run the conformance suite.
@@ -141,3 +162,19 @@ required-features = ["sam"]
 [[test]]
 name = "sam_live_tests"
 required-features = ["sam"]
+
+[[test]]
+name = "ocr_live_tests"
+required-features = ["ocr", "fetch", "conformance"]
+
+[[test]]
+name = "nim_contract_tests"
+required-features = ["nim", "conformance"]
+
+[[test]]
+name = "nim_live_tests"
+required-features = ["nim", "ocr", "guardrail", "fetch", "conformance"]
+
+[[test]]
+name = "ocr_vl_live_tests"
+required-features = ["ocr-vl", "fetch", "conformance"]

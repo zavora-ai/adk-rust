@@ -1,0 +1,21 @@
+{
+  "method": "POST",
+  "url": "https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-ocr-v1",
+  "headers": {
+    "Accept": "application/json",
+    "Authorization": "Bearer ${NVIDIA_API_KEY}",
+    "Content-Type": "application/json"
+  },
+  "body": {
+    "input": [
+      {
+        "type": "image_url",
+        "url": "{{datauri:image/png:doc-page-1000x1300.png}}"
+      }
+    ],
+    "merge_levels": [
+      "word"
+    ]
+  },
+  "bodyNote": "Placeholders {{b64:<file>}} / {{datauri:<mime>:<file>}} expand to the named fixture image under images/."
+}

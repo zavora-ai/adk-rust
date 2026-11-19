@@ -980,5 +980,248 @@
         0.5
       ]
     }
+  },
+  {
+    "id": "pp-ocrv6-tiny-det",
+    "task": "read",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "PaddlePaddle/PP-OCRv6_tiny_det_onnx",
+      "revision": "2ba1506c0380b8f0b03dd142459aac66d4421f6c"
+    },
+    "files": [
+      {
+        "path": "inference.onnx",
+        "sha256": "sha256:193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8",
+        "size": 1780590
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 14
+    }
+  },
+  {
+    "id": "pp-ocrv6-tiny-rec",
+    "task": "read",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "PaddlePaddle/PP-OCRv6_tiny_rec_onnx",
+      "revision": "2612ab37152ae0a677521bae4e1e3d4fb4cf7c30"
+    },
+    "files": [
+      {
+        "path": "inference.onnx",
+        "sha256": "sha256:9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6",
+        "size": 4462639
+      },
+      {
+        "path": "inference.yml",
+        "sha256": "sha256:66170210bad538e83fff3c4a3867e547d6bf20b50d64b20347c4b913f3034ea1",
+        "size": 55571
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 11
+    }
+  },
+  {
+    "id": "pp-ocrv6-small-det",
+    "task": "read",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "PaddlePaddle/PP-OCRv6_small_det_onnx",
+      "revision": "28fe5895c24fd108c19eb3e8479f4ab385fbfc62"
+    },
+    "files": [
+      {
+        "path": "inference.onnx",
+        "sha256": "sha256:d73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e",
+        "size": 9880512
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 14
+    }
+  },
+  {
+    "id": "pp-ocrv6-small-rec",
+    "task": "read",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "PaddlePaddle/PP-OCRv6_small_rec_onnx",
+      "revision": "b8f84f0b80c529de40b4fbb3544b84fa7233a513"
+    },
+    "files": [
+      {
+        "path": "inference.onnx",
+        "sha256": "sha256:5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634",
+        "size": 21159378
+      },
+      {
+        "path": "inference.yml",
+        "sha256": "sha256:ab078671bb49f06228eadccd34f1bb501e157f7a047095ffb943ba81512c77d1",
+        "size": 150579
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 11
+    }
+  },
+  {
+    "id": "pp-ocrv6-medium-det",
+    "task": "read",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "PaddlePaddle/PP-OCRv6_medium_det_onnx",
+      "revision": "61323801669c338b7891481ec7bac61ce31b576a"
+    },
+    "files": [
+      {
+        "path": "inference.onnx",
+        "sha256": "sha256:eb13b44b25bb36f89528b68720af8a61d9cf381176107f465db1757b65d086e1",
+        "size": 62032837
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 14
+    }
+  },
+  {
+    "id": "pp-ocrv6-medium-rec",
+    "task": "read",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "PaddlePaddle/PP-OCRv6_medium_rec_onnx",
+      "revision": "50c7eacafc52fa7bcf4194e8cd08e46f8558504b"
+    },
+    "files": [
+      {
+        "path": "inference.onnx",
+        "sha256": "sha256:9c09abf0957f7968c7586464b7397b84ad2387a0497a351af40e9acc71b673ba",
+        "size": 76554979
+      },
+      {
+        "path": "inference.yml",
+        "sha256": "sha256:991b700facf5b50a7de193468207d5f4255b538dde0d312ae3b7c7a9b6873129",
+        "size": 150580
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 11
+    }
+  },
+  {
+    "id": "paddleocr-vl-1.6",
+    "task": "read",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "PaddlePaddle/PaddleOCR-VL-1.6",
+      "revision": "132c45f52c0a26ed5a6b2f6bd8e3985794cc27dd"
+    },
+    "files": [
+      {
+        "path": "config.json",
+        "sha256": "sha256:ce7f4565f8b1db78532ad5d1b9ebe55c2139d49bd4cb04778b580a08a598f171",
+        "size": 2059
+      },
+      {
+        "path": "preprocessor_config.json",
+        "sha256": "sha256:111872ab1e8bb7fd040ac5087bfced7ab8f011f02139b088cba294964c3b1d0e",
+        "size": 641
+      },
+      {
+        "path": "tokenizer.json",
+        "sha256": "sha256:c8a215a59183d0d0781adc33bacd3ce6162716f7fd568fb30234a74d69803a7d",
+        "size": 11189060
+      },
+      {
+        "path": "chat_template.jinja",
+        "sha256": "sha256:2f27812dab7f333e471884e0c803d807f11953d5453140dfb1aaba234f872bc8",
+        "size": 1474
+      },
+      {
+        "path": "model.safetensors",
+        "sha256": "sha256:85a479d506a11e724e7285d395c551be69f41dbc16b6342d3cacfb189aed71db",
+        "size": 1917255968
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "candle"
+    }
+  },
+  {
+    "id": "pp-doclayoutv3",
+    "task": "read",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "PaddlePaddle/PP-DocLayoutV3_safetensors",
+      "revision": "e4f489dc536556fc1be02b973ba06756e0d4a2ac"
+    },
+    "files": [
+      {
+        "path": "config.json",
+        "sha256": "sha256:3cf834b91d23a756b1519bce4db42c09e852f3e35c35092dd5a3e253a50c071a",
+        "size": 2460
+      },
+      {
+        "path": "preprocessor_config.json",
+        "sha256": "sha256:519fe0187a43a1ca429e3ad8317bab8700f0d5e8fb3a6e3a0a413ffac078ba42",
+        "size": 575
+      },
+      {
+        "path": "model.safetensors",
+        "sha256": "sha256:5ea422c6cc5fe759a47e1357c35639b58173508e025a3131cbe4b6ac59e2b85e",
+        "size": 133270468
+      }
+    ],
+    "licence": {
+      "id": "Apache-2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "candle"
+    }
   }
 ]

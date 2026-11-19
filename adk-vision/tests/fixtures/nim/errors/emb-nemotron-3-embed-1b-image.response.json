@@ -1,0 +1,19 @@
+{
+  "status": 400,
+  "latencyMs": 863,
+  "headers": {
+    "Date": "Wed, 18 Nov 2026 20:36:28 GMT",
+    "Content-Type": "application/json",
+    "Content-Length": "128",
+    "Nvcf-Error-Source": "upstream_status",
+    "Nvcf-Reqid": "37c17f67-a317-4547-8b6b-cb3eb7db6cbb",
+    "Nvcf-Status": "errored",
+    "Server": "retriever-proxy/0.2 Python/3.12.14",
+    "X-Request-Id": "0794e5b1-259b-4c76-888b-83eb0b890f10"
+  },
+  "body": {
+    "object": "error",
+    "message": "image inputs require VLM serving to be enabled on this server",
+    "type": "invalid_request_error"
+  }
+}

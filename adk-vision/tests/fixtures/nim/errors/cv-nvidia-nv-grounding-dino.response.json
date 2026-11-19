@@ -1,0 +1,15 @@
+{
+  "status": 404,
+  "latencyMs": 944,
+  "headers": {
+    "Date": "Wed, 18 Nov 2026 20:32:41 GMT",
+    "Content-Type": "application/problem+json",
+    "Content-Length": "162",
+    "Nvcf-Error-Source": "upstream_status"
+  },
+  "body": {
+    "status": 404,
+    "title": "Not Found",
+    "detail": "Function '50128865-af25-4a3f-b175-d75ce3c72bd9': Not found for account '<scrubbed-account-id>'"
+  }
+}

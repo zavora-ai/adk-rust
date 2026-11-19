@@ -27,8 +27,11 @@
 //! | `onnx-dynamic` | The same backends against an onnxruntime library loaded from `ORT_DYLIB_PATH` |
 //! | `onnx-coreml`, `onnx-cuda` | The CoreML and CUDA execution providers for the `onnx` backends |
 //! | `cloud` | `LlmDescriber` over any `adk_core::Llm` that takes images, with the Gemini, Claude and 0–1000 region adapters |
-//! | `nim` | NVIDIA NIM vision-language models over the OpenAI-compatible client (implies `cloud`) |
+//! | `nim` | NVIDIA NIM: vision-language models over the OpenAI-compatible client, and `NimDocumentReader` for NVIDIA's OCR, page, table and chart endpoints, remote (implies `cloud`) |
 //! | `sam` | The Meta `sam-3.1` client: `SamSegmenter`, its stream parser and mask placement |
+//! | `ocr` | `PpOcrReader`: PP-OCRv6 text lines and words through `oar-ocr` on ONNX Runtime |
+//! | `ocr-vl` | `PaddleOcrVlReader`: PaddleOCR-VL-1.6 with PP-DocLayoutV3 through `oar-ocr-vl` on Candle |
+//! | `ocr-vl-metal` | `ocr-vl` on Apple GPUs |
 //!
 //! [`VisionToolset`] — `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`,
 //! `vision_crop`, `vision_redact`, `vision_annotate` — is always built: each tool runs on
@@ -105,8 +108,16 @@ mod geometry;
 mod guardrail;
 mod manifest;
 mod media;
+#[cfg(feature = "nim")]
+mod nim_cv;
+#[cfg(feature = "ocr")]
+mod ocr;
+#[cfg(feature = "ocr-vl")]
+mod ocr_vl;
 #[cfg(any(feature = "onnx", feature = "onnx-dynamic"))]
 pub mod onnx;
+#[cfg(any(feature = "ocr", feature = "ocr-vl", feature = "nim"))]
+mod reading;
 mod redact;
 mod runtime;
 #[cfg(feature = "sam")]
@@ -150,6 +161,16 @@ pub use media::{
     ArtifactLocator, DecodeLimits, DecodedImage, Frame, FrameMeta, FramePixels, FrameSourceId,
     ImageRef, MediaScope, MediaStore, Provenance, SourceImage, VideoRef, artifact_uri,
 };
+#[cfg(feature = "nim")]
+pub use nim_cv::{
+    DEFAULT_MAX_INLINE_BYTES, DEFAULT_MIN_LAYOUT_CONFIDENCE, DEFAULT_REQUESTS_PER_MINUTE,
+    DEFAULT_TIMEOUT, GRAPHIC_ELEMENTS_MODEL, NIM_READER_ID, NimCvConfig, NimDocumentReader,
+    NimOcrModel, PAGE_ELEMENTS_MODEL, TABLE_STRUCTURE_MODEL,
+};
+#[cfg(feature = "ocr")]
+pub use ocr::{PpOcrReader, PpOcrV6Size};
+#[cfg(feature = "ocr-vl")]
+pub use ocr_vl::{PADDLEOCR_VL_MANIFEST, PP_DOCLAYOUT_MANIFEST, PaddleOcrVlReader, VlDevice};
 pub use redact::{PersonRedactor, REDACTION_MARGIN};
 pub use runtime::{
     CallOptions, CallRecord, Edited, Escalation, Route, Trigger, VisionOutput, VisionRuntime,

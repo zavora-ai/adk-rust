@@ -21,7 +21,7 @@ use adk_core::{MeteredUsage, UsageCall, UsageHold, UsageUnit, UsageVector};
 pub use calls::Edited;
 pub use route::{CallOptions, CallRecord, Escalation, Route, Trigger, VisionOutput};
 
-use crate::backend::{BackendDescriptor, BackendId, InputLimits, Oversize};
+use crate::backend::{BackendDescriptor, BackendId, InputLimits, Locality, Oversize};
 use crate::cx::VisionCx;
 use crate::digest::Digest;
 use crate::edit::ops;
@@ -542,7 +542,15 @@ impl VisionRuntime {
         }
         // X3: frame calls (phase B) count `UsageUnit::Frames`.
         let (vendor, model, cost, bound) = match &descriptor.price {
-            None => ("local".to_string(), descriptor.id.to_string(), Some(0), 0),
+            // A remote backend with no published price (NVIDIA's hosted NIMs) is capped by
+            // units, and its ledger entries name its host rather than `local`.
+            None => {
+                let vendor = match &descriptor.locality {
+                    Locality::Remote { hosts } => hosts.first().cloned(),
+                    Locality::InProcess | Locality::Loopback => None,
+                };
+                (vendor.unwrap_or_else(|| "local".into()), descriptor.id.to_string(), Some(0), 0)
+            }
             Some(price) => match price.unit() {
                 Some(unit) => {
                     let amount = if unit == UsageUnit::Requests { 1 } else { images };

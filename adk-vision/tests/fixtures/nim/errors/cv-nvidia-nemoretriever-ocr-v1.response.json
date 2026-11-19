@@ -1,0 +1,16 @@
+{
+  "status": 410,
+  "latencyMs": 809,
+  "headers": {
+    "Date": "Wed, 18 Nov 2026 20:32:36 GMT",
+    "Content-Type": "application/problem+json",
+    "Content-Length": "156",
+    "Nvcf-Error-Source": "gateway_rejected"
+  },
+  "body": {
+    "type": "about:blank",
+    "title": "Gone",
+    "status": 410,
+    "detail": "This endpoint has reached its end of life on 2026-05-18T00:00:00Z and is no longer available."
+  }
+}
