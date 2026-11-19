@@ -549,11 +549,16 @@ impl VisionBenchReport {
                 }
             }
             let middle = edges.get(edges.len() / 2).copied();
-            let throughput = row
-                .latency
-                .iter()
-                .find(|l| Some(l.long_edge) == middle)
-                .map_or("—".to_string(), |l| format!("{:.1} img/s", l.per_second));
+            let throughput = row.latency.iter().find(|l| Some(l.long_edge) == middle).map_or(
+                "—".to_string(),
+                |l| {
+                    if l.per_second < 1.0 {
+                        format!("{:.2} img/s", l.per_second)
+                    } else {
+                        format!("{:.1} img/s", l.per_second)
+                    }
+                },
+            );
             let rss = row.peak_rss_bytes.map_or("—".to_string(), |b| {
                 format!("{:.0} MiB", b as f64 / (1u64 << 20) as f64)
             });
@@ -578,7 +583,8 @@ impl VisionBenchReport {
             };
             let mut notes = row.notes.clone();
             if let Some(runs) = row.latency.first().map(|l| l.runs).filter(|r| *r != c.runs) {
-                notes.push(format!("{runs} timed runs per size"));
+                let plural = if runs == 1 { "" } else { "s" };
+                notes.push(format!("{runs} timed run{plural} per size"));
             }
             let mut mode = row.mode.label().to_string();
             if !notes.is_empty() {
@@ -684,7 +690,7 @@ mod tests {
         assert!(md.contains("| onnxruntime | 1.23.0 |"), "{md}");
         assert!(
             md.contains(
-                "| efficientsam-ti | segment | ort, CPU | 1.50 s | 80.0 ms / 95.5 ms | 1.20 s / 1.30 s | 0.8 img/s | 512 MiB |"
+                "| efficientsam-ti | segment | ort, CPU | 1.50 s | 80.0 ms / 95.5 ms | 1.20 s / 1.30 s | 0.80 img/s | 512 MiB |"
             ),
             "{md}"
         );
