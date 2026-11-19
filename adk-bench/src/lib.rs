@@ -50,7 +50,6 @@ pub mod long_history;
 pub mod memory;
 pub mod metrics;
 pub mod runner;
-/// Vision benchmarks: latency, accuracy and cost per `adk-vision` backend.
 #[cfg(feature = "vision")]
 pub mod vision;
 pub mod workload;

@@ -60,8 +60,9 @@ through `cargo adk eval --check-regression`.
 ## Results
 
 Measured on 2026-11-19 with the commands above, built with the `ci` profile. The local rows
-ran first, from a warm weights cache; the live calls, PaddleOCR-VL-1.6 (2 timed runs per size)
-and its CPU row ran later and were appended, each noting the load average it started under.
+ran first, from a warm weights cache; the live calls, PaddleOCR-VL-1.6 on Metal (2 timed runs
+per size) and on the CPU (one timed run at 1024 px) ran later and were appended, each noting the
+load average it started under.
 Recorded rows replay the responses recorded on 2026-11-19.
 
 | Machine | |
@@ -90,7 +91,8 @@ Recorded rows replay the responses recorded on 2026-11-19.
 | siglip2-base-patch16-256-quantized | embed | ort, CPU | 1.31 s | 124.0 ms / 271.8 ms | 180.6 ms / 217.1 ms | 136.0 ms / 192.5 ms | 5.4 img/s | 1501 MiB |
 | pp-ocrv6-tiny | read | oar-ocr on ort, CPU | 0.04 s | 80.4 ms / 131.4 ms | 98.0 ms / 120.7 ms | 112.6 ms / 177.5 ms | 9.8 img/s | 1596 MiB |
 | pp-ocrv6-small | read | oar-ocr on ort, CPU | 0.15 s | 374.2 ms / 461.2 ms | 442.2 ms / 519.2 ms | 470.9 ms / 731.9 ms | 2.2 img/s | 1690 MiB |
-| paddleocr-vl-1.6-metal | read | oar-ocr-vl on Candle, Metal | 21.46 s | 8.39 s / 10.83 s | 8.22 s / 8.81 s | 10.17 s / 10.56 s | 0.1 img/s | 2293 MiB |
+| paddleocr-vl-1.6-metal | read | oar-ocr-vl on Candle, Metal | 21.46 s | 8.39 s / 10.83 s | 8.22 s / 8.81 s | 10.17 s / 10.56 s | 0.12 img/s | 2293 MiB |
+| paddleocr-vl-1.6-cpu | read | oar-ocr-vl on Candle, CPU | 4.74 s | — | 25.53 s / 25.53 s | — | 0.04 img/s | 3491 MiB |
 
 | Backend | Mode | Eval set | Cases | Scores | Cost / 1k images |
 |---|---|---|---|---|---|
@@ -116,6 +118,7 @@ Recorded rows replay the responses recorded on 2026-11-19.
 | nemotron-super-vl | live (one live call, 3.07 s wall; load average 14.82 13.08 15.57 at its start) | shapes-locate | 1 | box_hit_rate 0.000, detection_recall 0.800, region_iou 0.755 | unpriced |
 | sam-3.1 | live (one live call, 4.84 s wall; load average 14.82 13.08 15.57 at its start) | shapes-concepts | 1 | box_hit_rate 1.000, detection_recall 1.000, region_iou 0.990 | $2.50 |
 | paddleocr-vl-1.6-metal | local (load average 19.00 16.20 13.85 at its start; 2 timed runs per size) | documents-read | 2 | field_exact_match 1.000, field_normalized_match 1.000, ocr_char_accuracy 0.910, ocr_word_accuracy 0.876 | $0.00 |
+| paddleocr-vl-1.6-cpu | local (load average 1.83 9.49 12.21 at its start; 1 timed run per size) | documents-read | 2 | field_exact_match 1.000, field_normalized_match 1.000, ocr_char_accuracy 0.910, ocr_word_accuracy 0.876 | $0.00 |
 
 | Backend | Model | Revision | Licence |
 |---|---|---|---|
@@ -136,6 +139,8 @@ Recorded rows replay the responses recorded on 2026-11-19.
 | sam-3.1 | `sam-3.1` | — | provider terms |
 | paddleocr-vl-1.6-metal | `paddleocr-vl-1.6` | `132c45f52c0a` | Apache-2.0 |
 | paddleocr-vl-1.6-metal | `pp-doclayoutv3` | `e4f489dc5365` | Apache-2.0 |
+| paddleocr-vl-1.6-cpu | `paddleocr-vl-1.6` | `132c45f52c0a` | Apache-2.0 |
+| paddleocr-vl-1.6-cpu | `pp-doclayoutv3` | `e4f489dc5365` | Apache-2.0 |
 
 ## Reading the Results
 
@@ -146,7 +151,7 @@ Recorded rows replay the responses recorded on 2026-11-19.
 | EfficientSAM-Ti, SAM 2.1 Tiny q4 | Each image costs an encoder pass, about 0.6 s and 1.0 s, nearly flat across input sizes. Both segment the drawn shapes at mask IoU 0.98 or better; SAM 2.1's boxes are within 2 px for all three shapes, EfficientSAM's for two |
 | SigLIP 2 base | 124–181 ms per image; every caption ranks its own fixture first, and three of four fixtures rank their own caption first |
 | PP-OCRv6 tiny, small | Tiny reads a page in 80–113 ms, small in 374–471 ms; both read the report page and the invoice exactly and extract all seven invoice fields |
-| PaddleOCR-VL-1.6 (Metal) | 8.2–10.2 s per page after a 21 s load. Every word it reads matches; its character accuracy of 0.91 counts the chart's tick and axis labels, which it leaves to chart recognition, and its layout order, which puts the invoice total after the footer. All seven invoice fields extracted |
+| PaddleOCR-VL-1.6 | On Metal 8.2–10.2 s per page after a 21 s load; on the CPU 25.5 s per page at 1024 px. Every word it reads matches; its character accuracy of 0.91 counts the chart's tick and axis labels, which it leaves to chart recognition, and its layout order, which puts the invoice total after the footer. All seven invoice fields extracted |
 | Claude Sonnet 5.5, Haiku 5.5 | Every S5 click lands inside its target, at region IoU 0.99; on the drawn shapes, three (Sonnet) and four (Haiku) of five boxes are within 2 px |
 | Nemotron Super VL, Gemma 4 | No box lands within 2 px of the drawn edges (region IoU 0.71–0.87); Nemotron places every S5 click inside its target, Gemma 4 all but one. NVIDIA publishes no price for its hosted endpoints, so the rows say unpriced, not free |
 | Muse Spark 1.3 | Every S5 click inside its target; boxes looser than Claude's (region IoU 0.81–0.90) |
