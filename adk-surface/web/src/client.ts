@@ -124,6 +124,8 @@ export interface HomeClient {
   agents(): Promise<AgentRow[]>;
   decisions(): Promise<DecisionCard[]>;
   decision(id: string): Promise<DecisionCard>;
+  /** An image a decision holds, at the `href` its card names, read as the signed-in viewer (spec 3.7 §8.2). */
+  image?(href: string): Promise<Blob>;
   briefing(since?: string): Promise<Briefing>;
   command(command: Command, origin: Origin): Promise<CommandOutcome>;
   /** The session's feed from just after `after`, until `signal` aborts or the server closes. */
@@ -292,6 +294,17 @@ export class HttpClient implements HomeClient {
 
   decision(id: string) {
     return this.request<DecisionCard>(`/surface/decisions/${encodeURIComponent(id)}?surface=${this.surface}`);
+  }
+
+  async image(href: string) {
+    // Only the engine's own evidence route on this server: a card never names another address.
+    if (!href.startsWith(`${this.base}/surface/decisions/`)) throw new ApiError(400, labels.cantReach);
+    const response = await fetch(`${href}?surface=${this.surface}`, {
+      credentials: "same-origin",
+      headers: this.headers({ accept: "image/*" }),
+    });
+    if (!response.ok) throw await problem(response);
+    return response.blob();
   }
 
   briefing(since?: string) {

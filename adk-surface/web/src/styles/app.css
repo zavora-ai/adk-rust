@@ -995,6 +995,17 @@ pre {
   cursor: pointer;
 }
 
+.mini-decision-image {
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.mini-words {
+  display: grid;
+  gap: 4px;
+}
+
 .mini-heading {
   font-size: 16px;
   font-weight: 650;

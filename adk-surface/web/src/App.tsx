@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { ImageLoaderContext, sameOriginLoader } from "./evidence/images";
+import type { ImageLoader } from "./evidence/images";
 import type { Command, DecisionCard, Origin } from "./generated/api";
 import type { HomeClient } from "./client";
 import { ApiError, problemText } from "./client";
@@ -234,6 +236,12 @@ export function App({
       voice && voiceOffered(voiceModels.value?.models.length ?? 0) ? { open: () => navigate("voice") } : undefined,
     [voice, voiceModels.value, navigate],
   );
+  // A decision's images load as the signed-in viewer (spec 3.7 §8.2).
+  const imageLoader = useMemo<ImageLoader>(
+    () => (client.image ? (href) => client.image!(href) : sameOriginLoader),
+    [client],
+  );
+
   if (section === "voice" && voice) {
     // The conversation ended opens in Threads under the agent, in place of its own thread.
     const ended = (sessionId?: string) => {
@@ -390,7 +398,11 @@ export function App({
       </div>
     </div>
   );
-  return <VoiceEntryContext.Provider value={voiceEntry}>{home}</VoiceEntryContext.Provider>;
+  return (
+    <ImageLoaderContext.Provider value={imageLoader}>
+      <VoiceEntryContext.Provider value={voiceEntry}>{home}</VoiceEntryContext.Provider>
+    </ImageLoaderContext.Provider>
+  );
 }
 
 /** The client's voice routes, when it has them. */

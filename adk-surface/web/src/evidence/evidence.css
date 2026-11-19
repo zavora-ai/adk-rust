@@ -664,3 +664,216 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* The phone (board choices A14, A19). */
+.phone-evidence {
+  display: grid;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.phone-evidence-frame {
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.phone-evidence-frame figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.phone-evidence-toggle {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.phone-evidence-toggle span {
+  color: var(--done);
+}
+
+.phone-evidence-stage {
+  position: relative;
+  padding: 10px;
+  background: var(--code-bg);
+}
+
+.phone-evidence-dots {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  padding-top: 8px;
+}
+
+.phone-evidence-dots i {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.phone-evidence-dots i.current {
+  width: 22px;
+  background: var(--accent);
+}
+
+.phone-evidence-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 14px;
+  color: var(--text-2);
+  font-size: 13.5px;
+}
+
+.phone-evidence-foot code,
+.phone-evidence-digest code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.phone-evidence-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.phone-evidence-strip button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 4px;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+}
+
+.phone-evidence-strip button[aria-pressed="true"] {
+  border-color: var(--accent);
+}
+
+.phone-evidence-covered h2,
+.phone-evidence-digest h2 {
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.phone-evidence-covered ul {
+  display: grid;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 0;
+  font-size: 16px;
+  list-style: none;
+}
+
+.phone-evidence-covered li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.phone-evidence-covered i {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.phone-evidence-all {
+  margin: 6px 0 0;
+  color: var(--notice-warn-ink);
+  font-weight: 700;
+}
+
+.phone-evidence-rows {
+  display: grid;
+  margin: 0;
+}
+
+.phone-evidence-rows > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  font-size: 15px;
+}
+
+.phone-evidence-rows dt {
+  color: var(--text-2);
+}
+
+.phone-evidence-rows dd {
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.phone-evidence-rows code {
+  font-family: var(--mono);
+}
+
+.phone-evidence-said {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: var(--code-bg);
+  color: var(--text-2);
+  font-size: 15px;
+}
+
+.phone-evidence-said strong {
+  color: var(--text);
+  font-size: 17px;
+}
+
+.phone-evidence-more {
+  display: grid;
+  gap: 12px;
+}
+
+.phone-evidence-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.phone-evidence-tools a {
+  flex: 1 1 auto;
+  text-decoration: none;
+}
+
+.phone-actions-fixed {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  padding-bottom: 12px;
+  background: var(--decision);
+}
+
+.phone-decide-image .evidence-purged {
+  min-height: 220px;
+}

@@ -280,6 +280,8 @@ export interface AnswerRequest {
   answer: Answer;
   /** The changed arguments of an `edit`. */
   editedArgs?: unknown;
+  /** The digests of the images the device showed, for a call with images (spec 3.7 §8.2). */
+  evidence?: string[];
   /** The device showed the call in full (§7.1). */
   expanded?: boolean;
   /** Why, for a `deny`; reported to the agent. */
@@ -538,6 +540,59 @@ export interface CardLine {
   value: string;
 }
 
+/**
+ * A held call's images on its card (spec 3.7 §8.2, X11): what would leave, after redaction,
+ * with what was covered, where it goes, what it costs, how long it is kept and why nothing
+ * can be sent when that is so.
+ */
+export interface CardMedia {
+  /**
+   * This surface may tighten the crop or add a redaction, which holds the call again with
+   * the new image (board choices A7, A8).
+   */
+  canChange: boolean;
+  /** What the cost counts: "851 image tokens". */
+  costDetail?: string | null;
+  /** "Up to $0.0044" while waiting; "$0.0024" once it ran. */
+  costText?: string | null;
+  /** What was covered before they leave, by class. */
+  covered: CoveredLine[];
+  /** Every pixel of every image is covered. */
+  coveredAll: boolean;
+  /** "100% of the image", when so. */
+  coveredAllText?: string | null;
+  /** What they were cut from: "Page 2 of claim-0412.pdf". */
+  cutFrom?: string | null;
+  /** How: "nothing resized". */
+  cutNote?: string | null;
+  /** The fixed line under the card (board choice A21). */
+  fixedLine: string;
+  /** Where they go. */
+  goesTo?: GoesTo | null;
+  /** The images, in the order of the call's evidence. */
+  images: EvidenceImage[];
+  /** "Kept as evidence until 18 Dec". */
+  keptText?: string | null;
+  /** Why nothing can be sent, when that is so. */
+  notice?: MediaNotice | null;
+  /**
+   * The digest of the image a changed image replaced, when this call was held again with
+   * a changed image.
+   */
+  replaces?: string | null;
+  /** Where an authorised viewer opens the source image (board choice A9). */
+  sourceHref?: string | null;
+  /**
+   * "The exact image that would leave", "The 3 images that would leave", "The image that
+   * left".
+   */
+  title: string;
+  /** What they are: "Document crop", "3 document crops". */
+  what?: string | null;
+  /** What qualifies `what`: "never the page". */
+  whatNote?: string | null;
+}
+
 /** Where a decision is in its life. */
 export type CardStatus = "waiting" | "decided";
 
@@ -640,11 +695,32 @@ export type Command = {
   decisionId: string;
   /** The changed arguments of an `edit`. */
   editedArgs?: unknown;
+  /**
+   * The digests of the images the surface showed, in the order of the card's media
+   * (spec 3.7 §8.2): an answer that lets a call with images run names the images it
+   * lets leave, and is refused when they are not the call's.
+   */
+  evidence?: string[];
   /** The surface showed the call in full (§7.1). */
   expanded?: boolean;
   /** Why, for a `deny`; reported to the agent. */
   reason?: string | null;
   type: "decide";
+  /** The card's `version`. */
+  version: number;
+} | {
+  /** The change. */
+  change: ImageChange;
+  /** The card's `id`. */
+  decisionId: string;
+  /** The digest of the image the person changed, as the card showed it. */
+  from: string;
+  /**
+   * Only make the new image and say its digest and size, holding nothing again: what
+   * the editor shows before **Use this image** (board choice A8).
+   */
+  preview?: boolean;
+  type: "changeImage";
   /** The card's `version`. */
   version: number;
 } | {
@@ -758,6 +834,16 @@ export type CommandOutcome = {
   /** The decision now. */
   card: DecisionCard;
   type: "changed";
+} | {
+  /** The image the change would make: its digest and size, and the one it replaces. */
+  changed: ImageChanged;
+  type: "imagePreview";
+} | {
+  /** The old decision. */
+  card: DecisionCard;
+  /** The image change, when an image changed. */
+  changed?: ImageChanged | null;
+  type: "heldAgain";
 } | {
   /** When it takes effect. */
   cancelUntil: string;
@@ -900,6 +986,24 @@ export interface ConfirmRequest {
 }
 
 /**
+ * What a region on an evidence image covers, by the class the egress gate redacted it as
+ * (spec 3.7 §7.8 step 3).
+ */
+export type CoverClass = "face" | "personalText" | "schemaField" | "marked" | "other";
+
+/** What was covered of one class, as a line of "Covered before it leaves". */
+export interface CoveredLine {
+  /** The class. */
+  class: CoverClass;
+  /** How many regions. */
+  count: number;
+  /** Which images, when the call sends several and not all of them: "in image 3". */
+  note?: string | null;
+  /** "1 face", "3 personal text", "2 fields your schema marks personal". */
+  text: string;
+}
+
+/**
  * A decision answered, here or elsewhere (spec 3.3 §8.1 "Decided", §11 S-I2): who answered,
  * where and how, and when.
  */
@@ -956,8 +1060,19 @@ export interface DecisionCard {
   heading: string;
   /** The inbox entry: what a command answers. Never shown. */
   id: string;
+  /**
+   * The images the call would send, keep or act on, after redaction, with what was
+   * covered, where they go and what they cost (spec 3.7 §8.2, X11). Never on a chat card,
+   * which carries the image itself or a link (S-I5).
+   */
+  media?: CardMedia | null;
   /** The call spends money. */
   money: boolean;
+  /**
+   * The run that waited on this decision ended while it still waits: the answer is kept
+   * and used when the agent picks the thread up again (spec 3.7 §8.2, board choice A12).
+   */
+  parked?: ParkedView | null;
   /** Whether it can be taken back. */
   reversibility: Reversibility;
   /** "Can't be unsent". */
@@ -1076,7 +1191,7 @@ export interface DrawnCheck {
   message: string;
 }
 
-/** Components a home view holds, presented with CSS 3D (see the [module](self)). */
+/** Components a home view holds, presented with CSS 3D, as `HomeNode::Depth`. */
 export interface DrawnDepth {
   /** How the children are presented. */
   effect: DepthEffect;
@@ -1198,7 +1313,7 @@ export interface DrawnOption {
   value: string;
 }
 
-/** A 3D scene a home view draws (see the [module](self)). */
+/** A 3D scene a home view draws, as `HomeNode::Scene`. */
 export interface DrawnScene {
   /** Named axes, ticks and a floor grid. */
   axes?: SceneAxes | null;
@@ -1329,6 +1444,64 @@ export interface EndedWork {
   work: number;
 }
 
+/** One image a held call would send, as its card shows it. */
+export interface EvidenceImage {
+  /** The feature's one-line description of it. */
+  caption?: string | null;
+  /** Every pixel of it is covered. */
+  coveredAll: boolean;
+  /**
+   * What was covered of it, in one line: "1 field your schema marks personal", "nothing
+   * covered".
+   */
+  coveredText: string;
+  /** `sha256:<hex>` of the image's bytes, in full: the exact call and the terminal show it. */
+  digest: string;
+  /** The digest in short, `sha256:c52ca5…ce7550` (board choice S4). */
+  digestShort: string;
+  /** The field it shows: "PO number". */
+  field?: string | null;
+  /** Height in pixels. */
+  height: number;
+  /**
+   * Where the surface loads the image with the viewer's own authorisation; absent when it
+   * is deleted.
+   */
+  href?: string | null;
+  /** Its place in the call's evidence: what the image route takes. */
+  index: number;
+  /** `image/png`. */
+  mimeType: string;
+  /** It is no longer kept. */
+  purged?: PurgedView | null;
+  /** The regions over it, covered before it leaves. */
+  regions: EvidenceRegion[];
+  /** "1012 × 638 PNG". */
+  sizeText: string;
+  /** Why it is sent rather than read here: "Handwriting". */
+  why?: string | null;
+  /** Width in pixels. */
+  width: number;
+}
+
+/** A region drawn over an evidence image, in the image's own pixels. */
+export interface EvidenceRegion {
+  /** The class. */
+  class: CoverClass;
+  /** The tag on a small picture: "face". */
+  shortTag: string;
+  /** The region's tag on a large picture: "face · whole person". */
+  tag: string;
+  /** Left edge, pixels. */
+  x0: number;
+  /** Right edge, pixels, exclusive. */
+  x1: number;
+  /** Top edge, pixels. */
+  y0: number;
+  /** Bottom edge, pixels, exclusive. */
+  y1: number;
+}
+
 /** One event of a session's store, numbered by its position there (spec 3.3 §6). */
 export interface FeedEntry {
   /** When. */
@@ -1403,6 +1576,16 @@ export interface GenuiCapabilities {
   protocols: ProtocolClaims[];
 }
 
+/** Where the images go, in words. */
+export interface GoesTo {
+  /** The hosts, joined: `api.anthropic.com`. */
+  host: string;
+  /** The model: `claude-sonnet-5-5`. */
+  model?: string | null;
+  /** Who receives them: "Claude". */
+  provider?: string | null;
+}
+
 /**
  * Something the home lets every agent on it do beyond its definition, because the host
  * gives each agent it runs the tools for it (spec 3.3 §5.7, S-I12, S-I13): shown under
@@ -1424,6 +1607,31 @@ export interface GrantedUse {
   text: string;
 }
 
+/**
+ * A change to an evidence image before it leaves (board choices A7, A8): the crop can only
+ * shrink and covering can only grow, so a change never shows more than the image it changes.
+ */
+export interface ImageChange {
+  /** Boxes `[x0, y0, x1, y1]` in the image's pixels to fill solid black. */
+  cover?: number[][];
+  /** The new edges `[x0, y0, x1, y1]` in the image's pixels, inside the image. */
+  crop?: number[] | null;
+  /** The image's place in the call's evidence. */
+  image: number;
+}
+
+/** What a change made: the image it replaces and the new one. */
+export interface ImageChanged {
+  /** The digest of the image the change replaces. */
+  from: string;
+  /** The new image's height. */
+  height: number;
+  /** The digest of the new image, held again for the person's decision. */
+  to: string;
+  /** The new image's width. */
+  width: number;
+}
+
 /** One of the three switches of "What it can see" (spec 3.3 §5.6). */
 export type InputSource = "mic" | "camera" | "screen";
 
@@ -1435,6 +1643,19 @@ export type LightKind = "point" | "spot" | "directional";
 
 /** A line's arrowheads. */
 export type LineEnds = "none" | "end" | "both";
+
+/** A notice on the card about its images: why nothing can be sent. */
+export interface MediaNotice {
+  /** Why it says so. */
+  kind: MediaNoticeKind;
+  /** The rest. */
+  text: string;
+  /** The lead words, in bold: "Nothing to send." */
+  title: string;
+}
+
+/** Why a card's images cannot be sent. */
+export type MediaNoticeKind = "purged" | "allCovered";
 
 /** How much agents act on their own (spec 3.3 §8.1). */
 export type Mode = "justLook" | "suggest" | "askFirst" | "goAhead";
@@ -1481,6 +1702,16 @@ export type Origin = {
   agent: string;
   kind: "agent";
 };
+
+/** A decision whose run stopped waiting for it (spec 3.7 §8.2, board choice A12). */
+export interface ParkedView {
+  /** When the run ended. */
+  at: string;
+  /** Local `HH:MM`. */
+  atText: string;
+  /** "Document desk stopped waiting at 10:24 and finished its run without this. …". */
+  text: string;
+}
 
 /**
  * `POST /surface/phone/passkey/options` answer: the options for
@@ -1553,6 +1784,18 @@ export interface ProtocolClaims {
   id: string;
   /** Its name: `A2UI`, `AG-UI`, `MCP Apps`. */
   name: string;
+}
+
+/** An evidence image that is no longer kept (board choice A13). */
+export interface PurgedView {
+  /** The day it went, "18 Dec", when its retention ran out. */
+  day?: string | null;
+  /** The shorter line a small picture shows: "Image deleted 18 Dec". */
+  short: string;
+  /** "Evidence is kept for 30 days. What it was, …". */
+  text: string;
+  /** "This image was deleted on 18 Dec". */
+  title: string;
 }
 
 /** The keys a browser gives with its push subscription. */

@@ -8,6 +8,7 @@ import { labels } from "../labels";
 export const phoneLabels = {
   decisions: words.DECISIONS,
   decided: words.DECIDED,
+  allowOnce: words.ALLOW_ONCE,
   stopAll: words.STOP_ALL,
   allStopped: words.ALL_AGENTS_STOPPED_RESUME_IN_HOME,
   aDecisionIsWaiting: words.A_DECISION_IS_WAITING,

@@ -808,6 +808,13 @@
           "editedArgs": {
             "description": "The changed arguments of an `edit`."
           },
+          "evidence": {
+            "description": "The digests of the images the device showed, for a call with images (spec 3.7 §8.2).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "expanded": {
             "default": false,
             "description": "The device showed the call in full (§7.1).",
@@ -1484,6 +1491,142 @@
         ],
         "type": "object"
       },
+      "CardMedia": {
+        "description": "A held call's images on its card (spec 3.7 §8.2, X11): what would leave, after redaction,\nwith what was covered, where it goes, what it costs, how long it is kept and why nothing\ncan be sent when that is so.",
+        "properties": {
+          "canChange": {
+            "description": "This surface may tighten the crop or add a redaction, which holds the call again with\nthe new image (board choices A7, A8).",
+            "type": "boolean"
+          },
+          "costDetail": {
+            "description": "What the cost counts: \"851 image tokens\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "costText": {
+            "description": "\"Up to $0.0044\" while waiting; \"$0.0024\" once it ran.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "covered": {
+            "description": "What was covered before they leave, by class.",
+            "items": {
+              "$ref": "#/components/schemas/CoveredLine"
+            },
+            "type": "array"
+          },
+          "coveredAll": {
+            "description": "Every pixel of every image is covered.",
+            "type": "boolean"
+          },
+          "coveredAllText": {
+            "description": "\"100% of the image\", when so.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cutFrom": {
+            "description": "What they were cut from: \"Page 2 of claim-0412.pdf\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cutNote": {
+            "description": "How: \"nothing resized\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fixedLine": {
+            "description": "The fixed line under the card (board choice A21).",
+            "type": "string"
+          },
+          "goesTo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoesTo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where they go."
+          },
+          "images": {
+            "description": "The images, in the order of the call's evidence.",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceImage"
+            },
+            "type": "array"
+          },
+          "keptText": {
+            "description": "\"Kept as evidence until 18 Dec\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MediaNotice"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why nothing can be sent, when that is so."
+          },
+          "replaces": {
+            "description": "The digest of the image a changed image replaced, when this call was held again with\na changed image.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sourceHref": {
+            "description": "Where an authorised viewer opens the source image (board choice A9).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "description": "\"The exact image that would leave\", \"The 3 images that would leave\", \"The image that\nleft\".",
+            "type": "string"
+          },
+          "what": {
+            "description": "What they are: \"Document crop\", \"3 document crops\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "whatNote": {
+            "description": "What qualifies `what`: \"never the page\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "title",
+          "images",
+          "covered",
+          "coveredAll",
+          "canChange",
+          "fixedLine"
+        ],
+        "type": "object"
+      },
       "CardStatus": {
         "description": "Where a decision is in its life.",
         "oneOf": [
@@ -1806,6 +1949,13 @@
               "editedArgs": {
                 "description": "The changed arguments of an `edit`."
               },
+              "evidence": {
+                "description": "The digests of the images the surface showed, in the order of the card's media\n(spec 3.7 §8.2): an answer that lets a call with images run names the images it\nlets leave, and is refused when they are not the call's.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "expanded": {
                 "default": false,
                 "description": "The surface showed the call in full (§7.1).",
@@ -1834,6 +1984,46 @@
               "decisionId",
               "version",
               "answer"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Tightens the crop of one of a decision's images or covers more of it, then holds the\ncall again with the new image in its place (spec 3.7 §8.2, board choice A8): the crop\nonly shrinks and covering only grows. The decision at `version` closes; the call with\nthe new image waits for the person's answer.",
+            "properties": {
+              "change": {
+                "$ref": "#/components/schemas/ImageChange",
+                "description": "The change."
+              },
+              "decisionId": {
+                "description": "The card's `id`.",
+                "type": "string"
+              },
+              "from": {
+                "description": "The digest of the image the person changed, as the card showed it.",
+                "type": "string"
+              },
+              "preview": {
+                "default": false,
+                "description": "Only make the new image and say its digest and size, holding nothing again: what\nthe editor shows before **Use this image** (board choice A8).",
+                "type": "boolean"
+              },
+              "type": {
+                "const": "changeImage",
+                "type": "string"
+              },
+              "version": {
+                "description": "The card's `version`.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "type",
+              "decisionId",
+              "version",
+              "from",
+              "change"
             ],
             "type": "object"
           },
@@ -2258,6 +2448,53 @@
               },
               "type": {
                 "const": "changed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "card"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "What a change to an image would make, held nowhere: the editor shows it before **Use\nthis image** (board choice A8).",
+            "properties": {
+              "changed": {
+                "$ref": "#/components/schemas/ImageChanged",
+                "description": "The image the change would make: its digest and size, and the one it replaces."
+              },
+              "type": {
+                "const": "imagePreview",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "changed"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The call was held again with what the person changed — its arguments, or one of its\nimages (spec 3.7 V-I5): `card` is the old decision, closed; the call waiting with the\nnew image follows in the feed.",
+            "properties": {
+              "card": {
+                "$ref": "#/components/schemas/DecisionCard",
+                "description": "The old decision."
+              },
+              "changed": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ImageChanged"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The image change, when an image changed."
+              },
+              "type": {
+                "const": "heldAgain",
                 "type": "string"
               }
             },
@@ -2725,6 +2962,68 @@
         ],
         "type": "object"
       },
+      "CoverClass": {
+        "description": "What a region on an evidence image covers, by the class the egress gate redacted it as\n(spec 3.7 §7.8 step 3).",
+        "oneOf": [
+          {
+            "const": "face",
+            "description": "A face: until a face detector is chosen, the whole person (spec 3.7 Q3).",
+            "type": "string"
+          },
+          {
+            "const": "personalText",
+            "description": "Personal text: names, emails, phone numbers and numbers like them.",
+            "type": "string"
+          },
+          {
+            "const": "schemaField",
+            "description": "A field the document schema marks personal.",
+            "type": "string"
+          },
+          {
+            "const": "marked",
+            "description": "A box the person covered.",
+            "type": "string"
+          },
+          {
+            "const": "other",
+            "description": "Another class a feature names.",
+            "type": "string"
+          }
+        ]
+      },
+      "CoveredLine": {
+        "description": "What was covered of one class, as a line of \"Covered before it leaves\".",
+        "properties": {
+          "class": {
+            "$ref": "#/components/schemas/CoverClass",
+            "description": "The class."
+          },
+          "count": {
+            "description": "How many regions.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "note": {
+            "description": "Which images, when the call sends several and not all of them: \"in image 3\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "\"1 face\", \"3 personal text\", \"2 fields your schema marks personal\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "class",
+          "count",
+          "text"
+        ],
+        "type": "object"
+      },
       "Decided": {
         "description": "A decision answered, here or elsewhere (spec 3.3 §8.1 \"Decided\", §11 S-I2): who answered,\nwhere and how, and when.",
         "properties": {
@@ -2880,9 +3179,31 @@
             "description": "The inbox entry: what a command answers. Never shown.",
             "type": "string"
           },
+          "media": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CardMedia"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The images the call would send, keep or act on, after redaction, with what was\ncovered, where they go and what they cost (spec 3.7 §8.2, X11). Never on a chat card,\nwhich carries the image itself or a link (S-I5)."
+          },
           "money": {
             "description": "The call spends money.",
             "type": "boolean"
+          },
+          "parked": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ParkedView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The run that waited on this decision ended while it still waits: the answer is kept\nand used when the agent picks the thread up again (spec 3.7 §8.2, board choice A12)."
           },
           "reversibility": {
             "$ref": "#/components/schemas/Reversibility",
@@ -3191,7 +3512,7 @@
         "type": "object"
       },
       "DrawnDepth": {
-        "description": "Components a home view holds, presented with CSS 3D (see the [module](self)).",
+        "description": "Components a home view holds, presented with CSS 3D, as `HomeNode::Depth`.",
         "properties": {
           "effect": {
             "$ref": "#/components/schemas/DepthEffect",
@@ -3495,7 +3816,7 @@
         "type": "object"
       },
       "DrawnScene": {
-        "description": "A 3D scene a home view draws (see the [module](self)).",
+        "description": "A 3D scene a home view draws, as `HomeNode::Scene`.",
         "properties": {
           "axes": {
             "anyOf": [
@@ -3815,6 +4136,159 @@
         ],
         "type": "object"
       },
+      "EvidenceImage": {
+        "description": "One image a held call would send, as its card shows it.",
+        "properties": {
+          "caption": {
+            "description": "The feature's one-line description of it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "coveredAll": {
+            "description": "Every pixel of it is covered.",
+            "type": "boolean"
+          },
+          "coveredText": {
+            "description": "What was covered of it, in one line: \"1 field your schema marks personal\", \"nothing\ncovered\".",
+            "type": "string"
+          },
+          "digest": {
+            "description": "`sha256:<hex>` of the image's bytes, in full: the exact call and the terminal show it.",
+            "type": "string"
+          },
+          "digestShort": {
+            "description": "The digest in short, `sha256:c52ca5…ce7550` (board choice S4).",
+            "type": "string"
+          },
+          "field": {
+            "description": "The field it shows: \"PO number\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "height": {
+            "description": "Height in pixels.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "href": {
+            "description": "Where the surface loads the image with the viewer's own authorisation; absent when it\nis deleted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "index": {
+            "description": "Its place in the call's evidence: what the image route takes.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mimeType": {
+            "description": "`image/png`.",
+            "type": "string"
+          },
+          "purged": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PurgedView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "It is no longer kept."
+          },
+          "regions": {
+            "description": "The regions over it, covered before it leaves.",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRegion"
+            },
+            "type": "array"
+          },
+          "sizeText": {
+            "description": "\"1012 × 638 PNG\".",
+            "type": "string"
+          },
+          "why": {
+            "description": "Why it is sent rather than read here: \"Handwriting\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "width": {
+            "description": "Width in pixels.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index",
+          "digest",
+          "digestShort",
+          "mimeType",
+          "width",
+          "height",
+          "sizeText",
+          "regions",
+          "coveredAll",
+          "coveredText"
+        ],
+        "type": "object"
+      },
+      "EvidenceRegion": {
+        "description": "A region drawn over an evidence image, in the image's own pixels.",
+        "properties": {
+          "class": {
+            "$ref": "#/components/schemas/CoverClass",
+            "description": "The class."
+          },
+          "shortTag": {
+            "description": "The tag on a small picture: \"face\".",
+            "type": "string"
+          },
+          "tag": {
+            "description": "The region's tag on a large picture: \"face · whole person\".",
+            "type": "string"
+          },
+          "x0": {
+            "description": "Left edge, pixels.",
+            "format": "double",
+            "type": "number"
+          },
+          "x1": {
+            "description": "Right edge, pixels, exclusive.",
+            "format": "double",
+            "type": "number"
+          },
+          "y0": {
+            "description": "Top edge, pixels.",
+            "format": "double",
+            "type": "number"
+          },
+          "y1": {
+            "description": "Bottom edge, pixels, exclusive.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "class",
+          "tag",
+          "shortTag",
+          "x0",
+          "y0",
+          "x1",
+          "y1"
+        ],
+        "type": "object"
+      },
       "FeedEntry": {
         "description": "One event of a session's store, numbered by its position there (spec 3.3 §6).",
         "properties": {
@@ -4065,6 +4539,33 @@
         ],
         "type": "object"
       },
+      "GoesTo": {
+        "description": "Where the images go, in words.",
+        "properties": {
+          "host": {
+            "description": "The hosts, joined: `api.anthropic.com`.",
+            "type": "string"
+          },
+          "model": {
+            "description": "The model: `claude-sonnet-5-5`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "description": "Who receives them: \"Claude\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "host"
+        ],
+        "type": "object"
+      },
       "GrantedUse": {
         "description": "Something the home lets every agent on it do beyond its definition, because the host\ngives each agent it runs the tools for it (spec 3.3 §5.7, S-I12, S-I13): shown under\n\"Here is what Finance can do\" as \"On this home it can also:\". Hosts register each with\n`SurfaceEngineBuilder::grant`.",
         "properties": {
@@ -4087,6 +4588,81 @@
         "required": [
           "id",
           "text"
+        ],
+        "type": "object"
+      },
+      "ImageChange": {
+        "description": "A change to an evidence image before it leaves (board choices A7, A8): the crop can only\nshrink and covering can only grow, so a change never shows more than the image it changes.",
+        "properties": {
+          "cover": {
+            "description": "Boxes `[x0, y0, x1, y1]` in the image's pixels to fill solid black.",
+            "items": {
+              "items": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 4,
+              "minItems": 4,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "crop": {
+            "description": "The new edges `[x0, y0, x1, y1]` in the image's pixels, inside the image.",
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "image": {
+            "description": "The image's place in the call's evidence.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "image"
+        ],
+        "type": "object"
+      },
+      "ImageChanged": {
+        "description": "What a change made: the image it replaces and the new one.",
+        "properties": {
+          "from": {
+            "description": "The digest of the image the change replaces.",
+            "type": "string"
+          },
+          "height": {
+            "description": "The new image's height.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "to": {
+            "description": "The digest of the new image, held again for the person's decision.",
+            "type": "string"
+          },
+          "width": {
+            "description": "The new image's width.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "width",
+          "height"
         ],
         "type": "object"
       },
@@ -4166,6 +4742,44 @@
           {
             "const": "both",
             "description": "At both ends.",
+            "type": "string"
+          }
+        ]
+      },
+      "MediaNotice": {
+        "description": "A notice on the card about its images: why nothing can be sent.",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/MediaNoticeKind",
+            "description": "Why it says so."
+          },
+          "text": {
+            "description": "The rest.",
+            "type": "string"
+          },
+          "title": {
+            "description": "The lead words, in bold: \"Nothing to send.\"",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "title",
+          "text"
+        ],
+        "type": "object"
+      },
+      "MediaNoticeKind": {
+        "description": "Why a card's images cannot be sent.",
+        "oneOf": [
+          {
+            "const": "purged",
+            "description": "The image was deleted (board choice A13).",
+            "type": "string"
+          },
+          {
+            "const": "allCovered",
+            "description": "Every pixel is covered (board choice A15).",
             "type": "string"
           }
         ]
@@ -4359,6 +4973,30 @@
           }
         ]
       },
+      "ParkedView": {
+        "description": "A decision whose run stopped waiting for it (spec 3.7 §8.2, board choice A12).",
+        "properties": {
+          "at": {
+            "description": "When the run ended.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "atText": {
+            "description": "Local `HH:MM`.",
+            "type": "string"
+          },
+          "text": {
+            "description": "\"Document desk stopped waiting at 10:24 and finished its run without this. …\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "atText",
+          "text"
+        ],
+        "type": "object"
+      },
       "PasskeyOptions": {
         "description": "`POST /surface/phone/passkey/options` answer: the options for\n`navigator.credentials.create`, as WebAuthn's JSON form gives them (spec 3.3 §8.2).",
         "properties": {
@@ -4531,6 +5169,36 @@
           "id",
           "name",
           "claims"
+        ],
+        "type": "object"
+      },
+      "PurgedView": {
+        "description": "An evidence image that is no longer kept (board choice A13).",
+        "properties": {
+          "day": {
+            "description": "The day it went, \"18 Dec\", when its retention ran out.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "short": {
+            "description": "The shorter line a small picture shows: \"Image deleted 18 Dec\".",
+            "type": "string"
+          },
+          "text": {
+            "description": "\"Evidence is kept for 30 days. What it was, …\".",
+            "type": "string"
+          },
+          "title": {
+            "description": "\"This image was deleted on 18 Dec\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "text",
+          "short"
         ],
         "type": "object"
       },
@@ -7729,6 +8397,93 @@
           }
         },
         "summary": "Starts Confirm it's you for one answer, bound to the decision, its version and the edited arguments; feature mobile (spec 3.3 §8.2)"
+      }
+    },
+    "/api/surface/decisions/{id}/evidence/{index}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The image's place in the card's `media.images`",
+            "in": "path",
+            "name": "index",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The surface asking",
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": null
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The image"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "One image a decision holds as evidence (spec 3.7 §8.2): the exact bytes whose digest the card shows, for a viewer who may see the decision; never cached"
       }
     },
     "/api/surface/decisions/{id}/take-over": {
