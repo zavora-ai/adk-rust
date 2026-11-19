@@ -34,6 +34,8 @@ libc = "0.2"
 adk-vision = { workspace = true, optional = true }
 # Scales the latency image to each input size.
 image = { version = "0.25", default-features = false, optional = true }
+# The onnxruntime build the ONNX rows ran on, for the report (`vision-onnx`).
+ort = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -46,7 +48,7 @@ bfcl = []
 # features below.
 vision = ["dep:adk-vision", "adk-vision/eval", "dep:image"]
 # RF-DETR, EfficientSAM, SAM 2.1 and SigLIP 2 on ONNX Runtime.
-vision-onnx = ["vision", "adk-vision/onnx"]
+vision-onnx = ["vision", "adk-vision/onnx", "dep:ort"]
 # The ONNX backends on CoreML (Apple).
 vision-coreml = ["vision-onnx", "adk-vision/onnx-coreml"]
 # PP-OCRv6 tiny and small.

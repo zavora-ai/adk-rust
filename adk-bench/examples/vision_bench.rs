@@ -74,7 +74,7 @@ fn runtime_versions(machine: MachineInfo) -> MachineInfo {
     let lock = Path::new(env!("CARGO_MANIFEST_DIR")).join("../Cargo.lock");
     let text = std::fs::read_to_string(lock).unwrap_or_default();
     let mut machine = machine;
-    for name in ["ort", "oar-ocr", "oar-ocr-vl", "candle-core", "image", "tokenizers"] {
+    for name in ["ort", "oar-ocr", "oar-ocr-vl", "image", "tokenizers"] {
         let needle = format!("name = \"{name}\"\nversion = \"");
         if let Some(at) = text.find(&needle) {
             let rest = &text[at + needle.len()..];
@@ -83,32 +83,11 @@ fn runtime_versions(machine: MachineInfo) -> MachineInfo {
             }
         }
     }
-    if let Some(version) = onnxruntime_version() {
+    #[cfg(feature = "vision-onnx")]
+    if let Some(version) = backends::onnxruntime_version() {
         machine = machine.with_runtime("onnxruntime", version);
     }
     machine.with_runtime("profile", if cfg!(debug_assertions) { "debug" } else { "optimised" })
-}
-
-/// The onnxruntime library version, from the versioned library `ort` copies beside the binary.
-fn onnxruntime_version() -> Option<String> {
-    let exe = std::env::current_exe().ok()?;
-    let mut dirs = vec![exe.parent()?.to_path_buf()];
-    dirs.extend(exe.parent()?.parent().map(Path::to_path_buf));
-    for dir in dirs {
-        for entry in std::fs::read_dir(dir).ok()?.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let version = name
-                .strip_prefix("libonnxruntime.")
-                .and_then(|rest| rest.strip_suffix(".dylib"))
-                .or_else(|| name.strip_prefix("libonnxruntime.so."));
-            if let Some(v) =
-                version.filter(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
-            {
-                return Some(v.to_string());
-            }
-        }
-    }
-    None
 }
 
 async fn run(args: &[String]) -> Result<(), String> {

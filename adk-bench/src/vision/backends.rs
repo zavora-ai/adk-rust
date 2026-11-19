@@ -164,6 +164,14 @@ async fn fetch(id: &str) -> Result<adk_vision::VerifiedModel> {
     fetcher().fetch(manifest).await.map_err(super::vision_error)
 }
 
+/// The onnxruntime release this build links, such as `1.28.0`, from its build info.
+#[cfg(feature = "vision-onnx")]
+pub fn onnxruntime_version() -> Option<String> {
+    let info = ort::info();
+    let release = info.split("git-branch=rel-").nth(1)?;
+    Some(release.split([',', ' ']).next()?.to_string())
+}
+
 /// The ONNX execution provider from `ADK_VISION_ONNX_EP` (`cpu`, `coreml`, `cuda`).
 #[cfg(feature = "vision-onnx")]
 pub fn onnx_options() -> adk_vision::onnx::OnnxOptions {
