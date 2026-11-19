@@ -793,7 +793,9 @@ async fn redactors(
                  models fetch {PERSON_DETECTOR}`"
             )
         })?;
-        let detector = RfDetr::new(&model, &OnnxOptions::default())?;
+        // The redactor covers every person scoring 0.25 or more; RF-DETR reports from 0.5 by
+        // default, so the detector reports down to the redactor's floor.
+        let detector = RfDetr::new(&model, &OnnxOptions::default())?.with_threshold(0.25);
         gate = gate.with_redactor(Arc::new(PersonRedactor::new(Arc::new(detector))));
     }
     if classes.contains(&RedactionClass::personal_text()) {

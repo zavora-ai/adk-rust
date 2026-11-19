@@ -15,9 +15,11 @@ for identity cards, the portrait box.
 """
 
 import json
+import os
+import random
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 HERE = Path(__file__).parent
 FONTS = Path("/System/Library/Fonts/Supplemental")
@@ -31,7 +33,7 @@ REGULAR = font("Arial.ttf", 26)
 SMALL = font("Arial.ttf", 18)
 BOLD = font("Arial Bold.ttf", 26)
 TITLE = font("Arial Bold.ttf", 40)
-HAND = font("Bradley Hand Bold.ttf", 36)
+HAND_FONT = "SnellRoundhand.ttc"
 STAMP = font("Arial Black.ttf", 64)
 
 FIRST = ["Amara", "Bruno", "Chen", "Dalia", "Emeka", "Farah", "Goran", "Hana", "Ivo", "Juno",
@@ -43,6 +45,12 @@ STORES = ["Larch Street Market", "Harbour Hardware", "Copperleaf Books", "Junipe
           "Ember Grill", "Cedar Lane Grocers", "Tidewater Fish Co", "Maple Print Shop"]
 ITEMS = ["Torque sensor", "Fiducial card", "Seal kit", "Gasket set", "Cable ties",
          "Bearing pack", "Relay module", "Hex bolts", "Thermal paste", "Pressure gauge"]
+# The draw of each hard field, chosen so PP-OCRv6 tiny reads it as one block below the
+# desk's 0.8 threshold while every printed block on every page stays above 0.85.
+SEEDS = json.loads(os.environ.get("DOC_SEEDS", "null")) or {
+    "invoice-05.png": 0, "invoice-09.png": 0, "receipt-03.png": 0, "receipt-07.png": 0,
+    "contract-04.png": 0,
+}
 GOODS = ["Bread", "Coffee", "Notebook", "Batteries", "Tape", "Apples", "Soap", "Pens", "Rice"]
 
 
@@ -80,23 +88,38 @@ class Page:
         return box
 
     def handwritten(self, xy, name, value):
-        box = self.text(xy, value, HAND, fill=(20, 30, 120))
+        """A hurried pen: each glyph turned, lifted and sized by hand, the ink soft at the
+        edges. Returns the ink's box."""
+        rnd = random.Random(f"{value}:{SEEDS.get(self.file, 0)}")
+        layer = Image.new("RGBA", (60 * len(value) + 40, 140), (0, 0, 0, 0))
+        x = 10
+        for ch in value:
+            glyph = Image.new("RGBA", (90, 120), (0, 0, 0, 0))
+            size = int(40 * rnd.uniform(0.85, 1.2))
+            ImageDraw.Draw(glyph).text((15, 15), ch, font=font(HAND_FONT, size), fill=(20, 30, 120, 255))
+            glyph = glyph.rotate(rnd.uniform(-28, 28), resample=Image.BICUBIC)
+            layer.paste(glyph, (x, int(rnd.uniform(-3, 3)) + 10), glyph)
+            x += int(size * rnd.uniform(0.48, 0.56))
+        layer = layer.crop(layer.getbbox()).filter(ImageFilter.GaussianBlur(1.6))
+        self.image.paste(layer, xy, layer)
+        box = [xy[0], xy[1], xy[0] + layer.width, xy[1] + layer.height]
         self.field(name, value, box, hard="handwriting")
         return box
 
-    def stamp(self, centre, word, name):
-        """A red rubber stamp, rotated and half transparent, over the field `name`."""
+    def stamp(self, word, name):
+        """A red rubber stamp, turned and half transparent, over the field `name`."""
+        rnd = random.Random(f"{word}:{SEEDS.get(self.file, 0)}")
         layer = Image.new("RGBA", (420, 160), (0, 0, 0, 0))
         d = ImageDraw.Draw(layer)
-        d.rectangle([6, 6, 413, 153], outline=(200, 20, 30, 190), width=8)
+        d.rectangle([6, 6, 413, 153], outline=(200, 20, 30, 225), width=10)
         w = d.textlength(word, font=STAMP)
-        d.text(((420 - w) / 2, 34), word, fill=(200, 20, 30, 170), font=STAMP)
-        layer = layer.rotate(-14, expand=True, resample=Image.BICUBIC)
-        x, y = centre[0] - layer.width // 2, centre[1] - layer.height // 2
-        self.image.paste(layer, (x, y), layer)
-        for f in self.fields:
-            if f["name"] == name:
-                f["hard"] = "stamp"
+        d.text(((420 - w) / 2, 34), word, fill=(200, 20, 30, 215), font=STAMP)
+        layer = layer.rotate(rnd.uniform(-20, -6), expand=True, resample=Image.BICUBIC)
+        field = next(f for f in self.fields if f["name"] == name)
+        x0, y0, x1, y1 = field["box"]
+        centre = ((x0 + x1) / 2 + rnd.uniform(-40, 40), (y0 + y1) / 2 + rnd.uniform(-30, 30))
+        self.image.paste(layer, (int(centre[0] - layer.width / 2), int(centre[1] - layer.height / 2)), layer)
+        field["hard"] = "stamp"
 
     def save(self):
         self.image.save(HERE / self.file, optimize=True)
@@ -139,12 +162,12 @@ def invoice(n, i):
     y = top + len(rows) * row + 40
     if n == 5:
         page.text((480, y), "Total:", BOLD)
-        page.handwritten((580, y - 8), "total", total_text)
+        page.handwritten((580, y - 14), "total", total_text)
     else:
         page.labelled((480, y), "Total", "total", total_text, BOLD)
     page.text((60, 960), "Thank you for your order.", SMALL)
     if n == 9:
-        page.stamp((620, 150), "PAID", "date")
+        page.stamp("PAID", "date")
     return page.save()
 
 
@@ -169,8 +192,7 @@ def receipt(n, i):
     total_text = f"{total:.2f}"
     page.text((40, y + 40), "TOTAL", BOLD)
     if n in (3, 7):
-        w = page.draw.textlength(total_text, font=HAND)
-        page.handwritten((480 - w, y + 30), "total", total_text)
+        page.handwritten((360, y + 24), "total", total_text)
     else:
         w = page.draw.textlength(total_text, font=BOLD)
         box = page.text((480 - w, y + 40), total_text, BOLD)
@@ -208,28 +230,53 @@ def contract(n, i):
     page.personal.append(email)
     page.text((60, 900), "Signed for Zavoria Parts Ltd", SMALL)
     if n == 4:
-        page.stamp((480, top + 3 * row + 30), "APPROVED", "fee")
+        page.stamp("APPROVED", "fee")
     return page.save()
 
 
+def radial(size, inner, outer):
+    """An ellipse shaded from `inner` at its centre to `outer` at its rim."""
+    w, h = size
+    tile = Image.new("RGB", size, outer)
+    draw = ImageDraw.Draw(tile)
+    for i in range(40):
+        t = i / 40
+        colour = tuple(int(outer[k] + (inner[k] - outer[k]) * t) for k in range(3))
+        draw.ellipse([w * t / 2, h * t / 2, w - w * t / 2, h - h * t / 2], fill=colour)
+    return tile
+
+
 def portrait(image, box, hue):
-    """A drawn head and shoulders, clipped to its frame: generated, not anyone's photograph."""
+    """A drawn head and shoulders, shaded and softened like a photograph and clipped to its
+    frame: generated, not anyone's likeness."""
     x0, y0, x1, y1 = box
     w, h = x1 - x0, y1 - y0
-    tile = Image.new("RGB", (w, h), (220, 226, 235))
+    skin = [(232, 190, 160), (198, 146, 112), (156, 106, 76), (240, 205, 175)][hue % 4]
+    shade = tuple(max(0, c - 42) for c in skin)
+    hair = [(55, 38, 28), (20, 20, 22), (120, 80, 40), (70, 66, 62)][hue % 4]
+    shirt = [(52, 70, 98), (120, 50, 50), (50, 100, 72), (80, 80, 96)][hue % 4]
+    tile = Image.new("RGB", (w, h), (205, 214, 226))
     draw = ImageDraw.Draw(tile)
-    cx = w // 2
-    skin = [(234, 192, 150), (198, 140, 100), (150, 100, 70), (240, 205, 170)][hue % 4]
-    shirt = [(60, 110, 160), (150, 60, 60), (60, 130, 90), (90, 90, 110)][hue % 4]
-    hair = [(70, 45, 30), (20, 20, 20), (120, 80, 40), (60, 60, 60)][hue % 4]
-    draw.ellipse([cx - w * 0.46, h * 0.68, cx + w * 0.46, h * 1.5], fill=shirt)
-    draw.rectangle([cx - w * 0.08, h * 0.52, cx + w * 0.08, h * 0.72], fill=skin)
-    draw.ellipse([cx - w * 0.24, h * 0.14, cx + w * 0.24, h * 0.6], fill=skin)
-    draw.chord([cx - w * 0.26, h * 0.1, cx + w * 0.26, h * 0.44], 180, 360, fill=hair)
-    draw.ellipse([cx - w * 0.12, h * 0.32, cx - w * 0.06, h * 0.36], fill=(30, 30, 30))
-    draw.ellipse([cx + w * 0.06, h * 0.32, cx + w * 0.12, h * 0.36], fill=(30, 30, 30))
-    draw.arc([cx - w * 0.08, h * 0.42, cx + w * 0.08, h * 0.5], 20, 160, fill=(150, 60, 50), width=3)
-    image.paste(tile, (x0, y0))
+    draw.polygon([(10, h), (25, h * 0.78), (w * 0.35, h * 0.68), (w * 0.65, h * 0.68),
+                  (w - 25, h * 0.78), (w - 10, h)], fill=shirt)
+    draw.polygon([(w * 0.42, h * 0.68), (w / 2, h * 0.8), (w * 0.58, h * 0.68)], fill=(230, 230, 235))
+    draw.rectangle([w * 0.43, h * 0.55, w * 0.57, h * 0.7], fill=shade)
+    face = radial((int(w * 0.46), int(h * 0.5)), skin, shade)
+    mask = Image.new("L", face.size, 0)
+    ImageDraw.Draw(mask).ellipse([0, 0, face.size[0], face.size[1]], fill=255)
+    tile.paste(face, (int(w * 0.27), int(h * 0.12)), mask)
+    draw.ellipse([w * 0.24, h * 0.3, w * 0.31, h * 0.42], fill=shade)
+    draw.ellipse([w * 0.69, h * 0.3, w * 0.76, h * 0.42], fill=shade)
+    draw.chord([w * 0.25, h * 0.07, w * 0.75, h * 0.42], 180, 360, fill=hair)
+    draw.rectangle([w * 0.25, h * 0.2, w * 0.3, h * 0.34], fill=hair)
+    draw.rectangle([w * 0.7, h * 0.2, w * 0.75, h * 0.34], fill=hair)
+    for ex in (0.4, 0.6):
+        draw.ellipse([w * ex - 8, h * 0.33 - 4, w * ex + 8, h * 0.33 + 4], fill=(245, 245, 245))
+        draw.ellipse([w * ex - 4, h * 0.33 - 4, w * ex + 4, h * 0.33 + 4], fill=(60, 40, 30))
+        draw.line([w * ex - 10, h * 0.29, w * ex + 10, h * 0.285], fill=hair, width=3)
+    draw.line([w / 2, h * 0.36, w * 0.47, h * 0.45, w * 0.52, h * 0.46], fill=shade, width=3)
+    draw.arc([w * 0.42, h * 0.46, w * 0.58, h * 0.54], 20, 160, fill=(150, 70, 70), width=4)
+    image.paste(tile.filter(ImageFilter.GaussianBlur(1.2)), (x0, y0))
     ImageDraw.Draw(image).rectangle(box, outline=(140, 160, 190), width=2)
 
 
