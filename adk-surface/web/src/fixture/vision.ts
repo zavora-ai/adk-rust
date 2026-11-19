@@ -64,7 +64,7 @@ function image(id: string, index: number, url: string, fields: Partial<EvidenceI
   };
 }
 
-const EGRESS = "sha256:bd2be2a4b8a3a4f6d0b0a1fd0c8d7d6c9e8b5f4a3c2d1e0f9a8b7c6d5e4f3a29";
+const EGRESS = "sha256:6b644f480a4058281fbdb2f2e67821a69f702ea65f7c70552289a6add1f31c7c";
 
 /** The identity card's egress copy, as the gate drew it: the portrait and personal text covered. */
 function cardImage(id: string): EvidenceImage {
@@ -72,15 +72,16 @@ function cardImage(id: string): EvidenceImage {
     digest: EGRESS,
     width: 600,
     height: 380,
-    caption: "to api.anthropic.com as document_crop · 1 face · the whole person is covered, 5 personal details covered",
-    coveredText: "1 face, 5 personal text",
+    caption: "to api.anthropic.com as document_crop · 1 face · the whole person is covered, 6 personal details covered",
+    coveredText: "1 face, 6 personal text",
     regions: [
-      { class: "face", tag: "face · whole person", shortTag: "face", x0: 8, y0: 74, x1: 188, y1: 302 },
-      { class: "personalText", tag: "personal text", shortTag: "text", x0: 268, y0: 80, x1: 422, y1: 103 },
-      { class: "personalText", tag: "personal text", shortTag: "text", x0: 266, y0: 124, x1: 481, y1: 147 },
-      { class: "personalText", tag: "personal text", shortTag: "text", x0: 272, y0: 168, x1: 397, y1: 191 },
-      { class: "personalText", tag: "personal text", shortTag: "text", x0: 268, y0: 212, x1: 382, y1: 235 },
-      { class: "personalText", tag: "personal text", shortTag: "text", x0: 216, y0: 80, x1: 264, y1: 102 },
+      { class: "face", tag: "face · whole person", shortTag: "face", x0: 6, y0: 72, x1: 190, y1: 304 },
+      { class: "personalText", tag: "personal text", shortTag: "text", x0: 266, y0: 78, x1: 306, y1: 105 },
+      { class: "personalText", tag: "personal text", shortTag: "text", x0: 306, y0: 78, x1: 378, y1: 105 },
+      { class: "personalText", tag: "personal text", shortTag: "text", x0: 379, y0: 78, x1: 424, y1: 105 },
+      { class: "personalText", tag: "personal text", shortTag: "text", x0: 264, y0: 122, x1: 483, y1: 149 },
+      { class: "personalText", tag: "personal text", shortTag: "text", x0: 270, y0: 166, x1: 399, y1: 193 },
+      { class: "personalText", tag: "personal text", shortTag: "text", x0: 266, y0: 210, x1: 384, y1: 237 },
     ],
   });
 }
@@ -93,11 +94,11 @@ function media(id: string, overrides: Partial<CardMedia> = {}): CardMedia {
     what: "Document crop",
     covered: [
       { class: "face", count: 1, text: "1 face" },
-      { class: "personalText", count: 5, text: "5 personal text" },
+      { class: "personalText", count: 6, text: "6 personal text" },
     ],
     coveredAll: false,
-    costText: "Up to $0.0068",
-    costDetail: "304 image tokens",
+    costText: "Up to $0.0070",
+    costDetail: "308 image tokens",
     cutFrom: "id-card.png",
     cutNote: "nothing resized",
     keptText: `Kept as evidence until ${day(30)}`,
@@ -316,7 +317,7 @@ export function visionCard(state: VisionState): DecisionCard {
           title: "The image that left",
           images: [sent],
           costText: "$0.0024",
-          costDetail: "304 image tokens, 63 answer tokens",
+          costDetail: "308 image tokens, 63 answer tokens",
           keptText: `As evidence until ${day(30)}`,
           canChange: false,
           replaces: changed ? EGRESS : null,

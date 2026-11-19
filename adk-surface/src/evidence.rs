@@ -770,6 +770,7 @@ pub(crate) fn evidence_href(id: &str, index: usize) -> String {
 }
 
 /// Where decision `id` opens in the web home: `/ui/decisions/<id>`.
+#[cfg(feature = "tui")]
 pub(crate) fn decision_path(id: &str) -> String {
     format!("/ui/decisions/{}", percent_segment(id))
 }

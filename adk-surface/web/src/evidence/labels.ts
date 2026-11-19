@@ -51,7 +51,7 @@ export const evidenceLabels = {
   newDigestPending: "Made when you change something",
   editorHint: "Drag the edges to cut the image smaller. Draw a box to cover more of it. You can cover more, never less.",
   editorNote:
-    "The new image is saved and recorded. The call is then held again with it, and only the new image can be sent.",
+    "The new image is saved and recorded. The call is then held again with it, and only the new image can be sent. The egress gate covers it again before it leaves, so the new card names the digest that would leave.",
   useThisImage: "Use this image",
   heldAgain: (to: string, from: string) => `Held again with ${to}, which replaces ${from}. Answer the new card.`,
   cropHandle: (edge: string) => `Move the ${edge} edge`,
