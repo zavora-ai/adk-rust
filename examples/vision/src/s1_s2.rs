@@ -51,7 +51,6 @@ pub struct Extracted {
     pub correct: bool,
     pub bbox: Option<BBox>,
     pub backend: String,
-    pub escalated_from: Option<String>,
     pub hard: bool,
 }
 
@@ -118,8 +117,7 @@ fn extract(page: &Page, digest: Digest, answer: &Value) -> Vec<Extracted> {
                 .filter_map(|b| texts.get(&b["line"].as_u64().unwrap_or(0)).cloned())
                 .collect::<Vec<_>>()
                 .join(" ");
-            let escalated_from =
-                hits.iter().find_map(|b| b["escalatedFrom"].as_str().map(str::to_string));
+            let escalated = hits.iter().any(|b| b["escalatedFrom"].is_string());
             let bbox = hits.iter().filter_map(|b| bbox_of(&b["box"])).reduce(|a, b| {
                 BBox::new(a.x0.min(b.x0), a.y0.min(b.y0), a.x1.max(b.x1), a.y1.max(b.y1))
             });
@@ -132,8 +130,7 @@ fn extract(page: &Page, digest: Digest, answer: &Value) -> Vec<Extracted> {
                 correct: !read.is_empty() && normalise(&read).contains(&normalise(&field.value)),
                 read,
                 bbox,
-                backend: if escalated_from.is_some() { NIM_READER_ID } else { LOCAL }.to_string(),
-                escalated_from,
+                backend: if escalated { NIM_READER_ID } else { LOCAL }.to_string(),
                 hard: field.hard.is_some(),
             }
         })

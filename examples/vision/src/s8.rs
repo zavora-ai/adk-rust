@@ -2,7 +2,7 @@
 //! device), PaddleOCR-VL-1.6 (its recorded page; its 1.9 GB weights do not fit CI) and NVIDIA
 //! NIM's CV endpoints (recorded responses through the real client), and one `vision_detect`
 //! shape for RF-DETR Nano (on the device, COCO's closed classes) and `sam-3.1` (open
-//! vocabulary, a recorded live response) on drawn shapes. Each
+//! vocabulary, a recorded live response) asked for one COCO class on a drawn scene. Each
 //! answer matches the published schema; accuracy, latency and cost are reported side by
 //! side; the backends that run here pass the conformance suite.
 
@@ -167,12 +167,13 @@ pub async fn run() -> Result<Checks> {
     let report = std::fs::read(crate_fixtures().join("documents").join(DOC_PAGE))?;
     save(&artifacts, DOC_PAGE, report).await?;
     let card = page("id-card-01.png")?;
-    let shapes = std::fs::read(crate_fixtures().join("cloud/shapes-960x540.png"))?;
-    save(&artifacts, "shapes.png", shapes).await?;
+    // A drawn stop sign: a class RF-DETR's closed vocabulary holds, so both detectors can answer.
+    let scene = std::fs::read(crate_fixtures().join("eval/scene-1024x640.png"))?;
+    save(&artifacts, "scene.png", scene).await?;
 
     let nim_server = nim_server().await?;
     let sam_server = MockServer::start().await;
-    let sam_recording = crate_fixtures().join("cloud/recorded/sam-3-1.shapes-red-rectangle.json");
+    let sam_recording = crate_fixtures().join("cloud/recorded/sam-3-1.scene-stop-sign.json");
     serve_always(&sam_server, &Recording::load(&sam_recording)?).await;
     let sam = SamSegmenter::new(
         SamConfig::new("recorded").with_base_url(format!("{}/v1", sam_server.uri())),
@@ -212,7 +213,7 @@ pub async fn run() -> Result<Checks> {
     for backend in detectors {
         script.push(ScriptedResponse::function_call(
             "vision_detect",
-            json!({ "image": "shapes.png", "backend": backend, "classes": ["red rectangle"] }),
+            json!({ "image": "scene.png", "backend": backend, "classes": ["stop sign"] }),
         ));
         script.push(ScriptedResponse::text("Found."));
     }
@@ -247,7 +248,7 @@ pub async fn run() -> Result<Checks> {
     }
     let mut detect_answers = Vec::new();
     for backend in detectors {
-        let events = desk.send(&format!("Find the red rectangle with {backend}.")).await?;
+        let events = desk.send(&format!("Find the stop sign with {backend}.")).await?;
         let answer =
             tool_responses(&events, "vision_detect").into_iter().next().unwrap_or(Value::Null);
         detect_answers.push((backend, answer));
@@ -323,14 +324,14 @@ pub async fn run() -> Result<Checks> {
 
     // Side by side: accuracy, latency and cost per backend.
     let calls = desk.records("vision.call");
-    let shapes_truth = read_json(&crate_fixtures().join("cloud/shapes-960x540.groundtruth.json"))?;
-    let rectangle = shapes_truth["objects"]
+    let scene_truth = read_json(&crate_fixtures().join("eval/scene-1024x640.groundtruth.json"))?;
+    let stop_sign = scene_truth["objects"]
         .as_array()
         .into_iter()
         .flatten()
-        .find(|o| o["label"] == "red rectangle")
+        .find(|o| o["label"] == "stop sign")
         .and_then(|o| crate::fixtures::bbox_of(&o["bbox"]))
-        .context("the red rectangle's ground truth")?;
+        .context("the stop sign's ground truth")?;
     let mut table = Vec::new();
     for (backend, answer) in &read_answers {
         let record = calls.iter().find(|c| c.ext["backend"] == *backend);
@@ -351,10 +352,10 @@ pub async fn run() -> Result<Checks> {
             .into_iter()
             .flatten()
             .filter_map(|r| crate::fixtures::bbox_of(&r["box"]))
-            .map(|b| b.iou(&rectangle))
+            .map(|b| b.iou(&stop_sign))
             .fold(0.0, f32::max);
         table.push(format!(
-            "{backend}: red rectangle IoU {best:.2}, {} ms, {} µUSD",
+            "{backend}: stop sign IoU {best:.2}, {} ms, {} µUSD",
             record.and_then(|c| c.ext["durationMs"].as_u64()).unwrap_or(0),
             record.and_then(|c| c.ext.get("costMicroUsd")).and_then(Value::as_u64).unwrap_or(0),
         ));
