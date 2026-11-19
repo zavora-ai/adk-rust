@@ -96,7 +96,7 @@ fn runtime_versions(machine: MachineInfo) -> MachineInfo {
 }
 
 async fn run(args: &[String]) -> Result<(), String> {
-    let machine = runtime_versions(MachineInfo::detect());
+    let mut machine = runtime_versions(MachineInfo::detect());
     let mut config = VisionBenchConfig::default();
     if let Some(runs) = option(args, "--runs") {
         config.runs = runs.parse().map_err(|e| format!("--runs: {e}"))?;
@@ -161,6 +161,18 @@ async fn run(args: &[String]) -> Result<(), String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
         let earlier: VisionBenchReport =
             serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+        // The machine table describes the run being appended to; each appended row notes the
+        // load its own run started under.
+        if let Some(load) = &machine.load_average {
+            for row in &mut rows {
+                row.notes.push(format!("load average {load} at its start"));
+            }
+        }
+        let mut base = earlier.machine;
+        for (name, version) in std::mem::take(&mut machine.runtimes) {
+            base.runtimes.entry(name).or_insert(version);
+        }
+        machine = base;
         config = earlier.config;
         rows = earlier.rows.into_iter().chain(rows).collect();
     }
