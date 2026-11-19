@@ -2665,7 +2665,11 @@ fn a_decision_with_an_image_shows_its_digest_regions_and_link() {
     let mut renderer = Renderer::new(Theme::new(Appearance::Light, true));
     renderer.home = app.home.clone();
     let mut terminal = Terminal::new(TestBackend::new(130, 60)).unwrap();
-    terminal.draw(|frame| renderer.draw(frame, &app, shown + ARM_DELAY * 4)).unwrap();
+    terminal
+        .draw(|frame| {
+            renderer.draw(frame, &app, shown + ARM_DELAY * 4);
+        })
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let screen: Vec<String> = (0..60)
         .map(|y| (0..130).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
