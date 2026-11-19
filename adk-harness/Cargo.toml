@@ -89,6 +89,9 @@ browser = ["dep:adk-browser", "web"]
 computer-use = ["dep:adk-computer-use", "graph"]
 # The payments pack (spec 3.1 §7.16): `adk-auth` for the scope guard its tools run under.
 payments = ["dep:adk-payments", "dep:adk-auth"]
+# The vision pack (spec 3.7 X15): adk-vision's governed tools, the `.adk/vision.toml` egress
+# rules and the image privacy guardrail on by default; `web` for the untrusted-text screening.
+vision = ["web", "dep:adk-vision", "adk-vision/guardrail"]
 # The voice surface (spec 3.1 §7.17): the harness as the agent of an `IntegratedRealtimeRunner`.
 voice = ["dep:adk-realtime", "adk-realtime/integration"]
 # The managed form (spec 3.1 §7.18): adk-managed runs on adk-runner and adk-session already.
@@ -143,6 +146,7 @@ adk-browser = { workspace = true, optional = true }
 adk-computer-use = { workspace = true, optional = true }
 adk-payments = { workspace = true, optional = true }
 adk-realtime = { workspace = true, optional = true }
+adk-vision = { workspace = true, optional = true }
 adk-managed = { workspace = true, optional = true }
 adk-kernel = { workspace = true, optional = true }
 adk-site = { workspace = true, optional = true }
@@ -202,6 +206,8 @@ keyring = { version = "3.6.3", default-features = false, features = ["async-secr
 
 [dev-dependencies]
 adk-telemetry = { path = "../adk-telemetry" }
+# The vision pack tests keep the identity card as a session artifact.
+adk-artifact = { path = "../adk-artifact" }
 # The `Checkpointer` conformance suite, run against `SealedCheckpointer`.
 adk-graph = { path = "../adk-graph", features = ["conformance"] }
 # `anthropic` for the live confirmation-wait run (spec 3.3 §10 C2) and the live take-over
@@ -243,5 +249,5 @@ path = "tests/integration.rs"
 features = ["acp-server", "ambient", "auth", "browser", "computer-use", "docker", "encrypted",
     "firestore", "graph", "hooks", "kernel", "managed", "mcp", "memory", "memory-embeddings",
     "memory-graph", "mongodb", "neo4j", "observe", "payments", "postgres", "redis", "runner",
-    "sandbox", "skills", "skills-registry", "sqlite", "team", "team-a2a", "team-acp", "voice",
-    "web", "website"]
+    "sandbox", "skills", "skills-registry", "sqlite", "team", "team-a2a", "team-acp", "vision",
+    "voice", "web", "website"]

@@ -261,6 +261,15 @@ impl VisionToolset {
             .is_some_and(|plan| plan.is_remote())
     }
 
+    /// What the egress rules say about a call of `tool` with `args`: `None` for a call that
+    /// stays on the device (or does not parse), else the rule's action for its destination
+    /// and data class. A harness classes the call by it (spec 3.7 X15).
+    pub fn egress_action(&self, tool: &str, args: &Value) -> Option<EgressAction> {
+        let kind = VisionToolKind::from_name(tool)?;
+        let plan = self.inner.plan(kind, args).ok()?;
+        self.inner.egress_action(&plan).map(|(action, _)| action)
+    }
+
     /// The `BeforeToolCallback` that stages what a remote call would send, so the call is
     /// held with the exact egress image (spec 3.7 S4).
     ///

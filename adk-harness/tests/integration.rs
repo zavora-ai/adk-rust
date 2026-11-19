@@ -60,6 +60,7 @@ mod operator_policy_tests;
 mod pack_browser_tests;
 mod pack_computer_use_tests;
 mod pack_managed_tests;
+mod pack_vision_tests;
 mod payments_tests;
 mod personal_preset_tests;
 mod plan_graph_tests;

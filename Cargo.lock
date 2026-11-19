@@ -753,6 +753,7 @@ version = "3.0.0"
 dependencies = [
  "adk-acp",
  "adk-agent",
+ "adk-artifact",
  "adk-auth",
  "adk-awp",
  "adk-browser",
@@ -779,6 +780,7 @@ dependencies = [
  "adk-skill",
  "adk-telemetry",
  "adk-tool",
+ "adk-vision",
  "async-stream",
  "async-trait",
  "awp-types",

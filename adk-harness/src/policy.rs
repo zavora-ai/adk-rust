@@ -249,6 +249,8 @@ pub struct ToolClassRegistry {
     /// Classes of tools that publishers the harness does not own declare through a
     /// trusted manifest (spec 3.2 §7.7).
     origin_classes: Vec<Arc<dyn OriginClasses>>,
+    /// Classes of the harness's own tools decided per call (spec 3.7 X15).
+    call_classes: Vec<Arc<dyn CallClasses>>,
 }
 
 /// Classes tools of a publisher the harness does not own, from a declaration the user
@@ -284,6 +286,41 @@ pub trait OriginClasses: std::fmt::Debug + Send + Sync {
     /// The class of a call to `tool` that `source` publishes, or `None` when `source` is
     /// not one this classes.
     fn class_of(&self, source: &str, tool: &str) -> Option<ToolKind>;
+}
+
+/// Classes a pack's own tools per call, from the call's arguments (spec 3.7 X15): the vision
+/// pack's tools are `Read` when they stay on the device and `External` when they send an
+/// image off it. Consulted for the harness's own agents and static tools, before the
+/// registered classes.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use adk_core::ToolEffect;
+/// use adk_harness::{CallClasses, Isolation, ToolClassRegistry, ToolKind};
+/// use serde_json::{Value, json};
+///
+/// #[derive(Debug)]
+/// struct ByBackend;
+///
+/// impl CallClasses for ByBackend {
+///     fn class_of_call(&self, tool: &str, args: &Value) -> Option<ToolKind> {
+///         (tool == "vision_describe").then(|| match args["backend"].as_str() {
+///             Some("local") => ToolKind::Read,
+///             _ => ToolKind::External { effect: ToolEffect::ReadOnly, trusted_origin: false },
+///         })
+///     }
+/// }
+///
+/// let registry = ToolClassRegistry::harness_defaults("harness").with_call_classes(Arc::new(ByBackend));
+/// let local = json!({ "backend": "local" });
+/// let kind = registry.classify("harness", "vision_describe", None, &local, ToolEffect::ReadOnly, Isolation::Host, false);
+/// assert_eq!(kind, ToolKind::Read);
+/// ```
+pub trait CallClasses: std::fmt::Debug + Send + Sync {
+    /// The class of a call to `tool` with `args`, or `None` for a tool it does not class.
+    fn class_of_call(&self, tool: &str, args: &Value) -> Option<ToolKind>;
 }
 
 impl ToolClassRegistry {
@@ -359,6 +396,14 @@ impl ToolClassRegistry {
         domains: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
         self.web_allowlist = domains.into_iter().map(|d| d.into().to_ascii_lowercase()).collect();
+        self
+    }
+
+    /// Classes the harness's own tools that `classes` knows per call, from their arguments
+    /// (spec 3.7 X15).
+    #[must_use]
+    pub fn with_call_classes(mut self, classes: Arc<dyn CallClasses>) -> Self {
+        self.call_classes.push(classes);
         self
     }
 
@@ -453,6 +498,11 @@ impl ToolClassRegistry {
     ) -> ToolKind {
         let static_origin = origin.is_none_or(|origin| origin.source == STATIC_TOOL_ORIGIN);
         if static_origin && self.agents.contains(agent) {
+            if let Some(kind) =
+                self.call_classes.iter().find_map(|classes| classes.class_of_call(tool, args))
+            {
+                return kind;
+            }
             match self.classes.get(tool) {
                 Some(ToolKind::Shell(_)) => {
                     return if args.get("unsandboxed").and_then(Value::as_bool) == Some(true) {

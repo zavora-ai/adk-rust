@@ -239,6 +239,8 @@ pub struct HarnessAgentBuilder {
     #[cfg(feature = "computer-use")]
     computer_use: Option<crate::packs::computer_use::ComputerUsePack>,
     computer_use_requested: bool,
+    #[cfg(feature = "vision")]
+    vision: Option<crate::packs::vision::VisionPack>,
     voice_requested: bool,
     take_over: Option<crate::take_over::TakeOver>,
 }
@@ -363,6 +365,8 @@ impl HarnessAgentBuilder {
             #[cfg(feature = "computer-use")]
             computer_use: None,
             computer_use_requested: false,
+            #[cfg(feature = "vision")]
+            vision: None,
             voice_requested: false,
             take_over: None,
         }
@@ -1538,6 +1542,29 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// The vision pack (spec 3.7 X15, feature `vision`): the governed vision tools, the
+    /// egress rules of `.adk/vision.toml` and the privacy guardrail on the harness model.
+    /// A call that stays on the device is `Read`; one that sends an image off it is
+    /// `External`, held in Ask and Auto with the exact egress image as evidence unless an
+    /// `allow` rule covers its host and data class.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_harness::packs::vision::VisionPack;
+    ///
+    /// let harness = HarnessAgent::builder("desk")
+    ///     .model(model)
+    ///     .workspace(workspace)
+    ///     .pack_vision(VisionPack::new(store, |gate, store| runtime(gate, store)))
+    ///     .build()?;
+    /// ```
+    #[cfg(feature = "vision")]
+    pub fn pack_vision(mut self, pack: crate::packs::vision::VisionPack) -> Self {
+        self.vision = Some(pack);
+        self
+    }
+
     /// The computer-use pack (spec 3.1 §7.24, feature `computer-use`): `computer_use_observe`
     /// and `computer_use_preview` as `Read`, and `computer_use_execute` as class
     /// `ComputerUse` — denied in ReadOnly and Plan, held for a non-waivable one-shot approval
@@ -1818,6 +1845,21 @@ impl HarnessAgentBuilder {
                 ));
             }
         }
+        // The vision pack (spec 3.7 X15): the gate, the runtime and the toolset, and the egress
+        // rules as an operator policy layer, so a rule that asks holds the call.
+        #[cfg(feature = "vision")]
+        let vision = match self.vision.take() {
+            Some(pack) => Some(pack.into_runtime(workspace.root())?),
+            None => None,
+        };
+        #[cfg(feature = "vision")]
+        if let Some(vision) = &vision {
+            let layer = vision.policy();
+            self.operator_policy = Some(match self.operator_policy.take() {
+                Some(existing) => Arc::new(adk_core::StrictestPolicy::new(vec![existing, layer])),
+                None => layer,
+            });
+        }
         if self.voice_requested && cfg!(not(feature = "voice")) {
             return Err(AdkError::config(
                 "the voice surface needs adk-harness feature `voice`: packs::voice::VoiceSurface \
@@ -1844,6 +1886,13 @@ impl HarnessAgentBuilder {
             if browser.is_some() && crate::packs::browser::is_browser_tool(tool.name()) {
                 return Err(AdkError::config(format!(
                     "tool '{}' collides with a browser pack tool of the same name (spec 3.1 §7.24)",
+                    tool.name()
+                )));
+            }
+            #[cfg(feature = "vision")]
+            if vision.is_some() && adk_vision::VISION_TOOL_NAMES.contains(&tool.name()) {
+                return Err(AdkError::config(format!(
+                    "tool '{}' collides with a vision pack tool of the same name (spec 3.7 X15)",
                     tool.name()
                 )));
             }
@@ -1951,6 +2000,11 @@ impl HarnessAgentBuilder {
             registry
                 .register(crate::packs::computer_use::COMPUTER_USE_EXECUTE, ToolKind::ComputerUse);
         }
+        // The vision pack (spec 3.7 X15): each call classed by where its image goes.
+        #[cfg(feature = "vision")]
+        if let Some(vision) = &vision {
+            registry = registry.with_call_classes(vision.classes());
+        }
         // The partition's policy and crossing tools (spec 3.2 §7.8).
         #[cfg(feature = "kernel")]
         let partition = self.partition.wire(&self.name, &mut registry)?;
@@ -1987,6 +2041,10 @@ impl HarnessAgentBuilder {
                         .iter()
                         .map(|name| (*name).to_string()),
                 );
+            }
+            #[cfg(feature = "vision")]
+            if vision.is_some() {
+                reserved.extend(adk_vision::VISION_TOOL_NAMES.iter().map(|name| name.to_string()));
             }
             let plan = crate::team::TeamPlan::prepare(
                 &self.name,
@@ -2300,6 +2358,11 @@ impl HarnessAgentBuilder {
         #[cfg(feature = "computer-use")]
         if let Some(computer_use) = &computer_use {
             tools.extend(computer_use.tools.iter().cloned());
+        }
+        // The vision tools join the harness tools (spec 3.7 X15).
+        #[cfg(feature = "vision")]
+        if let Some(vision) = &vision {
+            tools.extend(vision.tools());
         }
         // Take over (spec 3.3 §10 H2): every call runs in a scope a secret can reach, and
         // leaves it scrubbed before RBAC, hooks or members see the result.
@@ -2804,6 +2867,16 @@ impl HarnessAgentBuilder {
         if let Some(mcp) = mcp.as_ref().filter(|_| public_only.is_none()) {
             agent_toolsets.push(mcp.manager());
             builder = builder.toolset(mcp.manager());
+        }
+        // The vision pack (spec 3.7 X15): a held remote call carries its egress image, and the
+        // privacy guardrail gates every image a request to a remote model carries (V-I4).
+        #[cfg(feature = "vision")]
+        if let Some(vision) = &vision {
+            builder = builder.before_tool_callback(vision.toolset.evidence_callback());
+            if model.data_locality().leaves_machine() {
+                let guardrail = vision.guardrail(model.as_ref(), harness_audit.clone());
+                builder = builder.before_model_callback(guardrail.before_model_callback());
+            }
         }
         if let Some(customize) = self.customize {
             builder = customize(builder);

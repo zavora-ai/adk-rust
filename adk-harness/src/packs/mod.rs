@@ -8,6 +8,7 @@
 //! | `payments` | `payments` | §7.16 |
 //! | `voice` | `voice` | §7.17 |
 //! | `managed` | `managed` | §7.18 |
+//! | `vision` | `vision` | spec 3.7 X15 |
 
 #[cfg(feature = "browser")]
 pub mod browser;
@@ -17,5 +18,7 @@ pub mod computer_use;
 pub mod managed;
 #[cfg(feature = "payments")]
 pub mod payments;
+#[cfg(feature = "vision")]
+pub mod vision;
 #[cfg(feature = "voice")]
 pub mod voice;
