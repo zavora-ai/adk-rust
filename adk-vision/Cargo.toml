@@ -16,7 +16,7 @@ exclude = ["tests/"]
 
 [package.metadata.docs.rs]
 # `ocr-vl-metal` needs Apple's Metal toolchain, which docs.rs does not have.
-features = ["fetch", "conformance", "ocr", "ocr-vl", "nim"]
+features = ["fetch", "conformance", "guardrail", "ocr", "ocr-vl", "nim"]
 
 # Spec 3.7 §7.1: media, geometry, manifests, the traits, `VisionRuntime`, the egress boundary
 # and the deterministic `Editor` always build; each runtime and provider is a feature, added
