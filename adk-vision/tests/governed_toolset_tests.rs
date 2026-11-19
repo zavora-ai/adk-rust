@@ -561,6 +561,66 @@ async fn s1_s2_local_first_and_five_crops_not_the_page() {
     assert_eq!(costs, 5 * 1_500);
     let ocr_spend = SpendKey::org(APP).with_vendor("ocr");
     assert_eq!(ledger.spent(&ocr_spend, SpendPeriod::Day).await.unwrap(), costs);
+
+    // Each read left its answer record beside the image for the annotated viewer: the
+    // regions in source pixels with their origin, the blocks in reading order, every call.
+    let names = artifacts
+        .list(adk_artifact::ListRequest {
+            app_name: APP.into(),
+            user_id: USER.into(),
+            session_id: SESSION.into(),
+        })
+        .await
+        .unwrap()
+        .file_names;
+    let answers: Vec<&String> =
+        names.iter().filter(|n| n.starts_with(adk_vision::ANSWER_ARTIFACT_PREFIX)).collect();
+    assert_eq!(answers.len(), 2, "{names:?}");
+    let mut form_record = None;
+    for name in answers {
+        let part = artifacts
+            .load(LoadRequest {
+                app_name: APP.into(),
+                user_id: USER.into(),
+                session_id: SESSION.into(),
+                file_name: name.clone(),
+                version: None,
+            })
+            .await
+            .unwrap()
+            .part;
+        let Part::InlineData { mime_type, data, .. } = part else { panic!("{name} holds no JSON") };
+        assert_eq!(mime_type, "application/json");
+        let record: Value = serde_json::from_slice(&data).unwrap();
+        assert_eq!(record["kind"], "adkVisionAnswer");
+        assert_eq!(record["tool"], "vision_read");
+        assert_eq!(*name, adk_vision::answer_artifact_name(record["callId"].as_str().unwrap()));
+        if record["image"]["name"] == "form.png" {
+            form_record = Some(record);
+        }
+    }
+    let record = form_record.expect("the form's answer record");
+    assert_eq!(record["image"]["digest"], json!(page.digest()));
+    assert_eq!(record["image"]["artifact"], json!(format!("vision-{}.png", page.digest().hex())));
+    let regions = record["regionSet"]["regions"].as_array().unwrap();
+    assert_eq!(regions.len(), blocks.len());
+    assert_eq!(record["page"]["blocks"].as_array().unwrap().len(), blocks.len());
+    assert!(regions.iter().all(|r| r["origin"]["frame"]["kind"].is_string()
+        && r["origin"]["chain"]["sourceWidth"] == json!(800)));
+    let escalated: Vec<&Value> =
+        regions.iter().filter(|r| r["origin"].get("escalatedFrom").is_some()).collect();
+    assert_eq!(escalated.len(), 5);
+    let egress: Vec<Value> = record["calls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|call| call["egress"].as_array().cloned().unwrap_or_default())
+        .collect();
+    let receipts: Vec<Value> = released.iter().map(|r| json!(r.egress)).collect();
+    assert_eq!(egress, receipts, "the record names exactly the released crops");
+    let schema: Value = serde_json::from_str(include_str!("../schema/region-set.json")).unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    assert!(validator.is_valid(&record["regionSet"]), "the record's RegionSet matches the schema");
 }
 
 #[tokio::test]

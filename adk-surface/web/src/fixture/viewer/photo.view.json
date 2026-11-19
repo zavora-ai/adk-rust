@@ -1,0 +1,1102 @@
+{
+  "agent": "inspector",
+  "agentName": "Inspector",
+  "answer": {
+    "id": "c-2207",
+    "labels": [
+      {
+        "count": 4,
+        "label": "part"
+      },
+      {
+        "count": 1,
+        "label": "seal"
+      },
+      {
+        "count": 1,
+        "label": "seal tear"
+      },
+      {
+        "count": 1,
+        "label": "fiducial"
+      }
+    ],
+    "measurements": {
+      "calibration": "In the belt's plane, from the fiducial: 40.0 mm is 245 px, so 6.12 px per mm. Valid only in that plane.",
+      "line": [
+        [
+          930.0,
+          472.0
+        ],
+        [
+          1016.0,
+          486.0
+        ]
+      ],
+      "region": 5,
+      "tiles": [
+        {
+          "label": "Longest",
+          "uncertainty": "± 0.3 mm",
+          "value": "14.3 mm"
+        },
+        {
+          "label": "Area",
+          "uncertainty": "± 0.6 mm²",
+          "value": "9.8 mm²"
+        }
+      ]
+    },
+    "name": "RF-DETR S + SAM 2.1 Tiny",
+    "place": "on this computer",
+    "regions": [
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "926, 494 → 1020, 532",
+        "chain": [
+          "Frame 1920 × 1080",
+          "Resized to 1024 × 576",
+          "Padded 224 top and bottom · 1024 × 1024",
+          "Mask mapped back to source pixels"
+        ],
+        "detail": "mask · 14.3 mm",
+        "facts": [
+          {
+            "label": "Shape",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Mask, 2,105 px · box "
+              },
+              {
+                "style": "mono",
+                "text": "926, 494 → 1020, 532"
+              }
+            ]
+          },
+          {
+            "label": "Found by",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "inspector-rfdetr-s-v3"
+              },
+              {
+                "style": "muted",
+                "text": " · your fine-tune, your manifest"
+              }
+            ]
+          },
+          {
+            "label": "Outlined by",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "sam2.1-tiny@8c1e2f0"
+              },
+              {
+                "style": "muted",
+                "text": " · Apache-2.0 · from the box"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 1024 × 1024, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "Seal tear",
+        "index": 5,
+        "label": "seal tear",
+        "mask": {
+          "area": 2105,
+          "counts": [
+            1000574,
+            1,
+            1080,
+            3,
+            1077,
+            5,
+            1075,
+            8,
+            1073,
+            8,
+            1072,
+            9,
+            1071,
+            9,
+            1072,
+            9,
+            1071,
+            9,
+            1071,
+            9,
+            1072,
+            9,
+            1071,
+            9,
+            1071,
+            10,
+            1071,
+            9,
+            1071,
+            10,
+            1070,
+            10,
+            1071,
+            10,
+            1070,
+            10,
+            1070,
+            10,
+            1071,
+            10,
+            1070,
+            10,
+            1070,
+            11,
+            1070,
+            11,
+            1069,
+            13,
+            1067,
+            15,
+            1064,
+            18,
+            1061,
+            21,
+            1059,
+            23,
+            1056,
+            26,
+            1053,
+            29,
+            1051,
+            31,
+            1048,
+            34,
+            1045,
+            36,
+            1044,
+            36,
+            1043,
+            37,
+            1042,
+            38,
+            1042,
+            38,
+            1043,
+            37,
+            1044,
+            36,
+            1044,
+            36,
+            1045,
+            35,
+            1046,
+            34,
+            1046,
+            34,
+            1047,
+            33,
+            1048,
+            32,
+            1048,
+            32,
+            1049,
+            31,
+            1049,
+            31,
+            1050,
+            30,
+            1051,
+            29,
+            1051,
+            29,
+            1052,
+            28,
+            1053,
+            27,
+            1053,
+            27,
+            1052,
+            28,
+            1052,
+            28,
+            1051,
+            29,
+            1051,
+            29,
+            1051,
+            29,
+            1050,
+            30,
+            1050,
+            30,
+            1049,
+            31,
+            1049,
+            31,
+            1048,
+            32,
+            1048,
+            32,
+            1048,
+            32,
+            1047,
+            33,
+            1047,
+            33,
+            1046,
+            34,
+            1046,
+            34,
+            1047,
+            33,
+            1048,
+            32,
+            1048,
+            32,
+            1049,
+            31,
+            1050,
+            30,
+            1050,
+            29,
+            1052,
+            27,
+            1054,
+            25,
+            1055,
+            24,
+            1057,
+            23,
+            1058,
+            21,
+            1059,
+            20,
+            1061,
+            18,
+            1063,
+            17,
+            1063,
+            16,
+            1064,
+            15,
+            1065,
+            14,
+            1066,
+            13,
+            1067,
+            13,
+            1067,
+            12,
+            1068,
+            11,
+            1069,
+            10,
+            1070,
+            7,
+            1073,
+            2,
+            972570
+          ],
+          "height": 1080,
+          "width": 1920
+        },
+        "measurement": "14.3 mm",
+        "score": 0.91,
+        "scoreText": "0.91",
+        "shape": "mask",
+        "tag": "seal tear · 0.91 · 14.3 mm",
+        "x0": 926.0,
+        "x1": 1020.0,
+        "y0": 494.0,
+        "y1": 532.0
+      },
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "906, 431 → 1074, 599",
+        "chain": [
+          "Frame 1920 × 1080",
+          "Resized to 1024 × 576",
+          "Padded 224 top and bottom · 1024 × 1024",
+          "Mask mapped back to source pixels"
+        ],
+        "detail": "mask",
+        "facts": [
+          {
+            "label": "Shape",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Mask, 22,172 px · box "
+              },
+              {
+                "style": "mono",
+                "text": "906, 431 → 1074, 599"
+              }
+            ]
+          },
+          {
+            "label": "Found by",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "inspector-rfdetr-s-v3"
+              },
+              {
+                "style": "muted",
+                "text": " · your fine-tune, your manifest"
+              }
+            ]
+          },
+          {
+            "label": "Outlined by",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "sam2.1-tiny@8c1e2f0"
+              },
+              {
+                "style": "muted",
+                "text": " · Apache-2.0 · from the box"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 1024 × 1024, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "Seal",
+        "index": 4,
+        "label": "seal",
+        "mask": {
+          "area": 22172,
+          "counts": [
+            978986,
+            18,
+            1055,
+            32,
+            1044,
+            40,
+            1036,
+            48,
+            1029,
+            54,
+            1023,
+            60,
+            1018,
+            64,
+            1013,
+            70,
+            1008,
+            74,
+            1004,
+            78,
+            1000,
+            82,
+            997,
+            84,
+            994,
+            88,
+            990,
+            92,
+            987,
+            94,
+            984,
+            98,
+            981,
+            100,
+            979,
+            102,
+            976,
+            106,
+            973,
+            108,
+            971,
+            110,
+            969,
+            112,
+            967,
+            114,
+            965,
+            116,
+            963,
+            118,
+            961,
+            120,
+            959,
+            122,
+            957,
+            124,
+            955,
+            126,
+            953,
+            128,
+            951,
+            130,
+            949,
+            132,
+            948,
+            132,
+            947,
+            134,
+            945,
+            136,
+            943,
+            138,
+            942,
+            138,
+            941,
+            140,
+            939,
+            142,
+            938,
+            142,
+            937,
+            144,
+            936,
+            144,
+            935,
+            146,
+            933,
+            148,
+            932,
+            148,
+            931,
+            150,
+            930,
+            150,
+            929,
+            152,
+            928,
+            152,
+            927,
+            154,
+            926,
+            154,
+            926,
+            154,
+            925,
+            156,
+            924,
+            156,
+            923,
+            158,
+            922,
+            158,
+            922,
+            158,
+            921,
+            160,
+            920,
+            160,
+            920,
+            160,
+            919,
+            162,
+            918,
+            162,
+            918,
+            162,
+            918,
+            162,
+            917,
+            164,
+            916,
+            164,
+            916,
+            164,
+            916,
+            164,
+            915,
+            166,
+            914,
+            166,
+            914,
+            166,
+            914,
+            166,
+            914,
+            166,
+            914,
+            166,
+            914,
+            166,
+            913,
+            168,
+            912,
+            168,
+            912,
+            168,
+            912,
+            168,
+            912,
+            168,
+            912,
+            168,
+            912,
+            168,
+            912,
+            168,
+            912,
+            168,
+            912,
+            168,
+            912,
+            168,
+            912,
+            168,
+            912,
+            168,
+            912,
+            168,
+            912,
+            168,
+            912,
+            168,
+            912,
+            168,
+            912,
+            168,
+            913,
+            166,
+            914,
+            166,
+            914,
+            166,
+            914,
+            166,
+            914,
+            166,
+            914,
+            166,
+            914,
+            166,
+            915,
+            164,
+            916,
+            164,
+            916,
+            164,
+            916,
+            164,
+            917,
+            162,
+            918,
+            162,
+            918,
+            162,
+            918,
+            162,
+            919,
+            160,
+            920,
+            160,
+            920,
+            160,
+            921,
+            158,
+            922,
+            158,
+            922,
+            158,
+            923,
+            156,
+            924,
+            156,
+            925,
+            154,
+            926,
+            154,
+            926,
+            154,
+            927,
+            152,
+            928,
+            152,
+            929,
+            150,
+            930,
+            150,
+            931,
+            148,
+            932,
+            148,
+            933,
+            146,
+            935,
+            144,
+            936,
+            144,
+            937,
+            142,
+            938,
+            142,
+            939,
+            140,
+            941,
+            138,
+            942,
+            138,
+            943,
+            136,
+            945,
+            134,
+            947,
+            132,
+            948,
+            132,
+            949,
+            130,
+            951,
+            128,
+            953,
+            126,
+            955,
+            124,
+            957,
+            122,
+            959,
+            120,
+            961,
+            118,
+            963,
+            116,
+            965,
+            114,
+            967,
+            112,
+            969,
+            110,
+            971,
+            108,
+            973,
+            106,
+            976,
+            102,
+            979,
+            100,
+            981,
+            98,
+            984,
+            94,
+            987,
+            92,
+            990,
+            88,
+            994,
+            84,
+            997,
+            82,
+            1000,
+            78,
+            1004,
+            74,
+            1008,
+            70,
+            1013,
+            64,
+            1018,
+            60,
+            1023,
+            54,
+            1029,
+            48,
+            1036,
+            40,
+            1044,
+            32,
+            1055,
+            18,
+            914236
+          ],
+          "height": 1080,
+          "width": 1920
+        },
+        "score": 0.94,
+        "scoreText": "0.94",
+        "shape": "mask",
+        "tag": "seal · 0.94",
+        "x0": 906.0,
+        "x1": 1074.0,
+        "y0": 431.0,
+        "y1": 599.0
+      },
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "840, 400 → 1140, 630",
+        "chain": [
+          "Frame 1920 × 1080",
+          "Resized to 1024 × 576",
+          "Padded 224 top and bottom · 1024 × 1024",
+          "Box mapped back to source pixels"
+        ],
+        "detail": "box",
+        "facts": [
+          {
+            "label": "Shape",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Box "
+              },
+              {
+                "style": "mono",
+                "text": "840, 400 → 1140, 630"
+              }
+            ]
+          },
+          {
+            "label": "Found by",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "inspector-rfdetr-s-v3"
+              },
+              {
+                "style": "muted",
+                "text": " · your fine-tune, your manifest"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 1024 × 1024, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "Part",
+        "index": 1,
+        "label": "part",
+        "score": 0.97,
+        "scoreText": "0.97",
+        "shape": "box",
+        "tag": "part · 0.97",
+        "x0": 840.0,
+        "x1": 1140.0,
+        "y0": 400.0,
+        "y1": 630.0
+      },
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "330, 300 → 630, 530",
+        "chain": [
+          "Frame 1920 × 1080",
+          "Resized to 1024 × 576",
+          "Padded 224 top and bottom · 1024 × 1024",
+          "Box mapped back to source pixels"
+        ],
+        "detail": "box",
+        "facts": [
+          {
+            "label": "Shape",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Box "
+              },
+              {
+                "style": "mono",
+                "text": "330, 300 → 630, 530"
+              }
+            ]
+          },
+          {
+            "label": "Found by",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "inspector-rfdetr-s-v3"
+              },
+              {
+                "style": "muted",
+                "text": " · your fine-tune, your manifest"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 1024 × 1024, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "Part",
+        "index": 0,
+        "label": "part",
+        "score": 0.96,
+        "scoreText": "0.96",
+        "shape": "box",
+        "tag": "part · 0.96",
+        "x0": 330.0,
+        "x1": 630.0,
+        "y0": 300.0,
+        "y1": 530.0
+      },
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "1290, 250 → 1590, 480",
+        "chain": [
+          "Frame 1920 × 1080",
+          "Resized to 1024 × 576",
+          "Padded 224 top and bottom · 1024 × 1024",
+          "Box mapped back to source pixels"
+        ],
+        "detail": "box",
+        "facts": [
+          {
+            "label": "Shape",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Box "
+              },
+              {
+                "style": "mono",
+                "text": "1290, 250 → 1590, 480"
+              }
+            ]
+          },
+          {
+            "label": "Found by",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "inspector-rfdetr-s-v3"
+              },
+              {
+                "style": "muted",
+                "text": " · your fine-tune, your manifest"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 1024 × 1024, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "Part",
+        "index": 2,
+        "label": "part",
+        "score": 0.95,
+        "scoreText": "0.95",
+        "shape": "box",
+        "tag": "part · 0.95",
+        "x0": 1290.0,
+        "x1": 1590.0,
+        "y0": 250.0,
+        "y1": 480.0
+      },
+      {
+        "atEdge": true,
+        "blurred": false,
+        "boxText": "1720, 470 → 1920, 700",
+        "chain": [
+          "Frame 1920 × 1080",
+          "Resized to 1024 × 576",
+          "Padded 224 top and bottom · 1024 × 1024",
+          "Box mapped back to source pixels"
+        ],
+        "detail": "box · at the edge",
+        "facts": [
+          {
+            "label": "Shape",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Box "
+              },
+              {
+                "style": "mono",
+                "text": "1720, 470 → 1920, 700"
+              }
+            ]
+          },
+          {
+            "label": "Found by",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "inspector-rfdetr-s-v3"
+              },
+              {
+                "style": "muted",
+                "text": " · your fine-tune, your manifest"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 1024 × 1024, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "Part",
+        "index": 3,
+        "label": "part",
+        "score": 0.88,
+        "scoreText": "0.88",
+        "shape": "box",
+        "tag": "part · 0.88",
+        "x0": 1720.0,
+        "x1": 1920.0,
+        "y0": 470.0,
+        "y1": 700.0
+      },
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "40, 660 → 285, 905",
+        "chain": [
+          "Frame 1920 × 1080",
+          "Resized to 1024 × 576",
+          "Padded 224 top and bottom · 1024 × 1024",
+          "Box mapped back to source pixels"
+        ],
+        "detail": "box · calibration",
+        "facts": [
+          {
+            "label": "Shape",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Box "
+              },
+              {
+                "style": "mono",
+                "text": "40, 660 → 285, 905"
+              }
+            ]
+          },
+          {
+            "label": "Found by",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "inspector-rfdetr-s-v3"
+              },
+              {
+                "style": "muted",
+                "text": " · your fine-tune, your manifest"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 1024 × 1024, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "Fiducial",
+        "index": 6,
+        "label": "fiducial",
+        "score": 0.99,
+        "scoreText": "0.99",
+        "shape": "box",
+        "tag": "fiducial · 0.99",
+        "x0": 40.0,
+        "x1": 285.0,
+        "y0": 660.0,
+        "y1": 905.0
+      }
+    ],
+    "run": {
+      "agent": "inspector",
+      "call": [
+        {
+          "style": "mono",
+          "text": "vision_segment"
+        },
+        {
+          "style": "plain",
+          "text": " c-2207 · "
+        },
+        {
+          "style": "mono",
+          "text": "vision_measure"
+        },
+        {
+          "style": "plain",
+          "text": " c-2208"
+        }
+      ],
+      "text": "Inspector · woke on line 2 at 10:41:07"
+    },
+    "selected": 5,
+    "stats": [
+      "7 regions",
+      "0.3 s",
+      "$0"
+    ],
+    "tool": "vision_segment"
+  },
+  "answers": [
+    {
+      "id": "c-2207",
+      "name": "RF-DETR S + SAM 2.1 Tiny",
+      "place": "on this computer",
+      "tool": "vision_segment"
+    }
+  ],
+  "caption": "A still the Inspector kept as evidence when it woke. Frames it did not keep are never stored. The white line is the longest length it measured.",
+  "examples": {
+    "canSave": true,
+    "caseName": "line-2-part-t43-seal-tear",
+    "file": "evals/vision/line-2.test.json",
+    "files": [
+      "evals/vision/invoices.test.json",
+      "evals/vision/line-2.test.json"
+    ]
+  },
+  "image": {
+    "digest": "sha256:594a57e5212677f5d8ed71e730129b7ca43fbf545c5189b27f4c769695c971ae",
+    "digestShort": "sha256:594a57…c971ae",
+    "height": 1080,
+    "href": "/api/surface/vision/s-line/images/sha256%3A594a57e5212677f5d8ed71e730129b7ca43fbf545c5189b27f4c769695c971ae",
+    "mimeType": "image/png",
+    "width": 1920
+  },
+  "kind": "photo",
+  "meta": "1920 × 1080 · line 2 camera, 10:41:07 · kept as evidence until 18 Dec",
+  "minScore": 0.5,
+  "sessionId": "s-line",
+  "title": "Line 2 · part T43"
+}

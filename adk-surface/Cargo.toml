@@ -171,6 +171,8 @@ adk-kernel = { path = "../adk-kernel", features = ["channels", "conformance", "p
 adk-harness = { path = "../adk-harness", features = ["kernel", "vision"] }
 # The vision pack's runtime, egress gate and redactors of `vision_home` (spec 3.7 §8.2).
 adk-vision = { path = "../adk-vision" }
+# Loads the labelled examples the annotated viewer saves, as `cargo adk eval` does.
+adk-eval = { path = "../adk-eval" }
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic", "openai", "gemini"] }
 # The provider-free realtime model the voice tests and `scripted_voice_home` script.
 adk-realtime = { path = "../adk-realtime", features = ["scripted"] }

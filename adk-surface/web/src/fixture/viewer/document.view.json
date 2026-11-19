@@ -1,0 +1,816 @@
+{
+  "agent": "desk",
+  "agentName": "Document desk",
+  "answer": {
+    "id": "c-31",
+    "labels": [
+      {
+        "count": 1,
+        "label": "title"
+      },
+      {
+        "count": 5,
+        "label": "text"
+      },
+      {
+        "count": 1,
+        "label": "table"
+      },
+      {
+        "count": 1,
+        "label": "seal"
+      },
+      {
+        "count": 2,
+        "label": "handwriting"
+      },
+      {
+        "count": 1,
+        "label": "checkbox"
+      }
+    ],
+    "name": "PP-OCRv6 small",
+    "place": "on this computer",
+    "regions": [
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "1100, 150 → 1524, 262",
+        "chain": [
+          "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
+          "Resized to 679 × 960",
+          "Padded 140 left, 141 right · 960 × 960",
+          "Answer mapped back to source pixels"
+        ],
+        "detail": "INVOICE",
+        "facts": [
+          {
+            "label": "Box",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "1100, 150 → 1524, 262"
+              },
+              {
+                "style": "muted",
+                "text": " source pixels"
+              }
+            ]
+          },
+          {
+            "label": "Model",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "pp-ocrv6-small@3f2a9c1"
+              },
+              {
+                "style": "muted",
+                "text": " · Apache-2.0"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 960 × 960, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "1 · title",
+        "index": 0,
+        "label": "title",
+        "order": 1,
+        "score": 0.99,
+        "scoreText": "0.99",
+        "shape": "box",
+        "tag": "1 · title · 0.99",
+        "text": "INVOICE",
+        "x0": 1100.0,
+        "x1": 1524.0,
+        "y0": 150.0,
+        "y1": 262.0
+      },
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "124, 140 → 900, 400",
+        "chain": [
+          "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
+          "Resized to 679 × 960",
+          "Padded 140 left, 141 right · 960 × 960",
+          "Answer mapped back to source pixels"
+        ],
+        "detail": "Northwind Packaging Ltd · Unit 7, Harbour Road · Port Examplia EX4 2PL",
+        "facts": [
+          {
+            "label": "Box",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "124, 140 → 900, 400"
+              },
+              {
+                "style": "muted",
+                "text": " source pixels"
+              }
+            ]
+          },
+          {
+            "label": "Model",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "pp-ocrv6-small@3f2a9c1"
+              },
+              {
+                "style": "muted",
+                "text": " · Apache-2.0"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 960 × 960, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "2 · text",
+        "index": 1,
+        "label": "text",
+        "order": 2,
+        "score": 0.97,
+        "scoreText": "0.97",
+        "shape": "box",
+        "tag": "2 · text · 0.97",
+        "text": "Northwind Packaging Ltd · Unit 7, Harbour Road · Port Examplia EX4 2PL",
+        "x0": 124.0,
+        "x1": 900.0,
+        "y0": 140.0,
+        "y1": 400.0
+      },
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "1000, 296 → 1524, 704",
+        "chain": [
+          "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
+          "Resized to 679 × 960",
+          "Padded 140 left, 141 right · 960 × 960",
+          "Answer mapped back to source pixels"
+        ],
+        "detail": "Invoice no. INV-2291 · Invoice date 06.11.2026 · PO number · Due date 06.12.2026 · Currency EUR",
+        "facts": [
+          {
+            "label": "Box",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "1000, 296 → 1524, 704"
+              },
+              {
+                "style": "muted",
+                "text": " source pixels"
+              }
+            ]
+          },
+          {
+            "label": "Model",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "pp-ocrv6-small@3f2a9c1"
+              },
+              {
+                "style": "muted",
+                "text": " · Apache-2.0"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 960 × 960, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "3 · text",
+        "index": 3,
+        "label": "text",
+        "order": 3,
+        "score": 0.93,
+        "scoreText": "0.93",
+        "shape": "box",
+        "tag": "3 · text · 0.93",
+        "text": "Invoice no. INV-2291 · Invoice date 06.11.2026 · PO number · Due date 06.12.2026 · Currency EUR",
+        "x0": 1000.0,
+        "x1": 1524.0,
+        "y0": 296.0,
+        "y1": 704.0
+      },
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "1232, 332 → 1430, 528",
+        "chain": [
+          "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
+          "Resized to 679 × 960",
+          "Padded 140 left, 141 right · 960 × 960",
+          "Answer mapped back to source pixels"
+        ],
+        "detail": "RECEIVED 07 NOV 2026",
+        "facts": [
+          {
+            "label": "Box",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "1232, 332 → 1430, 528"
+              },
+              {
+                "style": "muted",
+                "text": " source pixels"
+              }
+            ]
+          },
+          {
+            "label": "Model",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "pp-ocrv6-small@3f2a9c1"
+              },
+              {
+                "style": "muted",
+                "text": " · Apache-2.0"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 960 × 960, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "4 · seal",
+        "index": 2,
+        "label": "seal",
+        "order": 4,
+        "score": 0.88,
+        "scoreText": "0.88",
+        "shape": "box",
+        "tag": "4 · seal · 0.88",
+        "text": "RECEIVED 07 NOV 2026",
+        "x0": 1232.0,
+        "x1": 1430.0,
+        "y0": 332.0,
+        "y1": 528.0
+      },
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "1250, 466 → 1532, 540",
+        "chain": [
+          "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
+          "Resized to 679 × 960",
+          "Padded 140 left, 141 right · 960 × 960",
+          "Answer mapped back to source pixels"
+        ],
+        "detail": "PO-7781S",
+        "escalation": {
+          "by": "Gemini",
+          "cropDigest": "sha256:d4781e…272822",
+          "readAs": "PO-7781S",
+          "readAsScore": 0.58
+        },
+        "facts": [
+          {
+            "label": "Read as",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "PO-7781S"
+              },
+              {
+                "style": "muted",
+                "text": " · 0.58"
+              }
+            ]
+          },
+          {
+            "label": "Now",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "PO-77815"
+              },
+              {
+                "style": "muted",
+                "text": " · Gemini read a covered crop of it,"
+              },
+              {
+                "style": "plain",
+                "text": " "
+              },
+              {
+                "style": "mono",
+                "text": "sha256:d4781e…272822"
+              }
+            ]
+          },
+          {
+            "label": "Box",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "1250, 466 → 1532, 540"
+              },
+              {
+                "style": "muted",
+                "text": " source pixels"
+              }
+            ]
+          },
+          {
+            "label": "Model",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "pp-ocrv6-small@3f2a9c1"
+              },
+              {
+                "style": "muted",
+                "text": " · Apache-2.0"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 960 × 960, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "5 · handwriting",
+        "index": 4,
+        "label": "handwriting",
+        "order": 5,
+        "score": 0.58,
+        "scoreText": "0.58",
+        "shape": "box",
+        "tag": "5 · handwriting · 0.58",
+        "text": "PO-77815",
+        "x0": 1250.0,
+        "x1": 1532.0,
+        "y0": 466.0,
+        "y1": 540.0
+      },
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "120, 520 → 770, 760",
+        "chain": [
+          "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
+          "Resized to 679 × 960",
+          "Padded 140 left, 141 right · 960 × 960",
+          "Answer mapped back to source pixels"
+        ],
+        "detail": "Bill to · Mara Kestrel · 14 Ferry Lane · Port Examplia EX9 1QT",
+        "facts": [
+          {
+            "label": "Box",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "120, 520 → 770, 760"
+              },
+              {
+                "style": "muted",
+                "text": " source pixels"
+              }
+            ]
+          },
+          {
+            "label": "Model",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "pp-ocrv6-small@3f2a9c1"
+              },
+              {
+                "style": "muted",
+                "text": " · Apache-2.0"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 960 × 960, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "6 · text",
+        "index": 5,
+        "label": "text",
+        "order": 6,
+        "score": 0.96,
+        "scoreText": "0.96",
+        "shape": "box",
+        "tag": "6 · text · 0.96",
+        "text": "Bill to · Mara Kestrel · 14 Ferry Lane · Port Examplia EX9 1QT",
+        "x0": 120.0,
+        "x1": 770.0,
+        "y0": 520.0,
+        "y1": 760.0
+      },
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "124, 816 → 1530, 1322",
+        "chain": [
+          "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
+          "Resized to 679 × 960",
+          "Padded 140 left, 141 right · 960 × 960",
+          "Answer mapped back to source pixels"
+        ],
+        "detail": "4 rows × 4 columns",
+        "facts": [
+          {
+            "label": "Box",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "124, 816 → 1530, 1322"
+              },
+              {
+                "style": "muted",
+                "text": " source pixels"
+              }
+            ]
+          },
+          {
+            "label": "Model",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "pp-ocrv6-small@3f2a9c1"
+              },
+              {
+                "style": "muted",
+                "text": " · Apache-2.0"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 960 × 960, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "7 · table",
+        "index": 6,
+        "label": "table",
+        "order": 7,
+        "score": 0.95,
+        "scoreText": "0.95",
+        "shape": "box",
+        "tag": "7 · table · 0.95",
+        "text": "4 rows × 4 columns",
+        "x0": 124.0,
+        "x1": 1530.0,
+        "y0": 816.0,
+        "y1": 1322.0
+      },
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "1000, 1356 → 1530, 1572",
+        "chain": [
+          "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
+          "Resized to 679 × 960",
+          "Padded 140 left, 141 right · 960 × 960",
+          "Answer mapped back to source pixels"
+        ],
+        "detail": "Subtotal 970.60 · VAT 20% 194.12 · Total due € 1,164.72",
+        "facts": [
+          {
+            "label": "Box",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "1000, 1356 → 1530, 1572"
+              },
+              {
+                "style": "muted",
+                "text": " source pixels"
+              }
+            ]
+          },
+          {
+            "label": "Model",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "pp-ocrv6-small@3f2a9c1"
+              },
+              {
+                "style": "muted",
+                "text": " · Apache-2.0"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 960 × 960, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "8 · text",
+        "index": 8,
+        "label": "text",
+        "order": 8,
+        "score": 0.94,
+        "scoreText": "0.94",
+        "shape": "box",
+        "tag": "8 · text · 0.94",
+        "text": "Subtotal 970.60 · VAT 20% 194.12 · Total due € 1,164.72",
+        "x0": 1000.0,
+        "x1": 1530.0,
+        "y0": 1356.0,
+        "y1": 1572.0
+      },
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "120, 1376 → 560, 1436",
+        "chain": [
+          "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
+          "Resized to 679 × 960",
+          "Padded 140 left, 141 right · 960 × 960",
+          "Answer mapped back to source pixels"
+        ],
+        "detail": "☑ Paid by bank transfer",
+        "facts": [
+          {
+            "label": "Box",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "120, 1376 → 560, 1436"
+              },
+              {
+                "style": "muted",
+                "text": " source pixels"
+              }
+            ]
+          },
+          {
+            "label": "Model",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "pp-ocrv6-small@3f2a9c1"
+              },
+              {
+                "style": "muted",
+                "text": " · Apache-2.0"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 960 × 960, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "9 · checkbox",
+        "index": 7,
+        "label": "checkbox",
+        "order": 9,
+        "score": 0.81,
+        "scoreText": "0.81",
+        "shape": "box",
+        "tag": "9 · checkbox · 0.81",
+        "text": "☑ Paid by bank transfer",
+        "x0": 120.0,
+        "x1": 560.0,
+        "y0": 1376.0,
+        "y1": 1436.0
+      },
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "120, 1488 → 700, 1604",
+        "chain": [
+          "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
+          "Resized to 679 × 960",
+          "Padded 140 left, 141 right · 960 × 960",
+          "Answer mapped back to source pixels"
+        ],
+        "detail": "Approved — J.T. 12/11",
+        "facts": [
+          {
+            "label": "Box",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "120, 1488 → 700, 1604"
+              },
+              {
+                "style": "muted",
+                "text": " source pixels"
+              }
+            ]
+          },
+          {
+            "label": "Model",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "pp-ocrv6-small@3f2a9c1"
+              },
+              {
+                "style": "muted",
+                "text": " · Apache-2.0"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 960 × 960, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "10 · handwriting",
+        "index": 9,
+        "label": "handwriting",
+        "order": 10,
+        "score": 0.47,
+        "scoreText": "0.47",
+        "shape": "box",
+        "tag": "10 · handwriting · 0.47",
+        "text": "Approved — J.T. 12/11",
+        "x0": 120.0,
+        "x1": 700.0,
+        "y0": 1488.0,
+        "y1": 1604.0
+      },
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "120, 2076 → 1534, 2214",
+        "chain": [
+          "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
+          "Resized to 679 × 960",
+          "Padded 140 left, 141 right · 960 × 960",
+          "Answer mapped back to source pixels"
+        ],
+        "detail": "Bank: Examplia Savings · IBAN EX12 3456 7890 1234 56 · BIC EXSVEX22",
+        "facts": [
+          {
+            "label": "Box",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "120, 2076 → 1534, 2214"
+              },
+              {
+                "style": "muted",
+                "text": " source pixels"
+              }
+            ]
+          },
+          {
+            "label": "Model",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "pp-ocrv6-small@3f2a9c1"
+              },
+              {
+                "style": "muted",
+                "text": " · Apache-2.0"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 960 × 960, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "11 · text",
+        "index": 10,
+        "label": "text",
+        "order": 11,
+        "score": 0.9,
+        "scoreText": "0.90",
+        "shape": "box",
+        "tag": "11 · text · 0.90",
+        "text": "Bank: Examplia Savings · IBAN EX12 3456 7890 1234 56 · BIC EXSVEX22",
+        "x0": 120.0,
+        "x1": 1534.0,
+        "y0": 2076.0,
+        "y1": 2214.0
+      }
+    ],
+    "run": {
+      "agent": "desk",
+      "call": [
+        {
+          "style": "mono",
+          "text": "vision_read"
+        },
+        {
+          "style": "plain",
+          "text": " · c-31"
+        }
+      ],
+      "text": "Document desk · Northwind batch · 10:31"
+    },
+    "selected": 4,
+    "stats": [
+      "11 regions",
+      "3.4 s",
+      "$0"
+    ],
+    "tool": "vision_read"
+  },
+  "answers": [
+    {
+      "id": "c-34",
+      "name": "PaddleOCR-VL-1.6",
+      "place": "on this computer",
+      "tool": "vision_read"
+    },
+    {
+      "id": "c-31",
+      "name": "PP-OCRv6 small",
+      "place": "on this computer",
+      "tool": "vision_read"
+    }
+  ],
+  "examples": {
+    "canSave": true,
+    "caseName": "inv-2291-page-1-handwriting",
+    "file": "evals/vision/invoices.test.json",
+    "files": [
+      "evals/vision/invoices.test.json",
+      "evals/vision/line-2.test.json"
+    ]
+  },
+  "image": {
+    "digest": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "digestShort": "sha256:556b49…a22654",
+    "height": 2339,
+    "href": "/api/surface/vision/s-desk/images/sha256%3A556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "mimeType": "image/png",
+    "width": 1654
+  },
+  "kind": "document",
+  "meta": "1654 × 2339 · INV-2291.pdf, page 1 at 200 dpi",
+  "minScore": 0.5,
+  "sessionId": "s-desk",
+  "title": "INV-2291 · page 1"
+}

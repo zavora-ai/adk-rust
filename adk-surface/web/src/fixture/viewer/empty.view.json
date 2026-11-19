@@ -1,0 +1,157 @@
+{
+  "agent": "inspector",
+  "agentName": "Inspector",
+  "answer": {
+    "empty": {
+      "facts": [
+        {
+          "label": "Asked",
+          "parts": [
+            {
+              "style": "mono",
+              "text": "vision_segment"
+            },
+            {
+              "style": "plain",
+              "text": " · concept “torn seal”"
+            },
+            {
+              "style": "plain",
+              "text": " · c-2311"
+            }
+          ]
+        },
+        {
+          "label": "Sent",
+          "parts": [
+            {
+              "style": "plain",
+              "text": "A released copy to "
+            },
+            {
+              "style": "mono",
+              "text": "api.meta.ai"
+            },
+            {
+              "style": "plain",
+              "text": " · nothing needed covering"
+            }
+          ]
+        },
+        {
+          "label": "Cost",
+          "parts": [
+            {
+              "style": "plain",
+              "text": "$0.0025"
+            },
+            {
+              "style": "muted",
+              "text": " · billed though nothing matched"
+            }
+          ]
+        },
+        {
+          "label": "Run",
+          "parts": [
+            {
+              "style": "plain",
+              "text": "Inspector · line 2 · 11:02:44"
+            }
+          ]
+        }
+      ],
+      "failed": [
+        {
+          "style": "strong",
+          "text": "The call failed."
+        },
+        {
+          "style": "plain",
+          "text": " “sam-3.1 was rate limited; tried 3 times.” No answer, so nothing to show or save."
+        }
+      ],
+      "hidden": [
+        {
+          "style": "strong",
+          "text": "Hidden by your filters."
+        },
+        {
+          "style": "plain",
+          "text": " “4 regions are hidden by Score at least 0.95.” "
+        }
+      ],
+      "text": [
+        {
+          "style": "plain",
+          "text": "sam-3.1 answered with an empty result: nothing in this frame matched "
+        },
+        {
+          "style": "strong",
+          "text": "“torn seal”"
+        },
+        {
+          "style": "plain",
+          "text": ". That is an answer, not an error."
+        }
+      ],
+      "title": "Nothing found"
+    },
+    "id": "c-2311",
+    "labels": [],
+    "name": "sam-3.1",
+    "place": "Meta, in the cloud",
+    "regions": [],
+    "run": {
+      "agent": "inspector",
+      "call": [
+        {
+          "style": "mono",
+          "text": "vision_segment"
+        },
+        {
+          "style": "plain",
+          "text": " · c-2311"
+        }
+      ],
+      "text": "Inspector · line 2 · 11:02:44"
+    },
+    "stats": [
+      "0 regions",
+      "1.8 s",
+      "$0.0025"
+    ],
+    "tool": "vision_segment"
+  },
+  "answers": [
+    {
+      "id": "c-2311",
+      "name": "sam-3.1",
+      "place": "Meta, in the cloud",
+      "tool": "vision_segment"
+    }
+  ],
+  "caption": "The line supervisor asked the Inspector to check this frame again with a cloud model.",
+  "examples": {
+    "canSave": true,
+    "caseName": "line-2-11-02-44-region",
+    "file": "evals/vision/line-2.test.json",
+    "files": [
+      "evals/vision/invoices.test.json",
+      "evals/vision/line-2.test.json"
+    ]
+  },
+  "image": {
+    "digest": "sha256:45e055ba4f630e4bfa506f38fb8506265e6774f6b7767bbfd482ec0272440903",
+    "digestShort": "sha256:45e055…440903",
+    "height": 1080,
+    "href": "/api/surface/vision/s-line/images/sha256%3A45e055ba4f630e4bfa506f38fb8506265e6774f6b7767bbfd482ec0272440903",
+    "mimeType": "image/png",
+    "width": 1920
+  },
+  "kind": "photo",
+  "meta": "1920 × 1080 · line 2 camera · kept as evidence until 18 Dec",
+  "minScore": 0.5,
+  "sessionId": "s-line",
+  "title": "Line 2 · 11:02:44"
+}

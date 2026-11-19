@@ -452,6 +452,10 @@ pub enum ThreadItem {
         ok: bool,
         /// "Done" or "Failed".
         text: String,
+        /// The image a vision tool answered about, by digest: the thread links the call to
+        /// the annotated viewer (spec 3.7 §8.2, board choice V1).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        image: Option<String>,
     },
     /// An agent asked first: a held call. Its card comes from the inbox entry.
     #[serde(rename_all = "camelCase")]

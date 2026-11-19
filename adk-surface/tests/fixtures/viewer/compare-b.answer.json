@@ -1,0 +1,616 @@
+{
+ "kind": "adkVisionAnswer",
+ "version": 1,
+ "tool": "vision_read",
+ "callId": "c-34",
+ "invocationId": "inv-northwind-batch",
+ "agent": "desk",
+ "at": "2026-11-20T07:33:00Z",
+ "image": {
+  "digest": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+  "width": 1654,
+  "height": 2339,
+  "mimeType": "image/png",
+  "artifact": "vision-556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654.png",
+  "name": "INV-2291.pdf",
+  "provenance": {
+   "kind": "documentPage",
+   "document": "sha256:22cc382fadc6b14bcff61f522fc33f4191196619cfbb7b38c5395b2143039de6",
+   "page": 1,
+   "dpi": 200
+  }
+ },
+ "args": {
+  "image": "INV-2291.pdf"
+ },
+ "regionSet": {
+  "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+  "width": 1654,
+  "height": 2339,
+  "regions": [
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 1106,
+     "y0": 152,
+     "x1": 1530,
+     "y1": 264
+    },
+    "label": "title",
+    "score": 0.99,
+    "origin": {
+     "backend": "paddleocr-vl-1.6",
+     "manifest": "paddleocr-vl-1.6",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 136,
+     "y0": 144,
+     "x1": 912,
+     "y1": 404
+    },
+    "label": "text",
+    "score": 0.98,
+    "origin": {
+     "backend": "paddleocr-vl-1.6",
+     "manifest": "paddleocr-vl-1.6",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 1235,
+     "y0": 335,
+     "x1": 1433,
+     "y1": 531
+    },
+    "label": "seal",
+    "score": 0.89,
+    "origin": {
+     "backend": "paddleocr-vl-1.6",
+     "manifest": "paddleocr-vl-1.6",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 1192,
+     "y0": 331,
+     "x1": 1482,
+     "y1": 381
+    },
+    "label": "text",
+    "score": 0.95,
+    "origin": {
+     "backend": "paddleocr-vl-1.6",
+     "manifest": "paddleocr-vl-1.6",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 1254,
+     "y0": 467,
+     "x1": 1536,
+     "y1": 541
+    },
+    "label": "handwriting",
+    "score": 0.83,
+    "origin": {
+     "backend": "paddleocr-vl-1.6",
+     "manifest": "paddleocr-vl-1.6",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 130,
+     "y0": 524,
+     "x1": 780,
+     "y1": 764
+    },
+    "label": "text",
+    "score": 0.97,
+    "origin": {
+     "backend": "paddleocr-vl-1.6",
+     "manifest": "paddleocr-vl-1.6",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 145,
+     "y0": 824,
+     "x1": 1551,
+     "y1": 1330
+    },
+    "label": "table",
+    "score": 0.96,
+    "origin": {
+     "backend": "paddleocr-vl-1.6",
+     "manifest": "paddleocr-vl-1.6",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 127,
+     "y0": 1377,
+     "x1": 567,
+     "y1": 1437
+    },
+    "label": "checkbox",
+    "score": 0.8200000000000001,
+    "origin": {
+     "backend": "paddleocr-vl-1.6",
+     "manifest": "paddleocr-vl-1.6",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 1008,
+     "y0": 1359,
+     "x1": 1538,
+     "y1": 1575
+    },
+    "label": "text",
+    "score": 0.95,
+    "origin": {
+     "backend": "paddleocr-vl-1.6",
+     "manifest": "paddleocr-vl-1.6",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 129,
+     "y0": 1490,
+     "x1": 709,
+     "y1": 1606
+    },
+    "label": "handwriting",
+    "score": 0.48,
+    "origin": {
+     "backend": "paddleocr-vl-1.6",
+     "manifest": "paddleocr-vl-1.6",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 141,
+     "y0": 2078,
+     "x1": 1555,
+     "y1": 2216
+    },
+    "label": "text",
+    "score": 0.91,
+    "origin": {
+     "backend": "paddleocr-vl-1.6",
+     "manifest": "paddleocr-vl-1.6",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 1300,
+     "y0": 2236,
+     "x1": 1524,
+     "y1": 2288
+    },
+    "label": "text",
+    "score": 0.86,
+    "origin": {
+     "backend": "paddleocr-vl-1.6",
+     "manifest": "paddleocr-vl-1.6",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   }
+  ]
+ },
+ "page": {
+  "blocks": [
+   {
+    "kind": "title",
+    "text": "INVOICE",
+    "confidence": 0.99
+   },
+   {
+    "kind": "text",
+    "text": "Northwind Packaging Ltd · Unit 7, Harbour Road · Port Examplia EX4 2PL",
+    "confidence": 0.98
+   },
+   {
+    "kind": "seal",
+    "text": "RECEIVED 07 NOV 2026",
+    "confidence": 0.89
+   },
+   {
+    "kind": "text",
+    "text": "06.11.2026",
+    "confidence": 0.95
+   },
+   {
+    "kind": "handwriting",
+    "text": "PO-77815",
+    "confidence": 0.83
+   },
+   {
+    "kind": "text",
+    "text": "Bill to · Mara Kestrel · 14 Ferry Lane · Port Examplia EX9 1QT",
+    "confidence": 0.97
+   },
+   {
+    "kind": "table",
+    "text": "4 rows × 4 columns",
+    "confidence": 0.96
+   },
+   {
+    "kind": "checkbox",
+    "text": "☑ Paid by bank transfer",
+    "confidence": 0.8200000000000001
+   },
+   {
+    "kind": "text",
+    "text": "Subtotal 970.60 · VAT 20% 194.12 · Total due € 1,164.72",
+    "confidence": 0.95
+   },
+   {
+    "kind": "handwriting",
+    "text": "Approved — J.T. 12/11",
+    "confidence": 0.48
+   },
+   {
+    "kind": "text",
+    "text": "Bank: Examplia Savings · IBAN EX12 3456 7890 1234 56 · BIC EXSVEX22",
+    "confidence": 0.91
+   },
+   {
+    "kind": "text",
+    "text": "Page 1 of 1",
+    "confidence": 0.86
+   }
+  ],
+  "readingOrder": [
+   0,
+   1,
+   3,
+   2,
+   4,
+   5,
+   6,
+   8,
+   7,
+   9,
+   10,
+   11
+  ]
+ },
+ "calls": [
+  {
+   "task": "read",
+   "backend": "paddleocr-vl-1.6",
+   "locality": {
+    "kind": "inProcess"
+   },
+   "images": [],
+   "units": {},
+   "costMicroUsd": 0,
+   "regions": 12,
+   "durationMs": 14800
+  }
+ ],
+ "models": {
+  "paddleocr-vl-1.6": {
+   "revision": "a91c03d7e2b84f56c1d0e9a8b7c6d5e4f3a2b1c0",
+   "licence": "Apache-2.0",
+   "builtIn": true,
+   "name": "PaddleOCR-VL-1.6"
+  }
+ },
+ "display": {
+  "run": "Document desk · Northwind batch · 10:31"
+ }
+}

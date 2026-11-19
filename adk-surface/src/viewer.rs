@@ -33,6 +33,14 @@ use crate::evidence::short_digest;
 /// The artifact name prefix of an answer record `adk-vision` keeps for each perception call.
 pub const VISION_ANSWER_PREFIX: &str = "vision-answer-";
 
+/// The vision tools whose answers the viewer shows.
+pub const VIEWER_TOOLS: [&str; 4] = ["vision_detect", "vision_segment", "vision_read", "vision_describe"];
+
+/// Whether `tool`'s answer is about an image the viewer can show.
+pub(crate) fn answers_about_image(tool: &str) -> bool {
+    VIEWER_TOOLS.contains(&tool)
+}
+
 /// The score a region needs to be shown before a person moves the slider (board choice V3).
 pub const DEFAULT_MIN_SCORE: f64 = 0.5;
 
@@ -49,8 +57,6 @@ pub(crate) struct Record {
     pub(crate) tool: String,
     #[serde(default)]
     pub(crate) call_id: String,
-    #[serde(default)]
-    pub(crate) invocation_id: String,
     #[serde(default)]
     pub(crate) agent: String,
     #[serde(default)]
@@ -328,6 +334,12 @@ pub(crate) struct WireModel {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WireMeasurement {
     region: usize,
+    /// The measuring call, when it was its own: `c-2208`.
+    #[serde(default)]
+    call: Option<String>,
+    /// Its tool: `vision_measure`.
+    #[serde(default)]
+    tool: Option<String>,
     #[serde(default)]
     longest_mm: Option<f64>,
     #[serde(default)]
@@ -376,7 +388,6 @@ pub(crate) struct WireTrack {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WireVideo {
-    name: String,
     frame: u64,
     at_s: f64,
     length_s: f64,
@@ -420,6 +431,7 @@ pub(crate) fn chain_sizes(chain: &WireChain) -> Vec<(u32, u32)> {
 
 /// A point in the source image's pixels, carried through `chain` into the pixels the backend
 /// saw.
+#[cfg(test)]
 pub(crate) fn to_backend(chain: &WireChain, point: [f64; 2]) -> [f64; 2] {
     let sizes = chain_sizes(chain);
     let mut p = point;
@@ -439,7 +451,8 @@ pub(crate) fn to_backend(chain: &WireChain, point: [f64; 2]) -> [f64; 2] {
 }
 
 /// A point in the pixels the backend saw, carried back through `chain` into the source
-/// image's pixels: the inverse of [`to_backend`].
+/// image's pixels: the inverse of `to_backend`.
+#[cfg(test)]
 pub(crate) fn to_source(chain: &WireChain, point: [f64; 2]) -> [f64; 2] {
     let sizes = chain_sizes(chain);
     let mut p = point;
@@ -463,6 +476,7 @@ pub(crate) fn to_source(chain: &WireChain, point: [f64; 2]) -> [f64; 2] {
 }
 
 /// `p` in a `w` × `h` image turned clockwise by `quarter_turns`.
+#[cfg(test)]
 fn rotate(p: [f64; 2], quarter_turns: u8, w: f64, h: f64) -> [f64; 2] {
     match quarter_turns % 4 {
         1 => [h - p[1], p[0]],
@@ -500,7 +514,7 @@ pub(crate) fn mask_bounds(width: u32, height: u32, counts: &[u32]) -> Option<([f
         }
         at += count;
     }
-    (area > 0).then(|| ([x0 as f64, y0 as f64, x1 as f64, y1 as f64], area))
+    (area > 0).then_some(([x0 as f64, y0 as f64, x1 as f64, y1 as f64], area))
 }
 
 /// The bounds of a shape in source pixels, clamped to the image.
@@ -627,11 +641,6 @@ impl Fact {
 
     fn muted(mut self, text: impl Into<String>) -> Self {
         self.parts.push(FactPart { text: text.into(), style: FactStyle::Muted });
-        self
-    }
-
-    fn strong(mut self, text: impl Into<String>) -> Self {
-        self.parts.push(FactPart { text: text.into(), style: FactStyle::Strong });
         self
     }
 }
@@ -1234,7 +1243,7 @@ fn thousands(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -1278,12 +1287,27 @@ fn capitalised(text: &str) -> String {
     }
 }
 
-/// The short form of a call id, as the run shows it.
-fn call_words(tool: &str, call_id: &str) -> Vec<FactPart> {
-    vec![
-        FactPart { text: tool.to_string(), style: FactStyle::Mono },
-        FactPart { text: format!(" · {call_id}"), style: FactStyle::Plain },
-    ]
+/// The call that answered, as the run shows it: `vision_read · c-31`; with its measuring
+/// call, `vision_segment c-2207 · vision_measure c-2208`.
+fn call_words(record: &Record) -> Vec<FactPart> {
+    let mono = |text: &str| FactPart { text: text.to_string(), style: FactStyle::Mono };
+    let plain = |text: String| FactPart { text, style: FactStyle::Plain };
+    let measured = record
+        .measurements
+        .iter()
+        .find_map(|m| Some((m.tool.clone().unwrap_or_else(|| "vision_measure".into()), m.call.clone()?)));
+    match measured {
+        Some((tool, call)) => vec![
+            mono(&record.tool),
+            plain(format!(" {} · ", record.call_id)),
+            mono(&tool),
+            plain(format!(" {call}")),
+        ],
+        None if record.video.is_some() => {
+            vec![mono(&record.tool), plain(format!(" over sampled frames · {}", record.call_id))]
+        }
+        None => vec![mono(&record.tool), plain(format!(" · {}", record.call_id))],
+    }
 }
 
 /// What the call asked for: "torn seal", "person".
@@ -1394,7 +1418,7 @@ fn run_view(record: &Record, input: &ViewerInput<'_>) -> RunView {
         Some(at) => format!("{} · {}", input.agent_name, at.with_timezone(&input.offset).format("%H:%M")),
         None => input.agent_name.clone(),
     });
-    RunView { text, agent: record.agent.clone(), call: call_words(&record.tool, &record.call_id) }
+    RunView { text, agent: record.agent.clone(), call: call_words(record) }
 }
 
 /// One answer, projected.
@@ -1444,7 +1468,8 @@ pub(crate) fn answer_view(record: &Record, input: &ViewerInput<'_>) -> AnswerVie
             || bounds[2] >= f64::from(width) - 0.5
             || bounds[3] >= f64::from(height) - 0.5;
         let shape_word = if shape == ShapeKind::Mask { "mask" } else { "box" };
-        let detail = if let Some(text) = &text {
+        let read_as = region.origin.escalated_from.as_ref().and_then(|from| from.text.clone());
+        let detail = if let Some(text) = read_as.as_ref().or(text.as_ref()) {
             text.clone()
         } else if track.is_some() {
             String::new()
@@ -1530,8 +1555,11 @@ pub(crate) fn answer_view(record: &Record, input: &ViewerInput<'_>) -> AnswerVie
             (PictureKind::VideoFrame, _) => {
                 if let Some(track) = track {
                     let mut seen = Fact::new("Seen");
-                    if let (Some(first), Some(last)) = (track.spans.first(), track.spans.last()) {
-                        seen = seen.plain(format!("{} → {}", video_time(first[0]), video_time(last[1])));
+                    // The stretch of the video this frame is in, else the first.
+                    let at = record.video.as_ref().map_or(0.0, |video| video.at_s);
+                    let span = track.spans.iter().find(|span| span[0] <= at && at <= span[1]).or(track.spans.first());
+                    if let Some(span) = span {
+                        seen = seen.plain(format!("{} → {}", video_time(span[0]), video_time(span[1])));
                     }
                     facts.push(seen.muted(format!(" · {} frames", thousands(track.frames))));
                 }
@@ -1608,6 +1636,17 @@ pub(crate) fn answer_view(record: &Record, input: &ViewerInput<'_>) -> AnswerVie
             blurred,
         });
     }
+    // Chips in the answer's own order (board choice V3).
+    let mut labels: Vec<LabelCount> = Vec::new();
+    let mut by_index: Vec<&RegionView> = regions.iter().collect();
+    by_index.sort_by_key(|region| if kind == PictureKind::Document { region.order.unwrap_or(0) } else { region.index });
+    for region in by_index {
+        let label = region.label.trim_end_matches(" · blurred").to_string();
+        match labels.iter_mut().find(|entry| entry.label == label) {
+            Some(entry) => entry.count += 1,
+            None => labels.push(LabelCount { label, count: 1 }),
+        }
+    }
     // A photo lists its measured region first, then the rest by score.
     if kind == PictureKind::Photo {
         let measured = measurement.map(|m| m.region as u32);
@@ -1616,22 +1655,14 @@ pub(crate) fn answer_view(record: &Record, input: &ViewerInput<'_>) -> AnswerVie
             key(a).cmp(&key(b)).then(b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)))
         });
         // The calibration reference goes last.
-        if let Some(reference) = calibration_region {
-            if let Some(at) = regions.iter().position(|r| r.index as usize == reference) {
-                let region = regions.remove(at);
-                regions.push(region);
-            }
+        if let Some(reference) = calibration_region
+            && let Some(at) = regions.iter().position(|r| r.index as usize == reference)
+        {
+            let region = regions.remove(at);
+            regions.push(region);
         }
     }
 
-    let mut labels: Vec<LabelCount> = Vec::new();
-    for region in &regions {
-        let label = region.label.trim_end_matches(" · blurred").to_string();
-        match labels.iter_mut().find(|entry| entry.label == label) {
-            Some(entry) => entry.count += 1,
-            None => labels.push(LabelCount { label, count: 1 }),
-        }
-    }
     if kind == PictureKind::Document {
         // Chips in the order a page's kinds are read about: title first, then by first sight.
         labels.sort_by_key(|entry| match entry.label.as_str() {

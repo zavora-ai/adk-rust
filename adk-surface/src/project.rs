@@ -674,11 +674,18 @@ impl Projector {
                         } else {
                             words::FAILED.to_string()
                         };
+                        // A perception call's answer opens in the annotated viewer.
+                        let image = (ok && crate::viewer::answers_about_image(&function_response.name))
+                            .then(|| function_response.response.get("image").and_then(Value::as_str))
+                            .flatten()
+                            .filter(|digest| digest.starts_with("sha256:"))
+                            .map(str::to_string);
                         items.push(ThreadItem::Result {
                             tool: function_response.name.clone(),
                             call_id: id.clone(),
                             ok,
                             text,
+                            image,
                         });
                     }
                     _ => {}

@@ -114,6 +114,17 @@ pub mod paths {
     /// `GET`: one of the images a decision holds as evidence, its digest checked, for a viewer
     /// who may see the decision (spec 3.7 §8.2, §8.3).
     pub const EVIDENCE: &str = "/surface/decisions/{id}/evidence/{index}";
+    /// `GET`: the annotated viewer of one image of a session — a digest, or the name of an
+    /// image the session holds — with every answer the vision tools gave for it (spec 3.7
+    /// §8.2, X12).
+    pub const VISION_VIEW: &str = "/surface/vision/{session}/images/{image}/view";
+    /// `GET`: one image of a session, its digest checked, for the session's owner (spec 3.7
+    /// §8.3).
+    pub const VISION_IMAGE: &str = "/surface/vision/{session}/images/{image}";
+    /// `GET`: one answer's `RegionSet` as a file (board choice V14).
+    pub const VISION_REGIONS: &str = "/surface/vision/{session}/answers/{answer}/regions";
+    /// `POST`: save a labelled example from an answer (board choice V13).
+    pub const VISION_EXAMPLES: &str = "/surface/vision/{session}/examples";
     /// `GET`: the roster.
     pub const AGENTS: &str = "/surface/agents";
     /// `GET`: one agent a person added (spec 3.3 §5.7).
@@ -194,6 +205,10 @@ pub fn router(engine: SurfaceEngine) -> Router {
         .route(paths::DECISIONS, get(decisions))
         .route(paths::DECISION, get(decision))
         .route(paths::EVIDENCE, get(evidence))
+        .route(paths::VISION_VIEW, get(vision_view))
+        .route(paths::VISION_IMAGE, get(vision_image))
+        .route(paths::VISION_REGIONS, get(vision_regions))
+        .route(paths::VISION_EXAMPLES, post(vision_example))
         .route(paths::THREAD, get(thread))
         .route(paths::FEED, get(feed))
         .route(paths::QUEUED, get(queued))
@@ -448,21 +463,140 @@ async fn evidence(
 ) -> Response {
     let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
     match engine.evidence_image(&caller, &id, index).await {
-        Ok(image) => {
-            let mime = match image.mime_type.as_str() {
-                "image/png" | "image/jpeg" | "image/webp" | "image/gif" => image.mime_type,
-                _ => "application/octet-stream".to_string(),
+        Ok(image) => image_response(image),
+        Err(error) => failed(error),
+    }
+}
+
+/// `GET /surface/vision/{session}/images/{image}/view` query.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewerQuery {
+    /// The surface asking; defaults to the web home.
+    #[serde(default)]
+    pub surface: Option<SurfaceKind>,
+    /// The answer to show, by its call; the newest otherwise.
+    #[serde(default)]
+    pub answer: Option<String>,
+    /// A second answer to compare with it.
+    #[serde(default)]
+    pub compare: Option<String>,
+}
+
+/// `GET /surface/vision/{session}/answers/{answer}/regions` query.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RegionsQuery {
+    /// The surface asking; defaults to the web home.
+    #[serde(default)]
+    pub surface: Option<SurfaceKind>,
+    /// A second answer: both `RegionSet`s, in an array (board choice V14).
+    #[serde(default)]
+    pub with: Option<String>,
+}
+
+/// The annotated viewer of one image (spec 3.7 §8.2, X12), for the session's owner.
+async fn vision_view(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path((session, image)): Path<(String, String)>,
+    Query(query): Query<ViewerQuery>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine
+        .viewer(&caller, &session, &image, query.answer.as_deref(), query.compare.as_deref())
+        .await
+    {
+        Ok(view) => Json(view).into_response(),
+        Err(error) => failed(error),
+    }
+}
+
+/// One image of a session, for the session's owner: the exact bytes whose digest the viewer
+/// shows, never cached and never sniffed (spec 3.7 §8.3).
+async fn vision_image(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path((session, image)): Path<(String, String)>,
+    Query(query): Query<SurfaceQuery>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine.viewer_image(&caller, &session, &image).await {
+        Ok(image) => image_response(image),
+        Err(error) => failed(error),
+    }
+}
+
+/// An image's bytes with the headers every evidence and viewer image is served with.
+fn image_response(image: crate::evidence::EvidenceBytes) -> Response {
+    let mime = match image.mime_type.as_str() {
+        "image/png" | "image/jpeg" | "image/webp" | "image/gif" => image.mime_type,
+        _ => "application/octet-stream".to_string(),
+    };
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, mime),
+            (axum::http::header::CACHE_CONTROL, "private, no-store".to_string()),
+            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+        ],
+        image.bytes,
+    )
+        .into_response()
+}
+
+/// One answer's `RegionSet` as a file to save (board choice V14).
+async fn vision_regions(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path((session, answer)): Path<(String, String)>,
+    Query(query): Query<RegionsQuery>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine.viewer_export(&caller, &session, &answer, query.with.as_deref()).await {
+        Ok(set) => {
+            let safe: String = answer
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+                .collect();
+            let name = if query.with.is_some() {
+                format!("{safe}-compared.regions.json")
+            } else {
+                format!("{safe}.regions.json")
             };
             (
                 [
-                    (axum::http::header::CONTENT_TYPE, mime),
                     (axum::http::header::CACHE_CONTROL, "private, no-store".to_string()),
-                    (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+                    (
+                        axum::http::header::CONTENT_DISPOSITION,
+                        format!("attachment; filename=\"{name}\""),
+                    ),
                 ],
-                image.bytes,
+                Json(set),
             )
                 .into_response()
         }
+        Err(error) => failed(error),
+    }
+}
+
+/// Saves a labelled example from an answer (board choice V13). A paired device reads the
+/// viewer and saves nothing: the phone is read-only (board choice V15).
+async fn vision_example(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path(session): Path<String>,
+    Json(example): Json<crate::viewer::LabelledExample>,
+) -> Response {
+    if let Some(Extension(Some(context))) = &context
+        && device_of(context).is_some()
+    {
+        return failed(SurfaceError::NotHere(
+            "a phone shows the viewer read-only; save examples on a computer".into(),
+        ));
+    }
+    let caller = try_or_respond!(caller(context, SurfaceKind::Web, None));
+    match engine.save_example(&caller, &session, &example).await {
+        Ok(saved) => Json(saved).into_response(),
         Err(error) => failed(error),
     }
 }
