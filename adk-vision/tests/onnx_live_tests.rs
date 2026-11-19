@@ -16,6 +16,11 @@
 //! | `SigLip2` | `siglip2-base-patch16-256-quantized` | each caption ranks its photo first, and each photo its caption |
 //!
 //! Each backend also runs its trait's conformance suite on these models.
+//!
+//! With `--features onnx-dynamic` and `ORT_DYLIB_PATH` set, the same tests run against an
+//! onnxruntime library loaded at run time.
+
+#![cfg(any(feature = "onnx", feature = "onnx-dynamic"))]
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};

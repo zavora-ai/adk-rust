@@ -108,7 +108,3 @@ required-features = ["guardrail"]
 [[test]]
 name = "fetch_live_tests"
 required-features = ["fetch"]
-
-[[test]]
-name = "onnx_live_tests"
-required-features = ["onnx"]

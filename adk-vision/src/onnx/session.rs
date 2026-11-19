@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use ort::ep::ExecutionProviderDispatch;
 use ort::session::Session;
-use ort::session::builder::GraphOptimizationLevel;
+use ort::session::builder::{AutoDevicePolicy, GraphOptimizationLevel};
 use ort::value::{DynValue, Tensor};
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +31,8 @@ use crate::manifest::{ModelManifest, RuntimeSpec, VerifiedFile, VerifiedModel, V
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum OnnxExecutionProvider {
-    /// The CPU.
+    /// The CPU. The session is pinned to it rather than left to onnxruntime's automatic
+    /// device selection.
     #[default]
     Cpu,
     /// CoreML on Apple silicon (feature `onnx-coreml`).
@@ -41,26 +42,28 @@ pub enum OnnxExecutionProvider {
 }
 
 impl OnnxExecutionProvider {
-    /// The provider to register on a session builder, or `None` to run on the CPU.
-    fn dispatch(self) -> Option<ExecutionProviderDispatch> {
-        let provider = match self {
-            Self::Cpu => return None,
+    /// The accelerator to register on a session builder, or `None` to run on the CPU.
+    fn accelerator(self) -> Option<ExecutionProviderDispatch> {
+        match self {
+            Self::Cpu => None,
             #[cfg(feature = "onnx-coreml")]
             Self::CoreMl => Some(ort::ep::CoreML::default().build()),
-            #[cfg(not(feature = "onnx-coreml"))]
-            Self::CoreMl => None,
             #[cfg(feature = "onnx-cuda")]
             Self::Cuda => Some(ort::ep::CUDA::default().build()),
+            #[cfg(not(feature = "onnx-coreml"))]
+            Self::CoreMl => self.not_compiled(),
             #[cfg(not(feature = "onnx-cuda"))]
-            Self::Cuda => None,
-        };
-        if provider.is_none() {
-            tracing::warn!(
-                onnx.execution_provider = %self,
-                "execution provider not compiled into this build, running on the cpu"
-            );
+            Self::Cuda => self.not_compiled(),
         }
-        provider
+    }
+
+    #[cfg(any(not(feature = "onnx-coreml"), not(feature = "onnx-cuda")))]
+    fn not_compiled(self) -> Option<ExecutionProviderDispatch> {
+        tracing::warn!(
+            onnx.execution_provider = %self,
+            "execution provider not compiled into this build, running on the cpu"
+        );
+        None
     }
 }
 
@@ -165,14 +168,19 @@ impl OrtModel {
                 .with_intra_threads(threads)
                 .map_err(|e| failed(format!("could not set {threads} intra-op threads: {e}")))?;
         }
-        if let Some(provider) = options.execution_provider.dispatch() {
-            builder = builder.with_execution_providers([provider]).map_err(|e| {
+        builder = match options.execution_provider.accelerator() {
+            Some(provider) => builder.with_execution_providers([provider]).map_err(|e| {
                 failed(format!(
                     "could not register the {} execution provider: {e}",
                     options.execution_provider
                 ))
-            })?;
-        }
+            })?,
+            // `ort` asks onnxruntime to pick a device for efficiency unless told otherwise,
+            // and an onnxruntime build with CoreML then picks CoreML.
+            None => builder
+                .with_auto_device(AutoDevicePolicy::PreferCPU)
+                .map_err(|e| failed(format!("could not pin the session to the cpu: {e}")))?,
+        };
         let session = builder
             .commit_from_file(file.path())
             .map_err(|e| failed(format!("could not load {}: {e}", file.path().display())))?;
@@ -349,6 +357,19 @@ pub(crate) fn manifest_error(manifest: &ModelManifest, reason: String) -> Vision
 mod tests {
     use super::*;
     use crate::manifest::{InMemoryAcceptanceStore, LicenceGate, LicencePolicy, ManifestSet};
+
+    #[test]
+    fn an_accelerator_registers_only_when_its_feature_is_compiled() {
+        assert!(OnnxExecutionProvider::Cpu.accelerator().is_none());
+        assert_eq!(
+            OnnxExecutionProvider::CoreMl.accelerator().is_some(),
+            cfg!(feature = "onnx-coreml")
+        );
+        assert_eq!(
+            OnnxExecutionProvider::Cuda.accelerator().is_some(),
+            cfg!(feature = "onnx-cuda")
+        );
+    }
 
     #[test]
     fn roles_pick_the_encoder_and_the_decoder_by_name() {
