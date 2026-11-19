@@ -207,7 +207,7 @@ jobs:
         packages: protobuf-compiler libasound2-dev libudev-dev
 
     - name: Install cargo-nextest
-      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
       with:
         tool: cargo-nextest
 
@@ -239,7 +239,7 @@ jobs:
         neutralize-wild: 'true'
 
     - name: Install cargo-audit and cargo-deny
-      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
       with:
         tool: cargo-audit,cargo-deny
 
@@ -316,7 +316,7 @@ jobs:
         neutralize-wild: 'true'
 
     - name: Install cargo-nextest
-      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
       with:
         tool: cargo-nextest
 
@@ -495,7 +495,7 @@ jobs:
         neutralize-wild: 'true'
 
     - name: Install cargo-nextest
-      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
       with:
         tool: cargo-nextest
 
@@ -523,7 +523,7 @@ jobs:
         neutralize-wild: 'true'
 
     - name: Install cargo-nextest
-      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
       with:
         tool: cargo-nextest
 
@@ -616,7 +616,7 @@ jobs:
         neutralize-wild: 'true'
 
     - name: Install cargo-nextest
-      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
       with:
         tool: cargo-nextest
 
@@ -724,7 +724,7 @@ jobs:
         neutralize-wild: ${{ runner.os == 'Linux' && 'true' || 'false' }}
 
     - name: Install cargo-nextest
-      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
       with:
         tool: cargo-nextest
 
@@ -818,7 +818,7 @@ jobs:
         packages: protobuf-compiler
 
     - name: Install cargo-nextest
-      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
       with:
         tool: cargo-nextest
 
