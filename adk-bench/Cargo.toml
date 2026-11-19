@@ -31,6 +31,9 @@ tracing.workspace = true
 chrono.workspace = true
 futures.workspace = true
 libc = "0.2"
+adk-vision = { workspace = true, optional = true }
+# Scales the latency image to each input size.
+image = { version = "0.25", default-features = false, optional = true }
 
 [features]
 default = []
@@ -38,7 +41,28 @@ default = []
 tau2 = []
 # BFCL (Berkeley Function Calling Leaderboard) task quality adapter
 bfcl = []
+# Vision benchmarks and the vision adapter (spec 3.7 §7.17): the harness, the committed eval
+# sets as workloads, and cloud backends replayed from recordings. Backends come with the
+# features below.
+vision = ["dep:adk-vision", "adk-vision/eval", "dep:image"]
+# RF-DETR, EfficientSAM, SAM 2.1 and SigLIP 2 on ONNX Runtime.
+vision-onnx = ["vision", "adk-vision/onnx"]
+# The ONNX backends on CoreML (Apple).
+vision-coreml = ["vision-onnx", "adk-vision/onnx-coreml"]
+# PP-OCRv6 tiny and small.
+vision-ocr = ["vision", "adk-vision/ocr"]
+# PaddleOCR-VL-1.6 on the CPU, and on Apple GPUs.
+vision-ocr-vl = ["vision", "adk-vision/ocr-vl"]
+vision-ocr-vl-metal = ["vision-ocr-vl", "adk-vision/ocr-vl-metal"]
+# Claude and NVIDIA NIM describers and Meta sam-3.1, recorded or live.
+vision-cloud = ["vision", "adk-vision/cloud", "adk-vision/nim", "adk-vision/sam", "adk-model/anthropic"]
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util", "io-std"] }
 tempfile = "3"
+# The vision example serves recorded cloud responses to the real clients.
+wiremock = "0.6"
+
+[[example]]
+name = "vision_bench"
+required-features = ["vision"]

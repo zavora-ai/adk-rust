@@ -19,6 +19,9 @@
 //! - **Regression detection**: baselines compared with a configurable tolerance
 //! - **Long history** ([`long_history`]): per-turn and per-iteration framework cost as a
 //!   session grows to thousands of events, with a scripted model and no API key
+//! - **Vision** (`vision` feature): per `adk-vision` backend, cold load, p50 and p95 per image
+//!   at three input sizes, throughput, peak RSS, accuracy on the vision eval sets and cost
+//!   per 1,000 images, published with the machine and versions
 //!
 //! `cargo adk bench` is the command-line front end.
 //!
@@ -47,6 +50,9 @@ pub mod long_history;
 pub mod memory;
 pub mod metrics;
 pub mod runner;
+/// Vision benchmarks: latency, accuracy and cost per `adk-vision` backend.
+#[cfg(feature = "vision")]
+pub mod vision;
 pub mod workload;
 
 /// Task quality adapters for established benchmark suites.
