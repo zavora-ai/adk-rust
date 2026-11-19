@@ -15,8 +15,8 @@
 //! | Cost | the run's metered spend per 1,000 images: zero for local backends, catalog prices for cloud ones |
 //!
 //! Cloud backends replay recorded responses ([`RunMode::Recorded`]): accuracy and cost are
-//! what the live call produced, and latency is not measured. One live call gives a
-//! [`RunMode::Live`] row with a single timing.
+//! what the live call produced, and latency is not measured. A [`RunMode::Live`] row is one
+//! live call; the `vision_bench` example records its wall time in the row's notes.
 //!
 //! # Example
 //!
