@@ -17,7 +17,7 @@ exclude = ["tests/"]
 [package.metadata.docs.rs]
 # docs.rs has no CUDA or Metal toolchain, so the GPU features are left out; ort-sys skips
 # linking on docs.rs.
-features = ["fetch", "conformance", "guardrail", "onnx", "ocr", "ocr-vl", "cloud", "nim", "sam"]
+features = ["fetch", "conformance", "guardrail", "onnx", "ocr", "ocr-vl", "cloud", "nim", "sam", "mistralrs"]
 
 # Spec 3.7 §7.1: media, geometry, manifests, the traits, `VisionRuntime`, the egress boundary
 # and the deterministic `Editor` always build; each runtime and provider is a feature, added
@@ -59,6 +59,12 @@ ocr = ["fetch", "dep:oar-ocr", "dep:ort", "ort/download-binaries", "ort/tls-rust
 ocr-vl = ["fetch", "dep:oar-ocr-vl"]
 # `ocr-vl` on Apple GPUs through Candle's Metal backend.
 ocr-vl-metal = ["ocr-vl", "oar-ocr-vl/metal"]
+# `LlmDescriber::mistralrs`: a verified vision-language model (Qwen3-VL) in this process
+# through adk-mistralrs (§7.6), `InProcess`, so its images never reach the egress gate.
+mistralrs = ["cloud", "fetch", "dep:adk-mistralrs"]
+# `mistralrs` on Apple GPUs (Metal) or NVIDIA GPUs (CUDA toolkit required).
+mistralrs-metal = ["mistralrs", "adk-mistralrs/metal"]
+mistralrs-cuda = ["mistralrs", "adk-mistralrs/cuda"]
 
 [dependencies]
 adk-core.workspace = true
@@ -81,6 +87,8 @@ tracing.workspace = true
 uuid.workspace = true
 
 adk-guardrail = { workspace = true, optional = true }
+# `mistralrs`: Qwen3-VL and the other mistral.rs vision models in process.
+adk-mistralrs = { workspace = true, optional = true }
 # Provider prices for preflight estimates, and the clients `nim` and `sam` build on.
 adk-model = { workspace = true, optional = true }
 # Base64 images inside tool results (`guardrail`), data URLs and mask payloads (`cloud`, `sam`), and NIM data URIs (`nim`).
@@ -178,3 +186,11 @@ required-features = ["nim", "ocr", "guardrail", "fetch", "conformance"]
 [[test]]
 name = "ocr_vl_live_tests"
 required-features = ["ocr-vl", "fetch", "conformance"]
+
+[[test]]
+name = "local_redactor_tests"
+required-features = ["onnx", "ocr", "guardrail"]
+
+[[test]]
+name = "mistralrs_tests"
+required-features = ["mistralrs", "conformance"]
