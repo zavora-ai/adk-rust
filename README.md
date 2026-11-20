@@ -247,6 +247,10 @@ cargo run
 | `agent-engine` | Gemini Enterprise Agent Engine BYOC container and Terraform deployment |
 | `openai` | OpenAI-powered agent |
 | `custom` | Manual `Agent` trait implementation |
+| `harness` | Governed harness agent: modes, approvals, a shell, `AGENTS.md` and skills, at the console or served |
+| `autonomous` | An agent that runs unattended: a rubric-graded goal and a schedule on the kernel, durable stores, an approval-gated side effect, a budget and the OS sandbox |
+| `website` | An AWP 2.0 site project and the edge binary that serves it |
+| `vision` | A Document desk: on-device readers and a cloud describer behind the egress gate |
 
 **Enterprise patterns** — pre-composed, several capabilities already wired together.
 

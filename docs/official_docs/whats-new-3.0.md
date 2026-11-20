@@ -130,7 +130,7 @@ ONNX Runtime and Candle.
 
 | What you get | Where |
 |--------------|-------|
-| Meta Muse (`muse`, `muse-realtime`, `muse-responses`) | [Meta Muse](models/providers.md#meta-muse) |
+| Meta Muse: `muse` on `adk-rust`; `muse-realtime` and `muse-responses` on `adk-model` | [Meta Muse](models/providers.md#meta-muse) |
 | `FallbackLlm`: an ordered chain of models across providers | [Model fallback](models/fallback.md) |
 | Per-call reasoning effort (`GenerateContentConfig::effort`) | [Per-call reasoning effort](models/providers.md#per-call-reasoning-effort) |
 | Tool declarations kept in declaration order (`LlmRequest.tools` is a `ToolDeclarations`) | [Migrating 2.x → 3.0](migration/2.x-to-3.0.md) |
