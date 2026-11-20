@@ -10,7 +10,7 @@ repository.workspace = true
 documentation = "https://docs.rs/adk-skill"
 readme = "README.md"
 exclude = ["tests/"]
-keywords = ["adk", "skills", "agent", "prompt"]
+keywords = ["adk", "skills", "agent", "prompt", "agentskills"]
 categories = ["development-tools", "asynchronous"]
 
 [features]

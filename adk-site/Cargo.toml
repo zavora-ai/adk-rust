@@ -14,6 +14,9 @@ keywords = ["adk", "awp", "static-site", "release", "agent"]
 categories = ["web-programming", "asynchronous"]
 include = ["src/**/*", "Cargo.toml", "README.md", "LICENSE"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 # Spec 3.5 §7.1: the default build carries the content model, the built-in generator, the
 # launch gate, releases, the site log and `DirectoryHost`. External generators and host
 # adapters arrive later as their own features.

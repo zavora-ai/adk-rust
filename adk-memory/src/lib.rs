@@ -80,6 +80,22 @@
 //! - Expiry on every backend: a per-entry expiry or a per-service default TTL, enforced on
 //!   read, purged by [`MemoryService::purge_expired`] (see [`expiry`]), and
 //!   [`MemoryService::delete_memory`] by id
+//!
+//! ## Feature flags
+//!
+//! The in-memory backend is always compiled; no feature is on by default.
+//!
+//! | Feature | Enables |
+//! |---------|---------|
+//! | `sqlite-memory` | The SQLite backend |
+//! | `database-memory` | The PostgreSQL backend, with pgvector semantic search |
+//! | `redis-memory` | The Redis backend |
+//! | `mongodb-memory` | The MongoDB backend |
+//! | `neo4j-memory` | The Neo4j backend |
+//! | `vertex-memory` | Vertex AI Memory Bank on the Gemini Enterprise Agent Platform |
+//! | `graph-memory` | `GraphMemoryService`, the SQLite knowledge graph; implies `sqlite-memory` |
+//! | `embedding-trait` | The `EmbeddingProvider` trait without a vector backend |
+//! | `conformance` | The `conformance` module and `memory_conformance_tests!`, the id and expiry suite for a backend's tests |
 
 pub mod adapter;
 #[cfg(feature = "conformance")]

@@ -83,7 +83,8 @@
 //! ## Feature flags
 //!
 //! The default build runs on the CPU. `metal`, `accelerate`, `cuda`, `cudnn`, `flash-attn`,
-//! `nccl`, `mkl`, and `ring` pass through to mistral.rs; `reqwest` adds image loading from URLs.
+//! `nccl`, `mkl`, and `ring` pass through to mistral.rs; `reqwest` adds image loading from URLs;
+//! `bench-inference` enables the inference benchmarks, which download models.
 
 mod adapter;
 mod client;

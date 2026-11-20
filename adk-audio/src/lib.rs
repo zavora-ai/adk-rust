@@ -13,11 +13,13 @@
 //! | `tts` (default) | Cloud TTS: ElevenLabs, OpenAI, Gemini, Cartesia |
 //! | `stt` (default) | Cloud STT: OpenAI Whisper API, Deepgram, AssemblyAI, Gemini |
 //! | `muse` | `MuseStt`: Meta Muse file and realtime transcription, over `adk-model` |
+//! | `music` | `reqwest` for `MusicProvider` implementations, with `AudioError::Network` |
 //! | `fx` | DSP processors: normalizer, resampler, noise suppressor, compressor, trimmer, pitch shifter |
 //! | `mlx` | Local model loading with tokenizers and Hugging Face Hub |
 //! | `onnx` | ONNX Runtime local inference; `kokoro`, `chatterbox`, `whisper-onnx`, `distil-whisper`, and `moonshine` add models |
 //! | `onnx-cuda`, `onnx-coreml` | The CUDA and CoreML execution providers; without its feature a provider falls back to the CPU |
 //! | `qwen3-tts` | Qwen3-TTS on Candle |
+//! | `all-onnx` | `onnx`, `kokoro`, `chatterbox`, `whisper-onnx`, `distil-whisper`, `moonshine` and `qwen3-tts` |
 //! | `livekit` | `RealtimeBridge` to `adk-realtime` |
 //! | `desktop-audio` | Microphone capture, speaker playback, and VAD turn-taking |
 //! | `all` | Every feature except `desktop-audio`, `onnx-cuda`, and `onnx-coreml` |

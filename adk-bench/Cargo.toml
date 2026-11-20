@@ -13,6 +13,11 @@ homepage.workspace = true
 keywords = ["ai", "agent", "benchmark", "performance", "adk"]
 categories = ["development-tools::profiling"]
 
+[package.metadata.docs.rs]
+# The local vision backends (`vision-onnx`, `vision-coreml`, `vision-ocr`, `vision-ocr-vl`,
+# `vision-ocr-vl-metal`) build native runtimes and are documented on adk-vision.
+features = ["bfcl", "tau2", "vision-cloud"]
+
 [dependencies]
 adk-core.workspace = true
 adk-agent.workspace = true

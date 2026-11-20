@@ -38,6 +38,18 @@
 //! same [`ManagedStores`], wakes it. With durable stores, a parked session survives a
 //! restart: a new runtime instance rebuilds it from the [`ManagedStateStore`] and resumes
 //! it when the answer arrives. See [`durable`].
+//!
+//! ## Features
+//!
+//! No feature is on by default.
+//!
+//! | Feature | Enables |
+//! |---------|---------|
+//! | `sandbox` | `adk-sandbox` integration for isolated tool execution |
+//! | `memory` | Cross-session memory through an `adk_core::Memory` service (`with_memory`); links no extra crate |
+//! | `full` | `sandbox` and `memory` |
+//! | `gemini`, `openai`, `anthropic`, `ollama` | `DefaultModelResolver` builds that provider's models |
+//! | `all-providers` | Every provider feature |
 
 pub mod agent_builder;
 pub mod checkpoint;

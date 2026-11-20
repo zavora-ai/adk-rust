@@ -5,6 +5,10 @@ generator that writes a Markdown and a structured twin of every page, a launch g
 releases in an append-only log, and hosts that switch releases atomically. No code runs when a
 page is requested: a site is static files plus a log that proves which files are the site.
 
+[![Crates.io](https://img.shields.io/crates/v/adk-site.svg)](https://crates.io/crates/adk-site)
+[![Documentation](https://docs.rs/adk-site/badge.svg)](https://docs.rs/adk-site)
+[![License](https://img.shields.io/crates/l/adk-site.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
+
 > **Note:** `adk-site` is **Experimental** (see `STABILITY.md`). Its API may change without
 > notice while spec 3.5 lands.
 

@@ -10,6 +10,8 @@ The desktop audio pipeline connects system audio hardware to the existing `adk-a
 Microphone → AudioCapture → AudioStream → [VAD → STT → Agent → TTS] → AudioPlayback → Speaker
 ```
 
+The STT and TTS stages are `adk-audio`'s speech providers; see [Speech with adk-audio](../audio/speech.md).
+
 All components use the `cpal` crate for cross-platform audio (CoreAudio on macOS, PipeWire/ALSA/PulseAudio on Linux, WASAPI on Windows) and produce/consume the standard `AudioFrame` type.
 
 ## Feature Flags

@@ -14,6 +14,20 @@
 //! - ACP experimental extensions as an unreleased compatibility channel
 //! - AP2 `v0.1-alpha` as of `2026-03-22`
 //!
+//! # Features
+//!
+//! No feature is on by default; the kernel, journal, tools and policies need none.
+//!
+//! | Feature | Enables |
+//! |---------|---------|
+//! | `acp` | ACP `2026-01-30` checkout routes, delegated payment, completion, cancelation and status |
+//! | `acp-experimental` | ACP discovery, delegate authentication and signed webhooks; implies `acp` |
+//! | `ap2` | AP2 `v0.1-alpha` mandates, payment execution, receipts and interventions |
+//! | `ap2-a2a` | AP2 A2A-oriented helpers and Agent Card metadata; implies `ap2` |
+//! | `ap2-mcp` | AP2 MCP-safe continuation, intervention and receipt views; implies `ap2` |
+//! | `wallet` | The owner-funded site wallet: category mandates, caps checked before execution, holds, rails, anomaly pauses and reconciliation |
+//! | `sqlite`, `postgres`, `redis` | Durable wallet stores `SqliteWalletStore`, `PostgresWalletStore` and `RedisWalletStore`; each implies `wallet` and the same `adk-session` backend |
+//!
 //! # Example
 //!
 //! ```

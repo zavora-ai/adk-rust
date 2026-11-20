@@ -34,6 +34,7 @@
 //! | `egress-dns` | `egress::SystemResolver`: the operating system resolver for egress checks |
 //! | `egress-client` | `egress::GuardedClient`: an HTTP client that enforces an `EgressPolicy` |
 //! | `webhook-delivery` | The `webhook_delivery` module: signed outbound delivery |
+//! | `auth-bridge` | The `request_context` module: `RequestContextExtractor`, the trait an HTTP server authenticates requests through |
 //!
 //! ## Quick Start
 //!
