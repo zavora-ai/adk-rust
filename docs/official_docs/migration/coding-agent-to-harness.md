@@ -4,7 +4,7 @@
 and a coding prompt onto an `LlmAgent`, and runs `bash` on the host with no approval. In 3.0.0
 the harness supersedes it (spec 3.1 §4, §7.19): `adk_harness::coding::CodingAgent` keeps the
 same builder and builds a `HarnessAgent` in ask mode, so every edit and every command passes
-the governed path. `adk_agent::coding` is unchanged in 3.0.0 and carries no `#[deprecated]`
+the governed path. `adk_agent::coding` keeps its API in 3.0.0 — `write_todos` now keeps each session's list in session state under `harness:todos` (`adk_agent::coding::TODOS_STATE_KEY`) — and carries no `#[deprecated]`
 attribute; the [2.x → 3.0 guide](2.x-to-3.0.md) covers the rest of the upgrade.
 
 ## Quick reference
