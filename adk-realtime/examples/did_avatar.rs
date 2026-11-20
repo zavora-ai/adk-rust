@@ -32,7 +32,7 @@ fn main() {
         DIDConfig::new(&api_key, &agent_id)
             .with_llm_config(DIDLlmConfig {
                 provider: "openai".to_string(),
-                model: "gpt-4".to_string(),
+                model: "gpt-6.1-sol".to_string(),
                 instructions: Some("You are a helpful assistant.".to_string()),
             })
             .with_knowledge_id("kb_docs_v2"),
