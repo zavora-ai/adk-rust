@@ -58,6 +58,18 @@ export const labels = {
   paletteOpenThread: (agent: string) => `${agent}'s thread`,
   paletteTheme: (theme: string) => `Theme: ${theme}`,
   paletteAddAgent: "Add an agent",
+  // Decisions, the inbox (spec 3.3 §5.1).
+  waitingCount: (count: number) => `${count} waiting`,
+  filterByWho: "Filter by who asks",
+  everyone: "Everyone",
+  waitingDecisions: "Waiting decisions",
+  selectedDecision: "The selected decision",
+  caughtUp: "You're caught up.",
+  openInThread: "Open in its thread",
+  // Thread history (spec 3.3 §5.1).
+  threadHistory: "Thread history",
+  thisConversation: "this conversation",
+  noOtherThreads: "No other threads with this agent yet.",
   developer: "Developer panel",
   developerShort: "Developer",
   skipToContent: "Skip to the content",
@@ -115,8 +127,19 @@ export const labels = {
   earlierVersions: (count: number) => `Earlier versions · ${count}`,
   noEarlierVersions: "This is the drawing's first version.",
   closeCanvas: "Close the canvas",
+  openOwnWindow: "Open in its own window",
+  askDrawing: "Ask for a drawing",
+  askDrawingText: "Show this as a drawing I can look at: ",
+  // Stop the turn, and how you answered (spec 3.3 §5.1).
+  stopTurn: words.STOP_THE_TURN,
+  howYouAnswered: words.HOW_YOU_ANSWERED,
+  suggestedReplies: words.SUGGESTED_REPLIES,
+  surfaceNames: { web: "Web home", terminal: "Terminal", phone: "Phone", chat: "Chat", voice: "Voice", tray: "Tray" } as Record<string, string>,
+  onSurface: (surface: string, count: number) => `${surface} · ${count}`,
   canvasGone: "This drawing is no longer in the thread.",
   workSteps: (count: number) => `${count} steps`,
+  workedFor: (seconds: number) =>
+    seconds < 60 ? `Worked for ${seconds} s` : `Worked for ${Math.floor(seconds / 60)} min ${seconds % 60} s`,
   workFailed: (count: number) => (count === 1 ? "1 failed" : `${count} failed`),
   // Today (spec 3.3 §5.1).
   awayLead: "While you were",

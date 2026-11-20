@@ -54,6 +54,7 @@ const SCREENS: Array<{ name: string; query: string; size?: { width: number; heig
       await page.getByRole("complementary", { name: "Canvas" }).waitFor();
     },
   },
+  { name: "decisions inbox", query: "section=decisions", then: async (page) => void (await page.getByRole("list", { name: "Waiting decisions" }).waitFor()) },
   { name: "today", query: "section=today" },
   { name: "memory and rules", query: "section=memory" },
   { name: "developer run view", query: "screen=developer", then: async (page) => void (await page.getByRole("tree").waitFor()) },

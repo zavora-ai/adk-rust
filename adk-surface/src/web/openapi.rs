@@ -151,6 +151,8 @@ pub fn openapi() -> Value {
     let voice_ticket = schema_ref::<VoiceTicket>(&mut out);
     let voice_update = schema_ref::<VoiceUpdate>(&mut out);
     let agent_detail = schema_ref::<crate::agents::AgentDetail>(&mut out);
+    let agent_threads = schema_ref::<crate::agents::AgentThreads>(&mut out);
+    let answer_summary = schema_ref::<crate::answers::AnswerSummary>(&mut out);
     let agent_choices = schema_ref::<crate::agents::AgentChoices>(&mut out);
     let agent_preview = schema_ref::<crate::agents::AgentPreview>(&mut out);
     let genui_capabilities = schema_ref::<super::genui::GenuiCapabilities>(&mut out);
@@ -253,6 +255,26 @@ pub fn openapi() -> Value {
             "One agent the caller added: its definition, version and how it was added",
             json!([path_param("id")]),
             answer("The agent", agent_detail),
+        ),
+    );
+    routes.insert(
+        with(paths::ANSWERS),
+        read(
+            "How the caller answered since a time (spec 3.3 §5.1 \"How you answered\")",
+            json!([query(
+                "since",
+                "Since when; default the last 7 days",
+                json!({ "type": "string", "format": "date-time" })
+            )]),
+            answer("Each answer counted", answer_summary),
+        ),
+    );
+    routes.insert(
+        with(paths::AGENT_THREADS),
+        read(
+            "The caller's threads with one agent, newest first (spec 3.3 §5.1 \"Thread history\")",
+            json!([path_param("id")]),
+            answer("The threads", agent_threads),
         ),
     );
     routes.insert(

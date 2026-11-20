@@ -855,6 +855,14 @@ impl Projector {
                     // The person's own call: its DrawnSent item shows it, not the agent's work.
                     Part::FunctionCall { id, .. }
                         if requested.is_some() && crate::genui::is_requested(id.as_ref()) => {}
+                    // Replies an agent suggests: shown under its message, never as its work.
+                    Part::FunctionCall { name, args, id, .. }
+                        if name == crate::suggest::SUGGEST_REPLIES_TOOL =>
+                    {
+                        if let Ok(replies) = crate::suggest::replies_of(args) {
+                            items.push(ThreadItem::Suggestions { replies, call_id: id.clone() });
+                        }
+                    }
                     Part::FunctionCall { name, args, id, .. } => {
                         items.push(ThreadItem::Activity {
                             tool: name.clone(),
@@ -865,6 +873,9 @@ impl Projector {
                     // A held call's placeholder answer: its Decision item shows it.
                     Part::FunctionResponse { function_response, .. }
                         if adk_core::is_confirmation_pending(&function_response.response) => {}
+                    // The suggestions' own answer says nothing to the person.
+                    Part::FunctionResponse { function_response, .. }
+                        if function_response.name == crate::suggest::SUGGEST_REPLIES_TOOL => {}
                     // A call a person asked for that the agent's rules refused before holding it.
                     Part::FunctionResponse { function_response, id: Some(id), .. }
                         if requested.is_some() && crate::genui::is_requested(Some(id)) =>

@@ -78,6 +78,7 @@ mod origin;
 mod project;
 pub mod rules;
 mod source;
+pub mod suggest;
 #[cfg(feature = "tui")]
 pub mod tui;
 #[cfg(feature = "verb-ui")]
@@ -93,19 +94,19 @@ pub mod workflow;
 pub use agents::GrantedUse;
 pub use agents::{
     AgentCardView, AgentChoices, AgentColor, AgentDetail, AgentDraft, AgentLife, AgentPreview,
-    AgentPreviewRequest, AreaChoice, CardLine, ColorChoice, EndedWork, FileUse, ModelView,
-    RemovedAgent, RemovedThread, ShellUse, UsesDraft, WebUse,
+    AgentPreviewRequest, AgentThreads, AreaChoice, CardLine, ColorChoice, EndedWork, FileUse,
+    ModelView, RemovedAgent, RemovedThread, ShellUse, ThreadSummary, UsesDraft, WebUse,
 };
 pub use answers::{
-    AnswerLog, AnswerRecord, AuditAnswerLog, InMemoryAnswerLog, RECORD_LINES, RecordAnswerLog,
-    SURFACE_AUDIT_DECIDE,
+    AnswerLog, AnswerRecord, AnswerSummary, AuditAnswerLog, InMemoryAnswerLog, RECORD_LINES,
+    RecordAnswerLog, SURFACE_AUDIT_DECIDE, SurfaceCount,
 };
 pub use control::ControlSource;
 pub use engine::SURFACE_AUDIT_ANSWER;
 pub use engine::{
     Command, CommandOutcome, DEFAULT_POLL_INTERVAL, FeedFrame, SURFACE_AUDIT_RESUME_ALL,
     SURFACE_AUDIT_SEND, SURFACE_AUDIT_SET_MODE, SURFACE_AUDIT_STEER, SURFACE_AUDIT_STOP_ALL,
-    SurfaceEngine, SurfaceEngineBuilder,
+    SURFACE_AUDIT_STOP_TURN, SurfaceEngine, SurfaceEngineBuilder,
 };
 pub use engine::{
     SURFACE_AUDIT_APP_CALL_AUTO_APPROVED, SURFACE_AUDIT_DRAWN_SEALED, SURFACE_AUDIT_DRAWN_SUBMITTED,

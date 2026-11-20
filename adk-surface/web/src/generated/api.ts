@@ -225,6 +225,14 @@ export interface AgentRow {
 /** What an agent is doing (spec 3.3 §8.1). */
 export type AgentStatus = "working" | "waitingForYou" | "asleep" | "done" | "failed" | "ready" | "paused" | "cantStart";
 
+/** An agent's threads, newest first: `GET /surface/agents/{id}/threads`. */
+export interface AgentThreads {
+  /** The agent, by its roster name. */
+  agent: string;
+  /** Its threads, newest first. */
+  threads: ThreadSummary[];
+}
+
 /** `GET /surface/agents` answer. */
 export interface AgentsResponse {
   /** The caller's agents. */
@@ -288,6 +296,29 @@ export interface AnswerRequest {
   reason?: string | null;
   /** The card's `version`. */
   version: number;
+}
+
+/**
+ * How a person answered since a time (spec 3.3 §5.1 "How you answered"): how many of each
+ * answer, and on which surfaces. `GET /surface/answers`.
+ */
+export interface AnswerSummary {
+  /** "Allow once". */
+  allowedOnce: number;
+  /** "Always allow". */
+  alwaysAllowed: number;
+  /** "Deny". */
+  denied: number;
+  /** Edited, then allowed. */
+  edited: number;
+  /** Counted from. */
+  since: string;
+  /** How many were given on each surface, most first. */
+  surfaces: SurfaceCount[];
+  /** "12 answers: 9 allowed once, 2 always allowed, 1 denied". */
+  text: string;
+  /** Every answer. */
+  total: number;
 }
 
 /**
@@ -700,6 +731,10 @@ export type Command = {
   text: string;
   type: "steer";
 } | {
+  /** The session. */
+  sessionId: string;
+  type: "stopTurn";
+} | {
   /**
    * The images the person sent with it (spec 3.3 §5.1): at most
    * `MAX_IMAGES`. A message with images is never offered to a
@@ -822,6 +857,14 @@ export type CommandOutcome = {
   /** The session. */
   sessionId: string;
   type: "sent";
+} | {
+  /** The session. */
+  sessionId: string;
+  /** A turn was running and stopped. */
+  stopped: boolean;
+  /** "Stopped. Your agent waits for your next message." */
+  text: string;
+  type: "turnStopped";
 } | {
   /** The id of the session event that carries the message. */
   eventId: string;
@@ -2193,6 +2236,14 @@ export interface StopRequest {
   reason?: string | null;
 }
 
+/** How many answers were given on one surface. */
+export interface SurfaceCount {
+  /** How many. */
+  count: number;
+  /** The surface. */
+  surface: SurfaceKind;
+}
+
 /**
  * The surface a person uses (spec 3.3 §5, §7.2).
  * 
@@ -2216,7 +2267,7 @@ export interface SurfaceQuery {
    * that session's decisions.
    */
   session?: string | null;
-  /** `GET /surface/briefing`: since when. */
+  /** `GET /surface/briefing` and `GET /surface/answers`: since when. */
   since?: string | null;
   /** The surface; defaults to the web home. */
   surface?: SurfaceKind | null;
@@ -2280,6 +2331,12 @@ export type ThreadItem = {
   /** The tool. */
   tool: string;
 } | {
+  /** The call that offered them. */
+  callId?: string | null;
+  kind: "suggestions";
+  /** The replies, checked: one to four short lines, as data. */
+  replies: string[];
+} | {
   /** The inbox entry, when the call reached the inbox. */
   decisionId?: string | null;
   kind: "decision";
@@ -2311,6 +2368,19 @@ export interface ThreadResponse {
   entries: FeedEntry[];
   /** The session. */
   sessionId: string;
+}
+
+/**
+ * One of an agent's threads (spec 3.3 §5.1 "Thread history"): its session and when it last
+ * changed.
+ */
+export interface ThreadSummary {
+  /** When it last changed. */
+  at: string;
+  /** The session to open. */
+  sessionId: string;
+  /** "25 Oct 10:02". */
+  when: string;
 }
 
 /** One step of how a decision got here (spec 3.3 §7.1). */

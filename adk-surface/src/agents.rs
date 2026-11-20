@@ -513,6 +513,29 @@ pub struct RemovedThread {
     pub when: String,
 }
 
+/// One of an agent's threads (spec 3.3 §5.1 "Thread history"): its session and when it last
+/// changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSummary {
+    /// The session to open.
+    pub session_id: String,
+    /// When it last changed.
+    pub at: DateTime<Utc>,
+    /// "25 Oct 10:02".
+    pub when: String,
+}
+
+/// An agent's threads, newest first: `GET /surface/agents/{id}/threads`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentThreads {
+    /// The agent, by its roster name.
+    pub agent: String,
+    /// Its threads, newest first.
+    pub threads: Vec<ThreadSummary>,
+}
+
 /// What removing an agent ends, counted (spec 3.3 §5.7 "Pausing and removing").
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

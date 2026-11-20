@@ -1232,6 +1232,7 @@ async fn a_live_model_draws_a_form_whose_call_waits_for_the_person() {
         | ThreadItem::Activity { .. }
         | ThreadItem::Result { .. }
         | ThreadItem::Run { .. }
+        | ThreadItem::Suggestions { .. }
         | ThreadItem::Decision { .. }
         | ThreadItem::Drawn { .. }
         | ThreadItem::DrawnRefused { .. }

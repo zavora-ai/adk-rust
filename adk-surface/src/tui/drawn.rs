@@ -85,6 +85,7 @@ impl Drawings {
                 | ThreadItem::Activity { .. }
                 | ThreadItem::Result { .. }
                 | ThreadItem::Run { .. }
+                | ThreadItem::Suggestions { .. }
                 | ThreadItem::Decision { .. }
                 | ThreadItem::DrawnSent { .. } => {}
             }
@@ -972,6 +973,7 @@ pub(crate) fn json_lines(session: &str, entry: &FeedEntry) -> Vec<Value> {
             ThreadItem::Message { .. }
             | ThreadItem::Activity { .. }
             | ThreadItem::Result { .. }
+            | ThreadItem::Suggestions { .. }
             | ThreadItem::Decision { .. } => None,
         })
         .collect()

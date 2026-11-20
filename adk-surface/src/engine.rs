@@ -38,6 +38,9 @@ pub const SURFACE_AUDIT_SEND: &str = "surface.send";
 /// The audit action of a message sent to a running turn (spec 3.3 §6 "steer", §11): what
 /// "Steer" was refused or offered, and how a message a turn held ended.
 pub const SURFACE_AUDIT_STEER: &str = "surface.steer";
+
+/// The audit action of **Stop the turn** (spec 3.3 §5.1), recorded before the turn stops.
+pub const SURFACE_AUDIT_STOP_TURN: &str = "surface.stop_turn";
 /// The audit action of "Stop all" (spec 3.3 §11).
 pub const SURFACE_AUDIT_STOP_ALL: &str = "surface.stop_all";
 /// The audit action of "Resume all" (spec 3.3 §11).
@@ -160,6 +163,13 @@ pub enum Command {
         session_id: String,
         /// The message.
         text: String,
+    },
+    /// Stops the running turn of the caller's own session (spec 3.3 §5.1): a person only; the
+    /// agent waits for the next message, and nothing held for a decision is answered.
+    #[serde(rename_all = "camelCase")]
+    StopTurn {
+        /// The session.
+        session_id: String,
     },
     /// Queues a message as the session's next, after its open decisions (S-I4): never offered
     /// to a running turn.
@@ -328,6 +338,16 @@ pub enum CommandOutcome {
     Sent {
         /// The session.
         session_id: String,
+    },
+    /// The session's running turn was stopped, or none was running (spec 3.3 §5.1).
+    #[serde(rename_all = "camelCase")]
+    TurnStopped {
+        /// The session.
+        session_id: String,
+        /// A turn was running and stopped.
+        stopped: bool,
+        /// "Stopped. Your agent waits for your next message."
+        text: String,
     },
     /// The session's running turn took the message at its agent's next safe point (§6
     /// "steer"): the session holds it as event `event_id`, and the turn's next model call
@@ -1325,6 +1345,56 @@ impl SurfaceEngine {
         Ok(crate::agents::roster(rows, &definitions, can_change))
     }
 
+    /// How `caller` answered since `since` (spec 3.3 §5.1 "How you answered"): each answer
+    /// counted, and on which surfaces.
+    ///
+    /// # Errors
+    ///
+    /// Returns the answer log's error.
+    pub async fn answers_since(
+        &self,
+        caller: &Caller,
+        since: DateTime<Utc>,
+    ) -> Result<crate::answers::AnswerSummary> {
+        let mine: Vec<AnswerRecord> = self
+            .inner
+            .answers
+            .since(since)
+            .await?
+            .into_iter()
+            .filter(|record| record.by.id == caller.user_id())
+            .collect();
+        Ok(crate::answers::AnswerSummary::of(since, &mine))
+    }
+
+    /// The threads `caller` has with `agent`, newest first (spec 3.3 §5.1 "Thread history"):
+    /// each session and when it last changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns the source's error.
+    pub async fn agent_threads(
+        &self,
+        caller: &Caller,
+        agent: &str,
+    ) -> Result<crate::agents::AgentThreads> {
+        let offset = self.inner.projector.offset;
+        let mut threads: Vec<crate::agents::ThreadSummary> = self
+            .inner
+            .source
+            .agent_threads(caller.user_id(), agent)
+            .await?
+            .into_iter()
+            .map(|(session_id, at)| crate::agents::ThreadSummary {
+                session_id,
+                at,
+                when: at.with_timezone(&offset).format("%-d %b %H:%M").to_string(),
+            })
+            .collect();
+        threads.sort_by_key(|thread| std::cmp::Reverse(thread.at));
+        Ok(crate::agents::AgentThreads { agent: agent.to_string(), threads })
+    }
+
     /// The agents `caller` removed, each with its threads, which stay readable (spec 3.3
     /// §5.7, §13 decision 18): what "Removed agents" at the roster's foot lists.
     ///
@@ -1469,6 +1539,7 @@ impl SurfaceEngine {
                 self.send(caller, session_id, text, images, false, true).await
             }
             Command::Steer { session_id, text } => self.steer(caller, session_id, text).await,
+            Command::StopTurn { session_id } => self.stop_turn(caller, session_id).await,
             Command::Queue { session_id, text, images } => {
                 let images = crate::images::decode(&images)?;
                 self.send(caller, session_id, text, images, true, false).await
@@ -2083,6 +2154,27 @@ impl SurfaceEngine {
             tracing::warn!(error = %error, decision.id = %id, "the spoken answer was cancelled; its audit record failed");
         }
         Ok(CommandOutcome::AnswerCancelled { decision_id: id.to_string() })
+    }
+
+    /// **Stop the turn**: a person stops the running turn of their own session; recorded
+    /// before it takes effect.
+    async fn stop_turn(&self, caller: &Caller, session: String) -> Result<CommandOutcome> {
+        if let Origin::Agent { agent } = &caller.origin {
+            return Err(SurfaceError::NotHere(format!(
+                "an agent ({agent}) never stops a person's turn; a person does (spec 3.3 §7.4)"
+            )));
+        }
+        if self.inner.source.transcript(caller.user_id(), &session).await?.is_none() {
+            return Err(SurfaceError::not_found(format!("session '{session}'")));
+        }
+        self.audit_command(caller, SURFACE_AUDIT_STOP_TURN, json!({ "sessionId": session }))
+            .await?;
+        let stopped = self.inner.source.stop_turn(caller, &session).await?;
+        Ok(CommandOutcome::TurnStopped {
+            session_id: session,
+            stopped,
+            text: words::TURN_STOPPED.to_string(),
+        })
     }
 
     /// Sends `text` as a message of the session: a turn at once when the session is free,

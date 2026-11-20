@@ -16,7 +16,9 @@ describe("the icon rail", () => {
     render(<App client={new FixtureClient()} initialSection="today" />);
     const nav = await screen.findByRole("navigation", { name: "Sections" });
     const links = within(nav).getAllByRole("link");
-    expect(links.map((link) => link.textContent?.replace(/\d+$/, ""))).toEqual(["Threads", "Today", "Memory & rules", "Developer"]);
+    expect(links.map((link) => link.textContent?.replace(/\d+$/, ""))).toEqual(["Threads", "Decisions", "Today", "Memory & rules", "Developer"]);
+    // The Decisions mark carries the count of what waits.
+    await waitFor(() => expect(within(nav).getByRole("link", { name: /^Decisions/ }).querySelector(".badge-tab")?.textContent).toBe("2"));
     for (const link of links) {
       expect(link.querySelector("svg.tab-icon")?.getAttribute("aria-hidden")).toBe("true");
       expect(link.getAttribute("title")).toBeTruthy();
@@ -94,5 +96,56 @@ describe("the canvas beside a thread", () => {
     await waitFor(() => expect(document.querySelector(".side")?.hasAttribute("hidden")).toBe(true));
     await userEvent.click(within(canvas).getByRole("button", { name: "Close the canvas" }));
     await waitFor(() => expect(screen.queryByRole("complementary", { name: "Canvas" })).toBeNull());
+  });
+});
+
+describe("the phone's decision", () => {
+  it("leads with its question too, its heading still named by the card", async () => {
+    const { PhoneApp } = await import("../src/phone/PhoneApp");
+    const { phoneFixture } = await import("../src/fixture/phone");
+    const phone = phoneFixture("decide");
+    render(<PhoneApp client={phone.client} initial={phone.initial} />);
+    const heading = await screen.findByRole("heading", { name: "Publish a release", level: 1 });
+    const mark = heading.querySelector('[aria-hidden="true"]');
+    expect(mark?.textContent).toBe("?");
+  });
+});
+
+describe("the canvas in its own window", () => {
+  it("opens the drawing at its own address, and that window follows the session", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    try {
+      const surfaceId = timesheetCard().surfaceId;
+      render(
+        <CanvasPane entries={[{ seq: 2, at: "2026-11-20T10:02:00Z", atText: "10:02", items: [{ kind: "drawn", surface: timesheetCard(1) }] }]} pinned={surfaceId} open={[]} client={new GenuiFixtureClient("display")} send={vi.fn()} onSettled={vi.fn()} session="s-finance" onClose={vi.fn()} />,
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Open in its own window" }));
+      expect(open).toHaveBeenCalledWith(`/ui/canvas?session=s-finance&surface=${encodeURIComponent(surfaceId)}`, "_blank", "popup,width=760,height=900");
+    } finally {
+      open.mockRestore();
+    }
+    const { CanvasWindow } = await import("../src/screens/CanvasWindow");
+    const { cleanup } = await import("@testing-library/react");
+    cleanup();
+    render(<CanvasWindow client={new GenuiFixtureClient("display")} send={vi.fn()} location={{ search: `?session=s-finance&surface=${encodeURIComponent(timesheetCard().surfaceId)}` }} />);
+    const canvas = await screen.findByRole("complementary", { name: "Canvas" });
+    expect(await within(canvas).findByText("October timesheet", { selector: "h2" })).toBeTruthy();
+    expect(within(canvas).queryByRole("button", { name: "Open in its own window" })).toBeNull();
+  });
+});
+
+describe("ask for a drawing", () => {
+  it("puts the request in the message box, sent only with Send", async () => {
+    const { Composer } = await import("../src/components/Composer");
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    render(<Composer askDrawing placeholder="Message Finance" queued={[]} onSend={onSend} />);
+    const box = screen.getByLabelText("Message Finance") as HTMLInputElement;
+    await userEvent.type(box, "October's hours by client");
+    await userEvent.click(screen.getByRole("button", { name: "Ask for a drawing" }));
+    expect(box.value).toBe("Show this as a drawing I can look at: October's hours by client");
+    expect(document.activeElement).toBe(box);
+    expect(onSend).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Ask for a drawing" }));
+    expect(box.value).toBe("Show this as a drawing I can look at: October's hours by client");
   });
 });

@@ -3028,3 +3028,371 @@ button.segment {
     top: 0;
   }
 }
+
+/* ── Decisions, the inbox (spec 3.3 §5.1) ───────────────────── */
+
+.inbox {
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+}
+
+.inbox-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 20px 14px;
+  overflow-y: auto;
+  overscroll-behavior: none;
+  border-right: 1px solid var(--border);
+  background: var(--side);
+}
+
+.inbox-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0 6px;
+}
+
+.inbox-head h1 {
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  line-height: var(--lh-xl);
+}
+
+.inbox-count {
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.inbox-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 6px;
+}
+
+.inbox-filter button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--card);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.inbox-filter button[aria-pressed="true"] {
+  border-color: var(--text);
+  color: var(--text);
+}
+
+.inbox-filter-count {
+  color: var(--label);
+  font-variant-numeric: tabular-nums;
+}
+
+.inbox-items {
+  display: grid;
+  gap: 4px;
+}
+
+.inbox-item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px 10px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.inbox-item::before {
+  content: "";
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+  opacity: 0.45;
+}
+
+.inbox-item:hover {
+  background: color-mix(in srgb, var(--raised) 70%, var(--card));
+}
+
+.inbox-item[aria-current="true"] {
+  border-color: var(--decision-border);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.inbox-item[aria-current="true"]::before,
+.inbox-item-high::before {
+  opacity: 1;
+}
+
+.inbox-item-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.inbox-item-heading {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: var(--lh-md);
+}
+
+.inbox-item-meta {
+  color: var(--label);
+  font-size: var(--fs-xs);
+}
+
+.inbox-item-high .inbox-item-meta {
+  color: var(--accent);
+}
+
+.inbox-detail {
+  position: relative;
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 12px;
+  min-height: 0;
+  padding: 28px 40px 40px;
+  overflow-y: auto;
+  overscroll-behavior: none;
+  background: var(--card);
+}
+
+.inbox-detail > .decision,
+.inbox-detail > .decision-line {
+  width: 100%;
+  max-width: 760px;
+}
+
+.inbox-empty {
+  padding: 8px 6px;
+  color: var(--label);
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 760px) {
+  .inbox {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    height: auto;
+  }
+
+  .inbox-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    overflow: visible;
+  }
+
+  .inbox-detail {
+    padding: 20px 16px 40px;
+    overflow: visible;
+  }
+}
+
+/* Thread history (spec 3.3 §5.1): the agent's earlier threads, from the thread's header. */
+.thread-head-text {
+  min-width: 0;
+}
+
+.thread-history {
+  position: relative;
+  margin-left: auto;
+}
+
+.thread-history summary {
+  list-style: none;
+  min-height: 32px;
+  font-size: var(--fs-sm);
+}
+
+.thread-history summary::-webkit-details-marker {
+  display: none;
+}
+
+.thread-history summary .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.thread-history-list {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 240px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: var(--shadow-pop);
+}
+
+.thread-history-list ul {
+  display: grid;
+  gap: 2px;
+}
+
+.thread-history-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-history-list button:hover,
+.thread-history-list button[aria-current="true"] {
+  background: var(--raised);
+}
+
+.thread-history-current,
+.thread-history-empty {
+  color: var(--label);
+  font-size: var(--fs-xs);
+}
+
+.thread-history-empty {
+  padding: 8px 10px;
+}
+
+.work-log-time {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* A drawing in its own window (spec 3.3 §5.1 "The canvas"). */
+.canvas-window {
+  display: flex;
+  height: 100%;
+}
+
+.canvas-window > .canvas {
+  position: static;
+  flex: 1;
+  width: auto;
+  border-left: 0;
+  box-shadow: none;
+}
+
+.canvas-popout {
+  margin-left: auto;
+}
+
+.canvas-popout + .canvas-close {
+  margin-left: 0;
+}
+
+/* Stop the turn (spec 3.3 §5.1): beside Send while the agent works on this thread. */
+.composer-stop {
+  min-height: 36px;
+  font-size: var(--fs-sm);
+}
+
+.composer-stop .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.turn-stopped {
+  margin-top: 12px;
+  color: var(--label);
+  font-size: var(--fs-sm);
+}
+
+/* How you answered this week (spec 3.3 §5.1). */
+.answered {
+  display: grid;
+  gap: 10px;
+}
+
+.answered-text {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.answered-bar {
+  display: flex;
+  overflow: hidden;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+}
+
+.answered-allowed {
+  background: var(--pill-decided);
+}
+
+.answered-denied {
+  background: var(--label);
+}
+
+.answered-surfaces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.answered-surfaces li {
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+/* Suggested replies (spec 3.3 §5.1): under the agent's latest message; a tap fills the box. */
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: -6px;
+}
+
+.suggestion {
+  padding: 5px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--card);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.suggestion:hover {
+  border-color: color-mix(in srgb, var(--text) 30%, var(--border-strong));
+  color: var(--text);
+}

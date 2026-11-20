@@ -48,3 +48,16 @@ describe("the work log", () => {
     expect(within(log).getByText("Read file part-2.csv").closest(".activity")?.className).toContain("activity-failed");
   });
 });
+
+describe("the work log's time", () => {
+  it("says how long the folded steps took, from the first to the last result", () => {
+    const at = (s: number) => new Date(Date.UTC(2026, 10, 20, 9, 0, s)).toISOString();
+    const entries: FeedEntry[] = [1, 2, 3].flatMap((n) => [
+      { seq: n * 2 - 1, at: at((n - 1) * 15), atText: "09:00", items: [{ kind: "activity" as const, tool: "read_file", text: `Read file ${n}`, callId: `c${n}` }] },
+      { seq: n * 2, at: at((n - 1) * 15 + 8), atText: "09:00", items: [{ kind: "result" as const, tool: "read_file", ok: true, text: "Done", callId: `c${n}` }] },
+    ]);
+    render(<Thread entries={entries} open={[]} client={new FixtureClient()} send={vi.fn()} onSettled={vi.fn()} />);
+    const summary = screen.getByText("3 steps").closest("summary")!;
+    expect(within(summary).getByText("Worked for 38 s")).toBeTruthy();
+  });
+});

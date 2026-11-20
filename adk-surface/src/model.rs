@@ -672,6 +672,16 @@ pub enum ThreadItem {
         /// The run.
         run: CommandRun,
     },
+    /// Replies the agent suggests the person might send next (spec 3.3 §5.1): tapping one fills
+    /// the message box, and the person still sends it.
+    #[serde(rename_all = "camelCase")]
+    Suggestions {
+        /// The replies, checked: one to four short lines, as data.
+        replies: Vec<String>,
+        /// The call that offered them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<String>,
+    },
     /// An agent asked first: a held call. Its card comes from the inbox entry.
     #[serde(rename_all = "camelCase")]
     Decision {

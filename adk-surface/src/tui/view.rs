@@ -451,6 +451,14 @@ impl Renderer {
                         Span::styled(right, t.label()),
                     ]));
                 }
+                // Suggested replies: the terminal lists them; the person types what they send.
+                ThreadItem::Suggestions { replies, .. } => {
+                    let shown: Vec<String> = replies.iter().map(|reply| safe_line(reply)).collect();
+                    lines.push(Line::from(Span::styled(
+                        fit(&format!("{}: {}", words::SUGGESTED_REPLIES, shown.join(" · ")), width),
+                        t.label(),
+                    )));
+                }
                 // A run: its line unless its activity shows it, then its last lines.
                 ThreadItem::Run { tool, call_id, ok, text, run } => {
                     if !(results.is_some() && call_id.is_some()) {

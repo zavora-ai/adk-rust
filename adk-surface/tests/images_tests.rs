@@ -24,6 +24,7 @@ const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
 /// turn; its busy flag is set by the test.
 struct Shots {
     inner: LocalSource,
+    stopped: Mutex<Vec<String>>,
     turns: Mutex<Vec<(String, Vec<MessageImage>)>>,
     offered: Mutex<Vec<String>>,
     busy: AtomicBool,
@@ -82,6 +83,26 @@ impl Source for Shots {
         }])
     }
 
+    async fn stop_turn(&self, _caller: &Caller, session: &str) -> adk_surface::Result<bool> {
+        self.stopped.lock().unwrap().push(session.to_string());
+        Ok(true)
+    }
+
+    async fn agent_threads(
+        &self,
+        _user: &str,
+        agent: &str,
+    ) -> adk_surface::Result<Vec<(String, chrono::DateTime<chrono::Utc>)>> {
+        use chrono::TimeZone;
+        Ok(match agent {
+            "code" => vec![
+                ("s-old".into(), chrono::Utc.with_ymd_and_hms(2026, 10, 31, 16, 40, 0).unwrap()),
+                ("s1".into(), chrono::Utc.with_ymd_and_hms(2026, 11, 20, 10, 2, 0).unwrap()),
+            ],
+            _ => Vec::new(),
+        })
+    }
+
     async fn steer(
         &self,
         _caller: &Caller,
@@ -124,12 +145,14 @@ async fn home() -> Home {
     let inner = LocalSource::builder(APP).sessions(Arc::clone(&sessions)).build().unwrap();
     let source = Arc::new(Shots {
         inner,
+        stopped: Mutex::new(Vec::new()),
         turns: Mutex::new(Vec::new()),
         offered: Mutex::new(Vec::new()),
         busy: AtomicBool::new(false),
     });
     let engine = SurfaceEngine::builder(Arc::clone(&source) as Arc<dyn Source>)
         .agent_name("code", "Code")
+        .utc_offset(chrono::FixedOffset::east_opt(0).unwrap())
         .build();
     Home { engine, source, sessions }
 }
@@ -290,4 +313,138 @@ async fn the_roster_says_where_an_agent_s_commands_run() {
         adk_surface::words::commands_run(&degraded),
         "The sandbox is unavailable, so commands run on this computer: no bubblewrap"
     );
+}
+
+#[tokio::test]
+async fn thread_history_lists_an_agent_s_threads_newest_first() {
+    let home = home().await;
+    let history = home.engine.agent_threads(&web(), "code").await.unwrap();
+    assert_eq!(history.agent, "code");
+    assert_eq!(
+        history
+            .threads
+            .iter()
+            .map(|thread| (thread.session_id.as_str(), thread.when.as_str()))
+            .collect::<Vec<_>>(),
+        [("s1", "20 Nov 10:02"), ("s-old", "31 Oct 16:40")]
+    );
+    assert!(home.engine.agent_threads(&web(), "nobody").await.unwrap().threads.is_empty());
+}
+
+#[tokio::test]
+async fn a_person_stops_their_own_turn_and_an_agent_never_does() {
+    let home = home().await;
+    let outcome =
+        home.engine.execute(&web(), Command::StopTurn { session_id: "s1".into() }).await.unwrap();
+    assert_eq!(
+        outcome,
+        CommandOutcome::TurnStopped {
+            session_id: "s1".into(),
+            stopped: true,
+            text: "Stopped. Your agent waits for your next message.".into()
+        }
+    );
+    assert_eq!(home.source.stopped.lock().unwrap().as_slice(), ["s1"]);
+    let agent = Caller::human("ana", SurfaceKind::Web, Origin::Agent { agent: "code".into() });
+    let refused = home
+        .engine
+        .execute(&agent, Command::StopTurn { session_id: "s1".into() })
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), "surface.not_here");
+    let missing = home
+        .engine
+        .execute(&web(), Command::StopTurn { session_id: "nope".into() })
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code(), "surface.not_found");
+    assert_eq!(home.source.stopped.lock().unwrap().len(), 1, "only the person's own turn stopped");
+}
+
+#[tokio::test]
+async fn how_you_answered_counts_only_your_answers_since_then() {
+    use adk_surface::{Answer, AnswerLog, AnswerRecord, InMemoryAnswerLog, Via};
+    use chrono::TimeZone;
+    let log = InMemoryAnswerLog::new();
+    let at = |day: u32| chrono::Utc.with_ymd_and_hms(2026, 11, day, 9, 0, 0).unwrap();
+    let mine = |id: &str, answer: Answer, surface: SurfaceKind, day: u32| AnswerRecord {
+        approval_id: id.into(),
+        by: adk_core::principal::SubjectRef::human("ana"),
+        via: Via { surface, origin: Origin::Pointer },
+        answer,
+        at: at(day),
+    };
+    for record in [
+        mine("a1", Answer::AllowOnce, SurfaceKind::Web, 18),
+        mine("a2", Answer::AllowOnce, SurfaceKind::Phone, 19),
+        mine("a3", Answer::Deny, SurfaceKind::Web, 19),
+        mine("a4", Answer::AlwaysAllow, SurfaceKind::Web, 20),
+        mine("old", Answer::AllowOnce, SurfaceKind::Web, 1),
+        AnswerRecord {
+            by: adk_core::principal::SubjectRef::human("bo"),
+            ..mine("b1", Answer::Deny, SurfaceKind::Web, 20)
+        },
+    ] {
+        log.record(&record).await.unwrap();
+    }
+    let home = home().await;
+    let engine = SurfaceEngine::builder(Arc::clone(&home.source) as Arc<dyn Source>)
+        .answers(Arc::new(log))
+        .utc_offset(chrono::FixedOffset::east_opt(0).unwrap())
+        .build();
+    let summary = engine.answers_since(&web(), at(13)).await.unwrap();
+    assert_eq!(
+        (summary.total, summary.allowed_once, summary.always_allowed, summary.denied),
+        (4, 2, 1, 1)
+    );
+    assert_eq!(summary.text, "4 answers: 2 allowed once, 1 always allowed, 1 denied");
+    assert_eq!(
+        summary.surfaces.iter().map(|entry| (entry.surface, entry.count)).collect::<Vec<_>>(),
+        [(SurfaceKind::Web, 3), (SurfaceKind::Phone, 1)]
+    );
+    assert_eq!(engine.answers_since(&web(), at(21)).await.unwrap().text, "No answers this week.");
+}
+
+#[tokio::test]
+async fn an_agent_s_suggested_replies_show_under_its_message_and_never_as_work() {
+    let home = home().await;
+    let mut said = Event::new("inv-2");
+    said.author = "code".into();
+    said.llm_response.content = Some(Content {
+        role: "model".into(),
+        parts: vec![
+            Part::Text { text: "p95 doubled after the 09:12 deploy.".into() },
+            Part::FunctionCall {
+                name: "suggest_replies".into(),
+                args: json!({ "replies": ["What else changed at 09:12?", "Show the error logs"] }),
+                id: Some("call-s".into()),
+                thought_signature: None,
+            },
+        ],
+    });
+    home.sessions.append_event("s1", said).await.unwrap();
+    let mut answered = Event::new("inv-2");
+    answered.author = "code".into();
+    answered.llm_response.content = Some(Content {
+        role: "function".into(),
+        parts: vec![Part::FunctionResponse {
+            function_response: FunctionResponseData::new("suggest_replies", json!({ "shown": 2 })),
+            id: Some("call-s".into()),
+            annotations: None,
+        }],
+    });
+    home.sessions.append_event("s1", answered).await.unwrap();
+    let thread = home.engine.thread(&web(), "s1").await.unwrap();
+    assert!(
+        matches!(&thread[0].items[0], ThreadItem::Message { text, .. } if text == "p95 doubled after the 09:12 deploy.")
+    );
+    assert_eq!(
+        thread[0].items[1],
+        ThreadItem::Suggestions {
+            replies: vec!["What else changed at 09:12?".into(), "Show the error logs".into()],
+            call_id: Some("call-s".into())
+        }
+    );
+    assert_eq!(thread[0].items.len(), 2, "no activity line for the suggestions");
+    assert!(thread[1].items.is_empty(), "their answer says nothing to the person");
 }

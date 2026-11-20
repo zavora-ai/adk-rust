@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AgentRow, DecisionCard, ImageData, Origin, RemovedAgent, StatusLine } from "../generated/api";
+import type { AgentRow, AgentThreads, DecisionCard, ImageData, Origin, RemovedAgent, StatusLine } from "../generated/api";
 import { agentLabels } from "../agents/labels";
 import type { HomeClient } from "../client";
 import { problemText } from "../client";
@@ -57,6 +57,7 @@ export function Threads({
   onFollow,
   visiting,
   onBack,
+  onVisit,
   focusDecision,
   onOpenDecision,
   canAddAgents = false,
@@ -88,6 +89,8 @@ export function Threads({
   visiting?: { agent: string; session: string };
   /** Back to the agent's own conversation. */
   onBack: () => void;
+  /** Opens one of an agent's earlier threads (spec 3.3 §5.1 "Thread history"). */
+  onVisit?: (agent: string, session: string) => void;
   /** The decision to bring into view. */
   focusDecision?: string;
   onOpenDecision: (card: DecisionCard) => void;
@@ -106,6 +109,8 @@ export function Threads({
   const [sent, setSent] = useState(0);
   const [trouble, setTrouble] = useState(false);
   const [problem, setProblem] = useState("");
+  const [stoppedNote, setStoppedNote] = useState<{ session: string; text: string }>();
+  const [draft, setDraft] = useState<{ text: string; n: number }>();
   // The drawing shown beside the thread, in the session it belongs to (spec 3.3 §5.1).
   const [beside, setBeside] = useState<{ session: string; surfaceId: string }>();
   const feed = useRef(wakeable());
@@ -217,7 +222,7 @@ export function Threads({
           {shownAgent && (
             <header className="thread-head">
               <Avatar agent={shownAgent} size="lg" />
-              <div>
+              <div className="thread-head-text">
                 <h1 className="thread-name">{shownAgent.displayName}</h1>
                 {reading ? (
                   <p className="thread-sub">{reading.agent.removedText}</p>
@@ -230,6 +235,9 @@ export function Threads({
                   )
                 )}
               </div>
+              {!reading && client.agentThreads && onVisit && (
+                <ThreadHistory client={client} agent={key} current={session} onOpen={(chosen) => onVisit(key, chosen)} />
+              )}
             </header>
           )}
           {trouble && (
@@ -250,10 +258,16 @@ export function Threads({
             shell={reading ? undefined : current?.shell ?? undefined}
             pinned={pin}
             onPin={(surfaceId) => setBeside(surfaceId ? { session, surfaceId } : undefined)}
+            onSuggest={reading ? undefined : (text) => setDraft((last) => ({ text, n: (last?.n ?? 0) + 1 }))}
           />
           {problem && (
             <p className="decision-problem" role="alert">
               {problem}
+            </p>
+          )}
+          {stoppedNote?.session === session && (
+            <p className="turn-stopped" role="status">
+              {stoppedNote.text}
             </p>
           )}
         </div>
@@ -273,6 +287,22 @@ export function Threads({
         ) : (
           <Composer
             attach
+            askDrawing
+            draft={draft}
+            onStopTurn={
+              current?.status === "working" && current.sessionId === session
+                ? (origin) => {
+                    setProblem("");
+                    client
+                      .command({ type: "stopTurn", sessionId: session }, origin)
+                      .then((outcome) => {
+                        if (outcome.type === "turnStopped" && outcome.stopped) setStoppedNote({ session, text: outcome.text });
+                        onChanged();
+                      })
+                      .catch((error: unknown) => setProblem(problemText(error)));
+                  }
+                : undefined
+            }
             placeholder={name ? labels.message(name) : labels.messageYourAgents}
             queued={shownQueued}
             disabled={status?.stopped}
@@ -393,5 +423,65 @@ function MorningBriefing({
         </button>
       </div>
     </section>
+  );
+}
+
+/**
+ * Thread history (spec 3.3 §5.1): the person's earlier threads with the agent, newest first,
+ * read when opened. Choosing one shows it in place of the conversation, with the way back.
+ */
+function ThreadHistory({
+  client,
+  agent,
+  current,
+  onOpen,
+}: {
+  client: HomeClient;
+  agent: string;
+  current: string;
+  onOpen: (session: string) => void;
+}) {
+  const [threads, setThreads] = useState<AgentThreads["threads"]>();
+  const menu = useRef<HTMLDetailsElement>(null);
+  return (
+    <details
+      ref={menu}
+      className="thread-history"
+      onToggle={(event) => {
+        if ((event.currentTarget as HTMLDetailsElement).open) {
+          void client.agentThreads?.(agent).then((found) => setThreads(found?.threads ?? []), () => setThreads([]));
+        }
+      }}
+    >
+      <summary className="button button-secondary">
+        <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4h4M12 8v4l3 2" />
+        </svg>
+        {labels.threadHistory}
+      </summary>
+      <div className="thread-history-list" role="group" aria-label={labels.threadHistory}>
+        {threads === undefined ? null : threads.length <= 1 ? (
+          <p className="thread-history-empty">{labels.noOtherThreads}</p>
+        ) : (
+          <ul>
+            {threads.map((thread) => (
+              <li key={thread.sessionId}>
+                <button
+                  type="button"
+                  aria-current={thread.sessionId === current ? "true" : undefined}
+                  onClick={() => {
+                    if (menu.current) menu.current.open = false;
+                    onOpen(thread.sessionId);
+                  }}
+                >
+                  <span>{thread.when}</span>
+                  {thread.sessionId === current && <span className="thread-history-current">{labels.thisConversation}</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </details>
   );
 }

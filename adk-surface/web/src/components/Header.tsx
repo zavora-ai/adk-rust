@@ -12,6 +12,7 @@ import { Icon } from "./Icon";
 
 const tabs: Array<{ section: Section; label: string }> = [
   { section: "threads", label: labels.threads },
+  { section: "decisions", label: labels.decisions },
   { section: "today", label: labels.today },
   { section: "memory", label: labels.memoryAndRules },
 ];
@@ -19,6 +20,7 @@ const tabs: Array<{ section: Section; label: string }> = [
 /** Each section's mark in the icon rail of a wide screen (spec 3.3 §5.1). */
 const ICONS: Partial<Record<Section, string>> = {
   threads: "M4 5.5h16v10H10l-4 3.5v-3.5H4z",
+  decisions: "M4 13.5 6.5 5h11l2.5 8.5v5H4zM4 13.5h4.5l1.5 2h4l1.5-2H20",
   today: "M4.5 6h15v13.5h-15zM4.5 10h15M9 3.5v4M15 3.5v4",
   memory: "M5 4.5h10.5a3 3 0 0 1 3 3v12H8a3 3 0 0 1-3-3zM5 16.5a3 3 0 0 1 3-3h10.5",
   developer: "M8.5 7 3.5 12l5 5M15.5 7l5 5-5 5",
@@ -106,7 +108,7 @@ export function Header({
               <path d={ICONS[tab.section]} />
             </svg>
             <span className="tab-label">{tab.label}</span>
-            {tab.section === "threads" && decisions > 0 && (
+            {tab.section === "decisions" && decisions > 0 && (
               <span className="badge badge-tab" aria-label={`${labels.decisions}: ${decisions}`}>
                 {decisions}
               </span>

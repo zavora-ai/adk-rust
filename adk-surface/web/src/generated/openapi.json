@@ -681,6 +681,27 @@
           }
         ]
       },
+      "AgentThreads": {
+        "description": "An agent's threads, newest first: `GET /surface/agents/{id}/threads`.",
+        "properties": {
+          "agent": {
+            "description": "The agent, by its roster name.",
+            "type": "string"
+          },
+          "threads": {
+            "description": "Its threads, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/ThreadSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "agent",
+          "threads"
+        ],
+        "type": "object"
+      },
       "AgentsResponse": {
         "description": "`GET /surface/agents` answer.",
         "properties": {
@@ -841,6 +862,68 @@
         "required": [
           "version",
           "answer"
+        ],
+        "type": "object"
+      },
+      "AnswerSummary": {
+        "description": "How a person answered since a time (spec 3.3 §5.1 \"How you answered\"): how many of each\nanswer, and on which surfaces. `GET /surface/answers`.",
+        "properties": {
+          "allowedOnce": {
+            "description": "\"Allow once\".",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "alwaysAllowed": {
+            "description": "\"Always allow\".",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "denied": {
+            "description": "\"Deny\".",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "edited": {
+            "description": "Edited, then allowed.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "since": {
+            "description": "Counted from.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "surfaces": {
+            "description": "How many were given on each surface, most first.",
+            "items": {
+              "$ref": "#/components/schemas/SurfaceCount"
+            },
+            "type": "array"
+          },
+          "text": {
+            "description": "\"12 answers: 9 allowed once, 2 always allowed, 1 denied\".",
+            "type": "string"
+          },
+          "total": {
+            "description": "Every answer.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "since",
+          "total",
+          "allowedOnce",
+          "alwaysAllowed",
+          "edited",
+          "denied",
+          "surfaces",
+          "text"
         ],
         "type": "object"
       },
@@ -1991,6 +2074,24 @@
             "type": "object"
           },
           {
+            "description": "Stops the running turn of the caller's own session (spec 3.3 §5.1): a person only; the\nagent waits for the next message, and nothing held for a decision is answered.",
+            "properties": {
+              "sessionId": {
+                "description": "The session.",
+                "type": "string"
+              },
+              "type": {
+                "const": "stopTurn",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "sessionId"
+            ],
+            "type": "object"
+          },
+          {
             "description": "Queues a message as the session's next, after its open decisions (S-I4): never offered\nto a running turn.",
             "properties": {
               "images": {
@@ -2432,6 +2533,34 @@
             "required": [
               "type",
               "sessionId"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The session's running turn was stopped, or none was running (spec 3.3 §5.1).",
+            "properties": {
+              "sessionId": {
+                "description": "The session.",
+                "type": "string"
+              },
+              "stopped": {
+                "description": "A turn was running and stopped.",
+                "type": "boolean"
+              },
+              "text": {
+                "description": "\"Stopped. Your agent waits for your next message.\"",
+                "type": "string"
+              },
+              "type": {
+                "const": "turnStopped",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "sessionId",
+              "stopped",
+              "text"
             ],
             "type": "object"
           },
@@ -6516,6 +6645,26 @@
         },
         "type": "object"
       },
+      "SurfaceCount": {
+        "description": "How many answers were given on one surface.",
+        "properties": {
+          "count": {
+            "description": "How many.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "surface": {
+            "$ref": "#/components/schemas/SurfaceKind",
+            "description": "The surface."
+          }
+        },
+        "required": [
+          "surface",
+          "count"
+        ],
+        "type": "object"
+      },
       "SurfaceKind": {
         "description": "The surface a person uses (spec 3.3 §5, §7.2).\n\nWhat a surface may decide is fixed by §7.2 and computed by\n`rules::allowed_answers`; a surface never grants more\nthan the web home.",
         "oneOf": [
@@ -6583,7 +6732,7 @@
           },
           "since": {
             "default": null,
-            "description": "`GET /surface/briefing`: since when.",
+            "description": "`GET /surface/briefing` and `GET /surface/answers`: since when.",
             "format": "date-time",
             "type": [
               "string",
@@ -6774,6 +6923,34 @@
             "type": "object"
           },
           {
+            "description": "Replies the agent suggests the person might send next (spec 3.3 §5.1): tapping one fills\nthe message box, and the person still sends it.",
+            "properties": {
+              "callId": {
+                "description": "The call that offered them.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "suggestions",
+                "type": "string"
+              },
+              "replies": {
+                "description": "The replies, checked: one to four short lines, as data.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "replies"
+            ],
+            "type": "object"
+          },
+          {
             "description": "An agent asked first: a held call. Its card comes from the inbox entry.",
             "properties": {
               "decisionId": {
@@ -6895,6 +7072,30 @@
         "required": [
           "sessionId",
           "entries"
+        ],
+        "type": "object"
+      },
+      "ThreadSummary": {
+        "description": "One of an agent's threads (spec 3.3 §5.1 \"Thread history\"): its session and when it last\nchanged.",
+        "properties": {
+          "at": {
+            "description": "When it last changed.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "sessionId": {
+            "description": "The session to open.",
+            "type": "string"
+          },
+          "when": {
+            "description": "\"25 Oct 10:02\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "at",
+          "when"
         ],
         "type": "object"
       },
@@ -7918,6 +8119,122 @@
           }
         },
         "summary": "One agent the caller added: its definition, version and how it was added"
+      }
+    },
+    "/api/surface/agents/{id}/threads": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentThreads"
+                }
+              }
+            },
+            "description": "The threads"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "The caller's threads with one agent, newest first (spec 3.3 §5.1 \"Thread history\")"
+      }
+    },
+    "/api/surface/answers": {
+      "get": {
+        "parameters": [
+          {
+            "description": "Since when; default the last 7 days",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnswerSummary"
+                }
+              }
+            },
+            "description": "Each answer counted"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "How the caller answered since a time (spec 3.3 §5.1 \"How you answered\")"
       }
     },
     "/api/surface/briefing": {

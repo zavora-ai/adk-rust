@@ -13,6 +13,7 @@ import { DecisionCard } from "./DecisionCard";
 import type { Send, TakeOverSeam } from "./DecisionCard";
 import { Icon } from "./Icon";
 import { MessageImages, RunCard } from "./RunCard";
+import { canvasWindowPath } from "../screens/CanvasWindow";
 
 type Activity = Extract<ThreadItem, { kind: "activity" }>;
 type Result = Extract<ThreadItem, { kind: "result" }>;
@@ -21,8 +22,9 @@ type Run = Extract<ThreadItem, { kind: "run" }>;
 /** One line of a thread, ready to draw. */
 type Line =
   | { kind: "message"; key: string; from: "you" | "agent"; text: string; images?: ImageData[] }
-  | { kind: "activity"; key: string; text: string; result?: Result; run?: Run }
+  | { kind: "activity"; key: string; text: string; result?: Result; run?: Run; at?: string; endAt?: string }
   | { kind: "decision"; key: string; id?: string; tool: string; text: string }
+  | { kind: "suggestions"; key: string; replies: string[] }
   | {
       kind: "drawn";
       key: string;
@@ -102,7 +104,7 @@ export function lines(entries: FeedEntry[]): Line[] {
           break;
         case "activity": {
           if (item.callId && drawing.has(item.callId)) break;
-          const line = { kind: "activity" as const, key, text: (item as Activity).text };
+          const line: Extract<Line, { kind: "activity" }> = { kind: "activity", key, text: (item as Activity).text, at: entry.at };
           out.push(line);
           if (item.callId) byCall.set(item.callId, line);
           break;
@@ -111,10 +113,15 @@ export function lines(entries: FeedEntry[]): Line[] {
           // A form's call ends on its form.
           if (item.callId && claimed.has(item.callId)) break;
           const activity = item.callId ? byCall.get(item.callId) : undefined;
-          if (activity) activity.result = item;
-          else out.push({ kind: "activity", key, text: item.tool, result: item });
+          if (activity) {
+            activity.result = item;
+            activity.endAt = entry.at;
+          } else out.push({ kind: "activity", key, text: item.tool, result: item, at: entry.at, endAt: entry.at });
           break;
         }
+        case "suggestions":
+          out.push({ kind: "suggestions", key, replies: item.replies });
+          break;
         case "run": {
           // A command's run ends on its activity, as a result does (spec 3.3 §5.1).
           const activity = item.callId ? byCall.get(item.callId) : undefined;
@@ -181,6 +188,7 @@ export function Thread({
   shell,
   pinned,
   onPin,
+  onSuggest,
 }: {
   entries: FeedEntry[];
   open: Card[];
@@ -197,6 +205,8 @@ export function Thread({
   pinned?: string;
   /** Shows a drawing beside the thread, or brings it back (`undefined`). */
   onPin?: (surfaceId: string | undefined) => void;
+  /** Puts a suggested reply in the message box; the person still sends it. */
+  onSuggest?: (text: string) => void;
 }) {
   const [settled, setSettled] = useState<Card[]>([]);
   const settle = (card: Card) => {
@@ -204,6 +214,10 @@ export function Thread({
     onSettled(card);
   };
   const shown = lines(entries);
+  // Suggested replies stand only under the agent's latest message, until the person writes.
+  const lastYou = shown.map((line) => line.kind === "message" && line.from === "you").lastIndexOf(true);
+  const lastSuggestions = shown.map((line) => line.kind === "suggestions").lastIndexOf(true);
+  const offered = lastSuggestions > lastYou ? lastSuggestions : -1;
   const apps = useMemo(() => client.apps?.(), [client]);
   const named = new Set(
     shown.flatMap((line) =>
@@ -227,6 +241,16 @@ export function Thread({
         if (unit.kind === "log") return <WorkLog key={unit.key} steps={unit.steps} />;
         const line = unit.line;
         switch (line.kind) {
+          case "suggestions":
+            return shown[offered] === line && onSuggest ? (
+              <div key={line.key} className="suggestions" role="group" aria-label={labels.suggestedReplies}>
+                {line.replies.map((reply) => (
+                  <button key={reply} type="button" className="suggestion" onClick={() => onSuggest(reply)}>
+                    {visible(reply)}
+                  </button>
+                ))}
+              </div>
+            ) : null;
           case "message":
             return line.from === "you" ? (
               <div key={line.key} className="message-you-group">
@@ -361,6 +385,7 @@ export function CanvasPane({
   focusDecision,
   takeOver,
   onClose,
+  popOut = true,
 }: {
   entries: FeedEntry[];
   pinned: string;
@@ -372,6 +397,8 @@ export function CanvasPane({
   focusDecision?: string;
   takeOver?: TakeOverSeam;
   onClose: () => void;
+  /** Offers to open the drawing in its own window. */
+  popOut?: boolean;
 }) {
   const [tab, setTab] = useState<"drawing" | "versions" | "wire">("drawing");
   const line = lines(entries).find(
@@ -384,6 +411,19 @@ export function CanvasPane({
       <header className="canvas-head">
         <h2 className="canvas-title">{line ? visible(line.surface.title ?? labels.drawing) : labels.drawing}</h2>
         {line && <span className="canvas-version">v{line.surface.version}</span>}
+        {popOut && line && session && (
+          <button
+            type="button"
+            className="icon-button canvas-popout"
+            aria-label={labels.openOwnWindow}
+            title={labels.openOwnWindow}
+            onClick={() => window.open(canvasWindowPath(session, pinned), "_blank", "popup,width=760,height=900")}
+          >
+            <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M14 4.5h5.5V10M19.5 4.5 11 13M10 6H6.5A2 2 0 0 0 4.5 8v9.5a2 2 0 0 0 2 2H16a2 2 0 0 0 2-2V14" />
+            </svg>
+          </button>
+        )}
         <button type="button" className="icon-button canvas-close" aria-label={labels.closeCanvas} onClick={onClose}>
           <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M6 6l12 12M18 6 6 18" />
@@ -604,9 +644,14 @@ export function worklog(shown: Line[]): Unit[] {
 function WorkLog({ steps }: { steps: ActivityLine[] }) {
   const failed = steps.filter((step) => step.result && !step.result.ok).length;
   const last = steps[steps.length - 1]!;
+  // How long the folded work took: from the first step to the last step's result.
+  const from = Date.parse(steps[0]?.at ?? "");
+  const to = Date.parse(last.endAt ?? last.at ?? "");
+  const seconds = Number.isFinite(from) && Number.isFinite(to) && to >= from ? Math.round((to - from) / 1000) : undefined;
   return (
     <details className={`work-log${failed ? " work-log-failed" : ""}`}>
       <summary>
+        {seconds !== undefined && seconds > 0 && <span className="work-log-time">{labels.workedFor(seconds)}</span>}
         <span className="work-log-count">{labels.workSteps(steps.length)}</span>
         {failed > 0 && <span className="work-log-failed-count">{labels.workFailed(failed)}</span>}
         <span className="work-log-last">{visible(last.text)}</span>

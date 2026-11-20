@@ -920,6 +920,10 @@ impl App {
             CommandOutcome::Resumed => self.notice(words::RESUME_ALL, Tone::Info),
             CommandOutcome::ModeSet { mode } => self.notice(mode.status, Tone::Info),
             CommandOutcome::Pending { text, .. } => self.notice(text, Tone::Info),
+            CommandOutcome::TurnStopped { text, stopped: true, .. } => {
+                self.notice(text, Tone::Info)
+            }
+            CommandOutcome::TurnStopped { stopped: false, .. } => {}
             // The thread shows a message a running turn took.
             CommandOutcome::Sent { .. }
             | CommandOutcome::Steered { .. }

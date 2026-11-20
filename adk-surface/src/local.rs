@@ -929,6 +929,31 @@ impl Source for LocalSource {
         self.spawn_content(kernel, user, session, target, message_content(text, images)).await
     }
 
+    /// A kernel kills the session's running and queued runs; a harness or a runner cancels its
+    /// run in flight. A run waiting on a decision is left to wait.
+    async fn stop_turn(&self, caller: &Caller, session: &str) -> Result<bool> {
+        let user = caller.user_id();
+        if let Some((kernel, _)) = &self.kernel {
+            let mut stopped = false;
+            for process in self.processes(user).await? {
+                let run = &process.run;
+                if run.session_id.as_deref() == Some(session)
+                    && matches!(run.state, RunState::Running | RunState::Queued)
+                {
+                    kernel.processes().kill(&process.meta.pid, "stopped by the person").await?;
+                    stopped = true;
+                }
+            }
+            return Ok(stopped);
+        }
+        let runner: &Runner = match (&self.harness, &self.runner) {
+            (Some(harness), _) => harness.runner(),
+            (None, Some(runner)) => runner,
+            (None, None) => return Err(SurfaceError::unsupported("stopping a turn")),
+        };
+        Ok(runner.interrupt_identity(runner.app_name(), user, session))
+    }
+
     /// The turn this process runs takes the message: a kernel's claim of the session on this
     /// replica, else the harness's or the runner's run in flight.
     async fn steer(&self, caller: &Caller, session: &str, text: &str) -> Result<Option<Steering>> {

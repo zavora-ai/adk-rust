@@ -441,6 +441,31 @@ export class FixtureClient implements HomeClient {
     return this.rows();
   }
 
+  /** How the person answered this week, on the web home and the phone. */
+  async answers() {
+    return {
+      since: at(9, 0, -7),
+      total: 12,
+      allowedOnce: 9,
+      alwaysAllowed: 2,
+      edited: 0,
+      denied: 1,
+      surfaces: [
+        { surface: "web" as const, count: 8 },
+        { surface: "phone" as const, count: 4 },
+      ],
+      text: "12 answers: 9 allowed once, 2 always allowed, 1 denied",
+    };
+  }
+
+  /** Each agent's thread, and for Finance an earlier one from October. */
+  async agentThreads(agent: string) {
+    const row = this.rows().find((candidate) => candidate.agent.name === agent);
+    const threads = row?.sessionId ? [{ sessionId: row.sessionId, at: at(18, 0, -1), when: "Yesterday 18:00" }] : [];
+    if (agent === "finance") threads.push({ sessionId: "s-finance-october", at: "2026-10-31T16:40:00Z", when: "31 Oct 16:40" });
+    return { agent, threads };
+  }
+
   async decisions() {
     return [...this.cards.values()].filter((card) => card.status === "waiting");
   }

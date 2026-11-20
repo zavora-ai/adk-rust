@@ -1,4 +1,4 @@
-import { useContext, useId, useRef, useState } from "react";
+import { useContext, useEffect, useId, useRef, useState } from "react";
 import type { ClipboardEvent, DragEvent, FormEvent } from "react";
 import type { ImageData, Origin } from "../generated/api";
 import { MAX_IMAGES, readImages } from "../images";
@@ -18,6 +18,9 @@ export function Composer({
   queued,
   disabled = false,
   attach = false,
+  askDrawing = false,
+  onStopTurn,
+  draft,
   onSend,
 }: {
   placeholder: string;
@@ -25,6 +28,12 @@ export function Composer({
   disabled?: boolean;
   /** The message box takes images. */
   attach?: boolean;
+  /** Offers "Ask for a drawing": the request goes in the box, sent only with Send. */
+  askDrawing?: boolean;
+  /** While the agent works on this thread: stops its turn (spec 3.3 §5.1). */
+  onStopTurn?: (origin: Origin) => void;
+  /** Text put in the box from outside, such as a suggested reply; `n` changes with each. */
+  draft?: { text: string; n: number };
   onSend: (text: string, origin: Origin, images?: ImageData[]) => Promise<void>;
 }) {
   const [text, setText] = useState("");
@@ -34,6 +43,13 @@ export function Composer({
   const [sending, setSending] = useState(false);
   const field = useId();
   const picker = useRef<HTMLInputElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  // A suggested reply fills the box and takes the focus; nothing is sent until Send.
+  useEffect(() => {
+    if (!draft) return;
+    setText(draft.text);
+    input.current?.focus();
+  }, [draft]);
   // The microphone, where the server offers voice and the page may use it (spec 3.3 §5.6).
   const voice = useContext(VoiceEntryContext);
 
@@ -146,10 +162,28 @@ export function Composer({
               </svg>
             </button>
           )}
+          {askDrawing && (
+            <button
+              type="button"
+              className="icon-button composer-ask-drawing"
+              aria-label={labels.askDrawing}
+              title={labels.askDrawing}
+              disabled={disabled}
+              onClick={() => {
+                setText((current) => (current.startsWith(labels.askDrawingText) ? current : `${labels.askDrawingText}${current}`));
+                input.current?.focus();
+              }}
+            >
+              <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 19.5h16M6.5 16V11M11 16V6.5M15.5 16v-6M20 16V8.5" />
+              </svg>
+            </button>
+          )}
           <label htmlFor={field} className="visually-hidden">
             {placeholder}
           </label>
           <input
+            ref={input}
             id={field}
             className="composer-input"
             placeholder={placeholder}
@@ -167,6 +201,18 @@ export function Composer({
                   fill="currentColor"
                 />
               </svg>
+            </button>
+          )}
+          {onStopTurn && (
+            <button
+              type="button"
+              className="button button-secondary composer-stop"
+              onClick={(event) => onStopTurn(event.detail === 0 ? { kind: "keyboard" } : { kind: "pointer" })}
+            >
+              <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="7" y="7" width="10" height="10" rx="2" />
+              </svg>
+              {labels.stopTurn}
             </button>
           )}
           <button

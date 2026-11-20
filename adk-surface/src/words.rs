@@ -960,6 +960,14 @@ pub const OUT_OF_MEMORY: &str = "Out of memory";
 pub const REFUSED_BY_THE_SANDBOX: &str = "Refused by the sandbox";
 /// A run that could not start.
 pub const COULD_NOT_RUN: &str = "Could not run";
+/// The message box's control that stops the session's running turn (spec 3.3 §5.1).
+pub const STOP_THE_TURN: &str = "Stop the turn";
+/// After a turn was stopped: the agent waits for the next message.
+pub const TURN_STOPPED: &str = "Stopped. Your agent waits for your next message.";
+/// The replies an agent suggests, under its message (spec 3.3 §5.1).
+pub const SUGGESTED_REPLIES: &str = "Suggested replies";
+/// Today's section that counts the person's answers (spec 3.3 §5.1).
+pub const HOW_YOU_ANSWERED: &str = "How you answered this week";
 /// A drawn form sent and denied.
 pub const SENT_YOU_SAID_NO: &str = "Sent · you said no";
 /// A drawn form sent, allowed, and its call failed.
@@ -1309,6 +1317,31 @@ pub fn images_attached(count: usize) -> String {
 /// Under a run's output: "Showing the last 40 lines of 214."
 pub fn last_lines(shown: usize, total: usize) -> String {
     format!("Showing the last {shown} lines of {total}.")
+}
+
+/// How a person answered: "12 answers: 9 allowed once, 2 always allowed, 1 denied".
+pub fn answers_line(
+    total: u32,
+    allowed_once: u32,
+    always_allowed: u32,
+    edited: u32,
+    denied: u32,
+) -> String {
+    if total == 0 {
+        return "No answers this week.".to_string();
+    }
+    let parts: Vec<String> = [
+        (allowed_once, "allowed once"),
+        (always_allowed, "always allowed"),
+        (edited, "edited"),
+        (denied, "denied"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, what)| format!("{count} {what}"))
+    .collect();
+    let noun = if total == 1 { "answer" } else { "answers" };
+    format!("{total} {noun}: {}", parts.join(", "))
 }
 
 #[cfg(test)]

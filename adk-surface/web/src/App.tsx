@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { Command, DecisionCard, Origin } from "./generated/api";
 import type { HomeClient } from "./client";
 import { ApiError, problemText } from "./client";
@@ -7,7 +7,6 @@ import { AgentsScreen } from "./agents/AgentsScreen";
 import { agentRoutines } from "./agents/routines";
 import { agentsPlaceOf } from "./agents/route";
 import { Header } from "./components/Header";
-import { Developer } from "./developer/Developer";
 import { labels } from "./labels";
 import { planned as plan, today as todays } from "./plan";
 import { usePoll } from "./poll";
@@ -23,6 +22,8 @@ import type { Seams } from "./seams";
 import { readStored, writeStored } from "./stored";
 import { CommandPalette } from "./components/CommandPalette";
 import { voiceLabels } from "./voice/labels";
+import { DecisionsInbox } from "./screens/Decisions";
+import { CanvasWindow } from "./screens/CanvasWindow";
 import type { PaletteItem } from "./components/CommandPalette";
 import { applyTheme, nextTheme, storedTheme } from "./theme";
 import type { Theme } from "./theme";
@@ -40,6 +41,10 @@ const FOLLOWED_KEY = "adk.home.followed";
  * status line and Stop all. Everything it shows is read from the server; what it keeps itself
  * — the conversation each thread follows — lasts across a reload of the tab (§6).
  */
+// The developer panel loads when opened: few people open it, and it is large (graph, tree,
+// trace, protocols).
+const Developer = lazy(() => import("./developer/Developer").then((module) => ({ default: module.Developer })));
+
 export function App({
   client,
   seams = {},
@@ -249,6 +254,8 @@ export function App({
       voice && voiceOffered(voiceModels.value?.models.length ?? 0) ? { open: () => navigate("voice") } : undefined,
     [voice, voiceModels.value, navigate],
   );
+  // A drawing in its own window: the canvas alone, no header (spec 3.3 §5.1).
+  if (section === "canvas") return <CanvasWindow client={client} send={send} />;
   if (section === "voice" && voice) {
     // The conversation ended opens in Threads under the agent, in place of its own thread.
     const ended = (sessionId?: string) => {
@@ -268,6 +275,7 @@ export function App({
   const paletteItems: PaletteItem[] = [
     ...[
       { section: "threads" as const, label: labels.threads },
+      { section: "decisions" as const, label: labels.decisions },
       { section: "today" as const, label: labels.today },
       { section: "memory" as const, label: labels.memoryAndRules },
       { section: "developer" as const, label: labels.developer },
@@ -364,12 +372,25 @@ export function App({
               setVisiting(undefined);
               setFocusDecision(undefined);
             }}
+            onVisit={(agent, chosen) => {
+              setFocusDecision(undefined);
+              setVisiting(followed[agent] === chosen ? undefined : { agent, session: chosen });
+            }}
             focusDecision={focusDecision}
             onOpenDecision={openDecision}
             canAddAgents={roster.value?.canAdd ?? false}
             removed={roster.value?.removed ?? []}
             verbs={screens.value ?? undefined}
             snooze={verbs ? (item, choice, origin) => verbs.snooze(item, choice, origin) : undefined}
+          />
+        )}
+        {section === "decisions" && (
+          <DecisionsInbox
+            decisions={decisions.value ?? []}
+            send={send}
+            onSettled={() => refresh()}
+            takeOver={takeOver}
+            onOpenThread={openDecision}
           />
         )}
         {section === "today" && (
@@ -410,11 +431,13 @@ export function App({
           />
         )}
         {section === "developer" && (
-          <Developer
-            client={client}
-            sessionId={session}
-            workflow={workflow && graphs.value ? { client: workflow, graphs: graphs.value } : undefined}
-          />
+          <Suspense fallback={null}>
+            <Developer
+              client={client}
+              sessionId={session}
+              workflow={workflow && graphs.value ? { client: workflow, graphs: graphs.value } : undefined}
+            />
+          </Suspense>
         )}
         {section === "website" && website && <Website client={website} onThreads={() => navigate("threads")} />}
         {section === "agents" && agentsSeam && agentsPlace && (
