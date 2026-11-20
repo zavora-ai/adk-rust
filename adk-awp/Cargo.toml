@@ -14,6 +14,9 @@ keywords = ["awp", "agent", "adk", "protocol", "agentic"]
 categories = ["web-programming::http-server", "api-bindings"]
 include = ["src/**/*", "Cargo.toml", "README.md", "LICENSE"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 awp-types = { workspace = true }
 adk-core = { workspace = true, features = ["webhook-delivery"] }

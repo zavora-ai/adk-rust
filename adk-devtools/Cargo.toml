@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 description = "Developer tools (read/write/edit/grep/glob/bash) for ADK-Rust coding agents, scoped to a sandboxed workspace"
 repository.workspace = true
+homepage.workspace = true
 documentation = "https://docs.rs/adk-devtools"
 readme = "README.md"
 exclude = ["tests/"]

@@ -26,13 +26,23 @@
 //! |---------|----------|
 //! | `openai` | OpenAI Realtime API over WebSocket |
 //! | `openai-webrtc` | OpenAI Realtime API over WebRTC with Opus |
-//! | `telephony` | Provider-neutral phone-call control and governed call tools ([`telephony`]) |
+//! | `telephony` | Provider-neutral phone-call control and governed call tools (the `telephony` module) |
 //! | `openai-sip` | OpenAI Realtime SIP: incoming-call webhooks, accept, reject, transfer, hang up |
 //! | `gemini` | Gemini Live API |
 //! | `vertex-live` | Vertex AI Live API with Application Default Credentials |
 //! | `livekit` | LiveKit WebRTC bridge |
 //! | `heygen-avatar`, `did-avatar` | Video avatar providers |
 //! | `integration` | `IntegratedRealtimeRunner` with sessions, memory, and plugins |
+//!
+//! | Feature | Enables |
+//! |---------|---------|
+//! | `livekit-sip` | LiveKit SIP over the server API (`telephony::livekit`): trunks, dispatch rules, verified webhooks, outbound calls, transfer, hang up; implies `telephony` |
+//! | `video-avatar` | Avatar configuration and the `AvatarProvider` trait (`avatar`); `heygen-avatar` and `did-avatar` imply it |
+//! | `guardrails` | `output_guardrails(GuardrailSet)` on `RealtimeAgentBuilder` and `IntegratedRealtimeRunnerBuilder`: the model's text and transcripts screened by `adk-guardrail` |
+//! | `scripted` | `ScriptedRealtimeModel`, a provider-free test double that answers each client action from a script |
+//! | `record-payloads` | Bounded raw provider frames in diagnostics; without it they are redacted |
+//! | `full` | `openai`, `gemini`, `vertex-live` and `livekit` |
+//! | `full-webrtc` | `full` and `openai-webrtc`; needs cmake |
 //!
 //! No provider is enabled by default. Every tool call goes through
 //! `adk_core::authorize_tool_call`: the kill switch, the `ToolPolicy`, and confirmation.

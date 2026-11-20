@@ -1,6 +1,6 @@
 # Anthropic Native Tools Example Matrix
 
-This crate exercises every Anthropic native tool wrapper currently exposed by `adk-tool` and supported by the pinned `claudius` SDK surface in this repo.
+This crate exercises every Anthropic native tool wrapper `adk-tool` exposes through the `adk-anthropic` client. It runs on the catalog's Anthropic default, `claude-sonnet-5-5` (`adk_model::catalog::ANTHROPIC_DEFAULT`).
 
 ## Run
 
@@ -12,7 +12,7 @@ cargo run --manifest-path examples/anthropic_server_tools/Cargo.toml
 Optional:
 
 ```bash
-export ANTHROPIC_MODEL=claude-sonnet-4-20250514
+export ANTHROPIC_MODEL=claude-haiku-5-5   # any current model in place of the default
 ```
 
 ## Coverage
@@ -28,6 +28,10 @@ export ANTHROPIC_MODEL=claude-sonnet-4-20250514
 
 ## Notes
 
+- A tool version the model no longer accepts is reported as skipped, not failed: on
+  `claude-sonnet-5-5` the API refuses `text_editor_20250124` and `text_editor_20250429`
+  ("does not support tool types"). `bash_20241022` runs only with
+  `ANTHROPIC_RUN_LEGACY_BASH_20241022=1`.
 - The text-editor scenarios create a temporary file, ask the agent to edit it across multiple turns, and then verify the resulting file contents.
 - Anthropic web search is demonstrated as a true server-side native tool.
 - Anthropic bash and text-editor tools are demonstrated through the standard ADK agent tool loop, because that is how the current implementation executes them.

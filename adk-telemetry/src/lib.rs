@@ -10,6 +10,7 @@
 //! - SQLite span export (`sqlite` feature) and Google Cloud export (`gcp` feature)
 //! - Automatic context propagation
 //! - OpenTelemetry GenAI semantic conventions (the `semantic-conventions-genai` repository) via the `genai-semconv` feature (enabled by default)
+//! - JSON log formatting through `tracing-subscriber` (`json` feature)
 //!
 //! ## Usage
 //!

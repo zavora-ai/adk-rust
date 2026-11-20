@@ -30,6 +30,26 @@
 //!   reducers (ReducedValue, UntrackedValue, MessagesValue), state schema
 //!   validation, interrupt/resume, and loop iteration checkpoint keying
 //!
+//! ## Feature flags
+//!
+//! No feature is on by default; the in-memory checkpointer needs none.
+//!
+//! | Feature | Enables |
+//! |---------|---------|
+//! | `sqlite` | The SQLite checkpointer |
+//! | `postgres`, `redis`, `mongodb`, `neo4j`, `firestore` | Checkpointers for shared databases |
+//! | `conformance` | `CheckpointerHarness` and `checkpointer_conformance_tests!` for testing a backend |
+//! | `functional` | The functional API: `TaskContext`, typed reducers, schema validation, cancellation |
+//! | `node-cache` | Per-node result caching; `redis-cache` adds a Redis store |
+//! | `delta-checkpoint` | The difference between super-steps stored instead of the full state |
+//! | `time-travel` | Step, fork and state history |
+//! | `action` | `ActionNodeExecutor` for `adk-action` node configurations |
+//! | `action-http`, `action-rss`, `action-trigger` | HTTP and notification nodes, RSS feeds, the cron and webhook trigger runtime |
+//! | `action-db`, `action-email` | Placeholders: database and email nodes are rejected when the graph compiles |
+//! | `action-full` | `action`, `action-trigger`, `action-http`, `action-db`, `action-email` and `action-rss` |
+//! | `yaml` | The `definition` module: workflows from YAML or JSON files, their validation and JSON Schema; implies `action` |
+//! | `full` | `sqlite`, `action-full` and `yaml` |
+//!
 //! ## Quick Start
 //!
 //! ```rust

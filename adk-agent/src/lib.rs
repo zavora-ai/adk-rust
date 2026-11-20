@@ -80,6 +80,23 @@
 //!     .input_guardrails(input_guardrails)
 //!     .build()?;
 //! ```
+//!
+//! ## Features
+//!
+//! No feature is on by default.
+//!
+//! | Feature | Enables |
+//! |---------|---------|
+//! | `skills` | `with_skills`, `with_auto_skills` and the other skill methods on every agent builder |
+//! | `skills-progressive-disclosure` | `adk-skill`'s progressive-disclosure skill tools; implies `skills` |
+//! | `guardrails` | `input_guardrails`, `output_guardrails` and `tool_guardrails` through `adk-guardrail` |
+//! | `enhanced-plugins` | `enhanced_plugin` and `enhanced_plugins`: the `EnhancedPlugin` pipeline intercepting tool and model calls |
+//! | `team-tools` | `Delegate` relationships in a [`TeamSpec`], lowered to `AgentTool`s |
+//! | `codeact` | `CodeActAgent` |
+//! | `coding` | `CodingAgent` over `adk-devtools` |
+//! | `sandbox` | `LlmAgentBuilder::sandbox_config` through `adk-sandbox` |
+//! | `ambient` | `AmbientAgent` with `CronTrigger`, `WebhookTrigger` and `FileWatchTrigger` |
+//! | `record-payloads` | Trace payloads recorded in full, instead of truncated to `RunConfig::trace_payload_max_bytes`, when `RunConfig::record_payloads` is set |
 #![allow(clippy::result_large_err)]
 #![deny(missing_docs)]
 

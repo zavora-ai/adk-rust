@@ -11,7 +11,7 @@ documentation = "https://docs.rs/adk-deploy"
 readme = "README.md"
 exclude = ["tests/"]
 description = "Deployment manifest, bundling, and control-plane client for ADK-Rust"
-keywords = ["adk", "deploy", "agents", "platform"]
+keywords = ["adk", "deploy", "agents", "platform", "kubernetes"]
 categories = ["development-tools", "config"]
 
 [dependencies]

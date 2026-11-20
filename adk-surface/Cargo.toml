@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 description = "Agent surfaces for ADK-Rust: one engine that turns a kernel's sessions, decisions and activity into plain words for every surface, and the surfaces that show them"
 repository.workspace = true
+homepage.workspace = true
 documentation = "https://docs.rs/adk-surface"
 readme = "README.md"
 # The web home's built assets ship in the crate; its TypeScript source does not.

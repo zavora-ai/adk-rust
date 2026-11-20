@@ -233,8 +233,9 @@ nodes; implement `Node::validate` to take part in the build-time check.
 ## Related
 
 - [Graph Agents](../agents/graph-agents.md) — Graph workflow orchestration
-- [Studio Action Nodes](../studio/action-nodes.md) — Visual node editor in ADK Studio
-- [Triggers](../studio/triggers.md) — Workflow trigger types
+- [YAML Workflows](../agents/graph-workflows-yaml.md) — `action:` nodes in a workflow file, run with `adk-rust graph run`
+- [The Workflow Observer](../surfaces/workflow.md) — A graph agent's runs, steps and forks
+- [Cron wakes](../kernel/scheduling.md#cron-wakes-and-missed-occurrences) — Starting work on a schedule, a file change or a webhook (`adk-rust wake`)
 
 ---
 

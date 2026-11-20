@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 description = "Governed, durable harness agent for ADK-Rust: modes, standing approvals, shell, todos, instructions and skills over one governed tool path"
 repository.workspace = true
+homepage.workspace = true
 documentation = "https://docs.rs/adk-harness"
 readme = "README.md"
 exclude = ["tests/"]
@@ -254,6 +255,6 @@ path = "tests/integration.rs"
 # is a test fixture.
 features = ["acp-server", "ambient", "auth", "browser", "computer-use", "docker", "encrypted",
     "firestore", "graph", "hooks", "kernel", "managed", "mcp", "memory", "memory-embeddings",
-    "memory-graph", "mongodb", "neo4j", "observe", "payments", "postgres", "redis", "runner",
-    "sandbox", "skills", "skills-registry", "sqlite", "team", "team-a2a", "team-acp", "vision",
-    "voice", "web", "website"]
+    "memory-graph", "mongodb", "neo4j", "observe", "payments", "postgres", "redis",
+    "remote-shell", "runner", "sandbox", "skills", "skills-registry", "sqlite", "team", "team-a2a",
+    "team-acp", "vision", "voice", "web", "website"]

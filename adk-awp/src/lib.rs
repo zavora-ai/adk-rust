@@ -26,6 +26,14 @@
 //! edge stores with a conformance suite, and `business.toml` migration. The 1.x routes and
 //! `AwpState` sit behind the default `awp-v1` feature for one release line.
 //!
+//! ## Features
+//!
+//! | Feature | Default | Enables |
+//! |---------|---------|---------|
+//! | `awp-v1` | yes | The AWP 1.x routes (`awp_routes`, `AwpState`), served beside 2.0 for one release line |
+//! | `signing` | no | The `signing` module: detached JWS (EdDSA) over JCS, keys and delegations, the `_awp-root` DNS anchor, signed Agent Cards, the site log's tiles and checkpoint, `StaticBundle` |
+//! | `verify` | no | `signing`, plus the `verify` module (`Verifier`, the library behind `adk-rust awp verify`) and the `conformance` kit |
+//!
 //! ## Quick Start
 //!
 //! ```rust,no_run

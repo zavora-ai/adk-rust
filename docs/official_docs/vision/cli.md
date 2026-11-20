@@ -75,6 +75,11 @@ Every `run` takes:
 The table ends with each backend call: where it ran, its duration, its cost, and whether
 anything left the machine.
 
+A `run` whose on-device model is not cached fetches it first, as `models fetch` does: by its
+pinned revision, every file's SHA-256 checked, the licence gate first. The first call can
+therefore download the model — `rf-detr-n` is 108 MB. With `HF_HUB_OFFLINE=1` an uncached model
+is refused instead. `models fetch` does the same download ahead of time.
+
 ```bash
 adk-rust vision run read invoice.png --annotate invoice.read.png
 adk-rust vision run detect street.jpg --classes person,car --output regions
@@ -90,8 +95,9 @@ adk-rust vision run detect street.jpg --classes person,car --output regions
 | `nim` (read) | `NVIDIA_API_KEY`, and `--base-url` or `NVIDIA_NIM_CV_URL` (hosted: `https://ai.api.nvidia.com/v1/cv`) |
 | `sam-3.1` | `META_API_KEY` |
 
-An on-device describer over mistral.rs is not available yet, so `describe` always uses a
-remote model.
+The CLI's `describe` has no on-device backend, so it always uses a remote model through the
+egress gate. In your own program, `LlmDescriber::mistralrs` (`adk-vision` feature `mistralrs`)
+runs Qwen3-VL in the process — see [Local Describer](local-describer.md).
 
 ### A Remote Call Goes Through the Egress Gate
 

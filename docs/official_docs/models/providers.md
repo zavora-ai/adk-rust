@@ -753,7 +753,8 @@ committed at the catalog's per-unit price. See
 
 `MuseRealtimeAsrClient` (feature `muse-realtime`) transcribes live PCM16 mono audio over Meta's
 realtime WebSocket; `adk_audio::MuseStt` (feature `muse` of `adk-audio`) wraps it and
-`MuseAsrClient` as an `SttProvider`, with `TranscriptEvent`s.
+`MuseAsrClient` as an `SttProvider`, with `TranscriptEvent`s (see
+[Speech with adk-audio](../audio/speech.md)).
 
 | Behaviour | Detail |
 |-----------|--------|

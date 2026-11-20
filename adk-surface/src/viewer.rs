@@ -19,7 +19,7 @@
 //!
 //! A person may save a region, corrected or kept, as a labelled example: an `adk-eval` case
 //! that points at the image by path and digest with `expected_vision`, so `cargo adk eval`
-//! scores an agent against it ([`example_case`]). Saving never changes the run's answer.
+//! scores an agent against it. Saving never changes the run's answer.
 
 use std::collections::BTreeMap;
 

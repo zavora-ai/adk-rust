@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 description = "Agent kernel for ADK-Rust: a resident supervisor with a process model, wake sources, an event bus and a control plane over durable runs"
 repository.workspace = true
+homepage.workspace = true
 documentation = "https://docs.rs/adk-kernel"
 keywords = ["adk", "agent", "kernel", "durable", "supervisor"]
 categories = ["asynchronous", "development-tools"]

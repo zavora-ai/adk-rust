@@ -355,6 +355,48 @@ returning `Ok(result)` to deliver, possibly rewritten, or `Err(reason)` to withh
 The session keeps running while a call is held, so a decision recorded in the approval store
 authorizes the call when the model issues it again.
 
+## Screening the model's output
+
+With the `guardrails` feature, `output_guardrails` screens each completed model turn with an
+`adk-guardrail` `GuardrailSet`, as `LlmAgent` screens final text:
+
+```toml
+[dependencies]
+adk-realtime = { version = "3.0.0", features = ["openai", "integration", "guardrails"] }
+adk-guardrail = "3.0.0"
+```
+
+| Runtime | What is screened | A transform | A block |
+|---------|------------------|-------------|---------|
+| `RealtimeAgent` | The model's completed text and transcripts, before the final event reaches the client or the session | Rewrites the text | Interrupts the response, ends the run with the guardrail's error and closes the session |
+| `IntegratedRealtimeRunner` | Each completed turn's text, or its audio transcript when it produced no text, before it reaches the session and memory | Replaces the persisted text | Interrupts the response, persists nothing of the turn, and `next_event` returns `RealtimeError::OutputBlocked { guardrail, reason }` |
+
+The screen runs on the completed turn: the text and transcript deltas streamed before it have
+already reached the client, and a block replaces the turn's closing event with the error.
+
+```rust
+use adk_guardrail::{GuardrailSet, PiiRedactor};
+use adk_realtime::model::BoxedModel;
+use adk_realtime::{IntegratedRealtimeRunner, RealtimeAgent};
+
+fn agent(model: BoxedModel) -> adk_core::Result<RealtimeAgent> {
+    RealtimeAgent::builder("voice")
+        .model(model)
+        .output_guardrails(GuardrailSet::new().with(PiiRedactor::new()))
+        .build()
+}
+
+fn runner(model: BoxedModel) -> adk_realtime::Result<IntegratedRealtimeRunner> {
+    IntegratedRealtimeRunner::builder()
+        .model(model)
+        .identity("voice", "user-1", "session-1")
+        .output_guardrails(GuardrailSet::new().with(PiiRedactor::new()))
+        .build()
+}
+```
+
+`RealtimeRunner` has no output guardrails.
+
 ## Tool callbacks on the direct agent
 
 `RealtimeAgent` applies before- and after-tool callbacks with the same contract as the

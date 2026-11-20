@@ -16,7 +16,7 @@ homepage.workspace = true
 
 [package.metadata.docs.rs]
 # openai-webrtc builds the Opus C library with cmake and is left out.
-features = ["full", "heygen-avatar", "did-avatar", "integration", "openai-sip", "livekit-sip"]
+features = ["full", "heygen-avatar", "did-avatar", "integration", "openai-sip", "livekit-sip", "guardrails", "scripted"]
 
 [dependencies]
 # Core ADK dependencies

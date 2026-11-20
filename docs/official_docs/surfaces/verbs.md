@@ -10,7 +10,9 @@ the person every time. Every call goes through the governed path and is on recor
 > terminal and voice parts compile with `web`, `tui` and `voice`. `adk-cli` turns it on with
 > its own `verb-ui` feature, for `adk-rust up`.
 
-![Coming up with Snooze](../../design/images/spec-3.3/verbs-coming-up-light.png)
+| Light | Dark |
+|---|---|
+| ![Coming up with Snooze](../images/surfaces/verbs-coming-up-light.png) | ![Coming up with Snooze, dark](../images/surfaces/verbs-coming-up-dark.png) |
 
 ## Who takes an action, and how
 
@@ -69,7 +71,9 @@ agent makes, so it never asks.
 | How it got here | What the agent read in the turn that asked, from that turn's tool results: "Finance read 1 web page (example.com)". A fetch that was refused or failed is not counted, only the host name of a page is shown, and the agent is named as the card names it |
 | Details | "You can change it back", and the line "Agents always ask before they change things on your screens." |
 
-![An agent asks to snooze](../../design/images/spec-3.3/verbs-card-light.png)
+| Light | Dark |
+|---|---|
+| ![An agent asks to snooze](../images/surfaces/verbs-card-light.png) | ![An agent asks to snooze, dark](../images/surfaces/verbs-card-dark.png) |
 
 ## Wire it up
 
@@ -133,7 +137,9 @@ engine's source.
 | Voice | "Snooze news digest": at most eight words, never "always", and exactly one title. It waits out the engine's cancel window ("Snoozing in 5 s"), where "cancel" or **Cancel** withdraws it; once the window has ended it is being taken, and a late cancel changes nothing. An ordinary sentence reads nothing of Coming up. The model's own audio played back never takes one |
 | Chat, the tray | None |
 
-![Snooze by voice](../../design/images/spec-3.3/verbs-voice-light.png)
+| Light | Dark |
+|---|---|
+| ![Snooze by voice](../images/surfaces/verbs-voice-light.png) | ![Snooze by voice, dark](../images/surfaces/verbs-voice-dark.png) |
 
 ## Routes
 

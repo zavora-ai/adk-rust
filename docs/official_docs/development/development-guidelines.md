@@ -78,11 +78,20 @@ adk-rust/
 ├── adk-agent/      # Agent implementations (LlmAgent, workflow agents)
 ├── adk-runner/     # Execution runtime
 ├── adk-server/     # REST API and A2A protocol
-├── adk-cli/        # Command-line launcher
+├── adk-cli/        # The `adk-rust` binary: harness REPL, server, kernel, website and site tools
 ├── adk-realtime/   # Voice/audio streaming agents
 ├── adk-graph/      # LangGraph-style workflows
 ├── adk-browser/    # Browser automation tools
 ├── adk-eval/       # Agent evaluation framework
+├── adk-sandbox/    # Process and WASM sandboxes with OS enforcers
+├── adk-harness/    # Governed harness agent: modes, standing approvals, shell, goals, memory
+├── adk-kernel/     # Agent kernel: supervisor, process table, wake sources, control plane
+├── adk-surface/    # Agent surfaces: web home, terminal, chat, phone, voice
+├── adk-vision/     # Local-first perception behind an egress gate
+├── adk-awp/        # Agentic Web Protocol 2.0 routes, signing and verification
+├── adk-site/       # AWP website pipeline: content, generator, launch gate, hosts
+├── adk-drivers/    # Website service drivers (DNS, email, analytics, social)
+├── adk-website/    # The prebuilt AWP website product
 ├── adk-rust/       # Umbrella crate (re-exports all)
 └── examples/       # Standalone example crates
 ```

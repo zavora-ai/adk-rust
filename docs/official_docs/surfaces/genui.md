@@ -372,9 +372,10 @@ With `genui-apps`, an MCP server's tool that declares an app (`_meta.ui.resource
 the card background. The app only ever asks; the person's own press does what it asked for
 (wave 4 decision 15).
 
-| An app in a thread (light) | Every state (dark) |
+| Light | Dark |
 |---|---|
-| ![Weather's app in Chief of staff's thread](../images/surfaces/genui-app-light.png) | ![The states of an app, dark](../images/surfaces/genui-app-states-dark.png) |
+| ![Weather's app in Chief of staff's thread](../images/surfaces/genui-app-light.png) | ![Weather's app in Chief of staff's thread, dark](../images/surfaces/genui-app-dark.png) |
+| ![The states of an app](../images/surfaces/genui-app-states-light.png) | ![The states of an app, dark](../images/surfaces/genui-app-states-dark.png) |
 
 **Only the MCP tool's own call shows an app.** `McpToolset` writes the `adk.mcp.app` record
 when a tool with an app succeeds; a same-named tool without it is an ordinary result. A tool

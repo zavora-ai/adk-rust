@@ -11,7 +11,9 @@ answered on any surface; the observer links to it and never draws an answer of i
 > for secret redaction. It has no adk-rust umbrella feature and no adk-cli feature: a host
 > mounts it as a library.
 
-![The Runs tab while a charge waits for a decision](../images/surfaces/web-workflow-run-light.png)
+| Light | Dark |
+|---|---|
+| ![The Runs tab while a charge waits for a decision](../images/surfaces/web-workflow-run-light.png) | ![The Runs tab while a charge waits for a decision, dark](../images/surfaces/web-workflow-run-dark.png) |
 
 ## Try it
 
@@ -43,7 +45,9 @@ the provider received.
 | Step detail | Each node's kind, status, start, duration and attempt; for a model step, a link to its activity in the thread; for a replayed call, "Not sent again — the record from 09:14 answered it"; for a governed node, the decision it waited on. Then "What changed": each key Added, Changed or Removed, before and after |
 | Forks of this run | The forks made from this thread: when, from which step, which keys they edited |
 
-![A step's detail: what the charge wrote](../images/surfaces/web-workflow-step-light.png)
+| Light | Dark |
+|---|---|
+| ![A step's detail: what the charge wrote](../images/surfaces/web-workflow-step-light.png) | ![A step's detail: what the charge wrote, dark](../images/surfaces/web-workflow-step-dark.png) |
 
 Every value shown passes secret redaction ("Hidden: looks like a secret"), the keys the host
 hides with `Workflows::hide_keys` ("Hidden: this home hides this key") and a size cap; long
@@ -57,7 +61,9 @@ values collapse after 12 lines. Values are never logged.
 A fork starts a new session of the same person at the completed checkpoint of an earlier step,
 with the channels you edit overwritten whole. The original thread is never written.
 
-![The fork dialog with the note edited](../images/surfaces/web-workflow-fork-light.png)
+| Light | Dark |
+|---|---|
+| ![The fork dialog with the note edited](../images/surfaces/web-workflow-fork-light.png) | ![The fork dialog with the note edited, dark](../images/surfaces/web-workflow-fork-dark.png) |
 
 | Rule | Behaviour |
 |---|---|
@@ -71,7 +77,9 @@ with the channels you edit overwritten whole. The original thread is never writt
 | Record | `surface.workflow.fork` with `sessionId`, `from`, `forkSessionId`, `edited`, and the caller's `surface` and `origin`; `surface.workflow.start` with `sessionId` and `from` when its run starts. A fork the audit cannot record is removed and the request fails |
 | No runner | A fork asked to start where `Workflows` has no runner is refused before anything is made |
 
-![The fork's run: pay not sent again](../images/surfaces/web-workflow-fork-done-light.png)
+| Light | Dark |
+|---|---|
+| ![The fork's run: pay not sent again](../images/surfaces/web-workflow-fork-done-light.png) | ![The fork's run: pay not sent again, dark](../images/surfaces/web-workflow-fork-done-dark.png) |
 
 ## A graph's decision on every surface
 
@@ -81,7 +89,10 @@ where it came from — "From the invoice-run workflow · Open in Runs". A govern
 `SubgraphNode` is carded and routed the same way, and the run view shows its subgraph's node
 waiting for it.
 
-![The charge's card in the thread](../images/surfaces/web-workflow-decision-light.png)
+| Light | Dark |
+|---|---|
+| ![The charge's card in the thread](../images/surfaces/web-workflow-decision-light.png) | ![The charge's card in the thread, dark](../images/surfaces/web-workflow-decision-dark.png) |
+| ![Approved from the Runs tab: the run is done after one charge](../images/surfaces/web-workflow-run-done-light.png) | ![Approved from the Runs tab, dark](../images/surfaces/web-workflow-run-done-dark.png) |
 
 ## Mount it on your own server
 
