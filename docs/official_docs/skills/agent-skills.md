@@ -203,9 +203,7 @@ message no skill matches is sent unchanged.
 | `with_skill_policy(policy)` | Sets the [`SelectionPolicy`](#selection) (default: the top skill scoring at least 1.0) |
 | `with_skill_budget(chars)` | Cuts the injected body at `chars` characters (default 2,000) |
 
-`CodeActAgent`'s builder has the same five methods. It selects a skill from the user's message
-in the same way and puts the skill's block in its system prompt instead of the message; see
-[CodeAgent](../agents/code-agent.md).
+`CodeActAgent`'s builder has the same five methods; see [CodeAgent](../agents/code-agent.md).
 
 The injected block wraps the skill's body:
 
