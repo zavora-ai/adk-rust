@@ -58,6 +58,12 @@ adk-rust up --store postgres://harness:…@db/harness --bind 0.0.0.0:8081 --auth
 adk-rust up --home /srv/kernel                     # socket and harness.db under /srv/kernel
 ```
 
+> **Note:** `--bind` belongs to `adk-rust up`. The `up` of an app built on `HarnessLauncher`
+> (the `harness` and `autonomous` templates) takes `--port` (default 8080) and `--host`:
+> `cargo run -- up --port 8081`. A `--host` other than loopback needs a token set in code with
+> `HarnessLauncher::with_auth_token`; the app's `up` takes no `--auth-token` and does not read
+> `ADK_SERVE_TOKEN`.
+
 ```text
 $ adk-rust up --mode ask
   store harness.db: sessions, approvals, runs, processes, schedules, the activity ledger

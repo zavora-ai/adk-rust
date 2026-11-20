@@ -942,6 +942,17 @@ pub trait AuditRecorder: Send + Sync {
     ///
     /// Returns the recorder's error when the record cannot be written.
     async fn record(&self, draft: AuditRecordDraft) -> Result<()>;
+
+    /// Makes every record written so far verifiable without a later write, such as by
+    /// signing a checkpoint over them. A process calls it when it stops cleanly; a
+    /// recorder that wraps another forwards it. The default does nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the recorder's error when the records cannot be sealed.
+    async fn seal(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// An [`AuditRecorder`] with the [`AuditFailureMode`] that governs it.

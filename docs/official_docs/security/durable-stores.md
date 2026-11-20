@@ -1,7 +1,8 @@
 # Durable Stores
 
 Three stores keep safe actions safe across restarts and across processes, and a fourth
-keeps the signed audit log:
+keeps the signed audit log. [Other durable stores](#other-durable-stores) lists the run,
+schedule, kernel and harness stores.
 
 | Store | Trait | Keeps | Set on |
 |-------|-------|-------|--------|
@@ -12,6 +13,23 @@ keeps the signed audit log:
 
 Every backend implements the same trait and passes the same conformance suite, so choosing
 a backend changes one constructor and nothing else.
+
+## Other durable stores
+
+The runtime, the agent kernel and the harness keep their own state in further stores, each with
+its own backend matrix and conformance suite on the page that documents it:
+
+| Store | Trait | Keeps | Backends | Page |
+|-------|-------|-------|----------|------|
+| Durable runs | `DurableRunStore` | The run queue: input, state, attempts, lease, checkpoint, outcome | In memory, SQLite, PostgreSQL, Redis, MongoDB, Neo4j, Firestore | [Durable Runtime](../core/durable-runtime.md#backend-matrix) |
+| Schedules | `ScheduleStore` | Cron, one-shot and interval schedules with their next fire time | As durable runs | [Durable Runtime](../core/durable-runtime.md#schedules-and-the-firing-rule) |
+| Leases and governance state | `LeaseStore`, `GovernanceStateStore` | Fenced ownership of runs; the freeze per organisation, tenant and agent | As durable runs | [Durable Runtime](../core/durable-runtime.md#backend-matrix) |
+| Kernel processes | `ProcessStore` | The kernel's metadata per run: parent, partition, queue, kind, wake set and suspension | In memory, SQLite, PostgreSQL, Redis, MongoDB, Firestore, Neo4j | [Kernel Store Backends](../kernel/backends.md) |
+| Cron watermarks | `CronWatermarkStore` | The cursor per cron source, which never moves back, so a restart knows which occurrences it missed | As kernel processes | [Kernel Store Backends](../kernel/backends.md#cron-sleepers) |
+| The kernel's other stores | `AgendaStore`, `DriverStore`, `LedgerStore`, `PartitionStore` | Follow-ups, supervised drivers, the activity ledger, partitions | As kernel processes; `KernelStores::open(url)` opens every kernel store on one backend | [Kernel Store Backends](../kernel/backends.md#every-store-at-once-kernelstores) |
+| Harness modes | `ModeStore` | The mode of each session | In memory, file, SQLite, PostgreSQL, Redis | [Harness Durability](../harness/durability.md#shared-backends) |
+| Standing rules | `StandingRuleStore` | Rules a person granted, per user or per session; the policy reads them on every evaluation | In memory, file, SQLite, PostgreSQL, Redis | [Harness Durability](../harness/durability.md#shared-backends) |
+| Harness goals | `GoalStore` | Each session's goal record; only the harness writes it | In memory, SQLite | [Plans and Goals](../harness/plan-and-goals.md) |
 
 ## Backend matrix
 
@@ -187,5 +205,8 @@ and the Firestore emulator and runs every live suite.
 
 - [Spend Ledger](spend-ledger.md)
 - [Audit Log](audit-log.md)
+- [Durable Runtime](../core/durable-runtime.md)
+- [Kernel Store Backends](../kernel/backends.md)
+- [Harness Durability](../harness/durability.md)
 - [Tool Authorization](tool-authorization.md)
 - [Tool Effects](../tools/tool-effects.md)

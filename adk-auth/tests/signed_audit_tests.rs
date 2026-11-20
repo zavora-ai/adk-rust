@@ -182,6 +182,33 @@ async fn a_log_without_checkpoints_is_unanchored() {
     assert_eq!(kinds(&report), vec![VerifyFailureKind::Unanchored]);
 }
 
+/// A process that stops before the first checkpoint is due seals the log, so its records verify.
+#[tokio::test]
+async fn sealing_signs_the_unsigned_records_once() {
+    use adk_core::audit_log::AuditRecorder;
+
+    let store: Arc<dyn AuditLogStore> = Arc::new(InMemoryAuditLogStore::new());
+    let key = signer("audit.example.com", 1);
+    let log = open(store.clone(), key.clone(), &clock()).await;
+    log.seal().await.unwrap();
+    assert_eq!(store.latest_checkpoint(LOG_ID).await.unwrap(), None);
+    for n in 0..2 {
+        log.append(draft(n)).await.unwrap();
+    }
+    log.seal().await.unwrap();
+    log.seal().await.unwrap();
+
+    let export = AuditExport::from_store(store.as_ref(), LOG_ID).await.unwrap();
+    assert_eq!(export.checkpoints.iter().map(|c| c.size).collect::<Vec<_>>(), vec![2]);
+    let report = export.verify(&[trusted(&key)]);
+    assert!(report.is_valid(), "{report}");
+    assert_eq!(
+        (report.checkpoints_verified, report.verified_size, report.unsigned_tail),
+        (1, 2, 0)
+    );
+    assert_eq!(report.origin.as_deref(), Some("example.com/adk-audit/replica-1"));
+}
+
 #[tokio::test]
 async fn a_fork_under_the_same_key_fails() {
     let key = signer("audit.example.com", 1);

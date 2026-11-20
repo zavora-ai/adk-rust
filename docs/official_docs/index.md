@@ -54,9 +54,9 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 
 A native coding agent: read/edit/run code in a sandboxed workspace, autonomous goal mode, and parallel ultra-review workflows.
 
-- [Overview](coding-agent/index.md) - Start here: the pieces, install, and a 60-second quick start
+- [Overview](coding-agent/index.md) - The coding pieces and where to start; new projects start from [the harness](harness/index.md)
 - [Dev Tools](coding-agent/devtools.md) - `adk-devtools`: read/write/edit/glob/grep/bash + the sandboxed `Workspace`
-- [Harness](coding-agent/harness.md) - `CodingAgent` (the `coding` feature), the plan loop, `write_todos`; superseded by the [harness](harness/index.md)
+- [`CodingAgent` (2.x)](coding-agent/harness.md) - The 2.x one-call agent (the `coding` feature), the plan loop, `write_todos`; superseded by the [harness](harness/index.md)
 - [CLI](coding-agent/cli.md) - `adk-rust code` / `goal` (durable, resumable) / `ultracode`
 - [Workflows](coding-agent/workflows.md) - Ultra-review on `adk-graph`: parallel reviewers + fan-in
 - [Examples](coding-agent/examples.md) - The three runnable example crates
@@ -74,6 +74,7 @@ The governed, durable harness agent (`adk-harness`, spec 3.1): modes, approvals,
 - [Harness Shell and Sandbox](harness/shell-and-sandbox.md) - `bash` under Seatbelt or bubblewrap, in a container, or in a remote microVM: isolation status, unsandboxed retry, `auto_allow_sandboxed`, audit records
 - [Harness Team](harness/team.md) - Members lowered to a `TeamSpec`: local, ACP and A2A members, isolation, budgets, discovery, review rounds
 - [Harness Plans and Goals](harness/plan-and-goals.md) - The plan graph with Approve and Review gates and rewind; loop-until goals, durable and ambient
+- [Snapshots and Rewind](harness/snapshots-and-rewind.md) - Whole-workspace snapshots before each turn; `/rewind` and `/redo` restore files, transcript and plan
 - [Harness Durability](harness/durability.md) - The durability invariants and the tests that prove them; what to run after a crash
 - [Harness Identity](harness/identity.md) - RBAC per tool class, per-call shell credentials, authenticated identity, audit
 - [Harness Observability](harness/observability.md) - Spans, spend per agent and subject, the loop guard, evaluation baselines
@@ -81,6 +82,7 @@ The governed, durable harness agent (`adk-harness`, spec 3.1): modes, approvals,
 - [Harness Web Access and MCP Interaction](harness/web-and-mcp.md) - `web_fetch` and `web_search` under the domain allowlist, screened and delimited; MCP elicitation through the prompter or inbox, sampling under the budget, resources as untrusted blocks
 - [Harness Hooks](harness/hooks.md) - Hooks on tool events: deny, fail or annotate through the shell's launcher, never allow; workspace hooks under trust; `harness.hook.ran`
 - [Harness Payments](harness/payments.md) - The payments pack: `adk-payments` tools as class `Payment`, one non-waivable approval per call, mandate guardrails, spend ledger, `harness.payment` with the journal receipt
+- [Browser and Computer-Use Packs](harness/packs.md) - The browser pack under the web rules; desktop actions through the governed reference graph, approved once each
 - [Harness Voice](harness/voice.md) - The voice surface: the harness as the agent of an `IntegratedRealtimeRunner`, held calls surfaced as realtime events, spoken or inbox approvals, `harness.voice.*` in one audit trail
 - [The Personal Preset and Take Over](harness/personal.md) - `--preset personal`: a workspace of notes and files under the home, no host shell, quiet time and a daily spending limit asked at first run; take over: a typed secret reaches one tool call only
 - [The Website Runtime](harness/website.md) - feature `website`: `Preset::Website`, the back-office and public toolsets of an AWP 2.0 website, its two partitions and signals, the autonomy ladder compiled to policy, authoring, outbound Web Bot Auth and onboarding
@@ -252,7 +254,7 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Playbook Learning](deployment/website-learning.md) - Experiment decisions and KPIs short of the owner's targets propose playbook revisions; the owner accepts, edits or declines each, and accepted revisions are versioned
 - [Publishing from Git](deployment/website-repository.md) - A signed push from an authorised committer proposes a release on the owner's decision card: GitHub, GitLab or the plain signed form, a local repository or a forge's raw endpoint
 - [Website Experiments and Measurement](deployment/website-experiments.md) - Experiments on the charter's KPIs with guardrails that stop them, variants as static files, and the KPI sources that are not drivers
-- [Deploy Targets](deployment/deploy-targets.md) - One manifest to Docker Compose, Kubernetes, Agent Engine, Amazon ECS Express Mode or Azure Container Apps through `cargo adk deploy --target`, with secrets by reference, explicit stores and authenticated endpoints enforced
+- [Deploy Targets](deployment/deploy-targets.md) - One manifest to Docker Compose, Kubernetes, Agent Engine, Amazon ECS Express Mode or Azure Container Apps through `cargo adk deploy --target`, with secrets by reference, explicit stores and authenticated endpoints enforced; `adk-rust deploy` against a control plane you run
 - [Agent Engine](deployment/agent-engine.md) - Deploying on the Gemini Enterprise Agent Platform
 - [Agent Registry](deployment/agent-registry.md) - Discovery, registration, and remote invocation on the Agent Platform
 
@@ -278,8 +280,8 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Wallet](security/wallet.md) - An owner-funded wallet: category mandates, caps checked before execution, holds, rails, anomaly pauses, reconciliation
 - [Approval Service](security/approval-service.md) - Approval inbox with quorum, delegation, escalation, expiry, webhooks, and server endpoints
 - [Agent Identity](security/agent-identity.md) - Stable agent ids on every policy decision, approval, spend record, and audit event; resource-scoped credential brokers
-- [Durable Stores](security/durable-stores.md) - Spend ledger, action ledger, and approval store backends, their conformance suite, and the no-duplicate guarantee
-- [Audit Log](security/audit-log.md) - Signed, Merkle-hashed audit log with checkpoints, key rotation, and offline verification
+- [Durable Stores](security/durable-stores.md) - Spend ledger, action ledger, approval and audit log store backends, their conformance suite, and the no-duplicate guarantee; where the run, schedule, kernel and harness stores are documented
+- [Audit Log](security/audit-log.md) - Signed, Merkle-hashed audit log with checkpoints (and when they are signed), key rotation, and offline verification
 - [Subject Rights](security/subject-rights.md) - Visitor ids, consent records, and one operation to export, erase, or link a person's data across stores
 - [Image Privacy](security/image-privacy.md) - Faces and personal text redacted on the device before any image leaves; the image privacy guardrail on model requests, tool results and user input
 - [Network Egress Policy](security/egress.md) - Host, port and CIDR allowlists, the shared address classifier, and the egress-guarded HTTP client

@@ -1,7 +1,12 @@
-# The Coding Harness (`CodingAgent`)
+# `CodingAgent` (2.x)
 
-> **Note:** the [harness](../harness/index.md) supersedes `adk_agent::coding::CodingAgent` in 3.1;
-> see [Migrating from `CodingAgent`](../migration/coding-agent-to-harness.md).
+> **Note:** this page describes `adk_agent::coding::CodingAgent`, the 2.x API. The
+> [harness](../harness/index.md) (spec 3.1, in 3.0.0) supersedes it; new projects start from
+> the [harness quick start](../harness/index.md#quick-start). `adk_agent::coding` keeps its API
+> in 3.0.0 (`write_todos` now keeps each session's list in session state) and carries no
+> `#[deprecated]` attribute;
+> [Migrating from `CodingAgent`](../migration/coding-agent-to-harness.md) moves a project to
+> the harness.
 
 `CodingAgent` is a thin harness — shipped in `adk-agent` behind the `coding`
 feature — that wires the [dev tools](devtools.md), a planning `write_todos` tool,
@@ -22,6 +27,61 @@ let coding = CodingAgent::builder()
     .build()?;
 
 let agent = coding.agent();   // Arc<dyn Agent> — hand to a Runner
+```
+
+### Run one
+
+```toml
+[dependencies]
+adk-agent = { version = "3.0.0", features = ["coding"] }
+adk-core = "3.0.0"
+adk-devtools = "3.0.0"
+adk-runner = "3.0.0"
+adk-session = "3.0.0"
+anyhow = "1"
+```
+
+```rust
+use adk_agent::coding::CodingAgent;
+use adk_core::{Content, SessionId, UserId};
+use adk_devtools::Workspace;
+use adk_runner::Runner;
+use adk_session::{CreateRequest, InMemorySessionService, SessionService};
+use std::sync::Arc;
+
+async fn run(model: Arc<dyn adk_core::Llm>) -> anyhow::Result<()> {
+    // One call builds a coding agent over a confined workspace; bash is opt-in.
+    let coding = CodingAgent::builder()
+        .model(model)
+        .workspace(Workspace::new("./my-repo").allow_bash(true))
+        .build()?;
+
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "demo".into(),
+            user_id: "u".into(),
+            session_id: Some("s".into()),
+            state: Default::default(),
+        })
+        .await?;
+
+    let runner = Runner::builder()
+        .app_name("demo")
+        .agent(coding.agent())
+        .session_service(sessions)
+        .build()?;
+
+    let _events = runner
+        .run(
+            UserId::new("u")?,
+            SessionId::new("s")?,
+            Content::new("user").with_text("Add a function add(a,b) to add.py and run it."),
+        )
+        .await?;
+    // Stream the events: FunctionCall, FunctionResponse, Text.
+    Ok(())
+}
 ```
 
 Builder options:
@@ -106,8 +166,7 @@ Because it's an `LlmAgent` underneath, everything else in ADK composes:
 
 ## Running it
 
-The harness produces an `Arc<dyn Agent>`; drive it with `adk-runner` (see the
-[quick start](index.md#60-second-quick-start)) or use the
-[CLI](cli.md), which wraps all of this.
+`CodingAgent::agent` returns an `Arc<dyn Agent>`; drive it with `adk-runner` as
+[Run one](#run-one) shows. The [CLI](cli.md) runs the harness, not `CodingAgent`.
 
 Next: [The CLI →](cli.md)

@@ -1412,11 +1412,15 @@ impl HarnessLauncher {
     }
 
     /// Serves the harness on the bind address and `port` until Ctrl-C (spec 3.1 §8.2).
+    /// Once the server and any kernel have stopped, the harness's audit recorder is
+    /// [sealed](adk_core::audit_log::AuditRecorder::seal), so a signed audit log verifies
+    /// after a clean stop.
     ///
     /// # Errors
     ///
     /// Returns the [`build_app`](Self::build_app) error, or the listener's.
     pub async fn run_serve_directly(self, port: u16) -> Result<()> {
+        let audit = self.agent.runtime().audit_trail().map(|trail| trail.recorder().clone());
         let addr = SocketAddr::new(self.bind_address, port);
         let info = self.agent.info().clone();
         let kernel = self.kernel.clone();
@@ -1449,7 +1453,9 @@ impl HarnessLauncher {
             });
         }
         if let Some(kernel) = kernel {
-            return serve_resident(kernel, socket, app, addr, &info).await;
+            let served = serve_resident(kernel, socket, app, addr, &info).await;
+            seal_audit(audit).await;
+            return served;
         }
         let listener = listening(socket, addr)?;
         println!("ADK-Rust harness serving on http://{addr}");
@@ -1459,10 +1465,21 @@ impl HarnessLauncher {
         println!("  approvals: GET /api/approvals, POST /api/approvals/{{id}}/decide");
         println!("  standing rules: GET /api/rules, POST /api/rules, DELETE /api/rules/{{id}}");
         println!("Press Ctrl+C to stop\n");
-        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        let served = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
             .with_graceful_shutdown(shutdown_signal())
             .await
-            .map_err(|e| AdkError::config(format!("server error: {e}")))
+            .map_err(|e| AdkError::config(format!("server error: {e}")));
+        seal_audit(audit).await;
+        served
+    }
+}
+
+/// Seals the harness's audit log once its server has stopped, so the last records verify.
+async fn seal_audit(audit: Option<Arc<dyn adk_core::audit_log::AuditRecorder>>) {
+    if let Some(audit) = audit
+        && let Err(error) = audit.seal().await
+    {
+        tracing::warn!(error = %error, "the audit log was not sealed; its last records stay unsigned");
     }
 }
 

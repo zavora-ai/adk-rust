@@ -242,9 +242,19 @@ let trail = AuditTrail::new(Arc::new(recorder));
 
 ## Checkpoints and keys
 
-A checkpoint is signed every `checkpoint_every` records, on the first append after
-`checkpoint_interval`, on `checkpoint()`, and on `AuditSink::flush`. `spawn_checkpoint_timer`
-signs idle logs on the interval.
+A checkpoint is signed every `checkpoint_every` records (default 256), on the first append
+after `checkpoint_interval` (default 60 seconds) has passed since the last checkpoint, on
+`checkpoint()`, and on `AuditSink::flush` and `AuditRecorder::seal`, which sign the records not
+yet signed. `spawn_checkpoint_timer` signs idle logs on the interval.
+
+| Who seals the log | When |
+|-------------------|------|
+| `Harness::close` | After the runner closes: the REPL, `code` and `goal` of `adk-rust`, and the REPL and `goal` of a `HarnessLauncher` app, when they end |
+| `HarnessLauncher::run_serve_directly` | Once the server, and on `up` the kernel, have stopped: `serve` and `up` of `adk-rust` and of a `HarnessLauncher` app after Ctrl-C or `SIGTERM` |
+
+Until a checkpoint signs them, `adk-rust audit verify` reports a log's records as
+`unanchored` and the result `INVALID`. A process killed before its log was sealed leaves its
+last records unsigned; the next process on the same log signs them with its own checkpoints.
 
 ```text
 audit.example.com/replica-1
