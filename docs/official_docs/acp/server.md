@@ -343,13 +343,12 @@ With the feature, the server answers both versions through the SDK's agent proto
 | Client | What it gets |
 |--------|--------------|
 | A v1 client | The v1 server, unchanged |
-| A v2 client | `session/new`, `list`, `resume` (which replays the session from its start), `close`, `delete`, `set_config_option`, `prompt` and `cancel`; each turn ends with an `idle` state update that carries the stop reason and token usage |
+| A v2 client | `session/new`, `list`, `resume` (which replays the session from its start), `close`, `delete`, `set_config_option` and `prompt`; each turn ends with an `idle` state update that carries the stop reason and token usage |
 
 | Limit | Behaviour |
 |-------|-----------|
 | `tool_call/cancel`, `terminal/cancel` | Answered with error `-32602`: the server has nothing they can cancel |
-| A server configured with an authenticator | Serves v1 only, until v2 `auth/login` is implemented |
-| MCP over ACP | v1 only: the v2 server refuses `acp` MCP servers, which v2 cannot declare |
+| MCP over ACP | v1 only: an `AcpConnection` with `tool_servers` connects over v1 |
 
 On the client side, `AcpConnection::connect` asks for v2 and falls back to v1; see
 [ACP client and host](client.md). [Testing and support matrix](testing.md) lists v2 with the
