@@ -1,0 +1,330 @@
+{
+ "kind": "adkVisionAnswer",
+ "version": 1,
+ "tool": "vision_detect",
+ "callId": "c-881",
+ "invocationId": "inv-research-forklift",
+ "agent": "research",
+ "at": "2026-11-20T06:02:00Z",
+ "image": {
+  "digest": "sha256:4484960c0d621670c96be084aa892ae1a277890c601b454f880377d8b3fd55ed",
+  "width": 1920,
+  "height": 1080,
+  "mimeType": "image/png",
+  "artifact": "vision-4484960c0d621670c96be084aa892ae1a277890c601b454f880377d8b3fd55ed.png",
+  "name": "warehouse-2026-11-12.mp4",
+  "provenance": {
+   "kind": "derived",
+   "from": "sha256:b667c1a53317676c6961a8bdf4b28a7788bbbc827d1e86ef8ee661a6a31190bb",
+   "operation": "sha256:4056263a08c38128b3b530563250bc43fea6c689118079da6e0dfe4a8881b446"
+  }
+ },
+ "args": {
+  "image": "warehouse-2026-11-12.mp4",
+  "classes": [
+   "forklift",
+   "pallet",
+   "person"
+  ]
+ },
+ "regionSet": {
+  "image": "sha256:4484960c0d621670c96be084aa892ae1a277890c601b454f880377d8b3fd55ed",
+  "width": 1920,
+  "height": 1080,
+  "regions": [
+   {
+    "image": "sha256:4484960c0d621670c96be084aa892ae1a277890c601b454f880377d8b3fd55ed",
+    "shape": {
+     "kind": "box",
+     "x0": 570,
+     "y0": 556,
+     "x1": 1000,
+     "y1": 920
+    },
+    "label": "forklift",
+    "score": 0.94,
+    "track": 4,
+    "origin": {
+     "backend": "warehouse-rfdetr-m",
+     "manifest": "warehouse-rfdetr-m",
+     "frame": {
+      "kind": "modelInput",
+      "width": 640,
+      "height": 640,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1920,
+      "sourceHeight": 1080,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 640,
+        "height": 360
+       },
+       {
+        "op": "pad",
+        "left": 0,
+        "top": 140,
+        "right": 0,
+        "bottom": 140
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:4484960c0d621670c96be084aa892ae1a277890c601b454f880377d8b3fd55ed",
+    "shape": {
+     "kind": "box",
+     "x0": 1176,
+     "y0": 636,
+     "x1": 1404,
+     "y1": 836
+    },
+    "label": "pallet",
+    "score": 0.91,
+    "track": 9,
+    "origin": {
+     "backend": "warehouse-rfdetr-m",
+     "manifest": "warehouse-rfdetr-m",
+     "frame": {
+      "kind": "modelInput",
+      "width": 640,
+      "height": 640,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1920,
+      "sourceHeight": 1080,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 640,
+        "height": 360
+       },
+       {
+        "op": "pad",
+        "left": 0,
+        "top": 140,
+        "right": 0,
+        "bottom": 140
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:4484960c0d621670c96be084aa892ae1a277890c601b454f880377d8b3fd55ed",
+    "shape": {
+     "kind": "box",
+     "x0": 1070,
+     "y0": 536,
+     "x1": 1190,
+     "y1": 606
+    },
+    "label": "pallet",
+    "score": 0.83,
+    "track": 11,
+    "origin": {
+     "backend": "warehouse-rfdetr-m",
+     "manifest": "warehouse-rfdetr-m",
+     "frame": {
+      "kind": "modelInput",
+      "width": 640,
+      "height": 640,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1920,
+      "sourceHeight": 1080,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 640,
+        "height": 360
+       },
+       {
+        "op": "pad",
+        "left": 0,
+        "top": 140,
+        "right": 0,
+        "bottom": 140
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:4484960c0d621670c96be084aa892ae1a277890c601b454f880377d8b3fd55ed",
+    "shape": {
+     "kind": "box",
+     "x0": 1456,
+     "y0": 436,
+     "x1": 1604,
+     "y1": 824
+    },
+    "label": "person",
+    "score": 0.9,
+    "track": 2,
+    "origin": {
+     "backend": "warehouse-rfdetr-m",
+     "manifest": "warehouse-rfdetr-m",
+     "frame": {
+      "kind": "modelInput",
+      "width": 640,
+      "height": 640,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1920,
+      "sourceHeight": 1080,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 640,
+        "height": 360
+       },
+       {
+        "op": "pad",
+        "left": 0,
+        "top": 140,
+        "right": 0,
+        "bottom": 140
+       }
+      ]
+     }
+    }
+   }
+  ]
+ },
+ "calls": [
+  {
+   "task": "detect",
+   "backend": "warehouse-rfdetr-m",
+   "locality": {
+    "kind": "inProcess"
+   },
+   "images": [],
+   "units": {},
+   "costMicroUsd": 0,
+   "regions": 4,
+   "durationMs": 48
+  },
+  {
+   "task": "track",
+   "backend": "bytetrack",
+   "locality": {
+    "kind": "inProcess"
+   },
+   "images": [],
+   "units": {},
+   "costMicroUsd": 0,
+   "regions": 4,
+   "durationMs": 2,
+   "library": "trackforge 0.5"
+  }
+ ],
+ "models": {
+  "warehouse-rfdetr-m": {
+   "builtIn": false,
+   "name": "RF-DETR M"
+  }
+ },
+ "tracks": [
+  {
+   "id": 4,
+   "label": "forklift",
+   "frames": 139,
+   "spans": [
+    [
+     612.2,
+     640.0
+    ],
+    [
+     998,
+     1200
+    ]
+   ],
+   "trail": [
+    [
+     180,
+     960
+    ],
+    [
+     300,
+     930
+    ],
+    [
+     420,
+     900
+    ]
+   ],
+   "blurred": false
+  },
+  {
+   "id": 9,
+   "label": "pallet",
+   "frames": 1200,
+   "spans": [
+    [
+     0,
+     1200
+    ]
+   ],
+   "trail": [],
+   "blurred": false
+  },
+  {
+   "id": 11,
+   "label": "pallet",
+   "frames": 980,
+   "spans": [
+    [
+     300,
+     1200
+    ]
+   ],
+   "trail": [],
+   "blurred": false
+  },
+  {
+   "id": 2,
+   "label": "person",
+   "frames": 230,
+   "spans": [
+    [
+     540,
+     700
+    ],
+    [
+     1010,
+     1080
+    ]
+   ],
+   "trail": [
+    [
+     1610,
+     655
+    ],
+    [
+     1560,
+     650
+    ]
+   ],
+   "blurred": true
+  }
+ ],
+ "video": {
+  "frame": 19023,
+  "atS": 634.1,
+  "lengthS": 1200,
+  "sampledPerS": 5
+ },
+ "display": {
+  "title": "Warehouse aisle 3 · 10:34.1",
+  "meta": "warehouse-2026-11-12.mp4 · frame 19,023 · 1920 × 1080",
+  "run": "Research · “When does the forklift enter the aisle?” · 09:02",
+  "minScore": 0.6
+ }
+}

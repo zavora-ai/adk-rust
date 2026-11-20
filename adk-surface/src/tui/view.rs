@@ -447,7 +447,7 @@ impl Renderer {
                         Span::styled(right, t.label()),
                     ]));
                 }
-                ThreadItem::Result { tool, call_id, ok, text } => {
+                ThreadItem::Result { tool, call_id, ok, text, .. } => {
                     let shown_on_activity = results.is_some() && call_id.is_some();
                     if !shown_on_activity {
                         let (mark, style) = if *ok {

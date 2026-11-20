@@ -653,6 +653,14 @@ pre {
   color: var(--text-2);
 }
 
+.activity-viewer {
+  margin-left: 8px;
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 /* A decision sits on its own background (spec 3.3 §7.1). */
 .decision {
   display: flex;

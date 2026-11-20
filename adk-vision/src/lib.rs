@@ -186,8 +186,8 @@ pub use runtime::{
 pub use sam::{SamConfig, SamSegmenter};
 pub use sent::{SentImage, VisionInput};
 pub use toolset::{
-    EgressApproval, VISION_EGRESS_POLICY_REF, VISION_TOOL_NAMES, VisionTool, VisionToolKind,
-    VisionToolset, VisionToolsetBuilder,
+    ANSWER_ARTIFACT_PREFIX, EgressApproval, VISION_EGRESS_POLICY_REF, VISION_TOOL_NAMES,
+    VisionTool, VisionToolKind, VisionToolset, VisionToolsetBuilder, answer_artifact_name,
 };
 pub use tracker::GreedyIouTracker;
 pub use traits::{

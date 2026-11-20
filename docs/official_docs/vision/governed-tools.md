@@ -267,6 +267,7 @@ at build time as `adk-vision`'s `onnx` feature does.
 
 ## Related
 
+- [The Annotated Viewer](../surfaces/annotated-viewer.md) — each call's answer record, drawn over its image on the web home
 - [Vision overview](index.md)
 - [Image Privacy](../security/image-privacy.md)
 - [Tool Authorization](../security/tool-authorization.md) - "Approving with Evidence"

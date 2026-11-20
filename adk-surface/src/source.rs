@@ -262,6 +262,80 @@ pub trait Source: Send + Sync {
         None
     }
 
+    /// Whether [`vision_answers`](Self::vision_answers) and
+    /// [`vision_image`](Self::vision_image) work here, so an image card's "Open the source
+    /// image" opens the annotated viewer (board choice A9). `false`, the default.
+    fn keeps_vision_answers(&self) -> bool {
+        false
+    }
+
+    /// The answer records the vision tools left in `session` of `user`, as JSON, oldest first
+    /// (spec 3.7 §8.2, the annotated viewer). The default keeps none.
+    ///
+    /// # Errors
+    ///
+    /// The source's error.
+    async fn vision_answers(&self, user: &str, session: &str) -> Result<Vec<serde_json::Value>> {
+        let _ = (user, session);
+        Ok(Vec::new())
+    }
+
+    /// The image `image` of `session` of `user` — a `sha256:` digest, or the name of an image
+    /// artifact the session holds — served only when its bytes hash to the digest a digest
+    /// names; `None` when the session holds no such image. The engine checks the caller owns
+    /// the session first (spec 3.7 §8.3: read routes authorised as the inbox is).
+    ///
+    /// # Errors
+    ///
+    /// `surface.unsupported` when the source keeps no images, `surface.invalid` when the
+    /// stored bytes do not match the digest, or the source's error.
+    async fn vision_image(
+        &self,
+        user: &str,
+        session: &str,
+        image: &str,
+    ) -> Result<Option<crate::evidence::EvidenceBytes>> {
+        let _ = (user, session, image);
+        Err(SurfaceError::unsupported("showing a session's images"))
+    }
+
+    /// The eval fixture files a labelled example may be saved to, relative to the fixtures'
+    /// root (board choice V13); `None`, the default, when the source saves no examples.
+    async fn example_files(&self, user: &str) -> Result<Option<Vec<String>>> {
+        let _ = user;
+        Ok(None)
+    }
+
+    /// Writes the eval set `set` to `file` under the fixtures' root and the image `image`
+    /// beside it at `image_path`, relative to the file, when it is not there already
+    /// (board choice V13). The run's own answer is untouched.
+    ///
+    /// # Errors
+    ///
+    /// `surface.unsupported` by default; `surface.invalid` when `file` leaves the root; the
+    /// source's error.
+    async fn save_example(
+        &self,
+        caller: &Caller,
+        file: &str,
+        set: serde_json::Value,
+        image_path: &str,
+        image: &crate::evidence::EvidenceBytes,
+    ) -> Result<()> {
+        let _ = (caller, file, set, image_path, image);
+        Err(SurfaceError::unsupported("saving labelled examples"))
+    }
+
+    /// The eval set at `file` under the fixtures' root, when there is one.
+    ///
+    /// # Errors
+    ///
+    /// `surface.unsupported` by default; the source's error.
+    async fn example_set(&self, user: &str, file: &str) -> Result<Option<serde_json::Value>> {
+        let _ = (user, file);
+        Err(SurfaceError::unsupported("saving labelled examples"))
+    }
+
     /// Whether `request`'s call moves money by the source's account (spec 3.3 §7.4 rule 4): a
     /// kernel answers for the tools its mounted drivers declare `financial` (spec 3.2 K-I9).
     /// The engine also counts the payment tools; `false`, the default, adds nothing to them.

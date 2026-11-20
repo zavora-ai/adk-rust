@@ -1,0 +1,580 @@
+{
+ "kind": "adkVisionAnswer",
+ "version": 1,
+ "tool": "vision_read",
+ "callId": "c-31",
+ "invocationId": "inv-northwind-batch",
+ "agent": "desk",
+ "at": "2026-11-20T07:31:00Z",
+ "image": {
+  "digest": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+  "width": 1654,
+  "height": 2339,
+  "mimeType": "image/png",
+  "artifact": "vision-556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654.png",
+  "name": "INV-2291.pdf",
+  "provenance": {
+   "kind": "documentPage",
+   "document": "sha256:22cc382fadc6b14bcff61f522fc33f4191196619cfbb7b38c5395b2143039de6",
+   "page": 1,
+   "dpi": 200
+  }
+ },
+ "args": {
+  "image": "INV-2291.pdf"
+ },
+ "regionSet": {
+  "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+  "width": 1654,
+  "height": 2339,
+  "regions": [
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 1100,
+     "y0": 150,
+     "x1": 1524,
+     "y1": 262
+    },
+    "origin": {
+     "backend": "pp-ocrv6-small",
+     "manifest": "pp-ocrv6-small",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 124,
+     "y0": 140,
+     "x1": 900,
+     "y1": 400
+    },
+    "origin": {
+     "backend": "pp-ocrv6-small",
+     "manifest": "pp-ocrv6-small",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 1232,
+     "y0": 332,
+     "x1": 1430,
+     "y1": 528
+    },
+    "origin": {
+     "backend": "pp-ocrv6-small",
+     "manifest": "pp-ocrv6-small",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 1000,
+     "y0": 296,
+     "x1": 1524,
+     "y1": 704
+    },
+    "origin": {
+     "backend": "pp-ocrv6-small",
+     "manifest": "pp-ocrv6-small",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 1250,
+     "y0": 466,
+     "x1": 1532,
+     "y1": 540
+    },
+    "origin": {
+     "backend": "pp-ocrv6-small",
+     "manifest": "pp-ocrv6-small",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     },
+     "escalatedFrom": {
+      "backend": "pp-ocrv6-small",
+      "reason": {
+       "kind": "lowConfidence",
+       "threshold": 0.6
+      },
+      "score": 0.58,
+      "text": "PO-7781S"
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 120,
+     "y0": 520,
+     "x1": 770,
+     "y1": 760
+    },
+    "origin": {
+     "backend": "pp-ocrv6-small",
+     "manifest": "pp-ocrv6-small",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 124,
+     "y0": 816,
+     "x1": 1530,
+     "y1": 1322
+    },
+    "origin": {
+     "backend": "pp-ocrv6-small",
+     "manifest": "pp-ocrv6-small",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 120,
+     "y0": 1376,
+     "x1": 560,
+     "y1": 1436
+    },
+    "origin": {
+     "backend": "pp-ocrv6-small",
+     "manifest": "pp-ocrv6-small",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 1000,
+     "y0": 1356,
+     "x1": 1530,
+     "y1": 1572
+    },
+    "origin": {
+     "backend": "pp-ocrv6-small",
+     "manifest": "pp-ocrv6-small",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 120,
+     "y0": 1488,
+     "x1": 700,
+     "y1": 1604
+    },
+    "origin": {
+     "backend": "pp-ocrv6-small",
+     "manifest": "pp-ocrv6-small",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   },
+   {
+    "image": "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654",
+    "shape": {
+     "kind": "box",
+     "x0": 120,
+     "y0": 2076,
+     "x1": 1534,
+     "y1": 2214
+    },
+    "origin": {
+     "backend": "pp-ocrv6-small",
+     "manifest": "pp-ocrv6-small",
+     "frame": {
+      "kind": "modelInput",
+      "width": 960,
+      "height": 960,
+      "letterbox": "center"
+     },
+     "chain": {
+      "sourceWidth": 1654,
+      "sourceHeight": 2339,
+      "steps": [
+       {
+        "op": "resize",
+        "width": 679,
+        "height": 960
+       },
+       {
+        "op": "pad",
+        "left": 140,
+        "top": 0,
+        "right": 141,
+        "bottom": 0
+       }
+      ]
+     }
+    }
+   }
+  ]
+ },
+ "page": {
+  "blocks": [
+   {
+    "kind": "title",
+    "text": "INVOICE",
+    "confidence": 0.99
+   },
+   {
+    "kind": "text",
+    "text": "Northwind Packaging Ltd · Unit 7, Harbour Road · Port Examplia EX4 2PL",
+    "confidence": 0.97
+   },
+   {
+    "kind": "seal",
+    "text": "RECEIVED 07 NOV 2026",
+    "confidence": 0.88
+   },
+   {
+    "kind": "text",
+    "text": "Invoice no. INV-2291 · Invoice date 06.11.2026 · PO number · Due date 06.12.2026 · Currency EUR",
+    "confidence": 0.93
+   },
+   {
+    "kind": "handwriting",
+    "text": "PO-77815",
+    "confidence": 0.58
+   },
+   {
+    "kind": "text",
+    "text": "Bill to · Mara Kestrel · 14 Ferry Lane · Port Examplia EX9 1QT",
+    "confidence": 0.96
+   },
+   {
+    "kind": "table",
+    "text": "4 rows × 4 columns",
+    "confidence": 0.95
+   },
+   {
+    "kind": "checkbox",
+    "text": "☑ Paid by bank transfer",
+    "confidence": 0.81
+   },
+   {
+    "kind": "text",
+    "text": "Subtotal 970.60 · VAT 20% 194.12 · Total due € 1,164.72",
+    "confidence": 0.94
+   },
+   {
+    "kind": "handwriting",
+    "text": "Approved — J.T. 12/11",
+    "confidence": 0.47
+   },
+   {
+    "kind": "text",
+    "text": "Bank: Examplia Savings · IBAN EX12 3456 7890 1234 56 · BIC EXSVEX22",
+    "confidence": 0.9
+   }
+  ],
+  "readingOrder": [
+   0,
+   1,
+   3,
+   2,
+   4,
+   5,
+   6,
+   8,
+   7,
+   9,
+   10
+  ]
+ },
+ "calls": [
+  {
+   "task": "read",
+   "backend": "pp-ocrv6-small",
+   "locality": {
+    "kind": "inProcess"
+   },
+   "images": [],
+   "units": {},
+   "costMicroUsd": 0,
+   "regions": 11,
+   "durationMs": 1100
+  },
+  {
+   "task": "read",
+   "backend": "gemini-3.8-flash",
+   "locality": {
+    "kind": "remote",
+    "hosts": [
+     "generativelanguage.googleapis.com"
+    ]
+   },
+   "images": [
+    "sha256:556b495de3f3b8c95e33b8ee5511552ada624e85f74b602af3ee2baea8a22654"
+   ],
+   "egress": [
+    "sha256:d4781edbb62da6731fb7343b87fcaf884a50b7d19483eef327ea1b274e272822"
+   ],
+   "units": {},
+   "regions": 1,
+   "durationMs": 2300,
+   "escalation": {
+    "kind": "lowConfidence",
+    "threshold": 0.6
+   }
+  }
+ ],
+ "models": {
+  "pp-ocrv6-small": {
+   "revision": "3f2a9c1e5b7d40a8c2f61e9d3b8a7c5e4f1d2a6b",
+   "licence": "Apache-2.0",
+   "builtIn": true,
+   "name": "PP-OCRv6 small"
+  }
+ },
+ "display": {
+  "run": "Document desk · Northwind batch · 10:31"
+ }
+}

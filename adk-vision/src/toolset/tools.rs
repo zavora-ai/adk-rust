@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::Inner;
+use super::answer::Answer;
 use crate::backend::Locality;
 use crate::cx::VisionCx;
 use crate::edit::{EditOp, Overlay, Rgba};
@@ -289,7 +290,22 @@ impl Tool for VisionTool {
         for digest in approved {
             options = options.approving(digest);
         }
-        let result = self.run(&cx, &scope, &source, &args, &options).await?;
+        let (result, answer) = self.run(&cx, &scope, &source, &args, &options).await?;
+        if let (Some(answer), Some(artifacts)) = (answer, artifacts.as_ref()) {
+            let known = self.inner.known(&scope, &source.digest());
+            if let Some(known) = known {
+                let tool = self.kind.name();
+                let record =
+                    super::answer::record(ctx.as_ref(), tool, &known, image, &args, &answer);
+                super::answer::save(
+                    artifacts.as_ref(),
+                    ctx.invocation_id(),
+                    ctx.function_call_id(),
+                    &record,
+                )
+                .await;
+            }
+        }
         Ok(result)
     }
 }
@@ -302,7 +318,7 @@ impl VisionTool {
         source: &SourceImage,
         args: &Value,
         options: &CallOptions,
-    ) -> Result<Value> {
+    ) -> Result<(Value, Option<Answer>)> {
         let runtime = &self.inner.runtime;
         let image = source.digest();
         let (width, height) = source.size();
@@ -311,25 +327,27 @@ impl VisionTool {
                 let query = detect_query(args)?;
                 let out = runtime.detect_with(cx, source, &query, options).await?;
                 self.audit_calls(cx, &out.calls).await?;
-                Ok(json!({
+                let response = json!({
                     "image": image,
                     "width": width,
                     "height": height,
                     "regions": out.value.iter().map(region_json).collect::<Vec<_>>(),
                     "calls": calls_json(&out.calls),
-                }))
+                });
+                Ok((response, Some(Answer::regions(out.value, out.calls))))
             }
             VisionToolKind::Segment => {
                 let prompts = segment_prompts(args)?;
                 let out = runtime.segment_with(cx, source, &prompts, options).await?;
                 self.audit_calls(cx, &out.calls).await?;
-                Ok(json!({
+                let response = json!({
                     "image": image,
                     "width": width,
                     "height": height,
                     "regions": out.value.iter().map(region_json).collect::<Vec<_>>(),
                     "calls": calls_json(&out.calls),
-                }))
+                });
+                Ok((response, Some(Answer::regions(out.value, out.calls))))
             }
             VisionToolKind::Read => {
                 let read = ReadOptions {
@@ -357,12 +375,19 @@ impl VisionTool {
                         entry
                     })
                     .collect();
-                Ok(json!({
+                let response = json!({
                     "image": image,
                     "blocks": blocks,
                     "markdown": out.value.markdown,
                     "calls": calls_json(&out.calls),
-                }))
+                });
+                let answer = Answer {
+                    regions: Vec::new(),
+                    page: Some(out.value),
+                    described: None,
+                    calls: out.calls,
+                };
+                Ok((response, Some(answer)))
             }
             VisionToolKind::Describe => {
                 let question = args
@@ -377,7 +402,7 @@ impl VisionTool {
                 let out = runtime.describe_with(cx, &[source], &spec, options).await?;
                 self.audit_calls(cx, &out.calls).await?;
                 let answer = &out.value;
-                Ok(json!({
+                let response = json!({
                     "image": image,
                     "text": answer.text,
                     "value": answer.value,
@@ -385,7 +410,15 @@ impl VisionTool {
                     "regions": answer.regions.iter().map(region_json).collect::<Vec<_>>(),
                     "escalatedFrom": answer.escalated_from.as_ref().map(|from| &from.backend),
                     "calls": calls_json(&out.calls),
-                }))
+                });
+                let described = json!({ "text": answer.text, "value": answer.value });
+                let answer = Answer {
+                    regions: out.value.regions,
+                    page: None,
+                    described: Some(described),
+                    calls: out.calls,
+                };
+                Ok((response, Some(answer)))
             }
             VisionToolKind::Crop | VisionToolKind::Redact | VisionToolKind::Annotate => {
                 let op = self.edit_op(args, (width, height))?;
@@ -398,13 +431,14 @@ impl VisionTool {
                 };
                 cx.audit(crate::audit::edit_draft(image, operation, edited.image.digest)).await?;
                 self.inner.remember(scope, edited.image.clone());
-                Ok(json!({
+                let response = json!({
                     "image": edited.image.digest,
                     "width": edited.image.width,
                     "height": edited.image.height,
                     "artifact": edited.image.artifact.file_name,
                     "from": image,
-                }))
+                });
+                Ok((response, None))
             }
         }
     }

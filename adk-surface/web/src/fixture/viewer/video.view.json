@@ -1,0 +1,508 @@
+{
+  "agent": "research",
+  "agentName": "Research",
+  "answer": {
+    "id": "inv-research-forklift:c-881",
+    "labels": [
+      {
+        "count": 1,
+        "label": "forklift"
+      },
+      {
+        "count": 2,
+        "label": "pallet"
+      },
+      {
+        "count": 1,
+        "label": "person"
+      }
+    ],
+    "name": "RF-DETR M + ByteTrack",
+    "place": "on this computer",
+    "regions": [
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "570, 556 → 1000, 920",
+        "chain": [
+          "Video frame 1920 × 1080",
+          "Resized to 640 × 360",
+          "Padded 140 top and bottom · 640 × 640",
+          "Box mapped back to source pixels"
+        ],
+        "detail": "",
+        "facts": [
+          {
+            "label": "Seen",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "10:12.2 → 10:40.0"
+              },
+              {
+                "style": "muted",
+                "text": " · 139 frames"
+              }
+            ]
+          },
+          {
+            "label": "Box now",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "570, 556 → 1000, 920"
+              }
+            ]
+          },
+          {
+            "label": "Found by",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "warehouse-rfdetr-m"
+              },
+              {
+                "style": "muted",
+                "text": " · your manifest"
+              }
+            ]
+          },
+          {
+            "label": "Tracked by",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "ByteTrack"
+              },
+              {
+                "style": "muted",
+                "text": " · trackforge 0.5, on this computer"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 640 × 640, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "T4 · forklift",
+        "index": 0,
+        "label": "forklift",
+        "score": 0.94,
+        "scoreText": "0.94",
+        "shape": "box",
+        "tag": "forklift · T4 · 0.94",
+        "track": 4,
+        "trackName": "T4",
+        "x0": 570.0,
+        "x1": 1000.0,
+        "y0": 556.0,
+        "y1": 920.0
+      },
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "1176, 636 → 1404, 836",
+        "chain": [
+          "Video frame 1920 × 1080",
+          "Resized to 640 × 360",
+          "Padded 140 top and bottom · 640 × 640",
+          "Box mapped back to source pixels"
+        ],
+        "detail": "",
+        "facts": [
+          {
+            "label": "Seen",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "0:00.0 → 20:00.0"
+              },
+              {
+                "style": "muted",
+                "text": " · 1,200 frames"
+              }
+            ]
+          },
+          {
+            "label": "Box now",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "1176, 636 → 1404, 836"
+              }
+            ]
+          },
+          {
+            "label": "Found by",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "warehouse-rfdetr-m"
+              },
+              {
+                "style": "muted",
+                "text": " · your manifest"
+              }
+            ]
+          },
+          {
+            "label": "Tracked by",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "ByteTrack"
+              },
+              {
+                "style": "muted",
+                "text": " · trackforge 0.5, on this computer"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 640 × 640, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "T9 · pallet",
+        "index": 1,
+        "label": "pallet",
+        "score": 0.91,
+        "scoreText": "0.91",
+        "shape": "box",
+        "tag": "pallet · T9 · 0.91",
+        "track": 9,
+        "trackName": "T9",
+        "x0": 1176.0,
+        "x1": 1404.0,
+        "y0": 636.0,
+        "y1": 836.0
+      },
+      {
+        "atEdge": false,
+        "blurred": false,
+        "boxText": "1070, 536 → 1190, 606",
+        "chain": [
+          "Video frame 1920 × 1080",
+          "Resized to 640 × 360",
+          "Padded 140 top and bottom · 640 × 640",
+          "Box mapped back to source pixels"
+        ],
+        "detail": "",
+        "facts": [
+          {
+            "label": "Seen",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "5:00.0 → 20:00.0"
+              },
+              {
+                "style": "muted",
+                "text": " · 980 frames"
+              }
+            ]
+          },
+          {
+            "label": "Box now",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "1070, 536 → 1190, 606"
+              }
+            ]
+          },
+          {
+            "label": "Found by",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "warehouse-rfdetr-m"
+              },
+              {
+                "style": "muted",
+                "text": " · your manifest"
+              }
+            ]
+          },
+          {
+            "label": "Tracked by",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "ByteTrack"
+              },
+              {
+                "style": "muted",
+                "text": " · trackforge 0.5, on this computer"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 640 × 640, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "T11 · pallet",
+        "index": 2,
+        "label": "pallet",
+        "score": 0.83,
+        "scoreText": "0.83",
+        "shape": "box",
+        "tag": "pallet · T11 · 0.83",
+        "track": 11,
+        "trackName": "T11",
+        "x0": 1070.0,
+        "x1": 1190.0,
+        "y0": 536.0,
+        "y1": 606.0
+      },
+      {
+        "atEdge": false,
+        "blurred": true,
+        "boxText": "1456, 436 → 1604, 824",
+        "chain": [
+          "Video frame 1920 × 1080",
+          "Resized to 640 × 360",
+          "Padded 140 top and bottom · 640 × 640",
+          "Box mapped back to source pixels"
+        ],
+        "detail": "",
+        "facts": [
+          {
+            "label": "Seen",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "9:00.0 → 11:40.0"
+              },
+              {
+                "style": "muted",
+                "text": " · 230 frames"
+              }
+            ]
+          },
+          {
+            "label": "Box now",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "1456, 436 → 1604, 824"
+              }
+            ]
+          },
+          {
+            "label": "Found by",
+            "parts": [
+              {
+                "style": "mono",
+                "text": "warehouse-rfdetr-m"
+              },
+              {
+                "style": "muted",
+                "text": " · your manifest"
+              }
+            ]
+          },
+          {
+            "label": "Tracked by",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "ByteTrack"
+              },
+              {
+                "style": "muted",
+                "text": " · trackforge 0.5, on this computer"
+              }
+            ]
+          },
+          {
+            "label": "Answered in",
+            "parts": [
+              {
+                "style": "plain",
+                "text": "Model-input pixels, 640 × 640, letterboxed"
+              }
+            ]
+          }
+        ],
+        "heading": "T2 · person",
+        "index": 3,
+        "label": "person · blurred",
+        "score": 0.9,
+        "scoreText": "0.90",
+        "shape": "box",
+        "tag": "person · blurred · T2 · 0.90",
+        "track": 2,
+        "trackName": "T2",
+        "x0": 1456.0,
+        "x1": 1604.0,
+        "y0": 436.0,
+        "y1": 824.0
+      }
+    ],
+    "run": {
+      "agent": "research",
+      "call": [
+        {
+          "style": "mono",
+          "text": "vision_detect"
+        },
+        {
+          "style": "plain",
+          "text": " over sampled frames · c-881"
+        }
+      ],
+      "text": "Research · “When does the forklift enter the aisle?” · 09:02"
+    },
+    "selected": 0,
+    "stats": [
+      "4 regions",
+      "0.1 s",
+      "$0"
+    ],
+    "tool": "vision_detect",
+    "video": {
+      "atS": 634.1,
+      "atText": "10:34.1",
+      "frameText": "frame 19,023 · sampled 5 a second",
+      "lengthS": 1200.0,
+      "lengthText": "20:00",
+      "note": "Tracks are anonymous and start again when the video is opened again. People are blurred in every kept frame.",
+      "tracks": [
+        {
+          "blurred": false,
+          "framesText": "139",
+          "id": 4,
+          "label": "forklift",
+          "name": "T4",
+          "spans": [
+            [
+              612.2,
+              640.0
+            ],
+            [
+              998.0,
+              1200.0
+            ]
+          ],
+          "trail": [
+            [
+              180.0,
+              960.0
+            ],
+            [
+              300.0,
+              930.0
+            ],
+            [
+              420.0,
+              900.0
+            ]
+          ]
+        },
+        {
+          "blurred": false,
+          "framesText": "1.2k",
+          "id": 9,
+          "label": "pallet",
+          "name": "T9",
+          "spans": [
+            [
+              0.0,
+              1200.0
+            ]
+          ],
+          "trail": []
+        },
+        {
+          "blurred": false,
+          "framesText": "980",
+          "id": 11,
+          "label": "pallet",
+          "name": "T11",
+          "spans": [
+            [
+              300.0,
+              1200.0
+            ]
+          ],
+          "trail": []
+        },
+        {
+          "blurred": true,
+          "framesText": "230",
+          "id": 2,
+          "label": "person · blurred",
+          "name": "T2",
+          "spans": [
+            [
+              540.0,
+              700.0
+            ],
+            [
+              1010.0,
+              1080.0
+            ]
+          ],
+          "trail": [
+            [
+              1610.0,
+              655.0
+            ],
+            [
+              1560.0,
+              650.0
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  "answers": [
+    {
+      "id": "inv-research-forklift:c-881",
+      "name": "RF-DETR M + ByteTrack",
+      "place": "on this computer",
+      "tool": "vision_detect"
+    }
+  ],
+  "examples": {
+    "canSave": true,
+    "caseName": "warehouse-aisle-3-10-34-1-forklift",
+    "file": "evals/vision/line-2.test.json",
+    "files": [
+      "evals/vision/invoices.test.json",
+      "evals/vision/line-2.test.json"
+    ]
+  },
+  "image": {
+    "digest": "sha256:4484960c0d621670c96be084aa892ae1a277890c601b454f880377d8b3fd55ed",
+    "digestShort": "sha256:448496…fd55ed",
+    "height": 1080,
+    "href": "/api/surface/vision/s-research/images/sha256%3A4484960c0d621670c96be084aa892ae1a277890c601b454f880377d8b3fd55ed",
+    "mimeType": "image/png",
+    "width": 1920
+  },
+  "kind": "videoFrame",
+  "meta": "warehouse-2026-11-12.mp4 · frame 19,023 · 1920 × 1080",
+  "minScore": 0.6,
+  "sessionId": "s-research",
+  "title": "Warehouse aisle 3 · 10:34.1"
+}

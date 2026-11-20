@@ -241,6 +241,7 @@ fn result_item(ok: bool, text: &str) -> ThreadItem {
         call_id: Some("adk-call-requested-1".into()),
         ok,
         text: text.into(),
+        image: None,
     }
 }
 

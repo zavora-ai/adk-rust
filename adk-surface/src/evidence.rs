@@ -781,7 +781,7 @@ fn local_path(href: &str) -> bool {
 }
 
 /// `id` as one path segment.
-fn percent_segment(id: &str) -> String {
+pub(crate) fn percent_segment(id: &str) -> String {
     let mut out = String::with_capacity(id.len());
     for byte in id.bytes() {
         match byte {

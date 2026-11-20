@@ -82,6 +82,7 @@ mod source;
 pub mod tui;
 #[cfg(feature = "verb-ui")]
 pub mod verbs;
+pub mod viewer;
 #[cfg(any(feature = "voice", feature = "web"))]
 pub mod voice;
 #[cfg(feature = "web")]
@@ -104,6 +105,7 @@ pub use control::ControlSource;
 pub use engine::SURFACE_AUDIT_ANSWER;
 pub use engine::SURFACE_AUDIT_DRAWN_SUBMITTED;
 pub use engine::SURFACE_AUDIT_IMAGE_CHANGE;
+pub use engine::SURFACE_AUDIT_VISION_EXAMPLE;
 pub use engine::{
     Command, CommandOutcome, DEFAULT_POLL_INTERVAL, FeedFrame, SURFACE_AUDIT_RESUME_ALL,
     SURFACE_AUDIT_SEND, SURFACE_AUDIT_SET_MODE, SURFACE_AUDIT_STEER, SURFACE_AUDIT_STOP_ALL,

@@ -497,7 +497,13 @@ proptest! {
             ThreadItem::Message { from: Speaker::Agent, author: name.clone(), text: message.clone() },
             ThreadItem::Message { from: Speaker::You, author: "You".into(), text: message.clone() },
             ThreadItem::Activity { tool: tool.clone(), text: message.clone(), call_id: Some("c1".into()) },
-            ThreadItem::Result { tool: tool.clone(), call_id: None, ok: false, text: "Failed".into() },
+            ThreadItem::Result {
+                tool: tool.clone(),
+                call_id: None,
+                ok: false,
+                text: "Failed".into(),
+                image: None,
+            },
             ThreadItem::Decision { decision_id: None, tool: tool.clone(), text: "Waiting for you".into() },
         ]);
         app.update(frame(FeedFrame::Entry { entry: entry.clone() }), shown);
