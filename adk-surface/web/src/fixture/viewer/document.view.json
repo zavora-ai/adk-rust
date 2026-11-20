@@ -2,7 +2,7 @@
   "agent": "desk",
   "agentName": "Document desk",
   "answer": {
-    "id": "c-31",
+    "id": "inv-northwind-batch:c-31",
     "labels": [
       {
         "count": 1,
@@ -779,13 +779,13 @@
   },
   "answers": [
     {
-      "id": "c-34",
+      "id": "inv-northwind-batch:c-34",
       "name": "PaddleOCR-VL-1.6",
       "place": "on this computer",
       "tool": "vision_read"
     },
     {
-      "id": "c-31",
+      "id": "inv-northwind-batch:c-31",
       "name": "PP-OCRv6 small",
       "place": "on this computer",
       "tool": "vision_read"

@@ -2,7 +2,7 @@
   "agent": "research",
   "agentName": "Research",
   "answer": {
-    "id": "c-881",
+    "id": "inv-research-forklift:c-881",
     "labels": [
       {
         "count": 1,
@@ -477,7 +477,7 @@
   },
   "answers": [
     {
-      "id": "c-881",
+      "id": "inv-research-forklift:c-881",
       "name": "RF-DETR M + ByteTrack",
       "place": "on this computer",
       "tool": "vision_detect"

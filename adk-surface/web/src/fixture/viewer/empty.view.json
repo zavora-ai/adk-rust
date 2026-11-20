@@ -97,7 +97,7 @@
       ],
       "title": "Nothing found"
     },
-    "id": "c-2311",
+    "id": "inv-line-2-c-2311:c-2311",
     "labels": [],
     "name": "sam-3.1",
     "place": "Meta, in the cloud",
@@ -125,7 +125,7 @@
   },
   "answers": [
     {
-      "id": "c-2311",
+      "id": "inv-line-2-c-2311:c-2311",
       "name": "sam-3.1",
       "place": "Meta, in the cloud",
       "tool": "vision_segment"

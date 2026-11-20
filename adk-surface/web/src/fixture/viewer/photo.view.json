@@ -2,7 +2,7 @@
   "agent": "inspector",
   "agentName": "Inspector",
   "answer": {
-    "id": "c-2207",
+    "id": "inv-line-2-c-2207:c-2207",
     "labels": [
       {
         "count": 4,
@@ -1086,7 +1086,7 @@
   },
   "answers": [
     {
-      "id": "c-2207",
+      "id": "inv-line-2-c-2207:c-2207",
       "name": "RF-DETR S + SAM 2.1 Tiny",
       "place": "on this computer",
       "tool": "vision_segment"
