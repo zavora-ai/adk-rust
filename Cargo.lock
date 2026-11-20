@@ -1443,6 +1443,7 @@ dependencies = [
  "adk-artifact",
  "adk-core",
  "adk-devtools",
+ "adk-eval",
  "adk-graph",
  "adk-harness",
  "adk-kernel",
