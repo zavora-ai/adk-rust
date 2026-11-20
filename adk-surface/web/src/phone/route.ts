@@ -1,3 +1,6 @@
+import type { ViewerPlace } from "../viewer/route";
+import { viewerOf, viewerPath } from "../viewer/route";
+
 /** The phone's screens, each its own address under `/ui/` (spec 3.3 §5.4). */
 export type PhoneScreen =
   | { screen: "pair"; code?: string }
@@ -5,12 +8,21 @@ export type PhoneScreen =
   | { screen: "decide"; id: string }
   | { screen: "threads" }
   | { screen: "today" }
-  | { screen: "memory" };
+  | { screen: "memory" }
+  | { screen: "viewer"; place: ViewerPlace };
 
 const BASE = "/ui/";
 
+
 /** The screen a phone address names; the pairing link carries its code after `#code=`. */
-export function phoneScreenOf({ pathname, hash }: Pick<Location, "pathname" | "hash">): PhoneScreen {
+export function phoneScreenOf({
+  pathname,
+  hash,
+  search = "",
+}: Pick<Location, "pathname" | "hash"> & { search?: string }): PhoneScreen {
+  // The annotated viewer, read-only (spec 3.7 §8.2, board choice V15).
+  const place = viewerOf({ pathname, search });
+  if (place) return { screen: "viewer", place };
   const rest = pathname.startsWith(BASE) ? pathname.slice(BASE.length) : "";
   const [first, second] = rest.split("/");
   switch (first) {
@@ -47,6 +59,8 @@ export function phonePathOf(screen: PhoneScreen): string {
       return `${BASE}decisions/${encodeURIComponent(screen.id)}`;
     case "threads":
       return BASE;
+    case "viewer":
+      return viewerPath(screen.place);
     default:
       return `${BASE}${screen.screen}`;
   }

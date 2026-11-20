@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react";
 import type {
   AnswerView,
   CompareView,
@@ -89,8 +89,8 @@ function saveFile(name: string, value: unknown) {
   setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
-function useWidth(fallback: number): [React.RefObject<HTMLDivElement | null>, number] {
-  const ref = useRef<HTMLDivElement | null>(null);
+function useWidth(fallback: number): [RefObject<HTMLDivElement>, number] {
+  const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(fallback);
   useEffect(() => {
     const element = ref.current;
@@ -200,7 +200,7 @@ function Slider({ value, onChange }: { value: number; onChange: (value: number) 
         <span>{words.scoreAtLeast}</span>
         <span className="vw-mono">{value.toFixed(2)}</span>
       </span>
-      <span className="vw-slider" style={{ "--at": `${value * 100}%` } as React.CSSProperties}>
+      <span className="vw-slider" style={{ "--at": `${value * 100}%` } as CSSProperties}>
         <input
           type="range"
           min={0}

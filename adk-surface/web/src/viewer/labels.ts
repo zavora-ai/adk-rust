@@ -1,5 +1,6 @@
 /** The annotated viewer's own words (spec 3.7 §8.2); the engine sends the words about an answer. */
 export const viewerLabels = {
+  openViewer: "See what it found",
   compareBackends: "Compare backends",
   exportRegionSet: "Export RegionSet",
   exportBoth: "Export both RegionSets",

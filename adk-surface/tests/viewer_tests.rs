@@ -248,7 +248,8 @@ async fn a_photo_carries_masks_and_its_measurement() {
         .map(|f| format!("{}: {}", f.label, f.parts.iter().map(|p| p.text.as_str()).collect::<String>()))
         .collect();
     assert_eq!(facts[1], "Found by: inspector-rfdetr-s-v3 · your fine-tune, your manifest");
-    assert_eq!(facts[2], "Outlined by: sam2.1-tiny@8c1e2f0 · Apache-2.0 · from the box");
+    assert_eq!(facts[2], "Outlined by: sam2.1-tiny@8c1e2f0 · from the box");
+    assert_eq!(facts[0], "Shape: Mask, 2,775 px · box 922, 490 → 1024, 532");
     assert_eq!(facts[3], "Answered in: Model-input pixels, 1024 × 1024, letterboxed");
     assert_eq!(
         tear.chain,

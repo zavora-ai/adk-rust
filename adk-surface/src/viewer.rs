@@ -1396,9 +1396,12 @@ fn model_fact(label: &str, record: &Record, id: &str, extra: Option<String>) -> 
         }
         _ => fact.mono(id),
     };
+    // A built-in model's licence, unless the line says how it was prompted (board choice V5).
     let mut notes: Vec<String> = Vec::new();
     if model.built_in {
-        notes.extend(model.licence.clone());
+        if extra.is_none() {
+            notes.extend(model.licence.clone());
+        }
     } else if record.models.contains_key(id) {
         notes.push(match &model.note {
             Some(note) => format!("{note}, your manifest"),

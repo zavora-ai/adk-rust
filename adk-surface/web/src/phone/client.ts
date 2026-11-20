@@ -13,7 +13,9 @@ import type {
   DecisionsResponse,
   PhoneInfo,
   StatusLine,
+  ViewerView,
 } from "../generated/api";
+import type { ViewerPlace } from "../viewer/route";
 import { ApiError } from "../client";
 import { parseSse } from "../sse";
 import type { TokenStore } from "./idb";
@@ -35,6 +37,8 @@ export interface PhoneClient {
   decision(id: string): Promise<DecisionCard>;
   /** An image a decision holds, at the `href` its card names, read with the device's token (spec 3.7 §8.2). */
   image?(href: string): Promise<Blob>;
+  /** The annotated viewer of one image, read-only (spec 3.7 §8.2, board choice V15). */
+  viewer?(place: ViewerPlace): Promise<ViewerView>;
   /**
    * Answers through the device's own route, with the changed arguments of an Edit; never for
    * an answer that needs presence.
@@ -126,8 +130,19 @@ export class HttpPhoneClient implements PhoneClient {
     return this.request<DecisionCard>(`/surface/decisions/${encodeURIComponent(id)}?surface=phone`);
   }
 
+  viewer(place: ViewerPlace) {
+    const query = new URLSearchParams({ surface: "phone" });
+    if (place.answer) query.set("answer", place.answer);
+    if (place.compare) query.set("compare", place.compare);
+    return this.request<ViewerView>(
+      `/surface/vision/${encodeURIComponent(place.session)}/images/${encodeURIComponent(place.image)}/view?${query.toString()}`,
+    );
+  }
+
   async image(href: string) {
-    if (!href.startsWith(`${this.base}/surface/decisions/`)) throw new ApiError(400, "Not an image of a decision");
+    if (!href.startsWith(`${this.base}/surface/decisions/`) && !href.startsWith(`${this.base}/surface/vision/`)) {
+      throw new ApiError(400, "Not an image of a decision or a session");
+    }
     const response = await fetch(`${href}?surface=phone`, {
       credentials: "same-origin",
       headers: { accept: "image/*", ...(this.token ? { authorization: `Bearer ${this.token}` } : {}) },

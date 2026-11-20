@@ -9,6 +9,8 @@ import { Decisions } from "./Decisions";
 import { Agents, ThisPhone, TodayLines } from "./Glance";
 import { phoneLabels } from "./labels";
 import { Pair } from "./Pair";
+import { PhoneViewer } from "../viewer/PhoneViewer";
+import { viewerOf } from "../viewer/route";
 import { badge } from "./push";
 import type { PhoneScreen } from "./route";
 import { phonePathOf, phoneScreenOf } from "./route";
@@ -46,6 +48,24 @@ export function PhoneApp({ client, initial }: { client: PhoneClient; initial?: P
     window.addEventListener("popstate", back);
     return () => window.removeEventListener("popstate", back);
   }, []);
+  // A card's "Open the source image" opens the read-only viewer in place (spec 3.7 §8.2, V15).
+  useEffect(() => {
+    if (!client.viewer) return;
+    const onClick = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0) return;
+      const link = (event.target as Element | null)?.closest?.("a[href]");
+      if (!(link instanceof HTMLAnchorElement) || link.target) return;
+      const url = new URL(link.href, window.location.href);
+      const place = url.origin === window.location.origin ? viewerOf(url) : undefined;
+      if (!place) return;
+      event.preventDefault();
+      const path = `${url.pathname}${url.search}`;
+      window.history.pushState(null, "", path);
+      setScreen({ screen: "viewer", place });
+    };
+    document.addEventListener("click", onClick);
+    return () => document.removeEventListener("click", onClick);
+  }, [client]);
 
   const go = useCallback((next: PhoneScreen) => {
     const path = phonePathOf(next);
@@ -122,13 +142,20 @@ export function PhoneApp({ client, initial }: { client: PhoneClient; initial?: P
     }
   }
 
-  const tab: Tab = screen.screen === "decide" ? "decisions" : screen.screen;
+  const tab: Tab = screen.screen === "decide" ? "decisions" : screen.screen === "viewer" ? "threads" : screen.screen;
   const line = [status.value?.mode?.status, status.value?.spend?.text].filter(Boolean).join(" · ");
   const title = TABS.find((entry) => entry.tab === tab)?.label ?? phoneLabels.decisions;
 
   return (
     <div className="phone">
-      {screen.screen === "decide" ? (
+      {screen.screen === "viewer" && client.viewer ? (
+        <PhoneViewer
+          client={{ viewer: client.viewer.bind(client) }}
+          place={screen.place}
+          onBack={() => (window.history.length > 1 ? window.history.back() : go({ screen: "threads" }))}
+          onOpenThread={() => go({ screen: "threads" })}
+        />
+      ) : screen.screen === "decide" ? (
         <Decide client={client} id={screen.id} onBack={() => go({ screen: "decisions" })} onSettled={onSettled} />
       ) : (
         <main className="phone-main">

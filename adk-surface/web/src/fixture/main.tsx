@@ -20,6 +20,8 @@ import { WebsiteFixture } from "./website";
 import { workflowFixture } from "./workflow";
 import { VisionHomeFixture, visionPhoneFixture } from "./vision";
 import type { VisionState } from "./vision";
+import { CORRECTING, ViewerHomeFixture, viewerPhoneFixture, viewerPlaceOf } from "./viewer";
+import type { ViewerState } from "./viewer";
 import "../styles/fonts.css";
 import "../styles/tokens.css";
 import "../styles/app.css";
@@ -68,6 +70,23 @@ const screens: Record<string, () => ReactNode> = {
   vision: () => {
     const state = (params.get("vision") ?? "pending") as VisionState;
     return <App client={new VisionHomeFixture(state)} seams={fixtureSeams()} initialSection="threads" initialAgent="desk" />;
+  },
+  // The annotated viewer (spec 3.7 §8.2, X12): `&viewer=document|photo|video|compare|empty|correct`.
+  viewer: () => {
+    const state = (params.get("viewer") ?? "document") as ViewerState;
+    const place = viewerPlaceOf(state);
+    return (
+      <App
+        client={new ViewerHomeFixture(state)}
+        seams={fixtureSeams()}
+        initialSection="threads"
+        initialViewer={{ place, correction: state === "correct" ? CORRECTING : undefined }}
+      />
+    );
+  },
+  viewerPhone: () => {
+    const fixture = viewerPhoneFixture();
+    return <PhoneApp client={fixture.client} initial={fixture.initial} />;
   },
   visionPhone: () => {
     const fixture = visionPhoneFixture((params.get("vision") ?? "pending") as VisionState);
