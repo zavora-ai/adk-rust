@@ -110,7 +110,10 @@ fn requested_version(req: &axum::extract::Request) -> Option<String> {
 ///   binding's HTTP 400 with an AIP-193 body (§11.6).
 ///
 /// Mount it over the JSON-RPC and HTTP+JSON routes, not the agent card route:
-/// card discovery carries no version.
+/// card discovery carries no version. Mount it with
+/// [`Router::route_layer`](axum::Router::route_layer): [`Router::layer`](axum::Router::layer)
+/// also wraps the router's fallback, so a request no route matches would answer
+/// `VERSION_NOT_SUPPORTED` rather than `404`.
 pub async fn version_negotiation(
     req: axum::extract::Request,
     next: axum::middleware::Next,

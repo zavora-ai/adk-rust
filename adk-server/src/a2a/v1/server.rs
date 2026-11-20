@@ -117,6 +117,10 @@ impl A2aV1Server {
 
     /// The JSON-RPC and HTTP+JSON bindings, behind `A2A-Version` negotiation. Put
     /// authentication on this router: the handlers act for the caller it identifies.
+    ///
+    /// Negotiation covers only the bindings' paths, so a request for any other path of an
+    /// app this router is merged into keeps that app's answer (`404` when nothing serves
+    /// it). Add authentication with [`Router::route_layer`] for the same reason.
     pub fn rpc_router(&self) -> Router {
         Router::new()
             .route(
@@ -125,7 +129,9 @@ impl A2aV1Server {
             )
             .with_state(self.handler.clone())
             .nest(&self.rest_path, rest_router(self.handler.clone()))
-            .layer(axum::middleware::from_fn(version_negotiation))
+            // `Router::layer` would also wrap the fallback, which a merge hands to the
+            // whole app, so every unknown path would answer `VERSION_NOT_SUPPORTED`.
+            .route_layer(axum::middleware::from_fn(version_negotiation))
     }
 
     /// The card route and both bindings, without authentication.

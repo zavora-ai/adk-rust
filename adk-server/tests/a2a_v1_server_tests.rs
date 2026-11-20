@@ -172,6 +172,36 @@ async fn with_a2a_answers_v1_on_both_bindings_and_0_3_on_its_endpoint() {
 }
 
 #[tokio::test]
+async fn unknown_paths_are_not_found_and_the_bindings_still_negotiate() {
+    let base = serve_with_a2a().await;
+    let http = reqwest::Client::new();
+    let rpc = json!({"jsonrpc": "2.0", "id": 7, "method": "SendMessage", "params": {}});
+
+    for path in ["/", "/ui/", "/no-such-route", "/a2a/v1/rest/no-such-route"] {
+        let get = http.get(format!("{base}{path}")).send().await.unwrap();
+        assert_eq!(get.status(), 404, "GET {path}");
+        let post = http.post(format!("{base}{path}")).json(&rpc).send().await.unwrap();
+        assert_eq!(post.status(), 404, "POST {path}");
+    }
+
+    // Without `A2A-Version` a request means 0.3, which the v1 bindings refuse.
+    let refused: Value =
+        http.post(format!("{base}/a2a/v1")).json(&rpc).send().await.unwrap().json().await.unwrap();
+    assert_eq!(refused["error"]["code"], -32009, "{refused}");
+    let refused = http.get(format!("{base}/a2a/v1/rest/tasks")).send().await.unwrap();
+    assert_eq!(refused.status(), 400);
+
+    let listed = http
+        .get(format!("{base}/a2a/v1/rest/tasks"))
+        .header("A2A-Version", "1.0")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), 200);
+    assert_eq!(listed.headers()["a2a-version"], "1.0");
+}
+
+#[tokio::test]
 async fn a2a_v1_server_mounts_its_bindings_where_its_card_says() {
     let base = listen(|base| {
         let runner_config = Arc::new(
