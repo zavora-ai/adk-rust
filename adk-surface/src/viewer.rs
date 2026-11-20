@@ -1,7 +1,7 @@
 //! The annotated viewer (spec 3.7 §8.2, X12): looking at what an agent saw.
 //!
 //! Every perception call of the vision tools leaves an answer record beside its image in the
-//! session — `vision-answer-<call id>.json`, the image itself as `vision-<hex>.<ext>` — with
+//! session — `vision-answer-<run>.<call id>.json`, the image itself as `vision-<hex>.<ext>` — with
 //! the call's `RegionSet` in source pixels, each region's backend, coordinate frame and
 //! transform chain, a read's blocks in reading order, and each backend call's duration and
 //! cost. The engine reads those records through the [`Source`](crate::Source) and projects
@@ -58,6 +58,8 @@ pub(crate) struct Record {
     pub(crate) tool: String,
     #[serde(default)]
     pub(crate) call_id: String,
+    #[serde(default)]
+    pub(crate) invocation_id: String,
     #[serde(default)]
     pub(crate) agent: String,
     #[serde(default)]
@@ -398,6 +400,16 @@ pub(crate) struct WireVideo {
 }
 
 impl Record {
+    /// The answer's identifier in a session: its run and its call, since a model may reuse a
+    /// call id in a later turn.
+    pub(crate) fn id(&self) -> String {
+        if self.invocation_id.is_empty() {
+            self.call_id.clone()
+        } else {
+            format!("{}:{}", self.invocation_id, self.call_id)
+        }
+    }
+
     /// Parses an answer record.
     ///
     /// # Errors
@@ -842,6 +854,16 @@ pub struct EmptyView {
     pub hidden: Vec<FactPart>,
     /// "The call failed." and its line.
     pub failed: Vec<FactPart>,
+}
+
+/// The answer `id` names among `records` (oldest first): by its run and call, or by its call
+/// alone — a thread's tool line knows only the call — the newest such answer.
+pub(crate) fn find<'a>(records: &'a [Record], id: &str) -> Option<&'a Record> {
+    records
+        .iter()
+        .rev()
+        .find(|record| record.id() == id)
+        .or_else(|| records.iter().rev().find(|record| record.call_id == id))
 }
 
 /// The run and the call that produced an answer.
@@ -1814,7 +1836,7 @@ pub(crate) fn answer_view(record: &Record, input: &ViewerInput<'_>) -> AnswerVie
         _ => regions.first().map(|r| r.index),
     };
     AnswerView {
-        id: record.call_id.clone(),
+        id: record.id(),
         tool: record.tool.clone(),
         name: answer_name(record),
         place: answer_place(record),
@@ -2008,11 +2030,11 @@ pub(crate) fn view(
     input: &ViewerInput<'_>,
 ) -> Option<ViewerView> {
     let newest = records.last()?;
-    let shown = answer.and_then(|id| records.iter().find(|r| r.call_id == id)).unwrap_or(newest);
+    let shown = answer.and_then(|id| find(records, id)).unwrap_or(newest);
     let (title, meta) = title_of(shown);
     let shown_view = answer_view(shown, input);
     let compare = compare
-        .and_then(|id| records.iter().find(|r| r.call_id == id && r.call_id != shown.call_id))
+        .and_then(|id| find(records, id).filter(|other| other.id() != shown.id()))
         .map(|other| compare_view(shown_view.clone(), answer_view(other, input)));
     let selected = shown_view
         .selected
@@ -2039,7 +2061,7 @@ pub(crate) fn view(
             .iter()
             .rev()
             .map(|record| AnswerChoice {
-                id: record.call_id.clone(),
+                id: record.id(),
                 name: answer_name(record),
                 place: answer_place(record),
                 tool: record.tool.clone(),

@@ -297,7 +297,13 @@ impl Tool for VisionTool {
                 let tool = self.kind.name();
                 let record =
                     super::answer::record(ctx.as_ref(), tool, &known, image, &args, &answer);
-                super::answer::save(artifacts.as_ref(), ctx.function_call_id(), &record).await;
+                super::answer::save(
+                    artifacts.as_ref(),
+                    ctx.invocation_id(),
+                    ctx.function_call_id(),
+                    &record,
+                )
+                .await;
             }
         }
         Ok(result)

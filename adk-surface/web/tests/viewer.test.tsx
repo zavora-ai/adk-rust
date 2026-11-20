@@ -158,7 +158,7 @@ describe("the annotated viewer", () => {
     await userEvent.click(within(side).getAllByRole("button", { name: "Keep PaddleOCR-VL's" })[0]);
     await userEvent.click(within(side).getByRole("button", { name: "Save example" }));
     await waitFor(() => expect(saved).toHaveLength(1));
-    expect(saved[0]).toMatchObject({ answer: "c-34", scope: "region", region: { text: "PO-77815", label: "handwriting" } });
+    expect(saved[0]).toMatchObject({ answer: "inv-northwind-batch:c-34", scope: "region", region: { text: "PO-77815", label: "handwriting" } });
   });
 
   it("says an empty answer is an answer, apart from hidden and failed (V12)", async () => {
@@ -173,7 +173,7 @@ describe("the annotated viewer", () => {
     await userEvent.click(within(side).getByRole("button", { name: "Save as an example with nothing in it" }));
     await userEvent.click(within(side).getByRole("button", { name: "Save example" }));
     await waitFor(() => expect(saved).toHaveLength(1));
-    expect(saved[0]).toMatchObject({ answer: "c-2311", scope: "nothing" });
+    expect(saved[0]).toMatchObject({ answer: "inv-line-2-c-2311:c-2311", scope: "nothing" });
     expect(saved[0].region).toBeUndefined();
   });
 
@@ -191,7 +191,7 @@ describe("the annotated viewer", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save example" }));
     await waitFor(() => expect(saved).toHaveLength(1));
     expect(saved[0]).toEqual({
-      answer: "c-31",
+      answer: "inv-northwind-batch:c-31",
       file: "evals/vision/invoices.test.json",
       caseName: views.document.examples.caseName,
       scope: "page",
@@ -207,9 +207,14 @@ describe("the annotated viewer", () => {
     open(views.document, { viewerClient, onNavigate: navigate });
     await screen.findByRole("heading", { name: "INV-2291 · page 1" });
     await userEvent.click(screen.getByRole("button", { name: "Export RegionSet" }));
-    expect(viewerClient.regions).toHaveBeenCalledWith("s-desk", "c-31", undefined);
+    expect(viewerClient.regions).toHaveBeenCalledWith("s-desk", "inv-northwind-batch:c-31", undefined);
     await userEvent.click(screen.getByRole("button", { name: "Compare backends" }));
-    expect(navigate).toHaveBeenCalledWith({ session: "s-desk", image: views.document.image.digest, answer: "c-31", compare: "c-34" });
+    expect(navigate).toHaveBeenCalledWith({
+      session: "s-desk",
+      image: views.document.image.digest,
+      answer: "inv-northwind-batch:c-31",
+      compare: "inv-northwind-batch:c-34",
+    });
   });
 
   it("goes back to the agent's thread", async () => {

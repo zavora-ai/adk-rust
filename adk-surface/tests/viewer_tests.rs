@@ -89,7 +89,11 @@ async fn save(artifacts: &InMemoryArtifactService, session: &str, name: &str, pa
 }
 
 async fn put_record(fixture: &Fixture, session: &str, record: &Value) {
-    let call = record["callId"].as_str().unwrap();
+    let call = format!(
+        "{}.{}",
+        record["invocationId"].as_str().unwrap_or_default(),
+        record["callId"].as_str().unwrap()
+    );
     let part = Part::InlineData {
         mime_type: "application/json".into(),
         data: serde_json::to_vec(record).unwrap(),
@@ -461,6 +465,35 @@ fn page_of(digest: &str, width: u32, height: u32) -> Value {
         "page": { "blocks": [ { "kind": "title", "text": "INVOICE" }, { "kind": "handwriting", "text": "PO-7781S" } ], "readingOrder": [0, 1] },
         "calls": [ { "task": "read", "backend": "pp-ocrv6-small", "locality": { "kind": "inProcess" }, "durationMs": 1100, "costMicroUsd": 0 } ],
     })
+}
+
+#[tokio::test]
+async fn a_call_id_reused_in_a_later_run_keeps_both_answers() {
+    let fixture = fixture(None).await;
+    let (bytes, digest) = png(40, 20, [240, 240, 240, 255]);
+    put_image(&fixture, "s-new", &format!("vision-{}.png", &digest[7..]), &bytes).await;
+    let mut first = page_of(&digest, 40, 20);
+    first["invocationId"] = json!("inv-1");
+    let mut second = first.clone();
+    second["invocationId"] = json!("inv-2");
+    second["at"] = json!("2026-11-20T07:40:00Z");
+    second["page"]["blocks"][1]["text"] = json!("PO-77815");
+    put_record(&fixture, "s-new", &first).await;
+    put_record(&fixture, "s-new", &second).await;
+    let view = fixture.engine.viewer(&owner(), "s-new", &digest, None, None).await.unwrap();
+    let ids: Vec<&str> = view.answers.iter().map(|answer| answer.id.as_str()).collect();
+    assert_eq!(ids, ["inv-2:c-31", "inv-1:c-31"], "newest first");
+    // A tool line names the call only: its newest answer opens.
+    let by_call =
+        fixture.engine.viewer(&owner(), "s-new", &digest, Some("c-31"), None).await.unwrap();
+    assert_eq!(by_call.answer.unwrap().regions[1].text.as_deref(), Some("PO-77815"));
+    let older = fixture
+        .engine
+        .viewer(&owner(), "s-new", &digest, Some("inv-1:c-31"), Some("inv-2:c-31"))
+        .await
+        .unwrap();
+    assert_eq!(older.answer.unwrap().regions[1].text.as_deref(), Some("PO-7781S"));
+    assert_eq!(older.compare.unwrap().differ, 1);
 }
 
 #[tokio::test]

@@ -5,7 +5,7 @@
 //! What a person needs to look at the answer — every region with its shape, the backend, the
 //! coordinate frame and the transform chain, the page's blocks in reading order, and each
 //! backend call's duration and cost — is saved as a JSON artifact in the session, named
-//! `vision-answer-<call id>.json`, beside the image the media store keeps as
+//! `vision-answer-<run>.<call id>.json`, beside the image the media store keeps as
 //! `vision-<hex>.<ext>`. Surfaces read it without depending on this crate.
 //!
 //! | Key | Holds |
@@ -63,20 +63,25 @@ struct ModelFacts {
     built_in: bool,
 }
 
-/// The artifact name of the record for call `call_id`: characters outside `[A-Za-z0-9_-]`
-/// become `_`, so any call id makes one file name.
+/// The artifact name of the record for call `call_id` of run `invocation_id`: characters
+/// outside `[A-Za-z0-9_-]` become `_`, so any ids make one file name. The run is part of the
+/// name because a model may reuse a call id in a later turn, and each answer keeps its record.
 ///
 /// # Example
 ///
 /// ```
-/// assert_eq!(adk_vision::answer_artifact_name("call/7"), "vision-answer-call_7.json");
+/// assert_eq!(
+///     adk_vision::answer_artifact_name("inv-1", "call/7"),
+///     "vision-answer-inv-1.call_7.json"
+/// );
 /// ```
-pub fn answer_artifact_name(call_id: &str) -> String {
-    let safe: String = call_id
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
-        .collect();
-    format!("{ANSWER_ARTIFACT_PREFIX}{safe}.json")
+pub fn answer_artifact_name(invocation_id: &str, call_id: &str) -> String {
+    let safe = |id: &str| -> String {
+        id.chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .collect()
+    };
+    format!("{ANSWER_ARTIFACT_PREFIX}{}.{}.json", safe(invocation_id), safe(call_id))
 }
 
 fn builtin_manifests() -> Option<&'static ManifestSet> {
@@ -160,10 +165,16 @@ pub(crate) fn record(
     record
 }
 
-/// Saves `record` as the answer artifact of `call_id`. A record that cannot be saved is
-/// logged and the call's answer stands: the viewer is a view of the run, not part of it.
-pub(crate) async fn save(artifacts: &dyn Artifacts, call_id: &str, record: &Value) {
-    let name = answer_artifact_name(call_id);
+/// Saves `record` as the answer artifact of `call_id` in run `invocation_id`. A record that
+/// cannot be saved is logged and the call's answer stands: the viewer is a view of the run,
+/// not part of it.
+pub(crate) async fn save(
+    artifacts: &dyn Artifacts,
+    invocation_id: &str,
+    call_id: &str,
+    record: &Value,
+) {
+    let name = answer_artifact_name(invocation_id, call_id);
     let data = match serde_json::to_vec(record) {
         Ok(data) => data,
         Err(error) => {
@@ -188,7 +199,7 @@ mod tests {
 
     #[test]
     fn artifact_names_are_one_safe_file_name() {
-        assert_eq!(answer_artifact_name("c-31"), "vision-answer-c-31.json");
-        assert_eq!(answer_artifact_name("a/../b c"), "vision-answer-a____b_c.json");
+        assert_eq!(answer_artifact_name("inv-1", "c-31"), "vision-answer-inv-1.c-31.json");
+        assert_eq!(answer_artifact_name("i.1", "a/../b c"), "vision-answer-i_1.a____b_c.json");
     }
 }

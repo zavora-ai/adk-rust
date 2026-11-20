@@ -17,14 +17,14 @@ and saves it as a labelled example for their eval fixtures, and exports the answ
 |---|---|
 | A tool line in the thread | A `vision_detect`, `vision_segment`, `vision_read` or `vision_describe` result carries its image's digest (`ThreadItem::Result::image`); the line links to **See what it found** |
 | A card with images | **Open the source image** opens the viewer when the source keeps the session's answers and the feature named no other place (`Source::keeps_vision_answers`) |
-| An address | `/ui/vision/<session>/<image>`, the image a `sha256:` digest or the name of an image the session holds; `?answer=<call>` picks the answer and `&compare=<call>` a second one |
+| An address | `/ui/vision/<session>/<image>`, the image a `sha256:` digest or the name of an image the session holds; `?answer=` picks the answer — `<run>:<call>`, or a call id for its newest answer — and `&compare=` a second one |
 
 The back link returns to the agent's thread in that session.
 
 ## Where the Answers Come From
 
 Every perception call of the vision tools leaves an answer record beside its image in the
-session: `vision-answer-<call id>.json`, next to the image the media store keeps as
+session: `vision-answer-<run>.<call id>.json`, next to the image the media store keeps as
 `vision-<hex>.<ext>`. The tool's response stays compact for the model; the record holds what a
 person needs to look at the answer, and never pixels (V-I15).
 

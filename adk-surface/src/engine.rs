@@ -1383,9 +1383,7 @@ impl SurfaceEngine {
     ) -> Result<Value> {
         let records = self.vision_records(caller, session).await?;
         let set = |id: &str| {
-            records
-                .iter()
-                .find(|record| record.call_id == id)
+            crate::viewer::find(&records, id)
                 .map(|record| serde_json::to_value(&record.region_set).unwrap_or(Value::Null))
                 .ok_or_else(|| {
                     SurfaceError::not_found(format!("answer '{id}' of session '{session}'"))
@@ -1414,13 +1412,9 @@ impl SurfaceEngine {
     ) -> Result<crate::viewer::SavedExample> {
         crate::viewer::check_file(&example.file).map_err(SurfaceError::Invalid)?;
         let records = self.vision_records(caller, session).await?;
-        let record =
-            records.iter().find(|record| record.call_id == example.answer).ok_or_else(|| {
-                SurfaceError::not_found(format!(
-                    "answer '{}' of session '{session}'",
-                    example.answer
-                ))
-            })?;
+        let record = crate::viewer::find(&records, &example.answer).ok_or_else(|| {
+            SurfaceError::not_found(format!("answer '{}' of session '{session}'", example.answer))
+        })?;
         let case = crate::viewer::example_case(record, example).map_err(SurfaceError::Invalid)?;
         let image = self
             .inner
@@ -1438,6 +1432,7 @@ impl SurfaceEngine {
             json!({
                 "sessionId": session,
                 "answer": record.call_id,
+                "invocationId": record.invocation_id,
                 "tool": record.tool,
                 "imageDigest": record.image.digest,
                 "file": example.file,

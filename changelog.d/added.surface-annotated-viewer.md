@@ -1,5 +1,5 @@
 - **Annotated viewer** (`adk-surface`, `adk-vision`): every perception call of the vision
-  tools leaves an answer record beside its image (`vision-answer-<call>.json`: the `RegionSet`
+  tools leaves an answer record beside its image (`vision-answer-<run>.<call>.json`: the `RegionSet`
   with each region's backend, frame and transform chain, a read's blocks in reading order, each
   backend call's duration and cost). The web home's viewer at `/ui/vision/<session>/<image>`
   draws it over the image with filters by label, score and track, measurements and the run and

@@ -594,7 +594,9 @@ async fn s1_s2_local_first_and_five_crops_not_the_page() {
         let record: Value = serde_json::from_slice(&data).unwrap();
         assert_eq!(record["kind"], "adkVisionAnswer");
         assert_eq!(record["tool"], "vision_read");
-        assert_eq!(*name, adk_vision::answer_artifact_name(record["callId"].as_str().unwrap()));
+        let (run, call) =
+            (record["invocationId"].as_str().unwrap(), record["callId"].as_str().unwrap());
+        assert_eq!(*name, adk_vision::answer_artifact_name(run, call));
         if record["image"]["name"] == "form.png" {
             form_record = Some(record);
         }
