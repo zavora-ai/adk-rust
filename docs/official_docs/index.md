@@ -139,7 +139,7 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 - [Tools](realtime/tools.md) - Server-side actions: native handlers, bridged `adk_core::Tool`s, parallel calls; screened tool results and output guardrails
 - [Telephony](realtime/telephony.md) - Phone calls: OpenAI Realtime SIP, governed transfer, hang-up, DTMF and dialling tools, freeze ends the call
 - [Multimodal](realtime/multimodal.md) - Video input via `send_video_frame` and browser camera capture
-- [Speech with adk-audio](audio/speech.md) - Speech to text and text to speech outside a realtime session: `SttProvider` and `TtsProvider`, cloud providers, `TranscriptEvent` streams (the 3.0 change), on-device recognisers and voices on ONNX Runtime, speech as agent tools
+- [Speech with adk-audio](audio/speech.md) - STT and TTS providers and their defaults, live transcription with `TranscriptEvent` (the 3.0 change), on-device Whisper, Distil-Whisper, Moonshine, Kokoro, Chatterbox and Qwen3-TTS, model downloads, and speech as agent tools
 - [Affective Dialogue](realtime/affective-dialogue.md) - Emotion-aware responses on Gemini native-audio
 - [Memory](realtime/memory.md) - Context injection, turn storage, and knowledge-graph self-curation
 - [Building Web Apps](realtime/building-web-apps.md) - The server-side bridge, WS protocol, and Web Audio
