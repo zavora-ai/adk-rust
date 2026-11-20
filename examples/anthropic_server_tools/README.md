@@ -28,6 +28,10 @@ export ANTHROPIC_MODEL=claude-haiku-5-5   # any current model in place of the de
 
 ## Notes
 
+- A tool version the model no longer accepts is reported as skipped, not failed: on
+  `claude-sonnet-5-5` the API refuses `text_editor_20250124` and `text_editor_20250429`
+  ("does not support tool types"). `bash_20241022` runs only with
+  `ANTHROPIC_RUN_LEGACY_BASH_20241022=1`.
 - The text-editor scenarios create a temporary file, ask the agent to edit it across multiple turns, and then verify the resulting file contents.
 - Anthropic web search is demonstrated as a true server-side native tool.
 - Anthropic bash and text-editor tools are demonstrated through the standard ADK agent tool loop, because that is how the current implementation executes them.

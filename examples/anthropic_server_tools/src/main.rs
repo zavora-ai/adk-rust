@@ -92,22 +92,16 @@ fn model_name() -> String {
     std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| MODEL_NAME.to_string())
 }
 
-fn skip_known_anthropic_incompatibility(
-    error: &anyhow::Error,
-    tool_name: &str,
-) -> Option<String> {
+/// A tool version the model no longer accepts is a skip, not a failure: newer models drop the
+/// older `text_editor` and `bash` versions, which `ANTHROPIC_MODEL` can still exercise.
+fn skip_known_anthropic_incompatibility(error: &anyhow::Error) -> Option<String> {
     let message = format!("{error:#}");
-    if tool_name == "bash_20241022"
-        && (message.contains("bash_20241022")
-            || message.contains("expected one of")
-            || message.contains("invalid value"))
-    {
-        return Some(
-            "bash_20241022 is modeled by the pinned SDK but no longer accepted by the live Anthropic API"
-                .to_string(),
-        );
-    }
-    None
+    message.contains("does not support tool types").then(|| {
+        format!(
+            "{} does not accept this tool version; set ANTHROPIC_MODEL to a model that does",
+            model_name()
+        )
+    })
 }
 
 fn skipped(message: impl Into<String>) -> anyhow::Result<ScenarioOutcome> {
@@ -456,7 +450,7 @@ async fn main() -> anyhow::Result<()> {
                 skipped_count += 1;
             }
             Err(error) => {
-                if let Some(reason) = skip_known_anthropic_incompatibility(&error, name) {
+                if let Some(reason) = skip_known_anthropic_incompatibility(&error) {
                     println!("↷ {name}: {reason}");
                     skipped_count += 1;
                     continue;
