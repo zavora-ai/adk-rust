@@ -2011,7 +2011,9 @@ mod tests {
     #[test]
     fn version_prints_the_crate_version() {
         for flag in ["--version", "-V"] {
-            let error = Cli::try_parse_from(["adk-rust", flag]).err().expect("--version exits");
+            let Err(error) = Cli::try_parse_from(["adk-rust", flag]) else {
+                panic!("{flag} parsed as a command");
+            };
             assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
             assert_eq!(error.to_string(), format!("adk-rust {}\n", env!("CARGO_PKG_VERSION")));
         }
