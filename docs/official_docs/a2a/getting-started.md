@@ -101,7 +101,7 @@ The v1 card lists all three endpoints in `supportedInterfaces`, under
 `server` feature turns on; `adk-server` used without it serves only A2A 0.3, with its card at
 both paths.
 
-It returns the router; bind it to `127.0.0.1:8080` so the card's URL matches the listener.
+It returns the router; bind it to `127.0.0.1:8080` so the cards' URLs match the listener.
 
 ### Custom Config: Builder
 
@@ -252,8 +252,8 @@ Response (abbreviated):
 ```
 
 A request without `A2A-Version` asks for 0.3, which the v1 endpoint does not serve: it answers
-JSON-RPC error `-32009` (`VERSION_NOT_SUPPORTED`). The HTTP+JSON binding takes the message
-itself as the body and answers with `{"task": …}`:
+JSON-RPC error `-32009` (`VERSION_NOT_SUPPORTED`). The HTTP+JSON binding takes the JSON-RPC
+`params` object as the request body and answers with `{"task": …}`:
 
 ```bash
 curl -X POST "http://localhost:8080/a2a/v1/rest/message:send" \
