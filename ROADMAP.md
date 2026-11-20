@@ -1,6 +1,6 @@
 # ADK-Rust Roadmap
 
-> **Last updated:** October 2026
+> **Last updated:** November 2026
 >
 > ADK-Rust aims to become the best Rust-native platform for building, orchestrating, and deploying production AI agents across cloud, edge, enterprise, and emerging spatial environments.
 
@@ -28,6 +28,22 @@ By the end of 2026, an AI Agent built with ADK-Rust will have:
 | 🔮 | Planned / not started |
 
 ---
+
+## 3.0.0 — Release Candidate
+
+What the 3.0.0 release candidate ships; [What's new in 3.0](docs/official_docs/whats-new-3.0.md) has
+the guide for each row.
+
+| Capability | Crates | Tier | Status |
+|-----------|--------|------|--------|
+| Autonomous agents: goals, wake-ups, approvals, budgets, durable runs (`autonomy`) | `adk-harness`, `adk-kernel`, `adk-server`, `adk-session` | `enterprise` | ✅ |
+| One governed tool path, run budgets, spend and action ledgers, kill switch, signed audit | `adk-core`, `adk-runner`, `adk-auth` | every tier | ✅ |
+| The harness (spec 3.1) | `adk-harness` | `enterprise` | ✅ Beta |
+| The agent kernel (spec 3.2) | `adk-kernel` | `enterprise` | ✅ Beta |
+| Agent surfaces (spec 3.3): web home, terminal, phone, chat, voice, workflow observer, agent-drawn UI | `adk-surface` | `surface`, in no tier | ✅ Beta |
+| AWP 2.0 and websites (spec 3.5) | `awp-types`, `adk-awp` (Beta); `adk-site`, `adk-drivers`, `adk-website` (Experimental) | `enterprise` (`awp`); `full` (`website`) | 🚧 |
+| Local-first vision, phase A (spec 3.7) | `adk-vision` (Experimental) | `full` (`vision`) | 🚧 |
+| Self-improving harness (spec 3.4) | `adk-harness` | — | 🔮 Designed; not in 3.0.0 beyond the protected-path set and the instruction-trust check |
 
 ## Q1 2026 — Foundation & Enterprise Platform
 
@@ -66,8 +82,8 @@ Autonomous agents that do vertically integrated tasks well, demonstrating:
 | 3D world automation (Unreal Engine) | 🔮 | `adk-spatial-os` concept defined, not implemented |
 | Mega Agent (all capabilities combined) | 🚧 | Core capabilities exist; the integration showcase is the HarnessAgent — see [`docs/design/spec-3.1-harness-agent.md`](docs/design/spec-3.1-harness-agent.md) |
 | Agent Kernel (always-on harness: process model, wake sources, proactivity, drivers, partitions) | 🚧 | `adk-kernel` (Beta) implements [`docs/design/spec-3.2-agent-kernel.md`](docs/design/spec-3.2-agent-kernel.md) except the items under its [Remaining work](docs/design/spec-3.2-agent-kernel.md#remaining-work); builds on the HarnessAgent |
-| Harness UI (one decision contract rendered by the console, web client, ACP, AG-UI and notifiers) | 🚧 | Designed — see [`docs/design/spec-3.3-harness-ui.md`](docs/design/spec-3.3-harness-ui.md); builds on specs 3.1 and 3.2 |
-| Self-improving harness (opt-in maintenance loop: defect mining, sealed gate, signed bot PRs, supervised patch upgrades) | 🚧 | Designed — see [`docs/design/spec-3.4-self-improving-harness.md`](docs/design/spec-3.4-self-improving-harness.md); Experimental, off by default |
+| Harness UI (one decision contract rendered by the console, web client, ACP, AG-UI and notifiers) | ✅ | `adk-surface` (Beta) implements [`docs/design/spec-3.3-harness-ui.md`](docs/design/spec-3.3-harness-ui.md): the web home, terminal, phone, chat, voice and the workflow observer; open items under [Agent surfaces follow-ups](#agent-surfaces-follow-ups) |
+| Self-improving harness (opt-in maintenance loop: defect mining, sealed gate, signed bot PRs, supervised patch upgrades) | 🔮 | Designed — see [`docs/design/spec-3.4-self-improving-harness.md`](docs/design/spec-3.4-self-improving-harness.md). The maintenance loop is not in 3.0.0; `adk-harness` ships its protected-path set (§7.5, §10 P1) and the instruction-trust check (§10 P2) |
 | AWP 2.0 and `adk-website` (signed static sites with an agent front door, run by a multi-agent team for every kind of site) | 🚧 | `awp-types` and `adk-awp` (Beta) and `adk-site`, `adk-drivers` and `adk-website` (Experimental) implement [`docs/design/spec-3.5-agentic-web.md`](docs/design/spec-3.5-agentic-web.md) except the items under its [Remaining work](docs/design/spec-3.5-agentic-web.md#remaining-work); the product story is [`docs/design/awp-2.0-overview.md`](docs/design/awp-2.0-overview.md) |
 | Vision (`adk-vision`: local-first detection, segmentation, OCR and embeddings; cloud reasoning behind a privacy guardrail; per-image and per-frame budgets; Document desk, Inspector and Screen copilot) | 🚧 | Phase A done — the contracts, manifests and fetcher, the ONNX, OCR and cloud backends, the governed tools, egress gate and privacy guardrail, the harness vision pack, the Document desk scenarios S1–S8 ([`examples/vision`](examples/vision)), `adk-rust vision` and the `vision` template ([getting started](docs/official_docs/vision/getting-started.md)); phases B (video and the Inspector), C (teams and the Screen copilot) and D (spatial) next — see [`docs/design/spec-3.7-vision.md`](docs/design/spec-3.7-vision.md); Experimental |
 
@@ -295,7 +311,7 @@ These capabilities form the foundation and are stable:
 | `adk-model` | 15+ LLM providers (Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama, Bedrock, Azure AI, OpenRouter + presets) | ✅ Stable |
 | `adk-gemini` | Dedicated Gemini client, Vertex AI, ThinkingConfig, built-in tools | ✅ Stable |
 | `adk-anthropic` | Dedicated Anthropic client, streaming, thinking, caching, citations | ✅ Stable |
-| `adk-tool` | FunctionTool, #[tool] macro, MCP (rmcp 1.6), Google Search, Slack, BigQuery, Spanner | ✅ Stable |
+| `adk-tool` | FunctionTool, #[tool] macro, MCP (rmcp 3), Google Search, Slack, BigQuery, Spanner | ✅ Stable |
 | `adk-runner` | Agent execution, event streaming, cancellation, callbacks | ✅ Stable |
 | `adk-server` | REST + A2A v1.0.0, ServerBuilder, background runs, cron | ✅ Stable |
 | `adk-session` | SQLite, PostgreSQL, Redis, MongoDB, Firestore, Neo4j, encrypted | ✅ Stable |
