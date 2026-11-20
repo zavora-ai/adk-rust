@@ -399,4 +399,4 @@ Your code ──► add_session / add_entry / add_session_to_project   (writes a
 
 ---
 
-**Previous**: [← Guardrails](guardrails.md) | **Next**: [Studio →](../studio/studio.md)
+**Previous**: [← Guardrails](guardrails.md) | **Next**: [Payments and Commerce →](payments.md)

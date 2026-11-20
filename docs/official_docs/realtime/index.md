@@ -72,7 +72,13 @@ tokio = { version = "1", features = ["full"] }
 | `openai-webrtc` | OpenAI over WebRTC (implies `openai`; needs `cmake`) |
 | `vertex-live` | Gemini via Vertex AI Live (OAuth2 / ADC; implies `gemini`) |
 | `livekit` | LiveKit WebRTC bridge |
-| `heygen-avatar`, `did-avatar` | Video avatar providers |
+| `guardrails` | Output guardrails on the model's text and transcripts: `output_guardrails(GuardrailSet)` on `RealtimeAgent` and `IntegratedRealtimeRunner` (see [Tools](tools.md#screening-the-models-output)) |
+| `telephony` | Provider-neutral phone-call control: call handles, the freeze guard, and the transfer, end-call, DTMF and dialling tools (see [Telephony](telephony.md)) |
+| `openai-sip` | OpenAI Realtime SIP, `openai::sip` (implies `openai`, `telephony`) |
+| `livekit-sip` | LiveKit SIP, `telephony::livekit` (implies `telephony`) |
+| `video-avatar` | The `avatar` module: `AvatarProvider`, `AvatarConfig` and the session types the avatar providers implement |
+| `heygen-avatar`, `did-avatar` | Video avatar providers: HeyGen LiveAvatar (implies `video-avatar`, `livekit`) and D-ID (implies `video-avatar`) |
+| `scripted` | `ScriptedRealtimeModel`: a provider-free model that answers from a script, for tests of the runners, the integration layer and voice surfaces |
 | `full` | `openai`, `gemini`, `vertex-live`, and `livekit` |
 | `full-webrtc` | `full` and `openai-webrtc` |
 | `record-payloads` | Bounded raw provider frames in diagnostics (see [Providers](providers.md#diagnostics-and-payload-privacy)) |

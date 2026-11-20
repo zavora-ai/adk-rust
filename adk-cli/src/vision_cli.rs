@@ -201,8 +201,8 @@ pub enum RunTask {
         /// The question
         #[arg(long, default_value = "Describe this image.")]
         question: String,
-        /// The model (default: `claude-haiku-5-5`, `gemini-3.7-flash`, or NVIDIA's
-        /// `nemotron-3.5-super-vl-120b-a12b`)
+        /// The model (default: `claude-haiku-5-5`, `gemini-3.7-flash`, or
+        /// `nvidia/nemotron-3.5-super-vl-120b-a12b`)
         #[arg(long)]
         model: Option<String>,
         /// Also ask for regions, mapped to source pixels
@@ -676,8 +676,9 @@ fn describer(
             return Ok(config.describer()?);
         }
         other => bail!(
-            "no describing backend `{other}`: use claude, gemini or nim (an on-device describer \
-             over mistral.rs is not available yet)"
+            "no describing backend `{other}`: use claude, gemini or nim. The CLI has no \
+             on-device describer; in a program, `LlmDescriber::mistralrs` (adk-vision feature \
+             `mistralrs`) runs Qwen3-VL in the process"
         ),
     };
     Ok(adk_vision::LlmDescriber::remote(llm, [host])?)
@@ -1249,6 +1250,17 @@ mod tests {
             EgressAction::Deny
         );
         assert!(config.egress.redact.contains(&RedactionClass::faces()));
+    }
+
+    #[test]
+    fn an_unknown_describer_names_the_backends_and_the_in_process_one() {
+        let error = describer("qwen3-vl", None, None).expect_err("an unknown backend").to_string();
+        assert_eq!(
+            error,
+            "no describing backend `qwen3-vl`: use claude, gemini or nim. The CLI has no \
+             on-device describer; in a program, `LlmDescriber::mistralrs` (adk-vision feature \
+             `mistralrs`) runs Qwen3-VL in the process"
+        );
     }
 
     #[test]

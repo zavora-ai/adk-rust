@@ -33,6 +33,8 @@ rules; `KindTemplate::draft_charter` turns them into charter version 1.
 | Community | Concierge, Steward, Growth, Guardian, Revenue | Low budget; only P1 alarms interrupt |
 | Events | All eight | Date-driven freshness; wind-down and archive |
 
+`adk-website kinds` prints every kind with its title, its agents and its capabilities.
+
 Every draft starts each job at Observe or Propose for the first week; onboarding itself acts
 only with the owner's approval of each change. No KPI has a target until it has a baseline,
 and targets are the owner's (A-I14).
