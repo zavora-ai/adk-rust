@@ -472,7 +472,7 @@ result:               VALID
 An unattended agent has no one reading its answers. [Online evaluation](../evaluation/online-evaluation.md)
 judges a seeded sample of its finished runs on a background worker — rubrics, safety,
 hallucination, tool-call efficiency and whole-session metrics — under a judge budget of its own
-and the same kill switch, and records failed runs where a dashboard or the self-improvement loop
+and the same kill switch, and records failed runs where a dashboard or your own tooling
 reads them. Install its plugin on the runner you register with `KernelBuilder::agent`.
 
 ## 9. Delegate in the background

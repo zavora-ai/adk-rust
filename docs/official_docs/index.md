@@ -54,9 +54,9 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 
 A native coding agent: read/edit/run code in a sandboxed workspace, autonomous goal mode, and parallel ultra-review workflows.
 
-- [Overview](coding-agent/index.md) - Start here: the pieces, install, and a 60-second quick start
+- [Overview](coding-agent/index.md) - The coding pieces and where to start; new projects start from [the harness](harness/index.md)
 - [Dev Tools](coding-agent/devtools.md) - `adk-devtools`: read/write/edit/glob/grep/bash + the sandboxed `Workspace`
-- [Harness](coding-agent/harness.md) - `CodingAgent` (the `coding` feature), the plan loop, `write_todos`; superseded by the [harness](harness/index.md)
+- [`CodingAgent` (2.x)](coding-agent/harness.md) - The 2.x one-call agent (the `coding` feature), the plan loop, `write_todos`; superseded by the [harness](harness/index.md)
 - [CLI](coding-agent/cli.md) - `adk-rust code` / `goal` (durable, resumable) / `ultracode`
 - [Workflows](coding-agent/workflows.md) - Ultra-review on `adk-graph`: parallel reviewers + fan-in
 - [Examples](coding-agent/examples.md) - The three runnable example crates
@@ -74,6 +74,7 @@ The governed, durable harness agent (`adk-harness`, spec 3.1): modes, approvals,
 - [Harness Shell and Sandbox](harness/shell-and-sandbox.md) - `bash` under Seatbelt or bubblewrap, in a container, or in a remote microVM: isolation status, unsandboxed retry, `auto_allow_sandboxed`, audit records
 - [Harness Team](harness/team.md) - Members lowered to a `TeamSpec`: local, ACP and A2A members, isolation, budgets, discovery, review rounds
 - [Harness Plans and Goals](harness/plan-and-goals.md) - The plan graph with Approve and Review gates and rewind; loop-until goals, durable and ambient
+- [Snapshots and Rewind](harness/snapshots-and-rewind.md) - Whole-workspace snapshots before each turn; `/rewind` and `/redo` restore files, transcript and plan
 - [Harness Durability](harness/durability.md) - The durability invariants and the tests that prove them; what to run after a crash
 - [Harness Identity](harness/identity.md) - RBAC per tool class, per-call shell credentials, authenticated identity, audit
 - [Harness Observability](harness/observability.md) - Spans, spend per agent and subject, the loop guard, evaluation baselines
@@ -81,6 +82,7 @@ The governed, durable harness agent (`adk-harness`, spec 3.1): modes, approvals,
 - [Harness Web Access and MCP Interaction](harness/web-and-mcp.md) - `web_fetch` and `web_search` under the domain allowlist, screened and delimited; MCP elicitation through the prompter or inbox, sampling under the budget, resources as untrusted blocks
 - [Harness Hooks](harness/hooks.md) - Hooks on tool events: deny, fail or annotate through the shell's launcher, never allow; workspace hooks under trust; `harness.hook.ran`
 - [Harness Payments](harness/payments.md) - The payments pack: `adk-payments` tools as class `Payment`, one non-waivable approval per call, mandate guardrails, spend ledger, `harness.payment` with the journal receipt
+- [Browser and Computer-Use Packs](harness/packs.md) - The browser pack under the web rules; desktop actions through the governed reference graph, approved once each
 - [Harness Voice](harness/voice.md) - The voice surface: the harness as the agent of an `IntegratedRealtimeRunner`, held calls surfaced as realtime events, spoken or inbox approvals, `harness.voice.*` in one audit trail
 - [The Personal Preset and Take Over](harness/personal.md) - `--preset personal`: a workspace of notes and files under the home, no host shell, quiet time and a daily spending limit asked at first run; take over: a typed secret reaches one tool call only
 - [The Website Runtime](harness/website.md) - feature `website`: `Preset::Website`, the back-office and public toolsets of an AWP 2.0 website, its two partitions and signals, the autonomy ladder compiled to policy, authoring, outbound Web Bot Auth and onboarding
