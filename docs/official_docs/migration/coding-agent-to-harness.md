@@ -1,11 +1,11 @@
 # Migrating from `CodingAgent` to the harness
 
-`adk_agent::coding::CodingAgent` (3.0, feature `coding`) wired the dev tools, `write_todos`
-and a coding prompt onto an `LlmAgent`, and ran `bash` on the host with no approval. In 3.1
+`adk_agent::coding::CodingAgent` (in 2.x, feature `coding`) wires the dev tools, `write_todos`
+and a coding prompt onto an `LlmAgent`, and runs `bash` on the host with no approval. In 3.0.0
 the harness supersedes it (spec 3.1 §4, §7.19): `adk_harness::coding::CodingAgent` keeps the
 same builder and builds a `HarnessAgent` in ask mode, so every edit and every command passes
-the governed path. `adk_agent::coding` stays as it is in 3.1, is deprecated from 3.2.0, and is
-removed in 4.0.0 ([STABILITY.md](https://github.com/zavora-ai/adk-rust/blob/main/STABILITY.md)).
+the governed path. `adk_agent::coding` is unchanged in 3.0.0 and carries no `#[deprecated]`
+attribute; the [2.x → 3.0 guide](2.x-to-3.0.md) covers the rest of the upgrade.
 
 ## Quick reference
 
@@ -22,7 +22,7 @@ removed in 4.0.0 ([STABILITY.md](https://github.com/zavora-ai/adk-rust/blob/main
 
 ```toml
 [dependencies]
-# Before (3.0)
+# Before: adk_agent::coding
 # adk-agent = { version = "3.0.0", features = ["coding"] }
 
 # After
@@ -86,7 +86,7 @@ the preset does not expose — a mode, a sandboxed shell, members, skills, store
 
 ## What changes
 
-| 3.0 `CodingAgent` | Harness |
+| `adk_agent::coding::CodingAgent` | Harness |
 |---|---|
 | `bash`, `write_file` and `edit_file` run without asking | In ask mode reads run; edits and commands wait for approval ([Modes and approvals](../harness/modes-and-approvals.md)) |
 | The prompt calls the workspace sandboxed | The prompt states where the shell runs; `bash` runs on the host unless you choose the OS sandbox ([Shell and sandbox](../harness/shell-and-sandbox.md)) |
@@ -104,7 +104,7 @@ In ask mode a call that needs approval and finds no prompter is held: the turn e
 |---|---|
 | Decide held calls | `Harness::pending_approvals` and `Harness::decide`, then `Harness::resume` ([held calls](../harness/modes-and-approvals.md#held-calls)) |
 | Answer at once in code | `HarnessAgentBuilder::prompter` with your `ApprovalPrompter` ([prompting](../harness/modes-and-approvals.md#prompting)) |
-| Run like 3.0, governed | `HarnessAgentBuilder::mode(HarnessMode::Auto)` with `allow_host_shell_in_auto()`: edits and host commands run without asking; protected-path edits still ask |
+| Run like `adk_agent::coding::CodingAgent`, governed | `HarnessAgentBuilder::mode(HarnessMode::Auto)` with `allow_host_shell_in_auto()`: edits and host commands run without asking; protected-path edits still ask |
 
 ```rust
 use std::sync::Arc;
