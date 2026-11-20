@@ -165,8 +165,7 @@ Because it's an `LlmAgent` underneath, everything else in ADK composes:
 
 ## Running it
 
-The harness produces an `Arc<dyn Agent>`; drive it with `adk-runner` (see the
-[quick start](index.md#60-second-quick-start)) or use the
-[CLI](cli.md), which wraps all of this.
+`CodingAgent::agent` returns an `Arc<dyn Agent>`; drive it with `adk-runner` as
+[Run one](#run-one) shows. The [CLI](cli.md) runs the harness, not `CodingAgent`.
 
 Next: [The CLI →](cli.md)

@@ -411,11 +411,6 @@ on Linux). Without one, the endpoint is `http://127.0.0.1:8090`, which is also t
 address when both run on one machine. `cargo adk deploy` takes the endpoint as `--server`
 (default `http://127.0.0.1:8090`) and the token as `--token` or `ADK_DEPLOY_TOKEN`.
 
-```text
-$ adk-rust deploy status
-Error: no deploy token configured for http://127.0.0.1:8090. Run `adk-rust deploy login --endpoint ... --token ...`
-```
-
 ## Related
 
 - [Agent Engine](agent-engine.md) — the dispatch surface an Agent Engine container serves
