@@ -696,6 +696,18 @@ impl adk_core::audit_log::AuditRecorder for AuditLog {
     async fn record(&self, draft: AuditRecordDraft) -> Result<()> {
         self.append(draft).await.map(drop)
     }
+
+    /// Signs a checkpoint over the records appended since the last one, without waiting
+    /// for `checkpoint_every` or `checkpoint_interval`; does nothing when every record is
+    /// already signed.
+    async fn flush(&self) -> Result<()> {
+        let mut state = self.state.lock().await;
+        if state.frontier.size == state.checkpointed_size {
+            return Ok(());
+        }
+        let signers = vec![state.signer.clone()];
+        self.checkpoint_locked(&mut state, &signers).await.map(drop)
+    }
 }
 
 #[async_trait]

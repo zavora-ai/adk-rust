@@ -1412,57 +1412,70 @@ impl HarnessLauncher {
     }
 
     /// Serves the harness on the bind address and `port` until Ctrl-C (spec 3.1 §8.2).
+    /// Once the server and any kernel have stopped, the harness's audit recorder is
+    /// [flushed](adk_core::audit_log::AuditRecorder::flush), so a signed audit log verifies
+    /// after a clean stop.
     ///
     /// # Errors
     ///
     /// Returns the [`build_app`](Self::build_app) error, or the listener's.
     pub async fn run_serve_directly(self, port: u16) -> Result<()> {
-        let addr = SocketAddr::new(self.bind_address, port);
-        let info = self.agent.info().clone();
-        let kernel = self.kernel.clone();
-        #[cfg_attr(not(feature = "genui-apps"), allow(unused_mut))]
-        let mut this = self;
-        #[cfg(feature = "genui-apps")]
-        let sandbox = this.bind_apps(addr).await?;
-        let app = this.build_app()?;
-        // Bound now, so a taken address fails before anything starts; it accepts no
-        // connection until it listens, which a resident kernel's start comes before.
-        let refused = |e: std::io::Error| AdkError::config(format!("failed to bind {addr}: {e}"));
-        let socket = match addr {
-            SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4(),
-            SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6(),
+        let audit = self.agent.runtime().audit_trail().map(|trail| trail.recorder().clone());
+        let served = async move {
+            let addr = SocketAddr::new(self.bind_address, port);
+            let info = self.agent.info().clone();
+            let kernel = self.kernel.clone();
+            #[cfg_attr(not(feature = "genui-apps"), allow(unused_mut))]
+            let mut this = self;
+            #[cfg(feature = "genui-apps")]
+            let sandbox = this.bind_apps(addr).await?;
+            let app = this.build_app()?;
+            // Bound now, so a taken address fails before anything starts; it accepts no
+            // connection until it listens, which a resident kernel's start comes before.
+            let refused = |e: std::io::Error| AdkError::config(format!("failed to bind {addr}: {e}"));
+            let socket = match addr {
+                SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4(),
+                SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6(),
+            }
+            .map_err(refused)?;
+            // As `TcpListener::bind` sets it: a quick restart rebinds at once. Not on Windows,
+            // where it would let another process take the port.
+            #[cfg(not(windows))]
+            socket.set_reuseaddr(true).map_err(refused)?;
+            socket.bind(addr).map_err(refused)?;
+            // The apps origin serves the checked apps' pages and nothing else; it ends with the
+            // process (spec 3.3 §6.1 `genui-apps`).
+            #[cfg(feature = "genui-apps")]
+            if let Some((sandbox, host)) = sandbox {
+                tokio::spawn(async move {
+                    if let Err(error) = axum::serve(sandbox, host.sandbox_router()).await {
+                        tracing::warn!(error = %error, "the apps sandbox listener stopped");
+                    }
+                });
+            }
+            if let Some(kernel) = kernel {
+                return serve_resident(kernel, socket, app, addr, &info).await;
+            }
+            let listener = listening(socket, addr)?;
+            println!("ADK-Rust harness serving on http://{addr}");
+            println!("  mode {} · shell {}", info.default_mode, terminal_safe(&shell_label(&info)));
+            #[cfg(feature = "surface")]
+            println!("  web home  http://{addr}/ui/");
+            println!("  approvals: GET /api/approvals, POST /api/approvals/{{id}}/decide");
+            println!("  standing rules: GET /api/rules, POST /api/rules, DELETE /api/rules/{{id}}");
+            println!("Press Ctrl+C to stop\n");
+            axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+                .with_graceful_shutdown(shutdown_signal())
+                .await
+                .map_err(|e| AdkError::config(format!("server error: {e}")))
         }
-        .map_err(refused)?;
-        // As `TcpListener::bind` sets it: a quick restart rebinds at once. Not on Windows,
-        // where it would let another process take the port.
-        #[cfg(not(windows))]
-        socket.set_reuseaddr(true).map_err(refused)?;
-        socket.bind(addr).map_err(refused)?;
-        // The apps origin serves the checked apps' pages and nothing else; it ends with the
-        // process (spec 3.3 §6.1 `genui-apps`).
-        #[cfg(feature = "genui-apps")]
-        if let Some((sandbox, host)) = sandbox {
-            tokio::spawn(async move {
-                if let Err(error) = axum::serve(sandbox, host.sandbox_router()).await {
-                    tracing::warn!(error = %error, "the apps sandbox listener stopped");
-                }
-            });
+        .await;
+        if let Some(audit) = audit
+            && let Err(error) = audit.flush().await
+        {
+            tracing::warn!(error = %error, "the audit log was not flushed; its last records stay unsigned");
         }
-        if let Some(kernel) = kernel {
-            return serve_resident(kernel, socket, app, addr, &info).await;
-        }
-        let listener = listening(socket, addr)?;
-        println!("ADK-Rust harness serving on http://{addr}");
-        println!("  mode {} · shell {}", info.default_mode, terminal_safe(&shell_label(&info)));
-        #[cfg(feature = "surface")]
-        println!("  web home  http://{addr}/ui/");
-        println!("  approvals: GET /api/approvals, POST /api/approvals/{{id}}/decide");
-        println!("  standing rules: GET /api/rules, POST /api/rules, DELETE /api/rules/{{id}}");
-        println!("Press Ctrl+C to stop\n");
-        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-            .with_graceful_shutdown(shutdown_signal())
-            .await
-            .map_err(|e| AdkError::config(format!("server error: {e}")))
+        served
     }
 }
 

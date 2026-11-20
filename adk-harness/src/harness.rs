@@ -1337,7 +1337,9 @@ impl Harness {
     ///
     /// Sessions with turns not yet distilled are distilled first (spec 3.1 §7.15.2); a
     /// distillation that fails is logged at `warn`. [`close_with_report`](Self::close_with_report)
-    /// returns those failures instead.
+    /// returns those failures instead. Last, the audit recorder is
+    /// [flushed](adk_core::audit_log::AuditRecorder::flush): a signed log signs a checkpoint
+    /// over the records not yet signed, so the log verifies after the process exits.
     pub async fn close(&self) {
         self.close_with_report().await;
     }
@@ -1369,6 +1371,11 @@ impl Harness {
         // The runner closes the root agent: the coordinator's toolsets through a compiled
         // team root, the harness toolset included.
         self.runner.close().await;
+        if let Some(trail) = self.agent.runtime().audit_trail()
+            && let Err(error) = trail.recorder().flush().await
+        {
+            tracing::warn!(error = %error, "the audit log was not flushed; its last records stay unsigned");
+        }
         report
     }
 

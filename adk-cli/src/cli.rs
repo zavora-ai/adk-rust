@@ -146,7 +146,7 @@ impl std::str::FromStr for Provider {
 ///
 /// For custom agents, use [`adk_cli::Launcher`] in your own binary.
 #[derive(Parser)]
-#[command(name = "adk-rust")]
+#[command(name = "adk-rust", version)]
 #[command(
     about = "ADK-Rust CLI — governed coding harness, interactive agent, web server, and tooling"
 )]
@@ -2006,6 +2006,15 @@ mod tests {
             ChatArgs { ephemeral: true, ..ChatArgs::default() }
         );
         assert!(parse(&["adk-rust"]).command.is_none());
+    }
+
+    #[test]
+    fn version_prints_the_crate_version() {
+        for flag in ["--version", "-V"] {
+            let error = Cli::try_parse_from(["adk-rust", flag]).err().expect("--version exits");
+            assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
+            assert_eq!(error.to_string(), format!("adk-rust {}\n", env!("CARGO_PKG_VERSION")));
+        }
     }
 
     /// Spec 3.2 §8.1: `adk-rust partitions [list|add|set-mode P MODE]`.

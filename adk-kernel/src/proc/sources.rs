@@ -318,6 +318,10 @@ impl AuditRecorder for LedgerAuditTap {
         }
         Ok(())
     }
+
+    async fn flush(&self) -> adk_core::Result<()> {
+        self.inner.flush().await
+    }
 }
 
 /// The run a run-finished wake's key names: `run:<pid>:<state>` (`keys::run_finished`).
@@ -559,5 +563,33 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(records.records().len(), 1);
+    }
+
+    /// A kernel stopping cleanly flushes through the tap, so the signed log under it is sealed.
+    #[tokio::test]
+    async fn the_tap_forwards_a_flush() {
+        #[derive(Default)]
+        struct Flushes(std::sync::atomic::AtomicUsize);
+        #[async_trait]
+        impl AuditRecorder for Flushes {
+            fn digest(&self, value: &Value) -> String {
+                adk_core::json_digest(value)
+            }
+            async fn record(&self, _draft: AuditRecordDraft) -> adk_core::Result<()> {
+                Ok(())
+            }
+            async fn flush(&self) -> adk_core::Result<()> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+        }
+        let inner = Arc::new(Flushes::default());
+        let ledger = Ledger::new(
+            Arc::new(crate::proc::InMemoryLedgerStore::new()),
+            crate::proc::LedgerKey::from_bytes([1; 32]),
+        );
+        let tap = LedgerAuditTap::new(inner.clone(), Arc::new(ledger));
+        tap.flush().await.unwrap();
+        assert_eq!(inner.0.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }
