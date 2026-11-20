@@ -19,7 +19,7 @@ cd my-a2a-agent
 
 This generates a complete project with:
 - `Cargo.toml` — `adk-rust` with the `gemini`, `minimal`, `server`, and `sessions` features
-  (`server` includes A2A support)
+  (`server` serves A2A v1 and A2A 0.3)
 - `src/main.rs` — A2A server using the `A2aServer` builder
 - `.env.example` — API key placeholder
 - `README.md`
@@ -90,12 +90,18 @@ async fn main() -> anyhow::Result<()> {
 
 `quick_start` configures:
 - In-memory session service
-- Agent card at `GET /.well-known/agent-card.json` and `GET /.well-known/agent.json`, with
-  `http://localhost:8080/a2a` as its endpoint
-- JSON-RPC endpoints at `POST /a2a` and `POST /a2a/stream`
+- A2A v1: the agent card at `GET /.well-known/agent-card.json`, the JSON-RPC binding at
+  `POST /a2a/v1`, and the HTTP+JSON binding under `/a2a/v1/rest`
+- A2A 0.3: the agent card at `GET /.well-known/agent.json`, and JSON-RPC at `POST /a2a` and
+  `POST /a2a/stream`
 - The server's REST API, with the [host and origin defaults](../deployment/server.md#host-origin-and-bind-defaults)
 
-It returns the router; bind it to `127.0.0.1:8080` so the card's URL matches the listener.
+The v1 card lists all three endpoints in `supportedInterfaces`, under
+`http://localhost:8080`. A2A v1 comes from `adk-server`'s `a2a-v1` feature, which `adk-rust`'s
+`server` feature turns on; `adk-server` used without it serves only A2A 0.3, with its card at
+both paths.
+
+It returns the router; bind it to `127.0.0.1:8080` so the cards' URLs match the listener.
 
 ### Custom Config: Builder
 
@@ -138,11 +144,11 @@ async fn main() -> anyhow::Result<()> {
 | `.bind_addr(addr)` | `127.0.0.1:8080` | Server bind address; `0.0.0.0:8080` listens on every interface |
 | `.security_config(config)` | `SecurityConfig::default()` | Hosts and origins the server answers; the agent card URL's host is always answered |
 | `.session_service(svc)` | In-memory | Session backend |
-| `.agent_card_url(url)` | `http://localhost:{port}` | Public base URL; the card names `{url}/a2a` as the endpoint |
+| `.agent_card_url(url)` | `http://localhost:{port}` | Public base URL; the cards name `{url}/a2a/v1`, `{url}/a2a/v1/rest` and `{url}/a2a` as endpoints |
 | `.skill_index(index)` | none | Advertise the skills of a `SkillIndex` in the card |
 
-The card's name, description, and skills come from the agent; its version is `1.0.0` and it
-advertises streaming. `build()` returns an `A2aServerApp`: `serve()` binds `bind_addr` and serves
+The cards' name, description, and skills come from the agent; their version is `1.0.0` and
+they advertise streaming. `build()` returns an `A2aServerApp`: `serve()` binds `bind_addr` and serves
 until the process stops (a port in use fails with `server.a2a.port_in_use`), and `into_router()`
 returns the router for your own listener and shutdown handling.
 
@@ -152,38 +158,113 @@ returns the router for your own listener and shutdown handling.
 
 Once your agent is running, verify it with these commands.
 
-### Fetch the Agent Card
+### Fetch the Agent Cards
+
+The A2A v1 card:
 
 ```bash
 curl http://localhost:8080/.well-known/agent-card.json | jq .
 ```
 
-Expected response:
+Response from the `a2a` template (`my-a2a-agent`), abbreviated:
 
 ```json
 {
-  "name": "my-agent",
-  "description": "A helpful AI assistant",
-  "url": "http://localhost:8080/a2a",
+  "name": "my-a2a-agent",
+  "description": "An AI assistant",
+  "supportedInterfaces": [
+    {"url": "http://localhost:8080/a2a/v1", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"},
+    {"url": "http://localhost:8080/a2a/v1/rest", "protocolBinding": "HTTP+JSON", "protocolVersion": "1.0"},
+    {"url": "http://localhost:8080/a2a", "protocolBinding": "JSONRPC", "protocolVersion": "0.3"}
+  ],
   "version": "1.0.0",
-  "protocolVersion": "0.3.0",
-  "capabilities": {
-    "streaming": true,
-    "pushNotifications": false,
-    "stateTransitionHistory": true
-  },
+  "capabilities": {"streaming": true, "pushNotifications": false, "extendedAgentCard": false},
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain"],
   "skills": [
-    {
-      "id": "my-agent",
-      "name": "my-agent",
-      "description": "A helpful AI assistant",
-      "tags": ["agent"]
-    }
+    {"id": "my-a2a-agent", "name": "model", "description": "An AI assistant I am a helpful assistant.", "tags": ["llm"]}
   ]
 }
 ```
 
-### Send a Message (JSON-RPC)
+A v1 card has no top-level `url`; a client picks an entry of `supportedInterfaces`. The card is
+served with an `ETag`. The A2A 0.3 card is at `agent.json`:
+
+```bash
+curl http://localhost:8080/.well-known/agent.json | jq .
+```
+
+```json
+{
+  "name": "my-a2a-agent",
+  "description": "An AI assistant",
+  "url": "http://localhost:8080/a2a",
+  "version": "1.0.0",
+  "protocolVersion": "0.3.0",
+  "capabilities": {"streaming": true, "pushNotifications": false, "stateTransitionHistory": true},
+  "skills": [
+    {"id": "my-a2a-agent", "name": "model", "description": "An AI assistant I am a helpful assistant.", "tags": ["llm"]}
+  ]
+}
+```
+
+### Send a Message (A2A v1)
+
+Every v1 request carries `A2A-Version: 1.0`, as a header or an `A2A-Version` query parameter:
+
+```bash
+curl -X POST http://localhost:8080/a2a/v1 \
+  -H "Content-Type: application/json" \
+  -H "A2A-Version: 1.0" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "SendMessage",
+    "params": {
+      "message": {
+        "messageId": "msg-1",
+        "role": "ROLE_USER",
+        "parts": [{"text": "Reply with the single word: pong"}]
+      }
+    }
+  }'
+```
+
+Response (abbreviated):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "task": {
+      "id": "task-uuid",
+      "contextId": "context-uuid",
+      "status": {"state": "TASK_STATE_COMPLETED", "timestamp": "2026-11-20T02:49:16.930Z"},
+      "artifacts": [{"artifactId": "artifact-uuid", "parts": [{"text": "pong"}]}],
+      "history": [
+        {"messageId": "msg-1", "role": "ROLE_USER", "parts": [{"text": "Reply with the single word: pong"}]}
+      ],
+      "metadata": {"adk_app_name": "my-a2a-agent", "adk_session_id": "context-uuid"}
+    }
+  }
+}
+```
+
+A request without `A2A-Version` asks for 0.3, which the v1 endpoint does not serve: it answers
+JSON-RPC error `-32009` (`VERSION_NOT_SUPPORTED`). The HTTP+JSON binding takes the JSON-RPC
+`params` object as the request body and answers with `{"task": …}`:
+
+```bash
+curl -X POST "http://localhost:8080/a2a/v1/rest/message:send" \
+  -H "Content-Type: application/json" \
+  -H "A2A-Version: 1.0" \
+  -d '{"message": {"messageId": "msg-2", "role": "ROLE_USER", "parts": [{"text": "Reply with the single word: ping"}]}}'
+```
+
+See [A2A Protocol](../deployment/a2a.md) for every v1 operation.
+
+### Send a Message (A2A 0.3)
 
 ```bash
 curl -X POST http://localhost:8080/a2a \
@@ -194,15 +275,15 @@ curl -X POST http://localhost:8080/a2a \
     "params": {
       "message": {
         "role": "user",
-        "parts": [{"kind": "text", "text": "What is the A2A protocol?"}],
-        "messageId": "msg-1"
+        "parts": [{"kind": "text", "text": "Reply with the single word: pong"}],
+        "messageId": "msg-3"
       }
     },
     "id": "req-1"
   }'
 ```
 
-Expected response (abbreviated):
+Response (abbreviated):
 
 ```json
 {
@@ -215,8 +296,8 @@ Expected response (abbreviated):
     "artifacts": [
       {
         "artifactId": "artifact-uuid",
-        "parts": [{"text": "The A2A protocol is..."}],
-        "metadata": {"adk_app_name": "my-agent", "adk_author": "my-agent"}
+        "parts": [{"text": "pong"}],
+        "metadata": {"adk_app_name": "my-a2a-agent", "adk_author": "my-a2a-agent"}
       }
     ]
   }
@@ -229,7 +310,7 @@ thinking and provider-native server-tool parts are not sent to the peer. A peer'
 `server_tool_call` or `server_tool_response` data part stays in the session as input, and never
 reaches a model as a provider-native item.
 
-### Stream a Response
+### Stream a Response (A2A 0.3)
 
 ```bash
 curl -X POST http://localhost:8080/a2a/stream \
@@ -249,7 +330,8 @@ curl -X POST http://localhost:8080/a2a/stream \
 ```
 
 This returns Server-Sent Events: status updates (`submitted`, `working`), artifact updates with
-`append` for each streamed chunk, and a final status.
+`append` for each streamed chunk, a final status with `finalUpdate: true`, and `event: done`.
+The v1 equivalent is `SendStreamingMessage` on `/a2a/v1`.
 
 ---
 
@@ -286,12 +368,14 @@ the agent card at `agent_url` and sends messages only to an endpoint on the card
 
 ## Endpoints Reference
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/.well-known/agent-card.json` | Agent card (capabilities, skills, metadata) |
-| GET | `/.well-known/agent.json` | The same agent card at the pre-0.3 path |
-| POST | `/a2a` | JSON-RPC endpoint (`message/send`, `tasks/get`, `tasks/cancel`) |
-| POST | `/a2a/stream` | Streaming JSON-RPC (`message/stream`) |
+| Method | Path | Protocol | Description |
+|--------|------|----------|-------------|
+| GET | `/.well-known/agent-card.json` | v1 | Agent card: interfaces, capabilities, skills |
+| POST | `/a2a/v1` | v1 | JSON-RPC binding (`SendMessage`, `GetTask`, `ListTasks`, `CancelTask`, ... ); needs `A2A-Version: 1.0` |
+| POST, GET | `/a2a/v1/rest/...` | v1 | HTTP+JSON binding (`message:send`, `message:stream`, `tasks`, `tasks/{id}`, ...); needs `A2A-Version: 1.0` |
+| GET | `/.well-known/agent.json` | 0.3 | Agent card with `url` and `protocolVersion: "0.3.0"` |
+| POST | `/a2a` | 0.3 | JSON-RPC endpoint (`message/send`, `tasks/get`, `tasks/cancel`) |
+| POST | `/a2a/stream` | 0.3 | Streaming JSON-RPC (`message/stream`) |
 
 ---
 

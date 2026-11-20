@@ -22,7 +22,7 @@ advanced protocol work, ADK-Rust re-exports the exact `rmcp` SDK version it
 uses.
 
 ADK-Rust uses `rmcp` 3, the official Rust SDK (`adk-tool` requires
-`rmcp = "3.1"`). A client connects with the `initialize` handshake by default,
+`rmcp = "3.9"`). A client connects with the `initialize` handshake by default,
 which servers of every protocol revision answer; `ClientLifecycleMode::Auto` and
 `ClientLifecycleMode::Discover` opt in to the `2026-07-28` `server/discover`
 lifecycle. The `mcp_protocol_revisions` example in
@@ -452,5 +452,5 @@ These limits are stated so that deployment decisions remain explicit.
 
 - [MCP specification 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25)
 - [Official Rust SDK (`rmcp`)](https://github.com/modelcontextprotocol/rust-sdk)
-- [`rmcp` API documentation](https://docs.rs/rmcp/3.5.1/rmcp/) — the release the workspace lockfile resolves
+- [`rmcp` API documentation](https://docs.rs/rmcp/3.9/rmcp/) — the newest release that `adk-tool`'s `rmcp = "3.9"` requirement accepts
 - [Provider-aware schema normalization](schema-normalization.md)

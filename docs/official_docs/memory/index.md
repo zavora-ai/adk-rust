@@ -82,24 +82,28 @@ adk-memory = { version = "3.0.0", features = ["graph-memory"] }
 Store a couple of memories and search them back:
 
 ```rust
-use adk_memory::{InMemoryMemoryService, MemoryService, MemoryEntry, SearchRequest};
 use adk_core::Content;
+use adk_memory::{InMemoryMemoryService, MemoryEntry, MemoryService, SearchRequest};
 
-# async fn run() -> anyhow::Result<()> {
-let memory = InMemoryMemoryService::new();
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let memory = InMemoryMemoryService::new();
 
-memory.add_session("support", "alice", "s1", vec![
-    MemoryEntry::new(Content::new("user").with_text("Contact preference: email, not phone."), "user"),
-]).await?;
+    memory.add_session("support", "alice", "s1", vec![
+        MemoryEntry::new(Content::new("user").with_text("Contact preference: email, not phone."), "user"),
+    ]).await?;
 
-let hits = memory.search(SearchRequest {
-    app_name: "support".into(), user_id: "alice".into(),
-    query: "contact preference".into(),
-    limit: None, min_score: None, project_id: None,
-}).await?;
+    let hits = memory.search(SearchRequest {
+        app_name: "support".into(), user_id: "alice".into(),
+        query: "contact preference".into(),
+        limit: None, min_score: None, project_id: None,
+    }).await?;
 
-for entry in hits.memories { println!("{:?}", entry.content); }
-# Ok(()) }
+    for entry in hits.memories {
+        println!("{:?}", entry.content);
+    }
+    Ok(())
+}
 ```
 
 In a real agent you rarely call `search` by hand — you give the agent

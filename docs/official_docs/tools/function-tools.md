@@ -13,7 +13,7 @@ Function tools let you give agents abilities beyond conversation - calling APIs,
 | `#[tool]` macro (recommended) | A tool is one async function with a typed argument struct |
 | `FunctionTool::new()` | The tool is built at runtime, or you prefer an explicit closure |
 | `StatefulTool<S>` | Calls share state, such as a cache or a connection pool |
-| A `Tool` implementation | You need full control over the declaration or execution |
+| A `Tool` implementation | You need full control over the declaration or execution; see [Implementing the Core Traits](../core/traits.md#tool) for every method |
 
 Argument types derive their JSON Schema with `schemars`, and every tool receives an
 `Arc<dyn ToolContext>` with the session, artifacts, and memory of the call.
@@ -854,8 +854,8 @@ that tool. The origin is `Tool::origin()` — `"static"` (`adk_core::STATIC_TOOL
 tool compiled into the agent, `mcp:{toolset name}` for an MCP tool — plus a SHA-256 digest of
 the tool's declaration and `annotations()`. A held call that resumes against a tool with
 another origin or a changed declaration is answered as not run. A `Tool` that wraps another
-tool should forward `origin()` and `annotations()`; `adk-auth`'s `ProtectedTool` and
-`ScopeGuard` forward `origin()` only. See
+tool forwards `origin()` and `annotations()` with every other method, as `adk-auth`'s
+`ProtectedTool` and `ScopeGuard` do; see [Wrapping a tool](../core/traits.md#wrapping-a-tool) and
 [Tool Authorization](../security/tool-authorization.md#decisions-authorize-one-exact-call).
 
 ---
@@ -933,6 +933,7 @@ let cache_tool = StatefulTool::new(
 - [Built-in Tools](built-in-tools.md) - Pre-built tools (GoogleSearch, ExitLoop)
 - [MCP Tools](mcp-tools.md) - Model Context Protocol integration
 - [Tool Effects](tool-effects.md) - Retries, idempotency keys, and the action ledger
+- [Implementing the Core Traits](../core/traits.md#tool) - Every `Tool` method and what a wrapper forwards
 - [LlmAgent](../agents/llm-agent.md) - Adding tools to agents
 
 ---

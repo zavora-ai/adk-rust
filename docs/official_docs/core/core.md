@@ -176,7 +176,9 @@ fn main() -> adk_core::Result<()> {
 
 ## Agent Trait
 
-Every agent type — LLM agents, workflow agents, custom agents — implements `Agent`.
+Every agent type — LLM agents, workflow agents, custom agents — implements `Agent`. The table
+lists the methods most agents use; [Implementing the Core Traits](traits.md#agent) lists every
+method, and how a custom agent takes steering messages.
 
 | Method | Required | Purpose |
 |--------|----------|---------|
@@ -226,6 +228,9 @@ transfers as it goes.
 ---
 
 ## Tool Trait
+
+The methods most tools use; [Implementing the Core Traits](traits.md#tool) lists every method,
+including `batch_group`, `egress` and `approval_evidence`, and what a wrapper forwards.
 
 | Method | Default | Purpose |
 |--------|---------|---------|
@@ -290,6 +295,7 @@ the model receives and for `FunctionTool` and `#[tool]`.
 ## Toolset Trait
 
 A `Toolset` provides tools per context — by user, from an MCP server, or changing during a run.
+See also [Implementing the Core Traits](traits.md#toolset).
 
 | Method | Default | Purpose |
 |--------|---------|---------|
@@ -593,7 +599,8 @@ See [Events](../events/events.md).
 
 ## Llm Trait
 
-Every model provider implements `Llm`:
+Every model provider implements `Llm`. The methods a provider implements first; every method,
+and what a model wrapper forwards, is in [Implementing the Core Traits](traits.md#llm):
 
 | Method | Default | Purpose |
 |--------|---------|---------|
