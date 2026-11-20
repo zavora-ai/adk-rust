@@ -254,7 +254,7 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Playbook Learning](deployment/website-learning.md) - Experiment decisions and KPIs short of the owner's targets propose playbook revisions; the owner accepts, edits or declines each, and accepted revisions are versioned
 - [Publishing from Git](deployment/website-repository.md) - A signed push from an authorised committer proposes a release on the owner's decision card: GitHub, GitLab or the plain signed form, a local repository or a forge's raw endpoint
 - [Website Experiments and Measurement](deployment/website-experiments.md) - Experiments on the charter's KPIs with guardrails that stop them, variants as static files, and the KPI sources that are not drivers
-- [Deploy Targets](deployment/deploy-targets.md) - One manifest to Docker Compose, Kubernetes, Agent Engine, Amazon ECS Express Mode or Azure Container Apps through `cargo adk deploy --target`, with secrets by reference, explicit stores and authenticated endpoints enforced
+- [Deploy Targets](deployment/deploy-targets.md) - One manifest to Docker Compose, Kubernetes, Agent Engine, Amazon ECS Express Mode or Azure Container Apps through `cargo adk deploy --target`, with secrets by reference, explicit stores and authenticated endpoints enforced; `adk-rust deploy` against a control plane you run
 - [Agent Engine](deployment/agent-engine.md) - Deploying on the Gemini Enterprise Agent Platform
 - [Agent Registry](deployment/agent-registry.md) - Discovery, registration, and remote invocation on the Agent Platform
 
@@ -280,8 +280,8 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Wallet](security/wallet.md) - An owner-funded wallet: category mandates, caps checked before execution, holds, rails, anomaly pauses, reconciliation
 - [Approval Service](security/approval-service.md) - Approval inbox with quorum, delegation, escalation, expiry, webhooks, and server endpoints
 - [Agent Identity](security/agent-identity.md) - Stable agent ids on every policy decision, approval, spend record, and audit event; resource-scoped credential brokers
-- [Durable Stores](security/durable-stores.md) - Spend ledger, action ledger, and approval store backends, their conformance suite, and the no-duplicate guarantee
-- [Audit Log](security/audit-log.md) - Signed, Merkle-hashed audit log with checkpoints, key rotation, and offline verification
+- [Durable Stores](security/durable-stores.md) - Spend ledger, action ledger, approval and audit log store backends, their conformance suite, and the no-duplicate guarantee; where the run, schedule, kernel and harness stores are documented
+- [Audit Log](security/audit-log.md) - Signed, Merkle-hashed audit log with checkpoints (and when they are signed), key rotation, and offline verification
 - [Subject Rights](security/subject-rights.md) - Visitor ids, consent records, and one operation to export, erase, or link a person's data across stores
 - [Image Privacy](security/image-privacy.md) - Faces and personal text redacted on the device before any image leaves; the image privacy guardrail on model requests, tool results and user input
 - [Network Egress Policy](security/egress.md) - Host, port and CIDR allowlists, the shared address classifier, and the egress-guarded HTTP client
