@@ -112,7 +112,7 @@ The builder mirrors `LlmAgentBuilder`:
   `max_output_tokens` shorthands.
 - **Instructions**: `instruction`/`instruction_provider`,
   `global_instruction`/`global_instruction_provider`, with the same `{key}`
-  templating as `LlmAgent`; plus skills (`skills` feature), whose block opens the system
+  templating as `LlmAgent`; plus skills (`skills` feature), whose block goes into the system
   prompt (see [Agent Skills](../skills/agent-skills.md)).
 - **History**: `include_contents`.
 - **Tools**: static `tool`s and per-invocation `toolset`s; `tool_timeout`,
