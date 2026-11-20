@@ -1246,7 +1246,25 @@ impl LlmAgentBuilder {
         self
     }
 
-    /// Set a JSON schema for validating user input.
+    /// Records a JSON Schema describing the input this agent expects.
+    ///
+    /// The schema is descriptive: `LlmAgent` does not check user messages against it. To
+    /// give a model a schema for calling this agent as a tool, set it on the `AgentTool`
+    /// that wraps the agent (`adk_tool::AgentTool::input_schema`), which declares it as
+    /// the tool's parameters.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let agent = LlmAgentBuilder::new("lookup")
+    ///     .model(model)
+    ///     .input_schema(serde_json::json!({
+    ///         "type": "object",
+    ///         "properties": { "order_id": { "type": "string" } },
+    ///         "required": ["order_id"]
+    ///     }))
+    ///     .build()?;
+    /// ```
     pub fn input_schema(mut self, schema: serde_json::Value) -> Self {
         self.input_schema = Some(schema);
         self

@@ -107,10 +107,8 @@ proptest! {
         if config.lip_sync.is_some() {
             prop_assert!(json.contains("lipSync"), "expected camelCase 'lipSync' in JSON: {json}");
         }
-        if config.rendering.is_some() {
-            if config.rendering.as_ref().unwrap().frame_rate.is_some() {
-                prop_assert!(json.contains("frameRate"), "expected camelCase 'frameRate' in JSON: {json}");
-            }
+        if config.rendering.as_ref().is_some_and(|rendering| rendering.frame_rate.is_some()) {
+            prop_assert!(json.contains("frameRate"), "expected camelCase 'frameRate' in JSON: {json}");
         }
     }
 }

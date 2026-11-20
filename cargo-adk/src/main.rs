@@ -30,7 +30,9 @@ use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use cargo_adk::codegen::generate_project_with_registry;
+use cargo_adk::codegen::{
+    generate_pattern_readme, generate_project_with_registry, generate_readme,
+};
 use cargo_adk::composition::{DryRunFile, DryRunOutput, resolve_composition};
 use cargo_adk::registry::TemplateRegistry;
 
@@ -2082,6 +2084,16 @@ fn create_project_composable(
     // Generate project files
     let mut files = generate_project_with_registry(&registry, &manifest, name);
 
+    // A pattern's README names the pattern, unless its template ships its own README.
+    if let Some(pattern) = registry.resolve_pattern(template) {
+        let generic = generate_readme(&manifest, name);
+        if let Some(readme) =
+            files.iter_mut().find(|f| f.path == "README.md" && f.content == generic)
+        {
+            readme.content = generate_pattern_readme(&manifest, name, pattern);
+        }
+    }
+
     // Optionally include a YAML agent definition
     if with_yaml {
         files.push(cargo_adk::composition::GeneratedFile {
@@ -3223,6 +3235,14 @@ mod tests {
                 prop_assert!(
                     project_path.join(".gitignore").exists(),
                     ".gitignore missing for name={name}"
+                );
+
+                // The README names the pattern, not only the `llm` template it builds on
+                let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
+                prop_assert!(
+                    readme.contains("- **Template**: `a2a-server` (")
+                        && readme.contains("built on the `llm` template"),
+                    "README does not name the a2a-server pattern for name={name}:\n{readme}"
                 );
 
                 // Cargo.toml must enable the server + sessions features

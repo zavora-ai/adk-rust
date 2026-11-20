@@ -300,6 +300,36 @@ async fn verified_callers_are_agent_calls() {
     assert_eq!(read("agent_calls:get_quote").await, Some(3.0));
 }
 
+/// A recorder that keeps nothing and counts how often it is sealed.
+#[derive(Default)]
+struct SealCounter(AtomicU32);
+
+#[async_trait]
+impl AuditRecorder for SealCounter {
+    fn digest(&self, _value: &Value) -> String {
+        String::new()
+    }
+
+    async fn record(&self, _draft: AuditRecordDraft) -> adk_core::Result<()> {
+        Ok(())
+    }
+
+    async fn seal(&self) -> adk_core::Result<()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// The meter forwards a seal to the recorder it wraps, so a signed edge log verifies after
+/// a clean stop.
+#[tokio::test]
+async fn the_meter_forwards_a_seal() {
+    let inner = Arc::new(SealCounter::default());
+    let meter = EdgeMeter::new(inner.clone(), Arc::new(InMemoryBeaconStore::new()));
+    meter.seal().await.unwrap();
+    assert_eq!(inner.0.load(Ordering::SeqCst), 1);
+}
+
 /// Verified agent discovery — the edge's `awp.request.verified` records of card and manifest
 /// fetches — counts by surface (spec 3.5 §7.12).
 #[tokio::test]

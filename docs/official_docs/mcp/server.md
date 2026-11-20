@@ -206,7 +206,7 @@ impl OrderServer {
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for OrderServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
@@ -229,7 +229,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 The deterministic `mcp_manager` fixture in
 [adk-playground](https://github.com/zavora-ai/adk-playground) uses this server shape. `ServerConfig` is the name
 rmcp 3.4 gives the initialize result; earlier releases call it `ServerInfo`,
-which rmcp 3.4 and later keep as a deprecated alias.
+which rmcp 3.4 and later keep as a deprecated alias. `#[tool_handler]` routes calls through
+`Self::tool_router()` unless `router` names another; `router = self.tool_router` uses the
+router the server built once.
 
 ### Publish honest capabilities
 

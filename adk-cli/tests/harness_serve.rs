@@ -179,7 +179,10 @@ fn a_harness_beyond_loopback_needs_an_extractor() {
         .with_bind_address("0.0.0.0".parse().unwrap())
         .build_app()
         .unwrap_err();
-    assert!(error.to_string().contains("--auth-token"), "{error}");
+    let message = error.to_string();
+    // An app's `up` and `serve` take no `--auth-token`: the refusal names the launcher's own.
+    assert!(message.contains("HarnessLauncher::with_auth_token"), "{message}");
+    assert!(!message.contains("--auth-token") && !message.contains("ADK_SERVE_TOKEN"), "{message}");
 }
 
 #[tokio::test]

@@ -1360,10 +1360,13 @@ impl HarnessLauncher {
                     launcher.with_request_context_extractor(devices(Arc::new(extractor.clone())));
                 Some(extractor)
             }
+            // `adk-rust serve` and `up` refuse before this with their own flags; an app's
+            // `up` and `serve` take no token, so name the launcher's setting.
             None => {
                 return Err(AdkError::config(format!(
-                    "serving the harness on {} needs authentication: pass --auth-token or set \
-                     ADK_SERVE_TOKEN, or listen on 127.0.0.1",
+                    "serving the harness on {} needs authentication: set a token with \
+                     HarnessLauncher::with_auth_token or an extractor with \
+                     HarnessLauncher::with_request_context_extractor, or listen on 127.0.0.1",
                     self.bind_address
                 )));
             }
@@ -1420,6 +1423,16 @@ impl HarnessLauncher {
     ///
     /// Returns the [`build_app`](Self::build_app) error, or the listener's.
     pub async fn run_serve_directly(self, port: u16) -> Result<()> {
+        self.serve_until(port, std::future::pending()).await
+    }
+
+    /// Serves as [`run_serve_directly`](Self::run_serve_directly) does, stopping on Ctrl-C
+    /// or when `stop` resolves.
+    async fn serve_until(
+        self,
+        port: u16,
+        stop: impl Future<Output = ()> + Send + 'static,
+    ) -> Result<()> {
         let audit = self.agent.runtime().audit_trail().map(|trail| trail.recorder().clone());
         let addr = SocketAddr::new(self.bind_address, port);
         let info = self.agent.info().clone();
@@ -1453,7 +1466,7 @@ impl HarnessLauncher {
             });
         }
         if let Some(kernel) = kernel {
-            let served = serve_resident(kernel, socket, app, addr, &info).await;
+            let served = serve_resident(kernel, socket, app, addr, &info, stop).await;
             seal_audit(audit).await;
             return served;
         }
@@ -1466,7 +1479,12 @@ impl HarnessLauncher {
         println!("  standing rules: GET /api/rules, POST /api/rules, DELETE /api/rules/{{id}}");
         println!("Press Ctrl+C to stop\n");
         let served = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-            .with_graceful_shutdown(shutdown_signal())
+            .with_graceful_shutdown(async move {
+                tokio::select! {
+                    () = shutdown_signal() => {}
+                    () = stop => {}
+                }
+            })
             .await
             .map_err(|e| AdkError::config(format!("server error: {e}")));
         seal_audit(audit).await;
@@ -1523,6 +1541,7 @@ async fn serve_resident(
     app: Router,
     addr: SocketAddr,
     info: &adk_harness::HarnessInfo,
+    stop_when: impl Future<Output = ()> + Send,
 ) -> Result<()> {
     kernel.start().await.map_err(AdkError::from)?;
     let listener = match listening(socket, addr) {
@@ -1583,16 +1602,19 @@ async fn serve_resident(
         _ = interrupt.recv() => {}
         _ = terminate.recv() => {}
         () = adk_kernel::service::stop_requested() => {}
+        () = stop_when => {}
     }
     #[cfg(windows)]
     tokio::select! {
         _ = interrupt.recv() => {}
         () = adk_kernel::service::stop_requested() => {}
+        () = stop_when => {}
     }
     #[cfg(not(any(unix, windows)))]
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {}
         () = adk_kernel::service::stop_requested() => {}
+        () = stop_when => {}
     }
     tracing::info!("shutdown signal received; draining the kernel");
     // The server stops accepting while the kernel drains, then stops.
@@ -2204,7 +2226,76 @@ mod tests {
         assert_eq!(at("192.168.1.20:8080"), ["http://192.168.1.20:8080"]);
     }
 
-    use super::unknown_slash_notice;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use adk_core::audit_log::{AuditRecordDraft, AuditRecorder};
+    use adk_harness::{HarnessAgent, InstructionsConfig, Workspace};
+    use adk_model::{ScriptedLlm, ScriptedResponse};
+
+    use super::{HarnessLauncher, unknown_slash_notice};
+
+    /// A recorder that keeps nothing and counts how often it is sealed.
+    #[derive(Default)]
+    struct SealCounter(AtomicUsize);
+
+    #[async_trait::async_trait]
+    impl AuditRecorder for SealCounter {
+        fn digest(&self, _value: &serde_json::Value) -> String {
+            String::new()
+        }
+
+        async fn record(&self, _draft: AuditRecordDraft) -> adk_core::Result<()> {
+            Ok(())
+        }
+
+        async fn seal(&self) -> adk_core::Result<()> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn audited_harness(dir: &std::path::Path, seals: Arc<SealCounter>) -> HarnessAgent {
+        HarnessAgent::builder("harness")
+            .model(Arc::new(ScriptedLlm::new("scripted", Vec::<ScriptedResponse>::new())))
+            .workspace(Workspace::new(dir))
+            .project_instructions(InstructionsConfig {
+                user_file: None,
+                ..InstructionsConfig::default()
+            })
+            .without_default_members()
+            .audit_log(seals)
+            .build()
+            .unwrap()
+    }
+
+    /// `serve` seals the harness's audit log once its server stops.
+    #[tokio::test]
+    async fn serving_seals_the_audit_log_once_the_server_stops() {
+        let dir = tempfile::tempdir().unwrap();
+        let seals = Arc::new(SealCounter::default());
+        HarnessLauncher::new(audited_harness(dir.path(), seals.clone()))
+            .serve_until(0, async {})
+            .await
+            .unwrap();
+        assert_eq!(seals.0.load(Ordering::SeqCst), 1);
+    }
+
+    /// `up` seals the harness's audit log once the server and the kernel have stopped.
+    #[tokio::test]
+    async fn a_resident_kernel_seals_the_audit_log_once_it_stops() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let seals = Arc::new(SealCounter::default());
+        HarnessLauncher::new(audited_harness(dir.path(), seals.clone()))
+            .with_kernel_config(adk_kernel::KernelConfig::default().with_home(home.path()))
+            .resident()
+            .unwrap()
+            .serve_until(0, async {})
+            .await
+            .unwrap();
+        assert_eq!(seals.0.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn a_slash_line_no_command_matches_gets_one_notice() {
