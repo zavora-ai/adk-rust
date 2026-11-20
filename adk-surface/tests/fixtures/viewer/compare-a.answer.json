@@ -37,8 +37,6 @@
      "x1": 1524,
      "y1": 262
     },
-    "label": "title",
-    "score": 0.99,
     "origin": {
      "backend": "pp-ocrv6-small",
      "manifest": "pp-ocrv6-small",
@@ -77,8 +75,6 @@
      "x1": 900,
      "y1": 400
     },
-    "label": "text",
-    "score": 0.97,
     "origin": {
      "backend": "pp-ocrv6-small",
      "manifest": "pp-ocrv6-small",
@@ -117,8 +113,6 @@
      "x1": 1430,
      "y1": 528
     },
-    "label": "seal",
-    "score": 0.88,
     "origin": {
      "backend": "pp-ocrv6-small",
      "manifest": "pp-ocrv6-small",
@@ -157,8 +151,6 @@
      "x1": 1524,
      "y1": 704
     },
-    "label": "text",
-    "score": 0.71,
     "origin": {
      "backend": "pp-ocrv6-small",
      "manifest": "pp-ocrv6-small",
@@ -197,8 +189,6 @@
      "x1": 1532,
      "y1": 540
     },
-    "label": "handwriting",
-    "score": 0.58,
     "origin": {
      "backend": "pp-ocrv6-small",
      "manifest": "pp-ocrv6-small",
@@ -237,8 +227,6 @@
      "x1": 770,
      "y1": 760
     },
-    "label": "text",
-    "score": 0.96,
     "origin": {
      "backend": "pp-ocrv6-small",
      "manifest": "pp-ocrv6-small",
@@ -277,8 +265,6 @@
      "x1": 1530,
      "y1": 1322
     },
-    "label": "table",
-    "score": 0.95,
     "origin": {
      "backend": "pp-ocrv6-small",
      "manifest": "pp-ocrv6-small",
@@ -317,8 +303,6 @@
      "x1": 560,
      "y1": 1436
     },
-    "label": "checkbox",
-    "score": 0.81,
     "origin": {
      "backend": "pp-ocrv6-small",
      "manifest": "pp-ocrv6-small",
@@ -357,8 +341,6 @@
      "x1": 1530,
      "y1": 1572
     },
-    "label": "text",
-    "score": 0.94,
     "origin": {
      "backend": "pp-ocrv6-small",
      "manifest": "pp-ocrv6-small",
@@ -397,8 +379,6 @@
      "x1": 700,
      "y1": 1604
     },
-    "label": "handwriting",
-    "score": 0.47,
     "origin": {
      "backend": "pp-ocrv6-small",
      "manifest": "pp-ocrv6-small",
@@ -437,8 +417,6 @@
      "x1": 1534,
      "y1": 2214
     },
-    "label": "text",
-    "score": 0.9,
     "origin": {
      "backend": "pp-ocrv6-small",
      "manifest": "pp-ocrv6-small",

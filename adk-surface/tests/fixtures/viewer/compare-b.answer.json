@@ -37,8 +37,6 @@
      "x1": 1530,
      "y1": 264
     },
-    "label": "title",
-    "score": 0.99,
     "origin": {
      "backend": "paddleocr-vl-1.6",
      "manifest": "paddleocr-vl-1.6",
@@ -77,8 +75,6 @@
      "x1": 912,
      "y1": 404
     },
-    "label": "text",
-    "score": 0.98,
     "origin": {
      "backend": "paddleocr-vl-1.6",
      "manifest": "paddleocr-vl-1.6",
@@ -117,8 +113,6 @@
      "x1": 1433,
      "y1": 531
     },
-    "label": "seal",
-    "score": 0.89,
     "origin": {
      "backend": "paddleocr-vl-1.6",
      "manifest": "paddleocr-vl-1.6",
@@ -157,8 +151,6 @@
      "x1": 1532,
      "y1": 711
     },
-    "label": "text",
-    "score": 0.95,
     "origin": {
      "backend": "paddleocr-vl-1.6",
      "manifest": "paddleocr-vl-1.6",
@@ -197,8 +189,6 @@
      "x1": 1536,
      "y1": 541
     },
-    "label": "handwriting",
-    "score": 0.83,
     "origin": {
      "backend": "paddleocr-vl-1.6",
      "manifest": "paddleocr-vl-1.6",
@@ -237,8 +227,6 @@
      "x1": 780,
      "y1": 764
     },
-    "label": "text",
-    "score": 0.97,
     "origin": {
      "backend": "paddleocr-vl-1.6",
      "manifest": "paddleocr-vl-1.6",
@@ -277,8 +265,6 @@
      "x1": 1551,
      "y1": 1330
     },
-    "label": "table",
-    "score": 0.96,
     "origin": {
      "backend": "paddleocr-vl-1.6",
      "manifest": "paddleocr-vl-1.6",
@@ -317,8 +303,6 @@
      "x1": 567,
      "y1": 1437
     },
-    "label": "checkbox",
-    "score": 0.8200000000000001,
     "origin": {
      "backend": "paddleocr-vl-1.6",
      "manifest": "paddleocr-vl-1.6",
@@ -357,8 +341,6 @@
      "x1": 1538,
      "y1": 1575
     },
-    "label": "text",
-    "score": 0.95,
     "origin": {
      "backend": "paddleocr-vl-1.6",
      "manifest": "paddleocr-vl-1.6",
@@ -397,8 +379,6 @@
      "x1": 709,
      "y1": 1606
     },
-    "label": "handwriting",
-    "score": 0.48,
     "origin": {
      "backend": "paddleocr-vl-1.6",
      "manifest": "paddleocr-vl-1.6",
@@ -437,8 +417,6 @@
      "x1": 1555,
      "y1": 2216
     },
-    "label": "text",
-    "score": 0.91,
     "origin": {
      "backend": "paddleocr-vl-1.6",
      "manifest": "paddleocr-vl-1.6",
@@ -477,8 +455,6 @@
      "x1": 1524,
      "y1": 2288
     },
-    "label": "text",
-    "score": 0.86,
     "origin": {
      "backend": "paddleocr-vl-1.6",
      "manifest": "paddleocr-vl-1.6",

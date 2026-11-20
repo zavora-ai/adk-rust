@@ -207,6 +207,8 @@ async fn the_card_shows_the_exact_image_with_what_was_covered_and_where_it_goes(
     assert_eq!(media.what.as_deref(), Some("Document crop"));
     assert_eq!(media.cost_text.as_deref(), Some("Up to $0.0044"));
     assert_eq!(media.kept_text.as_deref(), Some("Kept as evidence until 18 Dec"));
+    // "Open the source image" opens the annotated viewer of the image the call named (A9).
+    assert_eq!(media.source_href.as_deref(), Some("/ui/vision/s1/id-card.png"));
     assert!(media.notice.is_none());
     // Allow once, Edit and Deny; never Always allow, which the egress rules decide.
     assert_eq!(answers(&card), [Answer::AllowOnce, Answer::Deny]);

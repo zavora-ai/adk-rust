@@ -287,6 +287,8 @@ pub(crate) struct WireBlock {
     pub(crate) kind: String,
     #[serde(default)]
     pub(crate) text: String,
+    #[serde(default)]
+    pub(crate) confidence: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1502,7 +1504,9 @@ pub(crate) fn answer_view(record: &Record, input: &ViewerInput<'_>) -> AnswerVie
             }
             words.join(" · ")
         };
-        let score_text = region.score.map(|s| format!("{s:.2}")).unwrap_or_default();
+        // A page's region carries its block's confidence.
+        let score = region.score.or(block.and_then(|b| b.confidence));
+        let score_text = score.map(|s| format!("{s:.2}")).unwrap_or_default();
         let track_name = region.track.map(|id| format!("T{id}"));
         let tag = match (&track_name, kind) {
             (Some(name), _) => [
@@ -1664,7 +1668,7 @@ pub(crate) fn answer_view(record: &Record, input: &ViewerInput<'_>) -> AnswerVie
             shape,
             text,
             detail,
-            score: region.score,
+            score,
             score_text,
             track: region.track,
             track_name,
@@ -1805,6 +1809,7 @@ pub(crate) fn answer_view(record: &Record, input: &ViewerInput<'_>) -> AnswerVie
                     .filter(|r| r.score.is_some_and(|s| s >= DEFAULT_MIN_SCORE))
                     .min_by(|a, b| a.score.unwrap_or(1.0).total_cmp(&b.score.unwrap_or(1.0)))
             })
+            .or_else(|| regions.first())
             .map(|r| r.index),
         _ => regions.first().map(|r| r.index),
     };

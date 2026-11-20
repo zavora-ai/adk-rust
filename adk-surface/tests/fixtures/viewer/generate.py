@@ -76,11 +76,10 @@ def page_record(call, at, backend, manifest, blocks, calls, models, *, escalate=
                 "text": text,
             }
             text = escalate["text"]
+        # As adk-vision writes a read: the block's kind and confidence are the page's.
         regions.append({
             "image": PAGE,
             "shape": box(b),
-            "label": kind,
-            "score": score,
             "origin": origin(backend, manifest, LETTERBOX_PAGE, **extra),
         })
         page_blocks.append({"kind": kind, "text": text, "confidence": score})
