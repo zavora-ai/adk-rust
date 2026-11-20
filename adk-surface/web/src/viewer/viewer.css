@@ -307,6 +307,7 @@
 }
 
 .vw-input.vw-mono {
+  font-family: var(--mono);
   font-size: 14px;
 }
 

@@ -286,6 +286,7 @@ an approval card can show the exact image; see [Governed Vision Tools](governed-
 - [Getting started: a Document desk](getting-started.md)
 - [The `adk-rust vision` CLI](cli.md)
 - [Governed Vision Tools](governed-tools.md)
+- [The Annotated Viewer](../surfaces/annotated-viewer.md): what an agent saw, on the web home
 - [Image Privacy](../security/image-privacy.md)
 - [Local ONNX backends](onnx.md)
 - [Cloud vision backends](cloud.md): `LlmDescriber`, NVIDIA NIM and Meta `sam-3.1`

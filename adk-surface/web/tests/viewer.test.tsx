@@ -155,7 +155,7 @@ describe("the annotated viewer", () => {
     expect(within(counts).getByText("2")).toBeTruthy();
     expect(within(counts).getByText("1")).toBeTruthy();
     expect(within(side).getByText("—")).toBeTruthy();
-    await userEvent.click(within(side).getAllByRole("button", { name: "Keep PaddleOCR-VL's" })[1]);
+    await userEvent.click(within(side).getAllByRole("button", { name: "Keep PaddleOCR-VL's" })[0]);
     await userEvent.click(within(side).getByRole("button", { name: "Save example" }));
     await waitFor(() => expect(saved).toHaveLength(1));
     expect(saved[0]).toMatchObject({ answer: "c-34", scope: "region", region: { text: "PO-77815", label: "handwriting" } });

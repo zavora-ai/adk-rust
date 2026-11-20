@@ -1992,7 +1992,8 @@ pub(crate) fn view(
             can_save: input.can_save,
             files,
             file,
-            case_name: slug(&format!("{title} {selected}")),
+            // "INV-2291 · page 1" and "handwriting": `inv-2291-p1-handwriting`.
+            case_name: slug(&format!("{} {selected}", title.replace("page ", "p"))),
         },
     })
 }
@@ -2191,6 +2192,15 @@ pub(crate) fn compare_view(a: AnswerView, b: AnswerView) -> CompareView {
             }
         }
     }
+    // Readings that differ first, the least sure first; then what only one answer found.
+    let score_of = |difference: &Difference| {
+        let region = difference.a_region.and_then(|i| a.regions.iter().find(|r| r.index == i));
+        region.and_then(|r| r.score).unwrap_or(1.0)
+    };
+    differences.sort_by(|x, y| {
+        let only = |d: &Difference| d.a_region.is_none() || d.b_region.is_none();
+        only(x).cmp(&only(y)).then(score_of(x).total_cmp(&score_of(y)))
+    });
     let mean = if overlaps.is_empty() { 0.0 } else { overlaps.iter().sum::<f64>() / overlaps.len() as f64 };
     let overlap_text = if overlaps.is_empty() {
         "The two answers found no region in common.".to_string()

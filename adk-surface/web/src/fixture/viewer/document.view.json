@@ -793,7 +793,7 @@
   ],
   "examples": {
     "canSave": true,
-    "caseName": "inv-2291-page-1-handwriting",
+    "caseName": "inv-2291-p1-handwriting",
     "file": "evals/vision/invoices.test.json",
     "files": [
       "evals/vision/invoices.test.json",

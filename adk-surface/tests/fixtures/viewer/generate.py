@@ -157,7 +157,7 @@ document_a = page_record(
 compare_blocks_a = []
 for order, kind, b, score, text in blocks_a:
     if order == 3:
-        compare_blocks_a.append((3, "text", [1188, 330, 1478, 380], 0.71, "06.11.2028"))
+        compare_blocks_a.append((3, "text", b, 0.71, "06.11.2028"))
     else:
         compare_blocks_a.append((order, kind, b, score, text))
 compare_a = page_record("c-31", "2026-11-20T07:31:00Z", "pp-ocrv6-small", "pp-ocrv6-small", compare_blocks_a, [local_call("read", "pp-ocrv6-small", 1100, 11)], PP)

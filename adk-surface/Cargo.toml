@@ -226,6 +226,12 @@ required-features = ["web"]
 name = "vision_home"
 required-features = ["web"]
 
+# The annotated viewer (spec 3.7 §8.2, X12): a harness with the vision pack reads a page and
+# detects on a photo; the viewer shows each answer and saves a corrected region as an eval case.
+[[example]]
+name = "vision_viewer"
+required-features = ["web"]
+
 # The tray panel over a scripted kernel with two agents (spec 3.3 §5.5).
 [[example]]
 name = "scripted_tray"

@@ -279,7 +279,7 @@ async fn two_backends_compare_region_by_region() {
         compare.differences.iter().map(|d| (d.number, d.a.clone(), d.b.clone())).collect();
     assert_eq!(
         differences,
-        [(3, "06.11.2028 · 0.71", "06.11.2026 · 0.95"), (5, "PO-7781S · 0.58", "PO-77815 · 0.83"), (12, "—", "Page 1 of 1 · 0.86")]
+        [(5, "PO-7781S · 0.58", "PO-77815 · 0.83"), (3, "06.11.2028 · 0.71", "06.11.2026 · 0.95"), (12, "—", "Page 1 of 1 · 0.86")]
             .map(|(n, a, b)| (n, a.to_string(), b.to_string()))
     );
     assert!(compare.overlap_text.contains("mean IoU 0.9"), "{}", compare.overlap_text);

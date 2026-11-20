@@ -333,7 +333,9 @@ export function Viewer({
         const kind = next.kind;
         setLayersOn(
           new Set(
-            kind === "document"
+            initialCorrection
+              ? [words.regions]
+              : kind === "document"
               ? [words.regions, words.readingOrder]
               : kind === "videoFrame"
                 ? [words.regions, words.trails]
@@ -341,7 +343,7 @@ export function Viewer({
           ),
         );
         setMinScore(next.minScore);
-        setSelected((current) => current ?? next.answer?.selected ?? undefined);
+        setSelected(next.answer?.selected ?? undefined);
         setFile((current) => current || next.examples.file);
         setCaseName((current) => current || next.examples.caseName);
       })
@@ -431,6 +433,8 @@ export function Viewer({
     }
   };
   const correct = (region: RegionView) => {
+    // The page around the region, its other blocks quiet (board choice V13).
+    setLayersOn(new Set([words.regions]));
     setCorrection({
       index: region.index,
       label: baseLabel(region),
@@ -1267,7 +1271,7 @@ function ComparePanel({
           <div key={`${difference.number}-${difference.title}`} className="vw-diff">
             <span className="vw-diff-head">
               <span className="vw-mono vw-muted">{difference.number}</span>
-              <Dot swatch={swatchOf(difference.label)} />
+              <Dot swatch={difference.aRegion == null || difference.bRegion == null ? ONLY_HERE : swatchOf(difference.label)} />
               <span className="vw-diff-title">{difference.title}</span>
             </span>
             <div className="vw-diff-grid">

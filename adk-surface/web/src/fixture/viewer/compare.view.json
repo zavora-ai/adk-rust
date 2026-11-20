@@ -159,7 +159,7 @@
       {
         "atEdge": false,
         "blurred": false,
-        "boxText": "1188, 330 → 1478, 380",
+        "boxText": "1000, 296 → 1524, 704",
         "chain": [
           "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
           "Resized to 679 × 960",
@@ -173,7 +173,7 @@
             "parts": [
               {
                 "style": "mono",
-                "text": "1188, 330 → 1478, 380"
+                "text": "1000, 296 → 1524, 704"
               },
               {
                 "style": "muted",
@@ -213,10 +213,10 @@
         "shape": "box",
         "tag": "3 · text · 0.71",
         "text": "06.11.2028",
-        "x0": 1188.0,
-        "x1": 1478.0,
-        "y0": 330.0,
-        "y1": 380.0
+        "x0": 1000.0,
+        "x1": 1524.0,
+        "y0": 296.0,
+        "y1": 704.0
       },
       {
         "atEdge": false,
@@ -911,7 +911,7 @@
           {
             "atEdge": false,
             "blurred": false,
-            "boxText": "1188, 330 → 1478, 380",
+            "boxText": "1000, 296 → 1524, 704",
             "chain": [
               "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
               "Resized to 679 × 960",
@@ -925,7 +925,7 @@
                 "parts": [
                   {
                     "style": "mono",
-                    "text": "1188, 330 → 1478, 380"
+                    "text": "1000, 296 → 1524, 704"
                   },
                   {
                     "style": "muted",
@@ -965,10 +965,10 @@
             "shape": "box",
             "tag": "3 · text · 0.71",
             "text": "06.11.2028",
-            "x0": 1188.0,
-            "x1": 1478.0,
-            "y0": 330.0,
-            "y1": 380.0
+            "x0": 1000.0,
+            "x1": 1524.0,
+            "y0": 296.0,
+            "y1": 704.0
           },
           {
             "atEdge": false,
@@ -1699,7 +1699,7 @@
           {
             "atEdge": false,
             "blurred": false,
-            "boxText": "1192, 331 → 1482, 381",
+            "boxText": "1008, 303 → 1532, 711",
             "chain": [
               "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
               "Resized to 679 × 960",
@@ -1713,7 +1713,7 @@
                 "parts": [
                   {
                     "style": "mono",
-                    "text": "1192, 331 → 1482, 381"
+                    "text": "1008, 303 → 1532, 711"
                   },
                   {
                     "style": "muted",
@@ -1753,10 +1753,10 @@
             "shape": "box",
             "tag": "3 · text · 0.95",
             "text": "06.11.2026",
-            "x0": 1192.0,
-            "x1": 1482.0,
-            "y0": 331.0,
-            "y1": 381.0
+            "x0": 1008.0,
+            "x1": 1532.0,
+            "y0": 303.0,
+            "y1": 711.0
           },
           {
             "atEdge": false,
@@ -2397,15 +2397,6 @@
     "differ": 2,
     "differences": [
       {
-        "a": "06.11.2028 · 0.71",
-        "aRegion": 3,
-        "b": "06.11.2026 · 0.95",
-        "bRegion": 3,
-        "label": "text",
-        "number": 3,
-        "title": "text · read differently"
-      },
-      {
         "a": "PO-7781S · 0.58",
         "aRegion": 4,
         "b": "PO-77815 · 0.83",
@@ -2413,6 +2404,15 @@
         "label": "handwriting",
         "number": 5,
         "title": "handwriting · read differently"
+      },
+      {
+        "a": "06.11.2028 · 0.71",
+        "aRegion": 3,
+        "b": "06.11.2026 · 0.95",
+        "bRegion": 3,
+        "label": "text",
+        "number": 3,
+        "title": "text · read differently"
       },
       {
         "a": "—",
@@ -2428,7 +2428,7 @@
   },
   "examples": {
     "canSave": true,
-    "caseName": "inv-2291-page-1-handwriting",
+    "caseName": "inv-2291-p1-handwriting",
     "file": "evals/vision/invoices.test.json",
     "files": [
       "evals/vision/invoices.test.json",
