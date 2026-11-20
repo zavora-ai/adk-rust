@@ -16,34 +16,68 @@ the home's own card. [Agent-Drawn UI](surfaces/genui.md) covers the feature in f
 adk-surface = { version = "3.0.0", features = ["web", "genui"] }
 adk-agent = "3.0.0"
 adk-model = "3.0.0"
+adk-tool = "3.0.0"
+anyhow = "1"
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
 ```
 
 ## 2) Give the agent the render tools
 
-```rust,ignore
+```rust
 use std::sync::Arc;
 
-use adk_agent::LlmAgentBuilder;
+use adk_agent::{Agent, LlmAgentBuilder};
 use adk_model::GeminiModel;
 use adk_surface::genui::DrawToolset;
+use adk_tool::{AdkError, tool};
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::{Value, json};
 
-let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?);
-let agent = LlmAgentBuilder::new("finance")
-    .model(model)
-    .instruction("Show the person forms and tables with the render tools when they help.")
-    .tool(Arc::new(send_invoice))
-    .toolset(Arc::new(DrawToolset::forms()))
-    .build()?;
+#[derive(Deserialize, JsonSchema)]
+struct InvoiceArgs {
+    /// The address the invoice goes to
+    to: String,
+    /// The amount, in cents
+    amount: u64,
+}
+
+/// Sends an invoice to an address.
+#[tool]
+async fn send_invoice(args: InvoiceArgs) -> std::result::Result<Value, AdkError> {
+    Ok(json!({ "sent": true, "to": args.to, "amount": args.amount }))
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let api_key = std::env::var("GOOGLE_API_KEY")?;
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-3.8-flash")?);
+
+    let agent = LlmAgentBuilder::new("finance")
+        .model(model)
+        .instruction("Show the person forms and tables with the render tools when they help.")
+        .tool(Arc::new(SendInvoice))
+        .require_tool_confirmation("send_invoice")
+        .toolset(Arc::new(DrawToolset::forms()))
+        .build()?;
+
+    println!("{} has the render tools", agent.name());
+    Ok(())
+}
 ```
 
 `DrawToolset::forms()` adds `render_form`, `render_card`, `render_table`, `render_screen`,
 `patch_surface` and `delete_surface`, each checked against the `forms` 1.0 catalog. They are
-read-only, so they need no approval.
+read-only, so they need no approval. `require_tool_confirmation` holds each `send_invoice` call
+until the person decides.
 
 ## 3) See a drawing in the web home
 
 The `scripted_genui` example is a complete home over a kernel and a scripted model, with no
-API key:
+API key. Run it from a clone of the repository:
 
 ```bash
 cargo run -p adk-surface --features web,genui --example scripted_genui -- 8805 /tmp/genui-home

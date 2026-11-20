@@ -4,8 +4,9 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 
 ## Getting Started
 
+- [What's New in 3.0](whats-new-3.0.md) - Autonomous agents, the governed tool path, the durable runtime, the harness, the kernel, surfaces, AWP 2.0 websites and vision, by area
 - [Introduction](introduction.md) - Overview of ADK-Rust, its architecture, and key concepts
-- [Quickstart](quickstart.md) - Scaffold, run, and test your first agent in the embedded UI in under 5 minutes
+- [Quickstart](quickstart.md) - Scaffold an agent server, run it, and talk to it over the REST API in under 5 minutes
 - [Build an Autonomous Agent](autonomy/index.md) - Choose among ambient agents, durable workers, background runs, goals, the agent kernel and the managed runtime, then scaffold an agent that works toward goals unattended, wakes itself, waits for approvals, stays in its budget and survives a crash
 - [A2UI Quickstart](quickstart-a2ui.md) - Give an agent the `genui` render tools, see its drawings in the web home, and read them as A2UI v0.9.1 JSON lines
 - [Migrating 2.x → 3.0](migration/2.x-to-3.0.md) - The breaking changes a 2.3.0 project meets in 3.0.0: API, wire, server routes, CLI and stored state, with before/after code
@@ -299,7 +300,6 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Development Guidelines](development/development-guidelines.md) - Contributing guide and best practices
 - [Composable Templates](development/composable-templates.md) - `cargo adk new` templates, addons, and enterprise patterns
 - [cargo adk build](development/cargo-adk-build.md) - Compile an agent project without deploying it
-- [Performance 0.8](development/performance-0-8.md) - Optimization release examples and adoption-focused validation
 
 ---
 
