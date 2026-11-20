@@ -10,7 +10,9 @@ one.
 > **Note:** the `website` feature is **Experimental**, as `adk-website` is (see `STABILITY.md`).
 > It implies `web`.
 
-![The site view a week after launch](../images/surfaces/website/10-site-view-light.png)
+| Light | Dark |
+|---|---|
+| ![The site view a week after launch](../images/surfaces/website/10-site-view-light.png) | ![The site view a week after launch, dark](../images/surfaces/website/10-site-view-dark.png) |
 
 ## Try it
 
@@ -73,11 +75,14 @@ Connections never ask for a password: each opens the service's own page or shows
 | Light | Dark |
 |---|---|
 | ![Setup code](../images/surfaces/website/01-setup-code-light.png) | ![Setup code, dark](../images/surfaces/website/01-setup-code-dark.png) |
+| ![Start: profiles and listings, and a phone for urgent alarms](../images/surfaces/website/02-start-light.png) | ![Start, dark](../images/surfaces/website/02-start-dark.png) |
 | ![Discovery](../images/surfaces/website/03-discovery-light.png) | ![Discovery, dark](../images/surfaces/website/03-discovery-dark.png) |
 | ![The interview with its live preview](../images/surfaces/website/04-interview-light.png) | ![The interview, dark](../images/surfaces/website/04-interview-dark.png) |
 | ![The charter](../images/surfaces/website/05-charter-light.png) | ![The charter, dark](../images/surfaces/website/05-charter-dark.png) |
+| ![Choose a look](../images/surfaces/website/06-design-light.png) | ![Choose a look, dark](../images/surfaces/website/06-design-dark.png) |
 | ![The launch check](../images/surfaces/website/07-launch-check-light.png) | ![The launch check, dark](../images/surfaces/website/07-launch-check-dark.png) |
 | ![Connect and go live](../images/surfaces/website/08-connect-light.png) | ![Connect and go live, dark](../images/surfaces/website/08-connect-dark.png) |
+| ![Your first 90 days](../images/surfaces/website/09-run-light.png) | ![Your first 90 days, dark](../images/surfaces/website/09-run-dark.png) |
 | ![The weekly review](../images/surfaces/website/11-weekly-review-light.png) | ![The weekly review, dark](../images/surfaces/website/11-weekly-review-dark.png) |
 | ![The web editor](../images/surfaces/website/12-editor-light.png) | ![The web editor, dark](../images/surfaces/website/12-editor-dark.png) |
 
