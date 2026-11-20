@@ -457,7 +457,8 @@ original: `adk-rust sessions fork ID --turns N` copies a session up to a turn, a
 after it. Both refuse while a turn runs on the session or a call waits for a decision, and both
 are recorded in the audit log ([Fork, Rewind, and Edit History](../sessions/history.md)).
 
-Verify the signed audit log:
+Verify the signed audit log. Here the kernel was stopped with Ctrl-C after one goal and its
+approval:
 
 ```bash
 adk-rust audit export --database-url sqlite://.adk/state.db --log-id ops-agent --out audit.jsonl
@@ -467,13 +468,20 @@ adk-rust audit verify audit.jsonl --key "$(cat .adk/audit.vkey)"
 ```text
 log:                  ops-agent
 origin:               adk-audit/ops-agent
-records:              244 (0 pruned)
-checkpoints verified: 4
-signed through:       204
-root:                 d96168f80119e79af0e235beaad0d9e5ac65d57b825677174e06010fc9594d79
-unsigned tail:        40
+records:              46 (0 pruned)
+checkpoints verified: 1
+signed through:       46
+root:                 e07522cc4d2630b9b2caf970fbeb14279f3b127a02e3c85987145c19ea58ae8a
+unsigned tail:        0
 result:               VALID
 ```
+
+The log is signed in checkpoints: every 256 records, on the first record 60 seconds after the
+last checkpoint, and when `up` stops after Ctrl-C or `SIGTERM`. Records after the last
+checkpoint are the `unsigned tail`. Until a checkpoint signs any record, `verify` reports them
+`unanchored` and the result `INVALID`, so a log read while a short-lived kernel still runs, or
+after `kill -9`, verifies once the next `up` stops cleanly
+([checkpoints](../security/audit-log.md#checkpoints-and-keys)).
 
 An unattended agent has no one reading its answers. [Online evaluation](../evaluation/online-evaluation.md)
 judges a seeded sample of its finished runs on a background worker — rubrics, safety,
