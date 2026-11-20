@@ -11,8 +11,8 @@ what 3.0 adds, by area, with the feature that turns it on and the guide that cov
 | Area | Crates | Tier | Start with |
 |------|--------|------|------------|
 | [Autonomous agents](#autonomous-agents) | `adk-harness`, `adk-kernel`, `adk-server` | `enterprise` (`autonomy`) | [Build an autonomous agent](autonomy/index.md) |
-| [One governed tool path](#one-governed-tool-path) | `adk-core`, `adk-runner`, `adk-auth`, `adk-sandbox` | every tier | [Tool authorization](security/tool-authorization.md) |
-| [Durable runtime](#durable-runtime) | `adk-core`, `adk-session`, `adk-server` | every tier; stores per backend | [Durable runtime](core/durable-runtime.md) |
+| [One governed tool path](#one-governed-tool-path) | `adk-core`, `adk-runner`, `adk-auth`, `adk-sandbox` | every tier; the OS sandbox and the signed audit log in `enterprise` (`autonomy`) | [Tool authorization](security/tool-authorization.md) |
+| [Durable runtime](#durable-runtime) | `adk-core`, `adk-session`, `adk-server` | `adk-core` stores in every tier; background runs, cron and webhook wake-ups in `enterprise` (`autonomy`) | [Durable runtime](core/durable-runtime.md) |
 | [The harness](#the-harness) | `adk-harness` (Beta) | `enterprise` | [The harness](harness/index.md) |
 | [The agent kernel](#the-agent-kernel) | `adk-kernel` (Beta) | `enterprise` | [The agent kernel](kernel/index.md) |
 | [Agent surfaces](#agent-surfaces) | `adk-surface` (Beta) | `surface`, in no tier | [Surfaces](surfaces/index.md) |
@@ -60,7 +60,7 @@ expires and the next claim resumes the run from its checkpoint.
 | Leases with fencing (`LeaseStore`), the run queue (`DurableRunStore`) and schedules (`ScheduleStore`) | [Durable runtime](core/durable-runtime.md) |
 | Background runs, cron schedules and signed webhook wake-ups that enqueue durable runs | [Wake-ups](core/wake-ups.md) |
 | An action ledger (`ActionLedger`) that keeps a non-idempotent call from running twice | [Durable runtime](core/durable-runtime.md) |
-| Run, lease, schedule, governance, approval, spend, action and audit stores on every `adk-session` backend | [Durable stores](security/durable-stores.md) |
+| Run, lease, schedule, governance, approval, spend, action and audit stores on SQLite, PostgreSQL, Redis, MongoDB, Firestore and Neo4j | [Durable stores](security/durable-stores.md) |
 
 ## The Harness
 
@@ -122,6 +122,7 @@ through an egress gate.
 | A Document desk: on-device readers and a cloud describer behind the gate | `cargo adk new claims-desk --template vision`, [Getting started](vision/getting-started.md) |
 | Governed vision tools and the image privacy guardrail | [Governed tools](vision/governed-tools.md), [Image privacy](security/image-privacy.md) |
 | Vision fields in evaluation cases (`Turn::expected_vision`) | [Vision evals](vision/evals.md) |
+| Approve with the image that would leave, and an annotated viewer of what an agent saw | [Approve with image](surfaces/approve-with-image.md), [Annotated viewer](surfaces/annotated-viewer.md) |
 
 `vision` (in `full`) is pure Rust; `vision-local` (in no tier) adds the on-device backends on
 ONNX Runtime and Candle.
@@ -142,11 +143,11 @@ ONNX Runtime and Candle.
 
 | Default | Change it with |
 |---------|----------------|
-| The server binds `127.0.0.1` through the launchers | `BIND_HOST`, after configuring authentication |
+| The server binds `127.0.0.1` through the launchers and the `cargo adk` scaffolds | `serve --host` or `Launcher::with_bind_address`; `BIND_HOST` in a scaffold — after configuring authentication |
 | Unlisted hosts and cross-origin requests are refused | `SecurityConfig::allowed_hosts`, `SecurityConfig::allowed_origins` |
 | Browser navigation refuses private network addresses | `BrowserToolset::with_private_network_access(true)` |
 | The devtools `bash` tool is off | `Workspace::allow_bash(true)` |
-| Tool arguments are checked against the tool's schema; a mismatch is `tool.invalid_arguments` | — |
+| `#[tool]` tools, and `FunctionTool` and `StatefulTool` with a schema, check their arguments; a mismatch is `tool.invalid_arguments` | `#[tool(lenient_args)]`, `with_lenient_args(true)` |
 
 ## Platform
 

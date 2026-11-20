@@ -26,10 +26,14 @@ point the project at the clone:
 
 ```bash
 git clone https://github.com/zavora-ai/adk-rust
-cargo install --path adk-rust/cargo-adk
+cargo install --locked --path adk-rust/cargo-adk
 cargo adk new quickstart_agent --template api --provider openai
 cd quickstart_agent
 ```
+
+> **Note:** `cargo install --path` reads the clone's `.cargo/config.toml`, which links with
+> `clang` and the `wild` linker on Linux. On Linux, install both, or delete the clone's
+> `[target.*]` sections for Linux before `cargo install`.
 
 Then add to the end of `quickstart_agent/Cargo.toml`:
 
@@ -130,8 +134,8 @@ curl -N -X POST http://127.0.0.1:8080/api/run/quickstart_agent/user1/SESSION_ID 
 You now have one executable that runs the agent, manages sessions and streams
 events. For a page where you talk to your agents, decide what they ask to do and review what
 they did, run [the web home](surfaces/web-home.md): install the CLI with
-`cargo install adk-cli` (before 3.0.0 is published, `cargo install --path adk-rust/adk-cli`
-from the clone), and `adk-rust serve` serves it at `http://127.0.0.1:8080/ui/`. A server you
+`cargo install adk-cli` (before 3.0.0 is published, `cargo install --locked --path ../adk-rust/adk-cli`
+from `quickstart_agent`), and `adk-rust serve` serves it at `http://127.0.0.1:8080/ui/`. A server you
 build mounts it with `adk-surface`'s `web` feature.
 
 ### Prefer a terminal-only agent?

@@ -61,8 +61,9 @@ cargo run
 ```
 
 > **Note:** until 3.0.0 is on crates.io, `cargo install cargo-adk` installs 2.3.0. To scaffold a
-> 3.0 project, install from a clone (`cargo install --path cargo-adk`) and point the generated
-> project at the clone — see [Before 3.0.0 is published](docs/official_docs/quickstart.md#before-300-is-published).
+> 3.0 project, install from a clone (`cargo install --locked --path cargo-adk`; on Linux the clone's
+> `.cargo/config.toml` links with `clang` and `wild`) and point the generated project at the clone —
+> see [Before 3.0.0 is published](docs/official_docs/quickstart.md#before-300-is-published).
 
 The server listens on `127.0.0.1:8080` (set `BIND_HOST=0.0.0.0` to listen on every interface).
 Confirm it with:
@@ -72,7 +73,8 @@ curl -fsS http://127.0.0.1:8080/api/health
 ```
 
 For a page where you talk to your agents, decide what they ask to do and review what they
-did, install the CLI with `cargo install adk-cli`; `adk-rust serve` serves
+did, install the CLI with `cargo install adk-cli` (before 3.0.0 is published it installs 2.3.0, so
+install from the clone as above); `adk-rust serve` serves
 [the web home](docs/official_docs/surfaces/web-home.md) at
 [http://127.0.0.1:8080/ui/](http://127.0.0.1:8080/ui/): Threads, Today and Memory & rules, in
 light and dark.

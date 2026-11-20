@@ -37,7 +37,7 @@ the guide for each row.
 | Capability | Crates | Tier | Status |
 |-----------|--------|------|--------|
 | Autonomous agents: goals, wake-ups, approvals, budgets, durable runs (`autonomy`) | `adk-harness`, `adk-kernel`, `adk-server`, `adk-session` | `enterprise` | ✅ |
-| One governed tool path, run budgets, spend and action ledgers, kill switch, signed audit | `adk-core`, `adk-runner`, `adk-auth` | every tier | ✅ |
+| One governed tool path, run budgets, spend and action ledgers, kill switch, signed audit | `adk-core`, `adk-runner`, `adk-auth` | every tier; signed audit in `enterprise` (`autonomy`) | ✅ |
 | The harness (spec 3.1) | `adk-harness` | `enterprise` | ✅ Beta |
 | The agent kernel (spec 3.2) | `adk-kernel` | `enterprise` | ✅ Beta |
 | Agent surfaces (spec 3.3): web home, terminal, phone, chat, voice, workflow observer, agent-drawn UI | `adk-surface` | `surface`, in no tier | ✅ Beta |
