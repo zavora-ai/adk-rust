@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 description = "Shared Google Cloud REST plumbing for Rust Agent Development Kit (ADK-Rust): ADC credential caching, bounded HTTP transport, and long-running-operation polling"
 repository = "https://github.com/zavora-ai/adk-rust"
+homepage.workspace = true
 documentation = "https://docs.rs/adk-gcp"
 keywords = ["ai", "agent", "adk", "gcp", "vertex-ai"]
 categories = ["api-bindings", "asynchronous"]

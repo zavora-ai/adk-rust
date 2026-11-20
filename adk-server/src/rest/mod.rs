@@ -656,7 +656,7 @@ impl ServerBuilder {
     /// The base URL is used to construct the agent card's endpoint URLs.
     ///
     /// With the `a2a-v1` feature, the root agent is served over A2A v1
-    /// ([`A2aV1Server`](crate::a2a::v1::server::A2aV1Server)):
+    /// (`a2a::v1::server::A2aV1Server`):
     ///
     /// - the JSON-RPC binding at `/a2a/v1`;
     /// - the HTTP+JSON binding under `/a2a/v1/rest`;

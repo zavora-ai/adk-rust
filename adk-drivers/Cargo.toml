@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 description = "Service drivers for ADK-Rust agents: DNS and registrar, email, analytics and search console, social and advertising, each with a kernel driver manifest, a conformance suite and reference adapters"
 repository.workspace = true
+homepage.workspace = true
 documentation = "https://docs.rs/adk-drivers"
 readme = "README.md"
 exclude = ["tests/"]

@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 description = "Graph-based workflow orchestration for ADK-Rust agents"
 repository = "https://github.com/zavora-ai/adk-rust"
+homepage.workspace = true
 documentation = "https://docs.rs/adk-graph"
 readme = "README.md"
 exclude = ["tests/", "examples/"]
