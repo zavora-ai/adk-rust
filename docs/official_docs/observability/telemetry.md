@@ -411,7 +411,7 @@ The conventions are in Development status, so names can still change upstream.
 | Span (OpenTelemetry name) | Kind | Emitted by | Attributes |
 |---|---|---|---|
 | `invoke_agent {agent}` | Internal | `Runner`, for the agent it runs | `gen_ai.operation.name` `invoke_agent`, `gen_ai.agent.name`, `gen_ai.agent.description`, `gen_ai.conversation.id` (the session) |
-| `{operation} {model}`, such as `chat claude-sonnet-5-5` or `generate_content gemini-3.7-flash` | Client | Every `adk-model` provider client | `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.request.stream` (when streaming), `gen_ai.request.temperature`, `top_p`, `top_k`, `max_tokens`, `frequency_penalty`, `presence_penalty`, `seed`, `stop_sequences`, `gen_ai.output.type`, `gen_ai.response.model`, `gen_ai.response.finish_reasons`, usage, `error.type` |
+| `{operation} {model}`, such as `chat claude-sonnet-5-5` or `generate_content gemini-3.8-flash` | Client | Every `adk-model` provider client | `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.request.stream` (when streaming), `gen_ai.request.temperature`, `top_p`, `top_k`, `max_tokens`, `frequency_penalty`, `presence_penalty`, `seed`, `stop_sequences`, `gen_ai.output.type`, `gen_ai.response.model`, `gen_ai.response.finish_reasons`, usage, `error.type` |
 | `execute_tool {tool}` | Internal | `LlmAgent`, for each tool it runs | `gen_ai.operation.name` `execute_tool`, `gen_ai.tool.name`, `gen_ai.tool.type` `function`, `gen_ai.tool.call.id` (when the model supplied one), `gen_ai.tool.description`, `gen_ai.agent.name`, `gen_ai.conversation.id`, `error.type` |
 
 The tracing names stay `agent.execute`, `gen_ai.generate` and `execute_tool`, so the
