@@ -72,6 +72,25 @@ Write one line per change, in the present tense, starting with the crate name in
 Leave out changes that only touch tests or CI.
 ```
 
+`.skills/incident-triage.md`:
+
+```markdown
+---
+name: incident-triage
+description: Triage a production incident from an alert. Use when an alert fires or a service is down.
+tags: [ops]
+---
+State the impact first, then the likely cause, then the next action.
+```
+
+`AGENTS.md`:
+
+```markdown
+# Project instructions
+
+Run the tests before committing.
+```
+
 | Frontmatter field | Required | Holds |
 |-------------------|----------|-------|
 | `name` | Yes | The skill's identifier: lowercase letters, digits and hyphens |

@@ -24,7 +24,7 @@ The v1 implementation provides:
 | Push notification authentication (Bearer + token) |
 | `INPUT_REQUIRED` multi-turn resume flow |
 | Input validation (parts, IDs, metadata size) |
-| `Content-Type: application/a2a+json` on HTTP+JSON responses |
+| `Content-Type: application/a2a+json` on successful HTTP+JSON responses; errors are `application/json` |
 | Task object as first SSE streaming event |
 | Context-scoped task lookup for multi-turn |
 | Version negotiation (`A2A-Version` header) |
