@@ -381,7 +381,8 @@ export function Viewer({
   const otherAnswers = view.answers.filter((choice) => choice.id !== answer?.id);
 
   // ---------------------------------------------------------------- the picture's fit
-  const available = Math.max(320, canvasWidth - 48);
+  // The canvas column's content width: its padding is already left out.
+  const available = Math.max(320, canvasWidth);
   const fit = compare
     ? Math.min(PANE_WIDTH, (available - 60) / 2) / view.image.width
     : view.image.height > view.image.width
@@ -706,7 +707,7 @@ export function Viewer({
               view={inset}
               displayWidth={360}
               boxes={insetBoxes}
-              masks={layerMasks ? [...(answer.regions.filter((r) => r.mask && r.index !== current.index).map((r) => ({ key: `i${r.index}`, mask: r.mask!, swatch: swatchOf(r.label, true) }))), ...insetMasks] : []}
+              masks={layerMasks ? [...(answer.regions.filter((r) => r.mask && r.index !== current.index).map((r) => ({ key: `i${r.index}`, mask: r.mask!, swatch: swatchOf(r.label, true), dashed: true }))), ...insetMasks] : []}
               svg={answer.measurements.line && answer.measurements.region === current.index ? <MeasureLine line={answer.measurements.line} /> : undefined}
               label={words.zoomedAround}
             />

@@ -30,6 +30,7 @@
   display: flex;
   flex-direction: column;
   min-height: 100%;
+  line-height: normal;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
@@ -547,14 +548,14 @@
 
 .vw-slider {
   position: relative;
-  height: 18px;
+  height: 6px;
 }
 
 .vw-slider::before,
 .vw-slider::after {
   content: "";
   position: absolute;
-  top: 6px;
+  top: 0;
   height: 6px;
   border-radius: 3px;
   pointer-events: none;
@@ -575,8 +576,10 @@
 
 .vw-slider input {
   position: absolute;
-  inset: 0;
+  top: -6px;
+  left: 0;
   width: 100%;
+  height: 18px;
   margin: 0;
   background: transparent;
   appearance: none;
@@ -678,7 +681,7 @@
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 4px 0;
+  padding: 8px 0;
   color: var(--text-2);
 }
 
@@ -686,7 +689,7 @@
   flex: 0 0 7px;
   width: 7px;
   height: 7px;
-  margin-top: 6px;
+  margin-top: 2px;
   border: 1.5px solid var(--label);
   border-radius: 4px;
 }
@@ -1117,13 +1120,18 @@ div.vw-box {
 
 /* ------------------------------------------------------------ the phone (board choice V15) */
 
-.vw-phone {
+.phone-main.vw-phone {
   position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
   padding: 0;
   gap: 0;
+  line-height: normal;
+}
+
+.vw-phone > * {
+  flex-shrink: 0;
 }
 
 .vw-phone-top {

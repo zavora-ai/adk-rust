@@ -86,11 +86,11 @@ function MaskCanvas({ masks, width, height }: { masks: StageMask[]; width: numbe
     context.clearRect(0, 0, width, height);
     if (masks.length === 0) return;
     const image = context.createImageData(width, height);
-    for (const { mask, swatch } of masks) {
+    for (const { mask, swatch, dashed } of masks) {
       if (mask.width !== width || mask.height !== height) continue;
       const set = maskPixels(mask);
       const [r, g, b] = hexRgb(swatch[0]);
-      const edge = Math.max(2, Math.round(width / 480));
+      const edge = Math.max(2, Math.round(width / (dashed ? 320 : 480)));
       for (let y = 0; y < height; y += 1) {
         for (let x = 0; x < width; x += 1) {
           if (!set[y * width + x]) continue;
@@ -101,6 +101,8 @@ function MaskCanvas({ masks, width, height }: { masks: StageMask[]; width: numbe
               !set[y * width + x - d] || !set[y * width + x + d] ||
               !set[(y - d) * width + x] || !set[(y + d) * width + x];
           }
+          // A mask not looked at is its outline, dashed (board choice V8).
+          if (dashed && (!border || Math.floor((x + y) / (edge * 6)) % 2 === 1)) continue;
           const at = (y * width + x) * 4;
           image.data[at] = r;
           image.data[at + 1] = g;

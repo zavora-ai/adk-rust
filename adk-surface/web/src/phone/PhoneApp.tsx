@@ -9,6 +9,7 @@ import { Decisions } from "./Decisions";
 import { Agents, ThisPhone, TodayLines } from "./Glance";
 import { phoneLabels } from "./labels";
 import { Pair } from "./Pair";
+import { ImageLoaderContext, sameOriginLoader } from "../evidence/images";
 import { PhoneViewer } from "../viewer/PhoneViewer";
 import { viewerOf } from "../viewer/route";
 import { badge } from "./push";
@@ -149,12 +150,14 @@ export function PhoneApp({ client, initial }: { client: PhoneClient; initial?: P
   return (
     <div className="phone">
       {screen.screen === "viewer" && client.viewer ? (
-        <PhoneViewer
-          client={{ viewer: client.viewer.bind(client) }}
-          place={screen.place}
-          onBack={() => (window.history.length > 1 ? window.history.back() : go({ screen: "threads" }))}
-          onOpenThread={() => go({ screen: "threads" })}
-        />
+        <ImageLoaderContext.Provider value={client.image ? (href: string) => client.image!(href) : sameOriginLoader}>
+          <PhoneViewer
+            client={{ viewer: client.viewer.bind(client) }}
+            place={screen.place}
+            onBack={() => (window.history.length > 1 ? window.history.back() : go({ screen: "threads" }))}
+            onOpenThread={() => go({ screen: "threads" })}
+          />
+        </ImageLoaderContext.Provider>
       ) : screen.screen === "decide" ? (
         <Decide client={client} id={screen.id} onBack={() => go({ screen: "decisions" })} onSettled={onSettled} />
       ) : (

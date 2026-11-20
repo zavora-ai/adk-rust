@@ -1575,7 +1575,7 @@
           {
             "atEdge": false,
             "blurred": false,
-            "boxText": "1105, 152 → 1529, 264",
+            "boxText": "1106, 152 → 1530, 264",
             "chain": [
               "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
               "Resized to 679 × 960",
@@ -1589,7 +1589,7 @@
                 "parts": [
                   {
                     "style": "mono",
-                    "text": "1105, 152 → 1529, 264"
+                    "text": "1106, 152 → 1530, 264"
                   },
                   {
                     "style": "muted",
@@ -1629,15 +1629,15 @@
             "shape": "box",
             "tag": "1 · title · 0.99",
             "text": "INVOICE",
-            "x0": 1105.0,
-            "x1": 1529.0,
+            "x0": 1106.0,
+            "x1": 1530.0,
             "y0": 152.0,
             "y1": 264.0
           },
           {
             "atEdge": false,
             "blurred": false,
-            "boxText": "133, 144 → 909, 404",
+            "boxText": "136, 144 → 912, 404",
             "chain": [
               "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
               "Resized to 679 × 960",
@@ -1651,7 +1651,7 @@
                 "parts": [
                   {
                     "style": "mono",
-                    "text": "133, 144 → 909, 404"
+                    "text": "136, 144 → 912, 404"
                   },
                   {
                     "style": "muted",
@@ -1691,15 +1691,15 @@
             "shape": "box",
             "tag": "2 · text · 0.98",
             "text": "Northwind Packaging Ltd · Unit 7, Harbour Road · Port Examplia EX4 2PL",
-            "x0": 133.0,
-            "x1": 909.0,
+            "x0": 136.0,
+            "x1": 912.0,
             "y0": 144.0,
             "y1": 404.0
           },
           {
             "atEdge": false,
             "blurred": false,
-            "boxText": "1191, 331 → 1481, 381",
+            "boxText": "1192, 331 → 1482, 381",
             "chain": [
               "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
               "Resized to 679 × 960",
@@ -1713,7 +1713,7 @@
                 "parts": [
                   {
                     "style": "mono",
-                    "text": "1191, 331 → 1481, 381"
+                    "text": "1192, 331 → 1482, 381"
                   },
                   {
                     "style": "muted",
@@ -1753,15 +1753,15 @@
             "shape": "box",
             "tag": "3 · text · 0.95",
             "text": "06.11.2026",
-            "x0": 1191.0,
-            "x1": 1481.0,
+            "x0": 1192.0,
+            "x1": 1482.0,
             "y0": 331.0,
             "y1": 381.0
           },
           {
             "atEdge": false,
             "blurred": false,
-            "boxText": "1234, 335 → 1432, 531",
+            "boxText": "1235, 335 → 1433, 531",
             "chain": [
               "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
               "Resized to 679 × 960",
@@ -1775,7 +1775,7 @@
                 "parts": [
                   {
                     "style": "mono",
-                    "text": "1234, 335 → 1432, 531"
+                    "text": "1235, 335 → 1433, 531"
                   },
                   {
                     "style": "muted",
@@ -1815,15 +1815,15 @@
             "shape": "box",
             "tag": "4 · seal · 0.89",
             "text": "RECEIVED 07 NOV 2026",
-            "x0": 1234.0,
-            "x1": 1432.0,
+            "x0": 1235.0,
+            "x1": 1433.0,
             "y0": 335.0,
             "y1": 531.0
           },
           {
             "atEdge": false,
             "blurred": false,
-            "boxText": "1253, 467 → 1535, 541",
+            "boxText": "1254, 467 → 1536, 541",
             "chain": [
               "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
               "Resized to 679 × 960",
@@ -1837,7 +1837,7 @@
                 "parts": [
                   {
                     "style": "mono",
-                    "text": "1253, 467 → 1535, 541"
+                    "text": "1254, 467 → 1536, 541"
                   },
                   {
                     "style": "muted",
@@ -1877,15 +1877,15 @@
             "shape": "box",
             "tag": "5 · handwriting · 0.83",
             "text": "PO-77815",
-            "x0": 1253.0,
-            "x1": 1535.0,
+            "x0": 1254.0,
+            "x1": 1536.0,
             "y0": 467.0,
             "y1": 541.0
           },
           {
             "atEdge": false,
             "blurred": false,
-            "boxText": "128, 523 → 778, 763",
+            "boxText": "130, 524 → 780, 764",
             "chain": [
               "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
               "Resized to 679 × 960",
@@ -1899,7 +1899,7 @@
                 "parts": [
                   {
                     "style": "mono",
-                    "text": "128, 523 → 778, 763"
+                    "text": "130, 524 → 780, 764"
                   },
                   {
                     "style": "muted",
@@ -1939,15 +1939,15 @@
             "shape": "box",
             "tag": "6 · text · 0.97",
             "text": "Bill to · Mara Kestrel · 14 Ferry Lane · Port Examplia EX9 1QT",
-            "x0": 128.0,
-            "x1": 778.0,
-            "y0": 523.0,
-            "y1": 763.0
+            "x0": 130.0,
+            "x1": 780.0,
+            "y0": 524.0,
+            "y1": 764.0
           },
           {
             "atEdge": false,
             "blurred": false,
-            "boxText": "141, 823 → 1547, 1329",
+            "boxText": "145, 824 → 1551, 1330",
             "chain": [
               "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
               "Resized to 679 × 960",
@@ -1961,7 +1961,7 @@
                 "parts": [
                   {
                     "style": "mono",
-                    "text": "141, 823 → 1547, 1329"
+                    "text": "145, 824 → 1551, 1330"
                   },
                   {
                     "style": "muted",
@@ -2001,15 +2001,15 @@
             "shape": "box",
             "tag": "7 · table · 0.96",
             "text": "4 rows × 4 columns",
-            "x0": 141.0,
-            "x1": 1547.0,
-            "y0": 823.0,
-            "y1": 1329.0
+            "x0": 145.0,
+            "x1": 1551.0,
+            "y0": 824.0,
+            "y1": 1330.0
           },
           {
             "atEdge": false,
             "blurred": false,
-            "boxText": "1006, 1359 → 1536, 1575",
+            "boxText": "1008, 1359 → 1538, 1575",
             "chain": [
               "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
               "Resized to 679 × 960",
@@ -2023,7 +2023,7 @@
                 "parts": [
                   {
                     "style": "mono",
-                    "text": "1006, 1359 → 1536, 1575"
+                    "text": "1008, 1359 → 1538, 1575"
                   },
                   {
                     "style": "muted",
@@ -2063,15 +2063,15 @@
             "shape": "box",
             "tag": "8 · text · 0.95",
             "text": "Subtotal 970.60 · VAT 20% 194.12 · Total due € 1,164.72",
-            "x0": 1006.0,
-            "x1": 1536.0,
+            "x0": 1008.0,
+            "x1": 1538.0,
             "y0": 1359.0,
             "y1": 1575.0
           },
           {
             "atEdge": false,
             "blurred": false,
-            "boxText": "125, 1377 → 565, 1437",
+            "boxText": "127, 1377 → 567, 1437",
             "chain": [
               "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
               "Resized to 679 × 960",
@@ -2085,7 +2085,7 @@
                 "parts": [
                   {
                     "style": "mono",
-                    "text": "125, 1377 → 565, 1437"
+                    "text": "127, 1377 → 567, 1437"
                   },
                   {
                     "style": "muted",
@@ -2125,15 +2125,15 @@
             "shape": "box",
             "tag": "9 · checkbox · 0.82",
             "text": "☑ Paid by bank transfer",
-            "x0": 125.0,
-            "x1": 565.0,
+            "x0": 127.0,
+            "x1": 567.0,
             "y0": 1377.0,
             "y1": 1437.0
           },
           {
             "atEdge": false,
             "blurred": false,
-            "boxText": "127, 1490 → 707, 1606",
+            "boxText": "129, 1490 → 709, 1606",
             "chain": [
               "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
               "Resized to 679 × 960",
@@ -2147,7 +2147,7 @@
                 "parts": [
                   {
                     "style": "mono",
-                    "text": "127, 1490 → 707, 1606"
+                    "text": "129, 1490 → 709, 1606"
                   },
                   {
                     "style": "muted",
@@ -2187,15 +2187,15 @@
             "shape": "box",
             "tag": "10 · handwriting · 0.48",
             "text": "Approved — J.T. 12/11",
-            "x0": 127.0,
-            "x1": 707.0,
+            "x0": 129.0,
+            "x1": 709.0,
             "y0": 1490.0,
             "y1": 1606.0
           },
           {
             "atEdge": false,
             "blurred": false,
-            "boxText": "137, 2078 → 1551, 2216",
+            "boxText": "141, 2078 → 1555, 2216",
             "chain": [
               "Page 1 of INV-2291.pdf at 200 dpi · 1654 × 2339",
               "Resized to 679 × 960",
@@ -2209,7 +2209,7 @@
                 "parts": [
                   {
                     "style": "mono",
-                    "text": "137, 2078 → 1551, 2216"
+                    "text": "141, 2078 → 1555, 2216"
                   },
                   {
                     "style": "muted",
@@ -2249,8 +2249,8 @@
             "shape": "box",
             "tag": "11 · text · 0.91",
             "text": "Bank: Examplia Savings · IBAN EX12 3456 7890 1234 56 · BIC EXSVEX22",
-            "x0": 137.0,
-            "x1": 1551.0,
+            "x0": 141.0,
+            "x1": 1555.0,
             "y0": 2078.0,
             "y1": 2216.0
           },
@@ -2424,7 +2424,7 @@
       }
     ],
     "onlyOne": 1,
-    "overlapText": "Where both found a region, the boxes overlap closely (mean IoU 0.95)."
+    "overlapText": "Where both found a region, the boxes overlap closely (mean IoU 0.94)."
   },
   "examples": {
     "canSave": true,

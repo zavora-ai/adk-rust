@@ -134,7 +134,9 @@ export function drawn(
   for (const region of shown) {
     const swatch = swatchOf(region.label, photo);
     const isSelected = region.index === selected;
-    if (region.mask && layers.masks) masks.push({ key: `m${region.index}`, mask: region.mask, swatch });
+    if (region.mask && layers.masks) {
+      masks.push({ key: `m${region.index}`, mask: region.mask, swatch, dashed: !isSelected });
+    }
     // A mask's box is drawn when it is the region looked at (board choice V8).
     if (!layers.regions || (region.mask && !isSelected)) continue;
     let tag: string | undefined;

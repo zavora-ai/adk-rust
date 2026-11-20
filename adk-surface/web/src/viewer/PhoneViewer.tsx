@@ -82,7 +82,9 @@ export function PhoneViewer({
         setSheet(true);
       }, true)
     : { boxes: [], masks: [] };
-  const sub = view.meta.replace(/^\d+ × \d+ · /, "");
+  // "line 2 camera, 10:41:07 · kept as evidence until 18 Dec" reads "10:41:07 · kept as …" here.
+  const [first = "", ...rest] = view.meta.replace(/^\d+ × \d+ · /, "").split(" · ");
+  const when = first.replace(/^.*, /, "");
   const header = (short: boolean) => (
     <header className="vw-phone-top">
       <button type="button" className="phone-back" onClick={onBack}>
@@ -90,7 +92,7 @@ export function PhoneViewer({
         {view.agentName}
       </button>
       <h1 className="vw-phone-title">{view.title}</h1>
-      <span className="vw-phone-sub">{short ? sub.split(" · ")[0].replace(/^.*, /, "") : sub}</span>
+      <span className="vw-phone-sub">{short ? when : [when, ...rest].join(" · ")}</span>
     </header>
   );
 
