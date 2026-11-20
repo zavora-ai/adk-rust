@@ -2,8 +2,9 @@
 
 > **Note:** this page describes `adk_agent::coding::CodingAgent`, the 2.x API. The
 > [harness](../harness/index.md) (spec 3.1, in 3.0.0) supersedes it; new projects start from
-> the [harness quick start](../harness/index.md#quick-start). `adk_agent::coding` is unchanged
-> in 3.0.0 and carries no `#[deprecated]` attribute;
+> the [harness quick start](../harness/index.md#quick-start). `adk_agent::coding` keeps its API
+> in 3.0.0 (`write_todos` now keeps each session's list in session state) and carries no
+> `#[deprecated]` attribute;
 > [Migrating from `CodingAgent`](../migration/coding-agent-to-harness.md) moves a project to
 > the harness.
 

@@ -60,7 +60,9 @@ adk-rust up --home /srv/kernel                     # socket and harness.db under
 
 > **Note:** `--bind` belongs to `adk-rust up`. The `up` of an app built on `HarnessLauncher`
 > (the `harness` and `autonomous` templates) takes `--port` (default 8080) and `--host`:
-> `cargo run -- up --port 8081 --host 0.0.0.0`.
+> `cargo run -- up --port 8081`. A `--host` other than loopback needs a token set in code with
+> `HarnessLauncher::with_auth_token`; the app's `up` takes no `--auth-token` and does not read
+> `ADK_SERVE_TOKEN`.
 
 ```text
 $ adk-rust up --mode ask

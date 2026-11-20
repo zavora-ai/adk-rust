@@ -53,7 +53,8 @@ from the notes in `notes/` and publishes it. Replace the notes, the instruction 
 
 `adk-rust --version` prints the CLI's version, and `cargo adk templates` lists `autonomous`
 when the installed `cargo adk` has the template; reinstall both when either is older than
-3.0.0.
+3.0.0. A CLI that rejects `--version` is older than 3.0.0; before 3.0.0 is published, install
+both from a clone ([Before 3.0.0 is published](../quickstart.md#before-300-is-published)).
 
 ## 1. Scaffold the agent
 
@@ -226,7 +227,7 @@ approved publish_status once; process 0803e865-8337-40cf-bbb9-32a8d4cac6dc conti
 The decision resumes the parked process at once: `publish_status` runs exactly once, the check
 passes, and the grader checks `STATUS.md` against `rubric.md`. The goal ends once every
 criterion passes; a failed criterion sends the agent back to revise with the grader's feedback,
-for at most three grading rounds ([rubric-graded goals](../harness/plan-and-goals.md#rubric-graded-goals)). `adk-rust approvals --home .adk deny ID --reason "…"` refuses it
+and a revision that publishes again waits for another decision, for at most three grading rounds ([rubric-graded goals](../harness/plan-and-goals.md#rubric-graded-goals)). `adk-rust approvals --home .adk deny ID --reason "…"` refuses it
 instead, and the agent is told why.
 
 ```text

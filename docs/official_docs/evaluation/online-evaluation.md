@@ -205,8 +205,9 @@ wrap it with `Harness::with_runner`.
 ## Feeding Your Own Improvement Loop
 
 > **Note:** the self-improving harness of spec 3.4
-> (`docs/design/spec-3.4-self-improving-harness.md` §7.3) is a draft design and is not in
-> 3.0.0. The steps below use the 3.0.0 APIs it would build on.
+> (`docs/design/spec-3.4-self-improving-harness.md` §7.3) ships its protected-path set and
+> instruction-trust check in 3.0.0; its maintenance loop is not in 3.0.0. The steps below use the
+> 3.0.0 APIs that loop would build on.
 
 A loop that turns failed runs into evaluation cases reads the online store:
 
