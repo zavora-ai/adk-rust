@@ -1,5 +1,6 @@
 use adk_core::{
-    CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, Result, Tool, ToolContext,
+    CallbackContext, Content, ErrorCategory, EventActions, MemoryEntry, ReadonlyContext, Result,
+    Tool, ToolContext,
 };
 use adk_tool::{
     AnthropicBashTool20250124, AnthropicTextEditorTool20250728, DeepSeekWebSearchTool,
@@ -242,6 +243,56 @@ async fn test_anthropic_text_editor_tool_executes_local_edits() {
     assert_eq!(updated, json!("alpha\ngamma\n"));
 
     let _ = std::fs::remove_file(file_path);
+}
+
+/// Runs `insert` on a file holding `alpha`, `beta` and `gamma`; returns the file after it.
+async fn insert_into_three_lines(insert_line: u32, insert_text: &str) -> Result<String> {
+    let tool = AnthropicTextEditorTool20250728::new();
+    let ctx = Arc::new(MockToolContext::new()) as Arc<dyn ToolContext>;
+    let file_path = std::env::temp_dir().join(format!("adk-tool-{}.txt", uuid::Uuid::new_v4()));
+    std::fs::write(&file_path, "alpha\nbeta\ngamma\n").unwrap();
+    let inserted = tool
+        .execute(
+            ctx,
+            json!({
+                "command": "insert",
+                "path": file_path.to_string_lossy(),
+                "insert_line": insert_line,
+                "insert_text": insert_text
+            }),
+        )
+        .await;
+    let content = std::fs::read_to_string(&file_path).unwrap();
+    let _ = std::fs::remove_file(file_path);
+    inserted.map(|_| content)
+}
+
+#[tokio::test]
+async fn text_editor_insert_goes_after_the_named_line() {
+    // Anthropic's text editor inserts after `insert_line`; 0 is the start of the file.
+    assert_eq!(insert_into_three_lines(0, "start").await.unwrap(), "start\nalpha\nbeta\ngamma\n");
+    assert_eq!(insert_into_three_lines(2, "middle").await.unwrap(), "alpha\nbeta\nmiddle\ngamma\n");
+    assert_eq!(insert_into_three_lines(3, "end").await.unwrap(), "alpha\nbeta\ngamma\nend\n");
+}
+
+#[tokio::test]
+async fn text_editor_insert_keeps_the_texts_own_lines() {
+    // A model usually ends `insert_text` with a newline; that newline adds no blank line.
+    assert_eq!(
+        insert_into_three_lines(1, "one\ntwo\n").await.unwrap(),
+        "alpha\none\ntwo\nbeta\ngamma\n"
+    );
+}
+
+#[tokio::test]
+async fn text_editor_insert_past_the_last_line_is_refused() {
+    let error = insert_into_three_lines(4, "beyond").await.unwrap_err();
+    assert_eq!(error.category, ErrorCategory::InvalidInput);
+    // A rejection's message reaches the model, so it can correct the call.
+    let shown = adk_core::tool_error_response("str_replace_based_edit_tool", &error, false);
+    let shown = shown["error"].as_str().unwrap();
+    assert!(shown.contains("insert_line 4 is out of range"), "{shown}");
+    assert!(shown.contains("which has 3 lines; use 0 to insert at the start"), "{shown}");
 }
 
 #[test]

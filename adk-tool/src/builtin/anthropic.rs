@@ -1,4 +1,4 @@
-use adk_core::{AdkError, Result, Tool, ToolContext};
+use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result, Tool, ToolContext};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -7,8 +7,14 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
+/// A call the model can correct: as a rejection, its message reaches the model.
 fn invalid_input(message: impl Into<String>) -> AdkError {
-    AdkError::tool(message.into())
+    AdkError::new(
+        ErrorComponent::Tool,
+        ErrorCategory::InvalidInput,
+        "tool.anthropic.invalid_input",
+        message,
+    )
 }
 
 fn resolve_workspace_path(path: &str) -> std::result::Result<PathBuf, String> {
@@ -113,24 +119,27 @@ async fn str_replace(path: &str, old_str: &str, new_str: &str) -> Result<String>
     }
 }
 
+/// Inserts `insert_text` after line `insert_line` (1-based), or at the start of the file
+/// when `insert_line` is 0, as Anthropic's text editor tool defines `insert`.
 async fn insert_text(path: &str, insert_line: u32, insert_text: &str) -> Result<String> {
-    if insert_line == 0 {
-        return Err(invalid_input("insert_line must be >= 1"));
-    }
-
     let resolved = resolve_workspace_path(path).map_err(AdkError::tool)?;
     let content = tokio::fs::read_to_string(&resolved)
         .await
         .map_err(|error| AdkError::tool(format!("failed to read '{path}': {error}")))?;
     let mut lines = content.split_terminator('\n').map(str::to_string).collect::<Vec<_>>();
 
-    let insert_index = insert_line as usize - 1;
+    let insert_index = insert_line as usize;
     if insert_index > lines.len() {
         return Err(invalid_input(format!(
-            "insert_line {insert_line} is out of range for '{path}'"
+            "insert_line {insert_line} is out of range for '{path}', which has {} lines; \
+             use 0 to insert at the start of the file",
+            lines.len()
         )));
     }
 
+    // Every line is written back with its own newline, so the text's last newline is the
+    // one its last line already gets.
+    let insert_text = insert_text.strip_suffix('\n').unwrap_or(insert_text);
     lines.insert(insert_index, insert_text.to_string());
     let mut updated = lines.join("\n");
     updated.push('\n');
