@@ -950,7 +950,7 @@ pub trait AuditRecorder: Send + Sync {
     /// # Errors
     ///
     /// Returns the recorder's error when the records cannot be sealed.
-    async fn flush(&self) -> Result<()> {
+    async fn seal(&self) -> Result<()> {
         Ok(())
     }
 }

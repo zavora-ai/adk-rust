@@ -1413,7 +1413,7 @@ impl HarnessLauncher {
 
     /// Serves the harness on the bind address and `port` until Ctrl-C (spec 3.1 §8.2).
     /// Once the server and any kernel have stopped, the harness's audit recorder is
-    /// [flushed](adk_core::audit_log::AuditRecorder::flush), so a signed audit log verifies
+    /// [sealed](adk_core::audit_log::AuditRecorder::seal), so a signed audit log verifies
     /// after a clean stop.
     ///
     /// # Errors
@@ -1432,7 +1432,8 @@ impl HarnessLauncher {
             let app = this.build_app()?;
             // Bound now, so a taken address fails before anything starts; it accepts no
             // connection until it listens, which a resident kernel's start comes before.
-            let refused = |e: std::io::Error| AdkError::config(format!("failed to bind {addr}: {e}"));
+            let refused =
+                |e: std::io::Error| AdkError::config(format!("failed to bind {addr}: {e}"));
             let socket = match addr {
                 SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4(),
                 SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6(),
@@ -1471,9 +1472,9 @@ impl HarnessLauncher {
         }
         .await;
         if let Some(audit) = audit
-            && let Err(error) = audit.flush().await
+            && let Err(error) = audit.seal().await
         {
-            tracing::warn!(error = %error, "the audit log was not flushed; its last records stay unsigned");
+            tracing::warn!(error = %error, "the audit log was not sealed; its last records stay unsigned");
         }
         served
     }

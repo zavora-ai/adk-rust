@@ -106,8 +106,8 @@ impl AuditRecorder for PseudonymousRecorder {
         self.inner.record(draft).await
     }
 
-    async fn flush(&self) -> Result<()> {
-        self.inner.flush().await
+    async fn seal(&self) -> Result<()> {
+        self.inner.seal().await
     }
 }
 

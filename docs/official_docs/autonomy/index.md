@@ -51,6 +51,10 @@ from the notes in `notes/` and publishes it. Replace the notes, the instruction 
 | `adk-rust`, the CLI | `cargo install adk-cli --features audit-sql` (`audit-sql` adds `adk-rust audit export`) |
 | A model API key | Any provider `cargo adk` offers; this guide uses Anthropic |
 
+`adk-rust --version` prints the CLI's version, and `cargo adk templates` lists `autonomous`
+when the installed `cargo adk` has the template; reinstall both when either is older than
+3.0.0.
+
 ## 1. Scaffold the agent
 
 ```bash
@@ -140,7 +144,9 @@ The banner follows the kernel's log lines. The kernel's home is `.adk`: its cont
 `.adk/kernel.sock`, admits only your OS user — when the project's path is too long for a
 socket, the banner names one in your temporary directory instead — and every `adk-rust`
 control command reaches it with `--home .adk` from the project directory. `cargo run -- up`
-refuses to start when any kernel store would be kept in memory.
+refuses to start when any kernel store would be kept in memory. A launcher app's `up` and
+`serve` take `--port` (default 8080) and `--host`; `adk-rust up` takes `--bind HOST:PORT`
+instead ([Kernel commands](../kernel/cli.md#adk-rust-up)).
 
 The kernel prewarms its agent as it comes up: the MCP servers the agent's first run would start
 are started, and its model connection is opened, so the first message does not wait for them

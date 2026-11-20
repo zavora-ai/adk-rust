@@ -700,7 +700,7 @@ impl adk_core::audit_log::AuditRecorder for AuditLog {
     /// Signs a checkpoint over the records appended since the last one, without waiting
     /// for `checkpoint_every` or `checkpoint_interval`; does nothing when every record is
     /// already signed.
-    async fn flush(&self) -> Result<()> {
+    async fn seal(&self) -> Result<()> {
         let mut state = self.state.lock().await;
         if state.frontier.size == state.checkpointed_size {
             return Ok(());

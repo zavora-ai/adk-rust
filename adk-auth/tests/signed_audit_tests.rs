@@ -182,21 +182,21 @@ async fn a_log_without_checkpoints_is_unanchored() {
     assert_eq!(kinds(&report), vec![VerifyFailureKind::Unanchored]);
 }
 
-/// A process that stops before the first checkpoint is due flushes, so its records verify.
+/// A process that stops before the first checkpoint is due seals the log, so its records verify.
 #[tokio::test]
-async fn flushing_signs_the_unsigned_records_once() {
+async fn sealing_signs_the_unsigned_records_once() {
     use adk_core::audit_log::AuditRecorder;
 
     let store: Arc<dyn AuditLogStore> = Arc::new(InMemoryAuditLogStore::new());
     let key = signer("audit.example.com", 1);
     let log = open(store.clone(), key.clone(), &clock()).await;
-    log.flush().await.unwrap();
+    log.seal().await.unwrap();
     assert_eq!(store.latest_checkpoint(LOG_ID).await.unwrap(), None);
     for n in 0..2 {
         log.append(draft(n)).await.unwrap();
     }
-    log.flush().await.unwrap();
-    log.flush().await.unwrap();
+    log.seal().await.unwrap();
+    log.seal().await.unwrap();
 
     let export = AuditExport::from_store(store.as_ref(), LOG_ID).await.unwrap();
     assert_eq!(export.checkpoints.iter().map(|c| c.size).collect::<Vec<_>>(), vec![2]);

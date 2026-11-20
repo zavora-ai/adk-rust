@@ -283,6 +283,7 @@ cargo run -- up          # the agent kernel, its state in .adk/state.db
 cargo run -- goal "make the tests pass" --until "cargo test"
 ```
 
+`serve` and `up` take `--port` (default 8080) and `--host`, not `adk-rust up`'s `--bind`.
 The project depends on `adk-rust` with `autonomy` and `cli`. For an agent that runs unattended
 from the start — `auto` mode, the OS sandbox, a budget, a spend cap, a signed audit log and a
 cron trigger — scaffold `--template autonomous` instead ([Build an autonomous
