@@ -1360,10 +1360,13 @@ impl HarnessLauncher {
                     launcher.with_request_context_extractor(devices(Arc::new(extractor.clone())));
                 Some(extractor)
             }
+            // `adk-rust serve` and `up` refuse before this with their own flags; an app's
+            // `up` and `serve` take no token, so name the launcher's setting.
             None => {
                 return Err(AdkError::config(format!(
-                    "serving the harness on {} needs authentication: pass --auth-token or set \
-                     ADK_SERVE_TOKEN, or listen on 127.0.0.1",
+                    "serving the harness on {} needs authentication: set a token with \
+                     HarnessLauncher::with_auth_token or an extractor with \
+                     HarnessLauncher::with_request_context_extractor, or listen on 127.0.0.1",
                     self.bind_address
                 )));
             }
