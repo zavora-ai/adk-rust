@@ -59,7 +59,7 @@
 //! # harness, its kernel, durable and background runs, approvals and signed audit
 //! adk-rust = { version = "3.0.0", features = ["enterprise"] }
 //!
-//! # Full — enterprise + audio, code, sandbox, code-tools, the website, and the
+//! # Full — enterprise + audio, code, sandbox, code-tools, the AWP website, vision, and the
 //! # graph-functional, graph-node-cache, graph-delta, graph-time-travel, and graph-yaml capabilities
 //! adk-rust = { version = "3.0.0", features = ["full"] }
 //!
@@ -79,9 +79,10 @@
 //!
 //! | Module | Feature | What it holds |
 //! |--------|---------|---------------|
-//! | `harness` | `harness` (in `full`) | The governed harness agent: modes, standing approvals, a sandboxed shell, plans and durable goals |
-//! | `kernel` | `harness-kernel` (in `full`) | The agent kernel `adk-rust up` runs: processes, wake sources, the event bus and the control plane |
+//! | `harness` | `harness` (in `enterprise` and `full`) | The governed harness agent: modes, standing approvals, a sandboxed shell, plans and durable goals |
+//! | `kernel` | `harness-kernel` (in `enterprise` and `full`) | The agent kernel `adk-rust up` runs: processes, wake sources, the event bus and the control plane |
 //! | `surface` | `surface` (in no tier) | The surface engine and the web home, over a harness or a kernel |
+//! | `vision` | `vision` (in `full`); `vision-local` adds the on-device backends | Local-first perception: regions in source pixels, verified weights, the egress gate, cloud describers and `sam-3.1`; with `harness`, the vision pack |
 //!
 //! [Build an autonomous agent](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/autonomy/index.md)
 //! takes one agent from a scaffold to running on its own.

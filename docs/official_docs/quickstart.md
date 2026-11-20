@@ -18,6 +18,29 @@ cd quickstart_agent
 This creates a complete Rust project with an OpenAI agent, in-memory sessions,
 the ADK HTTP runtime and its streaming endpoints.
 
+### Before 3.0.0 is published
+
+Until 3.0.0 is on crates.io, `cargo install cargo-adk` installs 2.3.0, and a 3.0 scaffold's
+`adk-rust = "3.0.0"` does not resolve. Install `cargo-adk` from a clone of the repository and
+point the project at the clone:
+
+```bash
+git clone https://github.com/zavora-ai/adk-rust
+cargo install --path adk-rust/cargo-adk
+cargo adk new quickstart_agent --template api --provider openai
+cd quickstart_agent
+```
+
+Then add to the end of `quickstart_agent/Cargo.toml`:
+
+```toml
+[patch.crates-io]
+adk-rust = { path = "../adk-rust/adk-rust" }
+```
+
+A template that adds another `adk-*` crate, such as `adk-tool` for `tools`, needs a
+`[patch.crates-io]` line for that crate too. Remove the section once 3.0.0 is published.
+
 ### Other Templates
 
 ```bash
@@ -74,6 +97,15 @@ cargo run
 ```
 
 The server binds `127.0.0.1` unless you set `BIND_HOST`, and `PORT` changes the port.
+It logs nothing at the default level; `RUST_LOG=info cargo run` also prints the routes it
+serves:
+
+```text
+INFO quickstart_agent: ADK agent server running on http://127.0.0.1:8080
+INFO quickstart_agent:   GET  /api/health                                — health check
+INFO quickstart_agent:   POST /api/sessions                              — create a session (appName, userId)
+INFO quickstart_agent:   POST /api/run/quickstart_agent/<user_id>/<session_id>     — send a message, SSE response
+```
 
 ## Step 4: Talk to it
 
@@ -97,9 +129,10 @@ curl -N -X POST http://127.0.0.1:8080/api/run/quickstart_agent/user1/SESSION_ID 
 
 You now have one executable that runs the agent, manages sessions and streams
 events. For a page where you talk to your agents, decide what they ask to do and review what
-they did, run [the web home](surfaces/web-home.md): `adk-rust serve` serves it at
-`http://127.0.0.1:8080/ui/`, and a server you build mounts it with `adk-surface`'s `web`
-feature.
+they did, run [the web home](surfaces/web-home.md): install the CLI with
+`cargo install adk-cli` (before 3.0.0 is published, `cargo install --path adk-rust/adk-cli`
+from the clone), and `adk-rust serve` serves it at `http://127.0.0.1:8080/ui/`. A server you
+build mounts it with `adk-surface`'s `web` feature.
 
 ### Prefer a terminal-only agent?
 
@@ -132,7 +165,7 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-This handles provider detection for compiled providers, session creation, agent building, and execution in a single call. It checks `ANTHROPIC_API_KEY`, then `OPENAI_API_KEY`, then `GOOGLE_API_KEY`, using each provider's default model, and skips providers whose feature is not compiled; with the default features only `GOOGLE_API_KEY` applies.
+This handles provider detection for compiled providers, session creation, agent building, and execution in a single call. It checks `ANTHROPIC_API_KEY`, then `OPENAI_API_KEY`, then `GOOGLE_API_KEY`, using each provider's default model, and skips providers whose feature is not compiled; with the default features only `GOOGLE_API_KEY` applies. With the `gemini-vertex` feature, `GOOGLE_GENAI_USE_ENTERPRISE` or `GOOGLE_GENAI_USE_VERTEXAI` set to `1` or `true` selects Gemini on Vertex AI first, using `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`.
 
 ---
 

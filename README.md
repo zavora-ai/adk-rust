@@ -24,6 +24,7 @@ orchestration.
 > **Milestone:** ADK-Rust has crossed **500K total crates.io downloads** across
 > the workspace crates.
 >
+> [What's new in 3.0](docs/official_docs/whats-new-3.0.md) lists every area the release adds.
 > Coming from 2.x: see the [2.x to 3.0 migration guide](docs/official_docs/migration/2.x-to-3.0.md)
 > and the [CHANGELOG](CHANGELOG.md). Coming from 1.x: start with the
 > [1.0 to 2.0 guide](docs/official_docs/migration/1.0-to-2.0.md).
@@ -59,6 +60,10 @@ cp .env.example .env
 cargo run
 ```
 
+> **Note:** until 3.0.0 is on crates.io, `cargo install cargo-adk` installs 2.3.0. To scaffold a
+> 3.0 project, install from a clone (`cargo install --path cargo-adk`) and point the generated
+> project at the clone — see [Before 3.0.0 is published](docs/official_docs/quickstart.md#before-300-is-published).
+
 The server listens on `127.0.0.1:8080` (set `BIND_HOST=0.0.0.0` to listen on every interface).
 Confirm it with:
 
@@ -67,7 +72,8 @@ curl -fsS http://127.0.0.1:8080/api/health
 ```
 
 For a page where you talk to your agents, decide what they ask to do and review what they
-did, `adk-rust serve` serves [the web home](docs/official_docs/surfaces/web-home.md) at
+did, install the CLI with `cargo install adk-cli`; `adk-rust serve` serves
+[the web home](docs/official_docs/surfaces/web-home.md) at
 [http://127.0.0.1:8080/ui/](http://127.0.0.1:8080/ui/): Threads, Today and Memory & rules, in
 light and dark.
 
@@ -89,7 +95,7 @@ adk-rust = "3.0.0"                                        # Gemini, agents, runn
 | `minimal` (default) | Gemini provider, agents, runner, sessions | Fast starter agents |
 | `standard` | minimal + OpenAI, Anthropic, tools, memory, telemetry, server, auth, graph, eval, guardrail, plugins, artifacts, skills, computer use | Serving an agent over HTTP |
 | `enterprise` | standard + realtime, browser, RAG, payments, AWP, and `autonomy`: the harness and its kernel, background runs with cron and webhook wake-ups, approvals, SQLite stores, and the signed audit log | Voice, retrieval, payments, and unattended agents |
-| `full` | enterprise + audio, code execution, sandbox, code tools, the AWP website, and the functional, node-cache, delta, and time-travel graph capabilities | Everything that needs no external infrastructure |
+| `full` | enterprise + audio, code execution, sandbox, code tools, the AWP website, vision, and the functional, node-cache, delta, time-travel and YAML graph capabilities | Everything that needs no external infrastructure |
 
 A tier is a starting point, not a ceiling. Add any single capability on top of one
 without moving to the next tier, so `features = ["minimal", "audio"]` gives you the
@@ -158,7 +164,7 @@ environment, among those you compiled in.
 | Azure AI Inference | (endpoint-specific) | `azure-ai` |
 | mistral.rs | **Gemma 4**, Phi-3, Llama, Qwen 3.5, Voxtral, FLUX | `adk-mistralrs` |
 
-Defaults are curated in `adk_model::catalog` and were checked on 23 August 2026.
+Defaults are curated in `adk_model::catalog` and were checked on 17 November 2026.
 Deployment-scoped providers such as Bedrock and Azure AI still require the model
 or deployment identifier available in your own account and region.
 
@@ -176,7 +182,7 @@ lives in [adk-playground](https://github.com/zavora-ai/adk-playground).
 |------------|-------|---------|
 | The web home — Threads, Today and Memory & rules: decisions with full detail, what happened while you were away, what your agents may do, and Stop all; a developer panel with topology, protocols, state and telemetry | [web home](docs/official_docs/surfaces/web-home.md) | `adk-rust serve`, `adk-rust up` |
 | Tools — `#[tool]` derives the JSON schema from your argument type | [tools](docs/official_docs/tools/function-tools.md) | `coding_agent` |
-| MCP clients and servers on `rmcp 3.1` — tools, resources, prompts, elicitation, tasks | [mcp](docs/official_docs/mcp/index.md) | `mcp_protocol_revisions` |
+| MCP clients and servers on `rmcp` 3 — tools, resources, prompts, elicitation, tasks | [mcp](docs/official_docs/mcp/index.md) | `mcp_protocol_revisions` |
 | Workflow agents — sequential, parallel, loop | [agents](docs/official_docs/agents/workflow-agents.md) | `multi_perspective_analysis` |
 | Portable teams — validated handoff, delegation, policies, receipts and shared state | [multi-agent](docs/official_docs/agents/multi-agent.md) | `team_architectures` |
 | Graph workflows — checkpoints, durable resume, human-in-the-loop, subgraphs | [graph-agents](docs/official_docs/agents/graph-agents.md) | `graph_subgraph_claims` |
@@ -213,6 +219,7 @@ cargo adk new my-agent --template agent-engine # Gemini Enterprise Agent Engine 
 cargo adk new my-agent --template harness    # governed harness: REPL with approvals, AGENTS.md, skills
 cargo adk new my-agent --template autonomous # unattended agent: goals and a schedule on the kernel, durable stores
 cargo adk new my-site --template website     # AWP 2.0 website: content, theme, charter, data and its edge
+cargo adk new my-desk --template vision      # Document desk: perception on the device, a gated cloud describer
 
 # Compose addons with any template
 cargo adk new my-agent --template tools --addon telemetry --addon sessions

@@ -38,7 +38,7 @@ documentation and automation.
 
 ## Built-in templates
 
-The built-in registry contains 13 composable templates.
+The built-in registry contains 17 composable templates.
 
 | Template | What it creates | Choose it when |
 |---|---|---|
@@ -55,6 +55,14 @@ The built-in registry contains 13 composable templates.
 | `realtime` | A Gemini Live session: typed text in, a spoken answer and its transcript out (`--provider gemini` only) | The product needs a live voice conversation |
 | `custom` | A manual implementation of the `Agent` trait | The execution contract cannot be expressed by a built-in agent |
 | `agent-engine` | A Gemini Enterprise Agent Engine BYOC container with `Dockerfile` and `deploy/terraform/` | The agent deploys to Agent Runtime as a prebuilt container |
+| `harness` | A governed harness agent with modes, approvals, a shell, `AGENTS.md` and a skill, at the console or served (see [The Harness](../harness/index.md)) | A person works with the agent in a project, approving what it does |
+| `autonomous` | An agent that works toward a rubric-graded goal and wakes on a schedule on the agent kernel, with durable SQLite stores, an approval-gated side effect, a run budget, a spend cap, a signed audit log and the OS sandbox (see [Build an autonomous agent](../autonomy/index.md)) | The agent runs unattended |
+| `website` | An AWP 2.0 site project — content, theme, a draft charter, data — and an edge binary that serves the published site and its capabilities (see [Spin up an AWP website](../deployment/website-quickstart.md)) | The product is a website with an agent edge |
+| `vision` | A Document desk: a harness with the vision pack, PP-OCRv6 and RF-DETR on the device, and a cloud describer behind the egress gate (`--provider anthropic` by default; see [Vision: Getting Started](../vision/getting-started.md)) | The agent reads scanned documents and images |
+
+`harness`, `autonomous` and `vision` take no `server` or `docker` add-on, since their launcher
+serves them itself; `website` takes no add-on, since its edge binary replaces the generated
+`main.rs`.
 
 `cargo adk templates` also lists `managed-agents`, an Anthropic Managed Agents session with SSE
 streaming. A separate generator creates it, and `--addon` flags do not apply to it.
