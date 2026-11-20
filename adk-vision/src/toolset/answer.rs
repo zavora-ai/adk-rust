@@ -90,9 +90,8 @@ fn models_of(regions: &[Region]) -> BTreeMap<String, ModelFacts> {
         let Some(id) = &region.origin.manifest else { continue };
         let known = builtin_manifests().and_then(|set| set.get(id));
         let revision = known.and_then(|manifest| match &manifest.source {
-            ModelSource::HuggingFace { revision, .. } | ModelSource::ModelScope { revision, .. } => {
-                Some(revision.clone())
-            }
+            ModelSource::HuggingFace { revision, .. }
+            | ModelSource::ModelScope { revision, .. } => Some(revision.clone()),
             _ => None,
         });
         models.entry(id.clone()).or_insert(ModelFacts {

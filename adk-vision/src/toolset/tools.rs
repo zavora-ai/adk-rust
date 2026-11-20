@@ -295,7 +295,8 @@ impl Tool for VisionTool {
             let known = self.inner.known(&scope, &source.digest());
             if let Some(known) = known {
                 let tool = self.kind.name();
-                let record = super::answer::record(ctx.as_ref(), tool, &known, image, &args, &answer);
+                let record =
+                    super::answer::record(ctx.as_ref(), tool, &known, image, &args, &answer);
                 super::answer::save(artifacts.as_ref(), ctx.function_call_id(), &record).await;
             }
         }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import type { DecisionCard } from "../generated/api";
 import { ApiError, problemText } from "../client";
 import { usePoll } from "../poll";
@@ -10,12 +10,14 @@ import { Agents, ThisPhone, TodayLines } from "./Glance";
 import { phoneLabels } from "./labels";
 import { Pair } from "./Pair";
 import { ImageLoaderContext, sameOriginLoader } from "../evidence/images";
-import { PhoneViewer } from "../viewer/PhoneViewer";
 import { viewerOf } from "../viewer/route";
 import { badge } from "./push";
 import type { PhoneScreen } from "./route";
 import { phonePathOf, phoneScreenOf } from "./route";
 import "./phone.css";
+
+// The read-only viewer loads only when it opens (spec 3.7 §8.2, board choice V15).
+const PhoneViewer = lazy(() => import("../viewer/PhoneViewer").then((module) => ({ default: module.PhoneViewer })));
 
 /** How far back Decisions shows answered decisions, here or elsewhere. */
 const DECIDED_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -151,12 +153,14 @@ export function PhoneApp({ client, initial }: { client: PhoneClient; initial?: P
     <div className="phone">
       {screen.screen === "viewer" && client.viewer ? (
         <ImageLoaderContext.Provider value={client.image ? (href: string) => client.image!(href) : sameOriginLoader}>
-          <PhoneViewer
-            client={{ viewer: client.viewer.bind(client) }}
-            place={screen.place}
-            onBack={() => (window.history.length > 1 ? window.history.back() : go({ screen: "threads" }))}
-            onOpenThread={() => go({ screen: "threads" })}
-          />
+          <Suspense fallback={<main className="phone-main" aria-busy="true" />}>
+            <PhoneViewer
+              client={{ viewer: client.viewer.bind(client) }}
+              place={screen.place}
+              onBack={() => (window.history.length > 1 ? window.history.back() : go({ screen: "threads" }))}
+              onOpenThread={() => go({ screen: "threads" })}
+            />
+          </Suspense>
         </ImageLoaderContext.Provider>
       ) : screen.screen === "decide" ? (
         <Decide client={client} id={screen.id} onBack={() => go({ screen: "decisions" })} onSettled={onSettled} />

@@ -78,11 +78,11 @@ mod origin;
 mod project;
 pub mod rules;
 mod source;
-pub mod viewer;
 #[cfg(feature = "tui")]
 pub mod tui;
 #[cfg(feature = "verb-ui")]
 pub mod verbs;
+pub mod viewer;
 #[cfg(any(feature = "voice", feature = "web"))]
 pub mod voice;
 #[cfg(feature = "web")]

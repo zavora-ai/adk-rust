@@ -187,6 +187,7 @@ impl Detector for PartDetector {
     ) -> adk_vision::Result<Vec<RawRegion>> {
         let asked = match query {
             DetectQuery::Classes(names) | DetectQuery::Concepts(names) => names.clone(),
+            _ => Vec::new(),
         };
         Ok(FOUND
             .iter()
@@ -203,7 +204,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     adk_core::ensure_crypto_provider();
     let mut args = std::env::args().skip(1);
     let port: u16 = args.next().map_or(Ok(8793), |port| port.parse())?;
-    let evals = args.next().map_or_else(|| std::env::temp_dir().join("vision-viewer-evals"), Into::into);
+    let evals =
+        args.next().map_or_else(|| std::env::temp_dir().join("vision-viewer-evals"), Into::into);
     std::fs::create_dir_all(&evals)?;
     let workspace = std::env::temp_dir().join(format!("vision-viewer-{}", std::process::id()));
     std::fs::create_dir_all(&workspace)?;

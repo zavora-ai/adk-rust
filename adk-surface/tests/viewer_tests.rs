@@ -34,7 +34,8 @@ const FRAME_OK: &str = "sha256:45e055ba4f630e4bfa506f38fb8506265e6774f6b7767bbfd
 const VFRAME: &str = "sha256:4484960c0d621670c96be084aa892ae1a277890c601b454f880377d8b3fd55ed";
 
 fn record(name: &str) -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/viewer/{name}.answer.json"));
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("tests/fixtures/viewer/{name}.answer.json"));
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
 }
 
@@ -99,7 +100,12 @@ async fn put_record(fixture: &Fixture, session: &str, record: &Value) {
 }
 
 async fn put_image(fixture: &Fixture, session: &str, name: &str, bytes: &[u8]) {
-    let part = Part::InlineData { mime_type: "image/png".into(), data: bytes.to_vec(), uri: None, annotations: None };
+    let part = Part::InlineData {
+        mime_type: "image/png".into(),
+        data: bytes.to_vec(),
+        uri: None,
+        annotations: None,
+    };
     save(&fixture.artifacts, session, name, part).await;
 }
 
@@ -131,7 +137,10 @@ async fn board_states() -> Vec<(&'static str, ViewerView)> {
     put_record(&fixture, "s-line", &record("empty")).await;
     put_record(&fixture, "s-research", &record("video")).await;
     let engine = &fixture.engine;
-    let view = |session: &'static str, image: &'static str, answer: Option<&'static str>, compare: Option<&'static str>| async move {
+    let view = |session: &'static str,
+                image: &'static str,
+                answer: Option<&'static str>,
+                compare: Option<&'static str>| async move {
         engine.viewer(&owner(), session, image, answer, compare).await.unwrap()
     };
     vec![
@@ -153,7 +162,8 @@ async fn the_boards_states_are_the_engines_own_projection() {
         let mut value = serde_json::to_value(&view).unwrap();
         // The fixture's eval files are the boards' (board choice V13), not this machine's.
         value["examples"]["canSave"] = json!(true);
-        value["examples"]["files"] = json!(["evals/vision/invoices.test.json", "evals/vision/line-2.test.json"]);
+        value["examples"]["files"] =
+            json!(["evals/vision/invoices.test.json", "evals/vision/line-2.test.json"]);
         value["examples"]["file"] = json!(if state == "document" || state == "compare" {
             "evals/vision/invoices.test.json"
         } else {
@@ -166,7 +176,12 @@ async fn the_boards_states_are_the_engines_own_projection() {
             continue;
         }
         let drawn: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(drawn, value, "{state}: run with ADK_SURFACE_WRITE_VIEWER=1 to rewrite {}", path.display());
+        assert_eq!(
+            drawn,
+            value,
+            "{state}: run with ADK_SURFACE_WRITE_VIEWER=1 to rewrite {}",
+            path.display()
+        );
     }
 }
 
@@ -179,10 +194,14 @@ async fn a_document_page_reads_as_the_board() {
     assert_eq!(view.image.digest_short, "sha256:556b49…a22654");
     assert_eq!(view.answers.len(), 2, "two answers for this page");
     let answer = view.answer.as_ref().unwrap();
-    assert_eq!((answer.name.as_str(), answer.place.as_str()), ("PP-OCRv6 small", "on this computer"));
+    assert_eq!(
+        (answer.name.as_str(), answer.place.as_str()),
+        ("PP-OCRv6 small", "on this computer")
+    );
     let orders: Vec<u32> = answer.regions.iter().filter_map(|r| r.order).collect();
     assert_eq!(orders, (1..=11).collect::<Vec<_>>(), "listed in reading order");
-    let chips: Vec<(String, u32)> = answer.labels.iter().map(|l| (l.label.clone(), l.count)).collect();
+    let chips: Vec<(String, u32)> =
+        answer.labels.iter().map(|l| (l.label.clone(), l.count)).collect();
     assert_eq!(
         chips,
         [("title", 1), ("text", 5), ("table", 1), ("seal", 1), ("handwriting", 2), ("checkbox", 1)]
@@ -215,7 +234,10 @@ async fn a_document_page_reads_as_the_board() {
         ]
     );
     let call: String = answer.run.call.iter().map(|p| p.text.as_str()).collect();
-    assert_eq!((answer.run.text.as_str(), call.as_str()), ("Document desk · Northwind batch · 10:31", "vision_read · c-31"));
+    assert_eq!(
+        (answer.run.text.as_str(), call.as_str()),
+        ("Document desk · Northwind batch · 10:31", "vision_read · c-31")
+    );
 }
 
 #[tokio::test]
@@ -245,7 +267,9 @@ async fn a_photo_carries_masks_and_its_measurement() {
     let facts: Vec<String> = tear
         .facts
         .iter()
-        .map(|f| format!("{}: {}", f.label, f.parts.iter().map(|p| p.text.as_str()).collect::<String>()))
+        .map(|f| {
+            format!("{}: {}", f.label, f.parts.iter().map(|p| p.text.as_str()).collect::<String>())
+        })
         .collect();
     assert_eq!(facts[1], "Found by: inspector-rfdetr-s-v3 · your fine-tune, your manifest");
     assert_eq!(facts[2], "Outlined by: sam2.1-tiny@8c1e2f0 · from the box");
@@ -253,11 +277,19 @@ async fn a_photo_carries_masks_and_its_measurement() {
     assert_eq!(facts[3], "Answered in: Model-input pixels, 1024 × 1024, letterboxed");
     assert_eq!(
         tear.chain,
-        ["Frame 1920 × 1080", "Resized to 1024 × 576", "Padded 224 top and bottom · 1024 × 1024", "Mask mapped back to source pixels"]
+        [
+            "Frame 1920 × 1080",
+            "Resized to 1024 × 576",
+            "Padded 224 top and bottom · 1024 × 1024",
+            "Mask mapped back to source pixels"
+        ]
     );
     let seal = &answer.regions[1];
     let area = seal.mask.as_ref().unwrap().area as f64;
-    assert!((area - std::f64::consts::PI * 84.0 * 84.0).abs() < 400.0, "the seal is a disc of radius 84: {area}");
+    assert!(
+        (area - std::f64::consts::PI * 84.0 * 84.0).abs() < 400.0,
+        "the seal is a disc of radius 84: {area}"
+    );
     let measurements = answer.measurements.as_ref().unwrap();
     assert_eq!(
         measurements.calibration,
@@ -279,8 +311,12 @@ async fn two_backends_compare_region_by_region() {
         compare.differences.iter().map(|d| (d.number, d.a.clone(), d.b.clone())).collect();
     assert_eq!(
         differences,
-        [(5, "PO-7781S · 0.58", "PO-77815 · 0.83"), (3, "06.11.2028 · 0.71", "06.11.2026 · 0.95"), (12, "—", "Page 1 of 1 · 0.86")]
-            .map(|(n, a, b)| (n, a.to_string(), b.to_string()))
+        [
+            (5, "PO-7781S · 0.58", "PO-77815 · 0.83"),
+            (3, "06.11.2028 · 0.71", "06.11.2026 · 0.95"),
+            (12, "—", "Page 1 of 1 · 0.86")
+        ]
+        .map(|(n, a, b)| (n, a.to_string(), b.to_string()))
     );
     assert!(compare.overlap_text.contains("mean IoU 0.9"), "{}", compare.overlap_text);
 }
@@ -301,7 +337,9 @@ async fn an_empty_answer_is_an_answer_with_its_call_and_cost() {
     let facts: Vec<String> = empty
         .facts
         .iter()
-        .map(|f| format!("{}: {}", f.label, f.parts.iter().map(|p| p.text.as_str()).collect::<String>()))
+        .map(|f| {
+            format!("{}: {}", f.label, f.parts.iter().map(|p| p.text.as_str()).collect::<String>())
+        })
         .collect();
     assert_eq!(
         facts,
@@ -321,12 +359,22 @@ async fn a_video_frame_carries_its_tracks() {
     let answer = view.answer.as_ref().unwrap();
     assert_eq!(answer.name, "RF-DETR M + ByteTrack");
     let tags: Vec<&str> = answer.regions.iter().map(|r| r.tag.as_str()).collect();
-    assert_eq!(tags, ["forklift · T4 · 0.94", "pallet · T9 · 0.91", "pallet · T11 · 0.83", "person · blurred · T2 · 0.90"]);
+    assert_eq!(
+        tags,
+        [
+            "forklift · T4 · 0.94",
+            "pallet · T9 · 0.91",
+            "pallet · T11 · 0.83",
+            "person · blurred · T2 · 0.90"
+        ]
+    );
     let forklift = &answer.regions[0];
     let facts: Vec<String> = forklift
         .facts
         .iter()
-        .map(|f| format!("{}: {}", f.label, f.parts.iter().map(|p| p.text.as_str()).collect::<String>()))
+        .map(|f| {
+            format!("{}: {}", f.label, f.parts.iter().map(|p| p.text.as_str()).collect::<String>())
+        })
         .collect();
     assert_eq!(
         facts,
@@ -341,8 +389,13 @@ async fn a_video_frame_carries_its_tracks() {
     let video = answer.video.as_ref().unwrap();
     assert_eq!((video.at_text.as_str(), video.length_text.as_str()), ("10:34.1", "20:00"));
     assert_eq!(video.frame_text, "frame 19,023 · sampled 5 a second");
-    let chips: Vec<(String, String)> = video.tracks.iter().map(|t| (t.name.clone(), t.frames_text.clone())).collect();
-    assert_eq!(chips, [("T4", "139"), ("T9", "1.2k"), ("T11", "980"), ("T2", "230")].map(|(a, b)| (a.to_string(), b.to_string())));
+    let chips: Vec<(String, String)> =
+        video.tracks.iter().map(|t| (t.name.clone(), t.frames_text.clone())).collect();
+    assert_eq!(
+        chips,
+        [("T4", "139"), ("T9", "1.2k"), ("T11", "980"), ("T2", "230")]
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+    );
     assert_eq!(view.min_score, 0.6);
 }
 
@@ -434,7 +487,10 @@ async fn a_corrected_region_is_an_eval_case_that_adk_eval_loads() {
     };
     let saved = fixture.engine.save_example(&owner(), "s-new", &example).await.unwrap();
     assert_eq!(saved.image, format!("images/{}.png", &digest[7..]));
-    assert_eq!(saved.text, "Saved to evals/vision/invoices.test.json as inv-po-number. The run's answer stays as it was.");
+    assert_eq!(
+        saved.text,
+        "Saved to evals/vision/invoices.test.json as inv-po-number. The run's answer stays as it was."
+    );
 
     example.case_name = "inv-page".into();
     example.scope = ExampleScope::Page;
@@ -488,7 +544,8 @@ async fn an_example_with_nothing_in_it_expects_no_regions() {
         region: None,
     };
     fixture.engine.save_example(&owner(), "s-new", &example).await.unwrap();
-    let loaded = adk_eval::TestFile::load(root.path().join("evals/vision/line-2.test.json")).unwrap();
+    let loaded =
+        adk_eval::TestFile::load(root.path().join("evals/vision/line-2.test.json")).unwrap();
     let turn = &loaded.eval_cases[0].conversation[0];
     assert_eq!(turn.expected_vision.as_ref().unwrap().count, Some(0));
 }
@@ -500,7 +557,11 @@ fn api(engine: SurfaceEngine, device: bool) -> axum::Router {
         metadata.insert(adk_kernel::pairing::DEVICE_KIND_METADATA.to_string(), "phone".to_string());
     }
     axum::Router::new().nest("/api", adk_surface::web::router(engine)).layer(axum::Extension(Some(
-        RequestContext { user_id: OWNER.into(), scopes: vec!["owner".into()], metadata: metadata.into_iter().collect() },
+        RequestContext {
+            user_id: OWNER.into(),
+            scopes: vec!["owner".into()],
+            metadata: metadata.into_iter().collect(),
+        },
     )))
 }
 
@@ -520,7 +581,8 @@ async fn the_web_api_serves_the_viewer_its_image_and_the_regionset() {
     };
     let response = get(format!("/api/surface/vision/s-new/images/{encoded}/view")).await;
     assert_eq!(response.status(), StatusCode::OK);
-    let view: Value = serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let view: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(view["image"]["href"], json!(format!("/api/surface/vision/s-new/images/{encoded}")));
 
     let response = get(format!("/api/surface/vision/s-new/images/{encoded}")).await;
@@ -531,7 +593,10 @@ async fn the_web_api_serves_the_viewer_its_image_and_the_regionset() {
 
     let response = get("/api/surface/vision/s-new/answers/c-31/regions".into()).await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()["content-disposition"], "attachment; filename=\"c-31.regions.json\"");
+    assert_eq!(
+        response.headers()["content-disposition"],
+        "attachment; filename=\"c-31.regions.json\""
+    );
 
     let body = json!({
         "answer": "c-31",
@@ -559,7 +624,11 @@ async fn the_web_api_serves_the_viewer_its_image_and_the_regionset() {
     let refused = post(phone.clone()).await;
     assert_ne!(refused.status(), StatusCode::OK);
     let read = phone
-        .oneshot(Request::get(format!("/api/surface/vision/s-new/images/{encoded}/view")).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::get(format!("/api/surface/vision/s-new/images/{encoded}/view"))
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(read.status(), StatusCode::OK);

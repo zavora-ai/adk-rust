@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ImageLoaderContext, sameOriginLoader } from "./evidence/images";
 import type { ImageLoader } from "./evidence/images";
 import type { Command, DecisionCard, Origin } from "./generated/api";
@@ -29,11 +29,13 @@ import type { VerbsClient } from "./verbs/client";
 import type { WebsiteClient } from "./website/client";
 import { websiteLabels } from "./website/labels";
 import { Website } from "./website/Website";
-import { Viewer } from "./viewer/Viewer";
 import type { Correction } from "./viewer/Viewer";
 import type { ViewerPlace } from "./viewer/route";
 import { viewerOf, viewerPath } from "./viewer/route";
 import type { WorkflowClient } from "./workflow/client";
+
+// The annotated viewer loads only when it opens: the home's main chunk stays within its budget.
+const Viewer = lazy(() => import("./viewer/Viewer").then((module) => ({ default: module.Viewer })));
 
 /** Where this tab keeps the session each agent's thread follows. */
 const FOLLOWED_KEY = "adk.home.followed";
@@ -345,13 +347,15 @@ export function App({
       )}
       <div id="content" className="content" key={signIns} ref={content}>
         {viewing && viewerClient && (
-          <Viewer
-            client={viewerClient}
-            place={viewing}
-            onNavigate={openViewer}
-            onOpenThread={closeViewer}
-            initialCorrection={viewing === initialViewer?.place ? initialViewer.correction : undefined}
-          />
+          <Suspense fallback={<div className="vw-loading" aria-busy="true" />}>
+            <Viewer
+              client={viewerClient}
+              place={viewing}
+              onNavigate={openViewer}
+              onOpenThread={closeViewer}
+              initialCorrection={viewing === initialViewer?.place ? initialViewer.correction : undefined}
+            />
+          </Suspense>
         )}
         {!(viewing && viewerClient) && section === "threads" && (
           <Threads

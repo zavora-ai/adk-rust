@@ -34,7 +34,8 @@ use crate::evidence::short_digest;
 pub const VISION_ANSWER_PREFIX: &str = "vision-answer-";
 
 /// The vision tools whose answers the viewer shows.
-pub const VIEWER_TOOLS: [&str; 4] = ["vision_detect", "vision_segment", "vision_read", "vision_describe"];
+pub const VIEWER_TOOLS: [&str; 4] =
+    ["vision_detect", "vision_segment", "vision_read", "vision_describe"];
 
 /// Whether `tool`'s answer is about an image the viewer can show.
 pub(crate) fn answers_about_image(tool: &str) -> bool {
@@ -401,7 +402,8 @@ impl Record {
     ///
     /// A sentence naming what is wrong when `value` is not an answer record.
     pub(crate) fn parse(value: Value) -> std::result::Result<Self, String> {
-        serde_json::from_value(value).map_err(|error| format!("not a vision answer record: {error}"))
+        serde_json::from_value(value)
+            .map_err(|error| format!("not a vision answer record: {error}"))
     }
 }
 
@@ -531,8 +533,12 @@ pub(crate) fn shape_bounds(shape: &WireShape, width: u32, height: u32) -> Option
     if !bounds.iter().all(|v| v.is_finite()) {
         return None;
     }
-    let clamped =
-        [bounds[0].clamp(0.0, w), bounds[1].clamp(0.0, h), bounds[2].clamp(0.0, w), bounds[3].clamp(0.0, h)];
+    let clamped = [
+        bounds[0].clamp(0.0, w),
+        bounds[1].clamp(0.0, h),
+        bounds[2].clamp(0.0, w),
+        bounds[3].clamp(0.0, h),
+    ];
     (clamped[2] > clamped[0] && clamped[3] > clamped[1]).then_some(clamped)
 }
 
@@ -1221,14 +1227,16 @@ pub(crate) fn chain_words(record: &Record, origin: &WireOrigin, shape: ShapeKind
             WireTransform::Other => "A step this viewer does not know".to_string(),
         });
     }
-    steps.push(match (shape, record.page.is_some()) {
-        (_, true) => "Answer mapped back to source pixels",
-        (ShapeKind::Mask, _) => "Mask mapped back to source pixels",
-        (ShapeKind::Polygon, _) => "Outline mapped back to source pixels",
-        (ShapeKind::Point | ShapeKind::Keypoints, _) => "Points mapped back to source pixels",
-        (ShapeKind::Box, _) => "Box mapped back to source pixels",
-    }
-    .to_string());
+    steps.push(
+        match (shape, record.page.is_some()) {
+            (_, true) => "Answer mapped back to source pixels",
+            (ShapeKind::Mask, _) => "Mask mapped back to source pixels",
+            (ShapeKind::Polygon, _) => "Outline mapped back to source pixels",
+            (ShapeKind::Point | ShapeKind::Keypoints, _) => "Points mapped back to source pixels",
+            (ShapeKind::Box, _) => "Box mapped back to source pixels",
+        }
+        .to_string(),
+    );
     steps
 }
 
@@ -1292,10 +1300,9 @@ fn capitalised(text: &str) -> String {
 fn call_words(record: &Record) -> Vec<FactPart> {
     let mono = |text: &str| FactPart { text: text.to_string(), style: FactStyle::Mono };
     let plain = |text: String| FactPart { text, style: FactStyle::Plain };
-    let measured = record
-        .measurements
-        .iter()
-        .find_map(|m| Some((m.tool.clone().unwrap_or_else(|| "vision_measure".into()), m.call.clone()?)));
+    let measured = record.measurements.iter().find_map(|m| {
+        Some((m.tool.clone().unwrap_or_else(|| "vision_measure".into()), m.call.clone()?))
+    });
     match measured {
         Some((tool, call)) => vec![
             mono(&record.tool),
@@ -1364,14 +1371,20 @@ fn answer_name(record: &Record) -> String {
     }
     if names.is_empty() {
         names.extend(
-            record.region_set.regions.first().map(|r| display_name(&r.origin.backend, &record.models)),
+            record
+                .region_set
+                .regions
+                .first()
+                .map(|r| display_name(&r.origin.backend, &record.models)),
         );
     }
     names.join(" + ")
 }
 
 fn answer_place(record: &Record) -> String {
-    answering_calls(record).next().map_or_else(|| "on this computer".to_string(), |c| place_of(&c.locality))
+    answering_calls(record)
+        .next()
+        .map_or_else(|| "on this computer".to_string(), |c| place_of(&c.locality))
 }
 
 /// The manifest a backend ran: from a region it answered, the backend's own id otherwise.
@@ -1418,7 +1431,9 @@ fn model_fact(label: &str, record: &Record, id: &str, extra: Option<String>) -> 
 /// The run's line: the feature's, or "Document desk · 10:31".
 fn run_view(record: &Record, input: &ViewerInput<'_>) -> RunView {
     let text = record.display.run.clone().unwrap_or_else(|| match record.at {
-        Some(at) => format!("{} · {}", input.agent_name, at.with_timezone(&input.offset).format("%H:%M")),
+        Some(at) => {
+            format!("{} · {}", input.agent_name, at.with_timezone(&input.offset).format("%H:%M"))
+        }
         None => input.agent_name.clone(),
     });
     RunView { text, agent: record.agent.clone(), call: call_words(record) }
@@ -1490,27 +1505,36 @@ pub(crate) fn answer_view(record: &Record, input: &ViewerInput<'_>) -> AnswerVie
         let score_text = region.score.map(|s| format!("{s:.2}")).unwrap_or_default();
         let track_name = region.track.map(|id| format!("T{id}"));
         let tag = match (&track_name, kind) {
-            (Some(name), _) => {
-                [Some(label.clone()), Some(name.clone()), (!score_text.is_empty()).then(|| score_text.clone())]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>()
-                    .join(" · ")
-            }
+            (Some(name), _) => [
+                Some(label.clone()),
+                Some(name.clone()),
+                (!score_text.is_empty()).then(|| score_text.clone()),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · "),
             (None, PictureKind::Document) => {
                 let number = position.get(&index).copied().unwrap_or(index as u32 + 1);
                 format!("{number} · {base_label} · {score_text}")
             }
-            _ => [Some(label.clone()), (!score_text.is_empty()).then(|| score_text.clone()), measured.clone()]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>()
-                .join(" · "),
+            _ => [
+                Some(label.clone()),
+                (!score_text.is_empty()).then(|| score_text.clone()),
+                measured.clone(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · "),
         };
         let heading = match (kind, &track_name) {
             (_, Some(name)) => format!("{name} · {base_label}"),
             (PictureKind::Document, None) => {
-                format!("{} · {base_label}", position.get(&index).copied().unwrap_or(index as u32 + 1))
+                format!(
+                    "{} · {base_label}",
+                    position.get(&index).copied().unwrap_or(index as u32 + 1)
+                )
             }
             _ => capitalised(&label),
         };
@@ -1522,7 +1546,10 @@ pub(crate) fn answer_view(record: &Record, input: &ViewerInput<'_>) -> AnswerVie
             EscalationView {
                 read_as: from.text.clone(),
                 read_as_score: from.score,
-                by: call.map_or_else(|| region.origin.backend.clone(), |c| escalation_name(&c.backend, &c.locality)),
+                by: call.map_or_else(
+                    || region.origin.backend.clone(),
+                    |c| escalation_name(&c.backend, &c.locality),
+                ),
                 crop_digest: call.and_then(|c| c.egress.first()).map(|d| short_digest(d)),
             }
         });
@@ -1553,25 +1580,44 @@ pub(crate) fn answer_view(record: &Record, input: &ViewerInput<'_>) -> AnswerVie
         match (kind, &region.shape) {
             (PictureKind::Document, _) => {
                 facts.push(Fact::new("Box").mono(box_words(bounds)).muted(" source pixels"));
-                facts.push(model_fact("Model", record, &manifest_of_backend(record, region, &primary), None));
+                facts.push(model_fact(
+                    "Model",
+                    record,
+                    &manifest_of_backend(record, region, &primary),
+                    None,
+                ));
             }
             (PictureKind::VideoFrame, _) => {
                 if let Some(track) = track {
                     let mut seen = Fact::new("Seen");
                     // The stretch of the video this frame is in, else the first.
                     let at = record.video.as_ref().map_or(0.0, |video| video.at_s);
-                    let span = track.spans.iter().find(|span| span[0] <= at && at <= span[1]).or(track.spans.first());
+                    let span = track
+                        .spans
+                        .iter()
+                        .find(|span| span[0] <= at && at <= span[1])
+                        .or(track.spans.first());
                     if let Some(span) = span {
-                        seen = seen.plain(format!("{} → {}", video_time(span[0]), video_time(span[1])));
+                        seen = seen.plain(format!(
+                            "{} → {}",
+                            video_time(span[0]),
+                            video_time(span[1])
+                        ));
                     }
                     facts.push(seen.muted(format!(" · {} frames", thousands(track.frames))));
                 }
                 facts.push(Fact::new("Box now").mono(box_words(bounds)));
                 for call in answering_calls(record) {
                     match call.task.as_str() {
-                        "detect" => facts.push(model_fact("Found by", record, &manifest_of(record, &call.backend), None)),
+                        "detect" => facts.push(model_fact(
+                            "Found by",
+                            record,
+                            &manifest_of(record, &call.backend),
+                            None,
+                        )),
                         "track" => {
-                            let mut fact = Fact::new("Tracked by").plain(display_name(&call.backend, &record.models));
+                            let mut fact = Fact::new("Tracked by")
+                                .plain(display_name(&call.backend, &record.models));
                             let mut note = Vec::new();
                             note.extend(call.library.clone());
                             note.push(place_of(&call.locality));
@@ -1642,7 +1688,9 @@ pub(crate) fn answer_view(record: &Record, input: &ViewerInput<'_>) -> AnswerVie
     // Chips in the answer's own order (board choice V3).
     let mut labels: Vec<LabelCount> = Vec::new();
     let mut by_index: Vec<&RegionView> = regions.iter().collect();
-    by_index.sort_by_key(|region| if kind == PictureKind::Document { region.order.unwrap_or(0) } else { region.index });
+    by_index.sort_by_key(|region| {
+        if kind == PictureKind::Document { region.order.unwrap_or(0) } else { region.index }
+    });
     for region in by_index {
         let label = region.label.trim_end_matches(" · blurred").to_string();
         match labels.iter_mut().find(|entry| entry.label == label) {
@@ -1802,7 +1850,8 @@ fn photo_models(record: &Record, facts: &mut Vec<Fact>, segmented: bool) {
 /// "Nothing found … That is an answer, not an error." (board choice V12).
 fn empty_view(record: &Record, input: &ViewerInput<'_>, kind: PictureKind, cost: u64) -> EmptyView {
     let call = answering_calls(record).next();
-    let backend = call.map_or_else(|| record.tool.clone(), |c| display_name(&c.backend, &record.models));
+    let backend =
+        call.map_or_else(|| record.tool.clone(), |c| display_name(&c.backend, &record.models));
     let picture = match kind {
         PictureKind::Document => "page",
         PictureKind::VideoFrame | PictureKind::Photo
@@ -1815,14 +1864,21 @@ fn empty_view(record: &Record, input: &ViewerInput<'_>, kind: PictureKind, cost:
     };
     let asked = record.display.asked.clone().or_else(|| asked_of(&record.args));
     let mut text = vec![FactPart {
-        text: format!("{backend} answered with an empty result: nothing in this {picture} matched "),
+        text: format!(
+            "{backend} answered with an empty result: nothing in this {picture} matched "
+        ),
         style: FactStyle::Plain,
     }];
     match &asked {
-        Some(asked) => text.push(FactPart { text: format!("“{asked}”"), style: FactStyle::Strong }),
+        Some(asked) => {
+            text.push(FactPart { text: format!("“{asked}”"), style: FactStyle::Strong })
+        }
         None => text.push(FactPart { text: "what it was asked".into(), style: FactStyle::Plain }),
     }
-    text.push(FactPart { text: ". That is an answer, not an error.".into(), style: FactStyle::Plain });
+    text.push(FactPart {
+        text: ". That is an answer, not an error.".into(),
+        style: FactStyle::Plain,
+    });
 
     let mut asked_fact = Fact::new("Asked").mono(record.tool.clone());
     if let Some(asked) = &asked {
@@ -2000,9 +2056,12 @@ pub(crate) fn view(
 
 /// The size of an encoded PNG, GIF or JPEG from its header; `None` for anything else.
 pub(crate) fn encoded_size(bytes: &[u8]) -> Option<(u32, u32)> {
-    let be32 = |at: usize| bytes.get(at..at + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
-    let be16 = |at: usize| bytes.get(at..at + 2).map(|b| u32::from(u16::from_be_bytes([b[0], b[1]])));
-    let le16 = |at: usize| bytes.get(at..at + 2).map(|b| u32::from(u16::from_le_bytes([b[0], b[1]])));
+    let be32 =
+        |at: usize| bytes.get(at..at + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+    let be16 =
+        |at: usize| bytes.get(at..at + 2).map(|b| u32::from(u16::from_be_bytes([b[0], b[1]])));
+    let le16 =
+        |at: usize| bytes.get(at..at + 2).map(|b| u32::from(u16::from_le_bytes([b[0], b[1]])));
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Some((be32(16)?, be32(20)?));
     }
@@ -2038,9 +2097,10 @@ pub(crate) fn unanswered(
 ) -> ViewerView {
     let (width, height) = encoded_size(&bytes.bytes).unwrap_or((0, 0));
     let name = (!image.starts_with("sha256:")).then(|| image.to_string());
-    let title = name
-        .as_deref()
-        .map_or_else(|| "An image".to_string(), |n| n.rsplit_once('.').map_or(n, |(stem, _)| stem).to_string());
+    let title = name.as_deref().map_or_else(
+        || "An image".to_string(),
+        |n| n.rsplit_once('.').map_or(n, |(stem, _)| stem).to_string(),
+    );
     let mut meta = vec![format!("{width} × {height}")];
     meta.extend(name);
     meta.push("nothing has answered for it yet".into());
@@ -2124,7 +2184,11 @@ pub(crate) fn compare_view(a: AnswerView, b: AnswerView) -> CompareView {
                 let rb = &b.regions[j];
                 if reading(ra) == reading(rb) {
                     agree += 1;
-                    marks_a.push(CompareMark { index: ra.index, agreement: Agreement::Agree, tag: None });
+                    marks_a.push(CompareMark {
+                        index: ra.index,
+                        agreement: Agreement::Agree,
+                        tag: None,
+                    });
                 } else {
                     differ += 1;
                     marks_a.push(CompareMark {
@@ -2201,14 +2265,26 @@ pub(crate) fn compare_view(a: AnswerView, b: AnswerView) -> CompareView {
         let only = |d: &Difference| d.a_region.is_none() || d.b_region.is_none();
         only(x).cmp(&only(y)).then(score_of(x).total_cmp(&score_of(y)))
     });
-    let mean = if overlaps.is_empty() { 0.0 } else { overlaps.iter().sum::<f64>() / overlaps.len() as f64 };
+    let mean = if overlaps.is_empty() {
+        0.0
+    } else {
+        overlaps.iter().sum::<f64>() / overlaps.len() as f64
+    };
     let overlap_text = if overlaps.is_empty() {
         "The two answers found no region in common.".to_string()
     } else {
-        let closely = if mean >= 0.9 { "closely" } else if mean >= 0.7 { "well" } else { "loosely" };
+        let closely = if mean >= 0.9 {
+            "closely"
+        } else if mean >= 0.7 {
+            "well"
+        } else {
+            "loosely"
+        };
         format!("Where both found a region, the boxes overlap {closely} (mean IoU {mean:.2}).")
     };
-    let short = |name: &str| name.split_whitespace().next().unwrap_or(name).trim_end_matches("-1.6").to_string();
+    let short = |name: &str| {
+        name.split_whitespace().next().unwrap_or(name).trim_end_matches("-1.6").to_string()
+    };
     CompareView {
         a: ComparePane { short_name: short(&a.name), answer: a, marks: marks_a },
         b: ComparePane { short_name: short(&b.name), answer: b, marks: marks_b },
@@ -2329,7 +2405,11 @@ pub(crate) fn check_case_name(name: &str) -> std::result::Result<(), String> {
     let ok = !name.is_empty()
         && name.len() <= 120
         && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
-    if ok { Ok(()) } else { Err(format!("the case name “{name}” takes letters, digits, - _ and . only")) }
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("the case name “{name}” takes letters, digits, - _ and . only"))
+    }
 }
 
 /// The `adk-eval` case an example makes of `record` (board choices V11–V13): a turn that shows
@@ -2339,7 +2419,10 @@ pub(crate) fn check_case_name(name: &str) -> std::result::Result<(), String> {
 /// # Errors
 ///
 /// A sentence for the person when the example does not fit the answer.
-pub(crate) fn example_case(record: &Record, example: &LabelledExample) -> std::result::Result<Value, String> {
+pub(crate) fn example_case(
+    record: &Record,
+    example: &LabelledExample,
+) -> std::result::Result<Value, String> {
     check_case_name(&example.case_name)?;
     let (w, h) = (f64::from(record.image.width), f64::from(record.image.height));
     if let Some(region) = &example.region {
@@ -2410,7 +2493,8 @@ pub(crate) fn example_case(record: &Record, example: &LabelledExample) -> std::r
                 if Some(index) == corrected_index {
                     continue;
                 }
-                let Some(bounds) = shape_bounds(&r.shape, record.image.width, record.image.height) else {
+                let Some(bounds) = shape_bounds(&r.shape, record.image.width, record.image.height)
+                else {
                     continue;
                 };
                 let label = r.label.clone().unwrap_or_else(|| "region".into());
@@ -2473,6 +2557,132 @@ pub(crate) fn with_case(set: Option<Value>, file: &str, case: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    /// A one-region `vision_detect` record over a `w` × `h` image, its box `b` answered in
+    /// model-input pixels through `steps`.
+    fn one_box(w: u32, h: u32, b: [f64; 4], steps: Value) -> Record {
+        let origin = json!({
+            "backend": "rf-detr-s",
+            "frame": { "kind": "modelInput", "width": 640, "height": 640, "letterbox": "center" },
+            "chain": { "sourceWidth": w, "sourceHeight": h, "steps": steps },
+        });
+        Record::parse(json!({
+            "tool": "vision_detect",
+            "callId": "c-1",
+            "agent": "desk",
+            "image": { "digest": "sha256:00", "width": w, "height": h },
+            "regionSet": { "image": "sha256:00", "width": w, "height": h, "regions": [
+                { "shape": { "kind": "box", "x0": b[0], "y0": b[1], "x1": b[2], "y1": b[3] }, "label": "part", "score": 0.9, "origin": origin },
+            ] },
+        }))
+        .unwrap()
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        /// A point carried into the backend's pixels and back is the same source pixel, for
+        /// any crop, resize, padding and turn.
+        #[test]
+        fn the_chain_maps_back_to_source_pixels(
+            (w, h) in (16u32..4000, 16u32..4000),
+            crop in (0.0f64..0.4, 0.0f64..0.4, 0.5f64..1.0, 0.5f64..1.0),
+            target in (64u32..2048, 64u32..2048),
+            pad in (0u32..300, 0u32..300, 0u32..300, 0u32..300),
+            turns in 0u8..4,
+            at in (0.0f64..1.0, 0.0f64..1.0),
+        ) {
+            let (cx, cy) = ((crop.0 * f64::from(w)) as u32, (crop.1 * f64::from(h)) as u32);
+            let cw = ((crop.2 * f64::from(w - cx)) as u32).max(1);
+            let ch = ((crop.3 * f64::from(h - cy)) as u32).max(1);
+            let chain = WireChain {
+                source_width: w,
+                source_height: h,
+                steps: vec![
+                    WireTransform::Crop { x: cx, y: cy, width: cw, height: ch },
+                    WireTransform::Resize { width: target.0, height: target.1 },
+                    WireTransform::Pad { left: pad.0, top: pad.1, right: pad.2, bottom: pad.3 },
+                    WireTransform::Rotate { quarter_turns: turns },
+                ],
+            };
+            let point = [f64::from(cx) + at.0 * f64::from(cw), f64::from(cy) + at.1 * f64::from(ch)];
+            let back = to_source(&chain, to_backend(&chain, point));
+            prop_assert!((back[0] - point[0]).abs() < 1e-6 && (back[1] - point[1]).abs() < 1e-6, "{point:?} -> {back:?}");
+        }
+
+        /// The box the viewer draws and lists is the RegionSet's box in source pixels, clamped
+        /// to the image, whatever frame and chain the backend answered through.
+        #[test]
+        fn shown_coordinates_are_source_pixels(
+            (w, h) in (32u32..3000, 32u32..3000),
+            corner in (-50.0f64..1.2, -50.0f64..1.2),
+            size in (0.02f64..0.9, 0.02f64..0.9),
+            letterbox in any::<bool>(),
+        ) {
+            let x0 = corner.0 * f64::from(w);
+            let y0 = corner.1 * f64::from(h);
+            let b = [x0, y0, x0 + size.0 * f64::from(w), y0 + size.1 * f64::from(h)];
+            let steps = if letterbox {
+                json!([{ "op": "resize", "width": 640, "height": 360 }, { "op": "pad", "left": 0, "top": 140, "right": 0, "bottom": 140 }])
+            } else {
+                json!([])
+            };
+            let record = one_box(w, h, b, steps);
+            let input = ViewerInput {
+                session: "s",
+                agent_name: "Desk".into(),
+                offset: FixedOffset::east_opt(0).unwrap(),
+                can_save: false,
+                files: Vec::new(),
+            };
+            let view = answer_view(&record, &input);
+            let clamped = [
+                b[0].clamp(0.0, f64::from(w)),
+                b[1].clamp(0.0, f64::from(h)),
+                b[2].clamp(0.0, f64::from(w)),
+                b[3].clamp(0.0, f64::from(h)),
+            ];
+            if clamped[2] > clamped[0] && clamped[3] > clamped[1] {
+                prop_assert_eq!(view.regions.len(), 1);
+                let region = &view.regions[0];
+                prop_assert_eq!([region.x0, region.y0, region.x1, region.y1], clamped);
+                prop_assert_eq!(&region.box_text, &box_words(clamped));
+            } else {
+                // A box wholly outside the image draws nothing.
+                prop_assert!(view.regions.is_empty());
+            }
+        }
+
+        /// A mask's bounds and area are the rectangle of pixels it sets.
+        #[test]
+        fn a_masks_bounds_are_the_pixels_it_sets(
+            (w, h) in (2u32..40, 2u32..40),
+            rect in (0.0f64..1.0, 0.0f64..1.0, 0.0f64..1.0, 0.0f64..1.0),
+        ) {
+            let (x0, x1) = ((rect.0 * f64::from(w - 1)) as u32, (rect.2 * f64::from(w - 1)) as u32);
+            let (y0, y1) = ((rect.1 * f64::from(h - 1)) as u32, (rect.3 * f64::from(h - 1)) as u32);
+            let (x0, x1, y0, y1) = (x0.min(x1), x0.max(x1) + 1, y0.min(y1), y0.max(y1) + 1);
+            let mut counts = Vec::new();
+            let (mut current, mut run) = (false, 0u32);
+            for x in 0..w {
+                for y in 0..h {
+                    let set = (x0..x1).contains(&x) && (y0..y1).contains(&y);
+                    if set == current {
+                        run += 1;
+                    } else {
+                        counts.push(run);
+                        current = set;
+                        run = 1;
+                    }
+                }
+            }
+            counts.push(run);
+            let (bounds, area) = mask_bounds(w, h, &counts).unwrap();
+            prop_assert_eq!(bounds, [f64::from(x0), f64::from(y0), f64::from(x1), f64::from(y1)]);
+            prop_assert_eq!(area, u64::from((x1 - x0) * (y1 - y0)));
+        }
+    }
 
     fn chain(steps: Vec<WireTransform>) -> WireChain {
         WireChain { source_width: 1654, source_height: 2339, steps }
@@ -2488,11 +2698,11 @@ mod tests {
         let there = to_backend(&chain, [1250.0, 466.0]);
         let back = to_source(&chain, there);
         assert!((back[0] - 1250.0).abs() < 1e-6 && (back[1] - 466.0).abs() < 1e-6, "{back:?}");
+        assert_eq!(pad_words(140, 0, 141, 0, (960, 960)), "Padded 140 left, 141 right · 960 × 960");
         assert_eq!(
-            pad_words(140, 0, 141, 0, (960, 960)),
-            "Padded 140 left, 141 right · 960 × 960"
+            pad_words(0, 224, 0, 224, (1024, 1024)),
+            "Padded 224 top and bottom · 1024 × 1024"
         );
-        assert_eq!(pad_words(0, 224, 0, 224, (1024, 1024)), "Padded 224 top and bottom · 1024 × 1024");
     }
 
     #[test]
@@ -2533,7 +2743,11 @@ mod tests {
         assert_eq!(seconds_words(14_800), "14.8 s");
         assert_eq!(slug("INV-2291 · page 1 handwriting"), "inv-2291-page-1-handwriting");
         assert_eq!(
-            frame_words(&WireFrame::ModelInput { width: 960, height: 960, letterbox: "center".into() }),
+            frame_words(&WireFrame::ModelInput {
+                width: 960,
+                height: 960,
+                letterbox: "center".into()
+            }),
             "Model-input pixels, 960 × 960, letterboxed"
         );
     }

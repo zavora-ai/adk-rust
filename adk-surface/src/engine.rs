@@ -1207,12 +1207,16 @@ impl SurfaceEngine {
         };
         // "Open the source image" opens the annotated viewer when the source keeps the
         // session's images and the feature named no other place (board choice A9).
-        let viewer_facts = hint.media.as_ref().filter(|facts| facts.source_href.is_none()).and_then(|facts| {
-            let named = request.args_redacted.get("image").and_then(Value::as_str)?;
-            self.inner.source.keeps_vision_answers().then(|| {
-                facts.clone().with_source_href(crate::viewer::viewer_path(&request.scope.session_id, named))
-            })
-        });
+        let viewer_facts =
+            hint.media.as_ref().filter(|facts| facts.source_href.is_none()).and_then(|facts| {
+                let named = request.args_redacted.get("image").and_then(Value::as_str)?;
+                self.inner.source.keeps_vision_answers().then(|| {
+                    facts.clone().with_source_href(crate::viewer::viewer_path(
+                        &request.scope.session_id,
+                        named,
+                    ))
+                })
+            });
         crate::evidence::project(
             request,
             &crate::evidence::MediaInput {
@@ -1264,7 +1268,11 @@ impl SurfaceEngine {
 
     /// The answer records of `session` for `caller`, parsed; a record that does not parse is
     /// logged and left out.
-    async fn vision_records(&self, caller: &Caller, session: &str) -> Result<Vec<crate::viewer::Record>> {
+    async fn vision_records(
+        &self,
+        caller: &Caller,
+        session: &str,
+    ) -> Result<Vec<crate::viewer::Record>> {
         // Only the caller's own session (S-I8): the inbox's rule for a thread.
         self.transcript(caller, session).await?;
         let raw = self.inner.source.vision_answers(caller.user_id(), session).await?;
@@ -1301,11 +1309,17 @@ impl SurfaceEngine {
         let digest = if image.starts_with("sha256:") {
             image.to_string()
         } else if let Some(record) = records.iter().find(|record| {
-            record.image.name.as_deref() == Some(image) || record.image.artifact.as_deref() == Some(image)
+            record.image.name.as_deref() == Some(image)
+                || record.image.artifact.as_deref() == Some(image)
         }) {
             record.image.digest.clone()
         } else {
-            let bytes = self.inner.source.vision_image(caller.user_id(), session, image).await?.ok_or_else(missing)?;
+            let bytes = self
+                .inner
+                .source
+                .vision_image(caller.user_id(), session, image)
+                .await?
+                .ok_or_else(missing)?;
             crate::evidence::digest_of(&bytes.bytes)
         };
         let records: Vec<crate::viewer::Record> =
@@ -1326,7 +1340,12 @@ impl SurfaceEngine {
         let bytes = self.inner.source.vision_image(caller.user_id(), session, &digest).await?;
         let bytes = match bytes {
             Some(bytes) => bytes,
-            None => self.inner.source.vision_image(caller.user_id(), session, image).await?.ok_or_else(missing)?,
+            None => self
+                .inner
+                .source
+                .vision_image(caller.user_id(), session, image)
+                .await?
+                .ok_or_else(missing)?,
         };
         Ok(crate::viewer::unanswered(session, image, &digest, &bytes, &input))
     }
@@ -1344,11 +1363,9 @@ impl SurfaceEngine {
         image: &str,
     ) -> Result<crate::evidence::EvidenceBytes> {
         self.transcript(caller, session).await?;
-        self.inner
-            .source
-            .vision_image(caller.user_id(), session, image)
-            .await?
-            .ok_or_else(|| SurfaceError::not_found(format!("image '{image}' of session '{session}'")))
+        self.inner.source.vision_image(caller.user_id(), session, image).await?.ok_or_else(|| {
+            SurfaceError::not_found(format!("image '{image}' of session '{session}'"))
+        })
     }
 
     /// The `RegionSet` of answer `answer` in `caller`'s `session`, as the vision tools
@@ -1370,7 +1387,9 @@ impl SurfaceEngine {
                 .iter()
                 .find(|record| record.call_id == id)
                 .map(|record| serde_json::to_value(&record.region_set).unwrap_or(Value::Null))
-                .ok_or_else(|| SurfaceError::not_found(format!("answer '{id}' of session '{session}'")))
+                .ok_or_else(|| {
+                    SurfaceError::not_found(format!("answer '{id}' of session '{session}'"))
+                })
         };
         match with {
             Some(other) => Ok(Value::Array(vec![set(answer)?, set(other)?])),
@@ -1395,10 +1414,13 @@ impl SurfaceEngine {
     ) -> Result<crate::viewer::SavedExample> {
         crate::viewer::check_file(&example.file).map_err(SurfaceError::Invalid)?;
         let records = self.vision_records(caller, session).await?;
-        let record = records
-            .iter()
-            .find(|record| record.call_id == example.answer)
-            .ok_or_else(|| SurfaceError::not_found(format!("answer '{}' of session '{session}'", example.answer)))?;
+        let record =
+            records.iter().find(|record| record.call_id == example.answer).ok_or_else(|| {
+                SurfaceError::not_found(format!(
+                    "answer '{}' of session '{session}'",
+                    example.answer
+                ))
+            })?;
         let case = crate::viewer::example_case(record, example).map_err(SurfaceError::Invalid)?;
         let image = self
             .inner

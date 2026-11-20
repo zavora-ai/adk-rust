@@ -847,9 +847,12 @@ impl Source for LocalSource {
         if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Ok(None);
         }
-        for (extension, mime) in
-            [("png", "image/png"), ("jpeg", "image/jpeg"), ("webp", "image/webp"), ("gif", "image/gif")]
-        {
+        for (extension, mime) in [
+            ("png", "image/png"),
+            ("jpeg", "image/jpeg"),
+            ("webp", "image/webp"),
+            ("gif", "image/gif"),
+        ] {
             let loaded = artifacts
                 .load(adk_artifact::LoadRequest {
                     app_name: self.app.clone(),
