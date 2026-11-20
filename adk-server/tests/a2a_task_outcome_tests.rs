@@ -221,6 +221,90 @@ async fn thinking_never_reaches_the_peer() {
     }
 }
 
+/// Streams "It is " and "sunny." as partial chunks and then a final chunk, as streaming
+/// providers do.
+fn streaming_agent() -> Arc<dyn Agent> {
+    let chunk = |text: &str, partial: bool| LlmResponse {
+        content: Some(Content::new("model").with_text(text)),
+        partial,
+        turn_complete: !partial,
+        ..Default::default()
+    };
+    let model = adk_model::MockLlm::new("streaming")
+        .with_response(chunk("It is ", true))
+        .with_response(chunk("sunny.", true))
+        .with_response(chunk("", false));
+    Arc::new(
+        LlmAgentBuilder::new("weather")
+            .description("tells the weather")
+            .model(Arc::new(model))
+            .build()
+            .unwrap(),
+    )
+}
+
+/// Sends JSON-RPC `method` with `params` to `/a2a` and returns the response.
+async fn legacy_rpc(app: &Router, method: &str, params: Value) -> Value {
+    let body = json!({"jsonrpc": "2.0", "method": method, "params": params, "id": 2});
+    let request = Request::builder()
+        .method("POST")
+        .uri("/a2a")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap()
+}
+
+#[tokio::test]
+async fn a_streamed_answer_is_one_artifact_on_the_task() {
+    let app = legacy_app(streaming_agent());
+    let sent: Value =
+        serde_json::from_str(&legacy_call(&app, "/a2a", "message/send", "weather?").await).unwrap();
+    let artifacts = sent["result"]["artifacts"].as_array().cloned().unwrap_or_default();
+    assert_eq!(artifacts.len(), 1, "one artifact per answer: {sent}");
+    assert_eq!(artifacts[0]["parts"], json!([{"text": "It is sunny."}]));
+
+    let got = legacy_rpc(&app, "tasks/get", json!({"id": sent["result"]["id"]})).await;
+    assert_eq!(got["result"]["artifacts"], sent["result"]["artifacts"], "{got}");
+}
+
+#[tokio::test]
+async fn a_streamed_answer_streams_no_blank_update() {
+    let app = legacy_app(streaming_agent());
+    let body = legacy_call(&app, "/a2a/stream", "message/stream", "weather?").await;
+    let fragments: Vec<Value> = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .filter_map(|data| serde_json::from_str::<Value>(data.trim()).ok())
+        .filter_map(|frame| frame["result"]["artifact"]["parts"].as_array().cloned())
+        .flatten()
+        .collect();
+    assert_eq!(fragments, [json!({"text": "It is "}), json!({"text": "sunny."})], "{body}");
+}
+
+#[tokio::test]
+async fn tasks_get_and_cancel_name_the_task_by_id_or_task_id() {
+    let app = legacy_app(ops_agent());
+    // `id` is the A2A 0.3 specification's name; `taskId` is what adk-server read before.
+    for key in ["id", "taskId"] {
+        let sent: Value =
+            serde_json::from_str(&legacy_call(&app, "/a2a", "message/send", "ping").await).unwrap();
+        let task_id = sent["result"]["id"].clone();
+
+        let got = legacy_rpc(&app, "tasks/get", json!({ key: task_id })).await;
+        assert_eq!(got["result"]["id"], task_id, "tasks/get by {key}: {got}");
+        assert_eq!(got["result"]["status"]["state"], "completed");
+
+        let canceled = legacy_rpc(&app, "tasks/cancel", json!({ key: task_id })).await;
+        assert!(canceled.get("error").is_none(), "tasks/cancel by {key}: {canceled}");
+        assert_eq!(canceled["result"]["taskId"], task_id);
+    }
+
+    let neither = legacy_rpc(&app, "tasks/get", json!({"task": "t-1"})).await;
+    assert_eq!(neither["error"]["code"], -32602, "{neither}");
+}
+
 #[cfg(feature = "a2a-v1")]
 mod v1 {
     use super::*;

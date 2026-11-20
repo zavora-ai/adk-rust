@@ -374,7 +374,7 @@ the agent card at `agent_url` and sends messages only to an endpoint on the card
 | POST | `/a2a/v1` | v1 | JSON-RPC binding (`SendMessage`, `GetTask`, `ListTasks`, `CancelTask`, ... ); needs `A2A-Version: 1.0` |
 | POST, GET | `/a2a/v1/rest/...` | v1 | HTTP+JSON binding (`message:send`, `message:stream`, `tasks`, `tasks/{id}`, ...); needs `A2A-Version: 1.0` |
 | GET | `/.well-known/agent.json` | 0.3 | Agent card with `url` and `protocolVersion: "0.3.0"` |
-| POST | `/a2a` | 0.3 | JSON-RPC endpoint (`message/send`, `tasks/get`, `tasks/cancel`) |
+| POST | `/a2a` | 0.3 | JSON-RPC endpoint (`message/send`, `tasks/get`, `tasks/cancel`; the last two name the task as `{"id": …}`, or `{"taskId": …}`) |
 | POST | `/a2a/stream` | 0.3 | Streaming JSON-RPC (`message/stream`) |
 
 ---
