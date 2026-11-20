@@ -646,9 +646,6 @@ let model = OpenAIResponsesClient::new(config.clone())?
     .with_websocket_fallback(true);
 ```
 
-The former `OpenAIResponsesConfig::with_transport` option and the `ResponsesTransport` enum
-were never read and are removed.
-
 `examples/gemini_ws_outcomes` runs each WebSocket case against a scripted local server and,
 when `OPENAI_API_KEY` is set, against the live endpoint:
 

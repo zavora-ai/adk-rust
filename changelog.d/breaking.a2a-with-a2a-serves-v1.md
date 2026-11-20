@@ -5,8 +5,9 @@
   - the HTTP+JSON binding under `/a2a/v1/rest`;
   - the v1 agent card at `/.well-known/agent-card.json`.
 
-  A2A 0.3 keeps its `/a2a` and `/a2a/stream` endpoints, and its card moves to
-  `/.well-known/agent.json` only. The v1 card lists the 0.3 endpoint as an interface with
+  A2A 0.3 keeps its `/a2a` and `/a2a/stream` endpoints, and its card stays at
+  `/.well-known/agent.json`; `/.well-known/agent-card.json`, which served nothing in 2.3.0,
+  now answers with the v1 card. The v1 card lists the 0.3 endpoint as an interface with
   `protocolVersion` `0.3`. The v1 card's skills come from the agent. Without `a2a-v1`,
   nothing changes.
 
@@ -14,5 +15,5 @@
   card that is not a 0.3 card. `A2aV1Client` and `RemoteA2aV1Agent` choose only interfaces
   for protocol version 1 (`v1_client::v1_interface`).
 
-  Migration: an A2A 0.3 client that reads only `/.well-known/agent-card.json` must read
-  `/.well-known/agent.json` instead, or use adk-server's `A2aClient`, which does.
+  Migration: an A2A 0.3 client that tries `/.well-known/agent-card.json` first must read
+  `/.well-known/agent.json` instead, or use adk-server's `A2aClient`, which falls back to it.

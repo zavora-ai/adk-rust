@@ -8,11 +8,11 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 - [Quickstart](quickstart.md) - Scaffold, run, and test your first agent in the embedded UI in under 5 minutes
 - [Build an Autonomous Agent](autonomy/index.md) - Choose among ambient agents, durable workers, background runs, goals, the agent kernel and the managed runtime, then scaffold an agent that works toward goals unattended, wakes itself, waits for approvals, stays in its budget and survives a crash
 - [A2UI Quickstart](quickstart-a2ui.md) - Give an agent the `genui` render tools, see its drawings in the web home, and read them as A2UI v0.9.1 JSON lines
-- [Migrating 2.x → 3.0](migration/2.x-to-3.0.md) - Every breaking change since 2.3.0, with before/after code
-- [Migrating 1.0 → 2.0](migration/1.0-to-2.0.md) - Complete breaking-change list with before/after code
+- [Migrating 2.x → 3.0](migration/2.x-to-3.0.md) - The breaking changes a 2.3.0 project meets in 3.0.0: API, wire, server routes, CLI and stored state, with before/after code
 - [SQLx 0.9 in ADK-Rust 3.0](migration/sqlx-0.9.md) - Sharing SQLx pools, TLS flags, and migration-runner inputs
 - [Migrating from `CodingAgent` to the harness](migration/coding-agent-to-harness.md) - `adk_agent::coding` to `adk_harness::coding`, approvals in unattended runs, todos, nesting
 - [Migrating from AWP 1.x to 2.0](migration/awp-1-to-2.md) - What changes, `adk-rust awp migrate-config business.toml`, and the AWP 1.x reference
+- [Migrating 1.0 → 2.0](migration/1.0-to-2.0.md) - Complete breaking-change list with before/after code
 
 ## Core
 
