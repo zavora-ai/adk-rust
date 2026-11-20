@@ -1,6 +1,6 @@
 # Anthropic Native Tools Example Matrix
 
-This crate exercises every Anthropic native tool wrapper currently exposed by `adk-tool` and supported by the pinned `claudius` SDK surface in this repo.
+This crate exercises every Anthropic native tool wrapper `adk-tool` exposes through the `adk-anthropic` client. It runs on the catalog's Anthropic default, `claude-sonnet-5-5` (`adk_model::catalog::ANTHROPIC_DEFAULT`).
 
 ## Run
 
@@ -12,7 +12,7 @@ cargo run --manifest-path examples/anthropic_server_tools/Cargo.toml
 Optional:
 
 ```bash
-export ANTHROPIC_MODEL=claude-sonnet-4-20250514
+export ANTHROPIC_MODEL=claude-haiku-5-5   # any current model in place of the default
 ```
 
 ## Coverage

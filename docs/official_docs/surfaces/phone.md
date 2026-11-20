@@ -244,6 +244,32 @@ Without a home URL, the phone's routes answer `400 surface.phone.needs_home_url`
 must be https, or `http://localhost` for tests: WebAuthn needs a secure context and refuses IP
 addresses.
 
+## Routes
+
+`adk_surface::mobile::router` serves these under `/api`, beside the engine's routes. Their
+wire types are in `adk_surface::web`.
+
+| Route | Who | Answer |
+|---|---|---|
+| `GET /surface/phone` | A phone, the web home | `PhoneInfo`: `pushKey`, `rpId`, `passkey`, `push`, `canAddPasskey` |
+| `PUT /surface/phone/push` `{endpoint, keys: {p256dh, auth}}` | A phone | Subscribes it to wake-ups |
+| `DELETE /surface/phone/push` | A phone | Ends its wake-ups |
+| `POST /surface/phone/push/received` `{id}` | A phone | Acknowledges a wake-up; `204` |
+| `GET /surface/phone/push/deliveries` | The operator | `DeliveriesResponse`: the latest acknowledged wake-ups |
+| `POST /surface/phone/passkey/options`, then `POST /surface/phone/passkey` | A phone within 10 minutes of pairing, the web home | Sets up a passkey |
+| `DELETE /surface/phone/passkey/{id}` | The web home | Removes a computer passkey of the caller |
+| `POST /surface/decisions/{id}/confirm/options`, then `POST /surface/decisions/{id}/confirm` | A phone, the web home | "Confirm it's you" for one answer ([above](#confirm-its-you)) |
+| `POST /surface/agents/confirm/options`, then `POST /surface/agents/confirm` | A phone, the web home | "Confirm it's you" for a change that adds an agent or lets one do more at high risk ([Your Agents](agents.md)) |
+| `POST /surface/phone/qr` `{url}` | The operator | The pairing link as a QR code, `image/svg+xml`; the link must start with the home's URL |
+| `GET /surface/phone/devices` | The operator | `PhoneDevicesResponse`: each paired phone's passkey and push, and the computer passkeys |
+
+The operator is a person in the `operator` group (`PhoneBuilder::operator_group` names
+another), never a device: a phone gets `403 surface.not_here` on the operator's routes, and a
+person outside the group `403 surface.operator_only`. A paired device whose kind is not `phone`
+gets `403 surface.not_here` on every route here. Without a home URL, `GET /surface/phone`,
+`PUT /surface/phone/push`, the passkey set-up, both confirmations and the QR code answer `400
+surface.phone.needs_home_url`.
+
 ## When a native app follows
 
 A native wrapper (Capacitor, or Tauri once it has first-party remote push) follows only when one

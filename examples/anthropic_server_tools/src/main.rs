@@ -39,7 +39,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const APP_NAME: &str = "anthropic-server-tools-example";
-const MODEL_NAME: &str = "claude-sonnet-4-20250514";
+const MODEL_NAME: &str = adk_model::catalog::ANTHROPIC_DEFAULT;
 
 #[derive(Debug)]
 enum ScenarioOutcome {
