@@ -259,14 +259,16 @@ wire types are in `adk_surface::web`.
 | `POST /surface/phone/passkey/options`, then `POST /surface/phone/passkey` | A phone within 10 minutes of pairing, the web home | Sets up a passkey |
 | `DELETE /surface/phone/passkey/{id}` | The web home | Removes a computer passkey of the caller |
 | `POST /surface/decisions/{id}/confirm/options`, then `POST /surface/decisions/{id}/confirm` | A phone, the web home | "Confirm it's you" for one answer ([above](#confirm-its-you)) |
-| `POST /surface/agents/confirm/options`, then `POST /surface/agents/confirm` | A phone, the web home | "Confirm it's you" for a change that adds an agent or lets one do more at high risk ([Your Agents](agents.md)) |
+| `POST /surface/agents/confirm/options`, then `POST /surface/agents/confirm` | The web home | "Confirm it's you" for a change that adds an agent or lets one do more at high risk ([Your Agents](agents.md)); a phone never makes one |
 | `POST /surface/phone/qr` `{url}` | The operator | The pairing link as a QR code, `image/svg+xml`; the link must start with the home's URL |
 | `GET /surface/phone/devices` | The operator | `PhoneDevicesResponse`: each paired phone's passkey and push, and the computer passkeys |
 
 The operator is a person in the `operator` group (`PhoneBuilder::operator_group` names
-another), never a device: a phone gets `403 surface.not_here` on the operator's routes, and a
-person outside the group `403 surface.operator_only`. A paired device whose kind is not `phone`
-gets `403 surface.not_here` on every route here. Without a home URL, `GET /surface/phone`,
+another), never a device; a person outside the group gets `403 surface.operator_only`. A paired
+device gets `403 kernel.unauthorized` on the routes no device scope covers: the operator's,
+`DELETE /surface/phone/passkey/{id}` and both agent confirmations. A paired device whose kind is
+not `phone` gets `403 surface.not_here` on the others, and the person at the web home gets it on
+the push routes. Without a home URL, `GET /surface/phone`,
 `PUT /surface/phone/push`, the passkey set-up, both confirmations and the QR code answer `400
 surface.phone.needs_home_url`.
 
