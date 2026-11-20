@@ -37,8 +37,8 @@ takes one agent from a scaffold to running on its own.
 | Provider | Feature | Catalog default model |
 |----------|---------|-----------------------|
 | Gemini | `gemini` (in every tier) | `gemini-3.8-flash` |
-| OpenAI | `openai` | `gpt-5.6-terra` |
-| Anthropic | `anthropic` | `claude-sonnet-5` |
+| OpenAI | `openai` | `gpt-6.1-sol` |
+| Anthropic | `anthropic` | `claude-sonnet-5-5` |
 | DeepSeek | `deepseek` | `deepseek-flash` |
 | Groq | `groq` | `openai/gpt-oss-120b` |
 | Ollama | `ollama` | `qwen3.5` |
@@ -313,9 +313,9 @@ Each enabled crate is re-exported as a module: `agent`, `model`, `tool`, `skill`
 - `standard` includes `computer-use`; provider features also enable `adk-managed`'s model resolver when `managed-runtime` is on.
 - `autonomy` (in `enterprise` and `full`) turns on everything an agent needs to run unattended: the harness and its kernel, durable and background runs with cron and webhook wake-ups, the approvals service, SQLite stores, and the signed audit log.
 - The 19 features that only aliased a sibling are removed: `cerebras`, `fireworks`, `mistral`, `perplexity`, `sambanova` and `together` (use `openai`); `whisper-onnx`, `distil-whisper`, `moonshine` and `chatterbox` (use `audio-onnx`); `action-code`, `action-db` and `action-email` (use `action`); `action-rss` (use `action-http`); `a2a` and `agent-registry` (use `server`); `cli-deepseek` and `cli-groq` (use `cli`); and `personas` (use `eval`).
-- New crates: `adk-harness` (the governed harness agent), `adk-kernel` (the agent kernel behind `adk-rust up`), `adk-surface` (the web home, terminal, phone and chat surfaces), and `adk-site`, `adk-drivers` and `adk-website` (the AWP website product). `enterprise` and `full` include the harness and the kernel through `autonomy`, `full` also the website; `surface` is opt-in.
+- New crates: `adk-harness` (the governed harness agent), `adk-kernel` (the agent kernel behind `adk-rust up`), `adk-surface` (the web home, terminal, phone and chat surfaces), `adk-site`, `adk-drivers` and `adk-website` (the AWP website product), and `adk-vision` (local-first perception, `vision` and `vision-local`). `enterprise` and `full` include the harness and the kernel through `autonomy`, `full` also the website and vision; `surface` and `vision-local` are opt-in.
 
-See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md).
+See [What's new in 3.0](../docs/official_docs/whats-new-3.0.md), the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md).
 
 ## Documentation
 

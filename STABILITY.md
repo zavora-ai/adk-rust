@@ -84,8 +84,8 @@ minor release. Every other crate was promoted to Stable in 1.0.0.
 | `adk-computer-use` | New in 2.0.0; tracks the `computer-use-mcp` wire contracts | Stabilize when the upstream contracts are versioned |
 | `adk-gcp` | New in 2.1.0; the shared ADC/LRO surface is still absorbing the per-crate GCP clients | Promote once the remaining Vertex backends consume it without API changes |
 | `adk-harness` | New in 3.0.0 (spec 3.1); the team, plan-graph, goal and pack layers are implemented and still taking shape in use | Review for Stable in 3.2.0 (spec 3.1 §12 phase 6) |
-| `adk-kernel` | New with spec 3.2; the agenda and the consolidation tick are in, and drivers, partitions, `/proc` and service installation land in later phases on top of the phase-1 API | Review for Stable once spec 3.2 phases 1–3 ship without breaking changes |
-| `adk-surface` | New with spec 3.3; the engine and the web home (`web`: its page and API) are in, and the terminal, chat, phone, tray and voice surfaces arrive as features in later phases. The desktop tray is the exception: a separate, unpublished, **Experimental** app in `adk-surface/desktop/` with its own workspace, not a feature of the crate. The `verb-ui` feature (screen actions) is **Experimental** inside the Beta crate, and so are the `whatsapp`, `slack`, `discord`, `matrix` and `teams` chat adapters (spec 3.5 §10 X12) | Review for Stable once spec 3.3 phases 1–2 ship without breaking changes; the desktop app leaves Experimental with signed installers; `verb-ui` is reviewed once its catalogue grows past snooze |
+| `adk-kernel` | New in 3.0.0 (spec 3.2); the process model, wake sources, the agenda and consolidation tick, drivers, partitions, `/proc` and service installation ship, and their API is still taking shape in use | Review for Stable once the 3.0 line ships them without breaking changes |
+| `adk-surface` | New in 3.0.0 (spec 3.3); the engine, the web home (`web`), the terminal (`tui`), chat channels (`channels`), the phone (`mobile`), voice (`voice`), the workflow observer (`workflow`) and agent-drawn UI (`genui`) ship, and their API is still taking shape in use. The desktop tray is the exception: a separate, unpublished, **Experimental** app in `adk-surface/desktop/` with its own workspace, not a feature of the crate. The `verb-ui` feature (screen actions) is **Experimental** inside the Beta crate, and so are the `whatsapp`, `slack`, `discord`, `matrix` and `teams` chat adapters (spec 3.5 §10 X12) | Review for Stable once the 3.0 line ships them without breaking changes; the desktop app leaves Experimental with signed installers; `verb-ui` is reviewed once its catalogue grows past snooze |
 
 ### Alpha Backends
 
@@ -114,7 +114,7 @@ The following crates are not part of the main workspace and are not covered by t
 
 ADK-Rust follows a predictable deprecation lifecycle so that consumers have time to migrate away from removed APIs.
 
-1. **Announcement.** When a public item is deprecated, the crate annotates it with `#[deprecated(since = "X.Y.Z", note = "Use <replacement> instead. Will be removed in X.(Y+2).0.")]`. The `since` field records the version that introduced the deprecation. The `note` field provides migration instructions.
+1. **Announcement.** When a public item is deprecated, the crate annotates it with `#[deprecated(since = "X.Y.Z", note = "Use <replacement> instead. Will be removed in <next major>.0.0.")]`. The `since` field records the version that introduced the deprecation. The `note` field provides migration instructions.
 
 2. **Grace period.** Deprecated public items remain available and functional for at least **N+2 minor releases** after the release in which the deprecation is announced. For example, an item deprecated in `3.1.0` will not be removed before `3.3.0`.
 
@@ -242,9 +242,19 @@ the major version on the breaking changes listed in the
 | Server exposure | `adk-server` binds `127.0.0.1` through the launchers, refuses unlisted hosts, and allows no cross-origin access by default |
 | Errors | `ErrorCategory` gains `Conflict` and `ResourceExhausted`; guardrail blocks and tool argument errors carry stable codes |
 | Dependencies | SQLx 0.9 for every SQL backend; see the [Public Dependency Policy](#public-dependency-policy) |
+| New crates | `adk-harness`, `adk-kernel` and `adk-surface` (Beta); `adk-site`, `adk-drivers`, `adk-website` and `adk-vision` (Experimental) |
 
-`cargo semver-checks` runs in the `semver` gate with `SEMVER_RELEASE_TYPE: major` while the
-3.0.0 release candidate is open.
+[What's new in 3.0](docs/official_docs/whats-new-3.0.md) lists what the release adds.
+
+### Criteria Status
+
+| Criterion | Status | Notes |
+|-----------|--------|-------|
+| **Semver inventory** | 🔲 Open | The `semver` gate runs with `SEMVER_RELEASE_TYPE: major` while the 3.0.0 release candidate is open, which accepts every change. The breaking-change inventory against 2.3.0 is generated with `--release-type minor`, as for 2.0.0. |
+| **Migration guide** | 🔲 Open | [docs/official_docs/migration/2.x-to-3.0.md](docs/official_docs/migration/2.x-to-3.0.md), checked against the semver inventory and the `breaking` changelog fragments. |
+| **CI enforcement** | ✅ Met | `fmt`, `clippy --all-targets -D warnings`, `nextest --workspace`, feature coverage, doctests, doc build, template scaffolding and the standalone examples run per PR; macOS and Windows test suites run after merge. |
+| **Supply chain** | 🔲 Open | `cargo audit` and `cargo deny check` run nightly (`ci-nightly.yml`); both pass on the release commit. |
+| **Release bookkeeping** | 🔲 Open | `SECURITY.md`'s supported versions and the milestone text here are current; `SEMVER_RELEASE_TYPE` returns to `minor` after the tag (CONTRIBUTING.md, "Release Process"). |
 
 ### Post-3.0 Contract
 
