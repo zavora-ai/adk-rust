@@ -1566,10 +1566,10 @@ impl Agent for RealtimeAgent {
                     handle.abort();
                 }
                 // Stop the avatar session
-                if let (Some(provider), Some(sess_id)) = (&avatar_provider, &avatar_session_id) {
-                    if let Err(e) = provider.stop_session(sess_id).await {
-                        tracing::warn!(error = %e, "avatar session cleanup failed");
-                    }
+                if let (Some(provider), Some(sess_id)) = (&avatar_provider, &avatar_session_id)
+                    && let Err(e) = provider.stop_session(sess_id).await
+                {
+                    tracing::warn!(error = %e, "avatar session cleanup failed");
                 }
             }
 
