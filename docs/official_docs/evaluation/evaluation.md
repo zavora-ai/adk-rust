@@ -85,6 +85,9 @@ Test cases are defined in JSON files with the `.test.json` extension:
 }
 ```
 
+A turn can also carry `expected_vision`, what the agent must perceive in an image, and its
+`user_content` an `image` part that names a fixture pinned by SHA-256; see [Vision](#vision).
+
 ### Multi-Turn Cases and Session Input
 
 The turns of a case run in order through one session, using a `Runner` over a private in-memory session service, so each turn sees the conversation history and state that earlier turns left. Each case starts a new session, built from its `session_input`:
@@ -230,6 +233,31 @@ let evaluator = Evaluator::with_llm_judge(EvaluationConfig::with_criteria(criter
 ```
 
 A `SAFE: NO` or `HALLUCINATION_FREE: NO` verdict from the judge fails the criterion regardless of its score.
+
+### Vision
+
+`EvaluationCriteria::vision` scores what an agent perceives against each turn's
+`expected_vision`: regions, masks, page text, document fields, click targets and a count. The
+answer is read from the responses of the vision tools the agent called (`vision_detect`,
+`vision_segment`, `vision_read`, `vision_describe`), and every score is computed in the source
+image's pixels. A score is computed only when it has a threshold:
+
+```rust
+use adk_eval::EvaluationCriteria;
+use adk_eval::vision::VisionCriteria;
+
+fn main() {
+    let criteria = EvaluationCriteria::default().with_vision(VisionCriteria {
+        region_iou: Some(0.75),
+        ocr_char_accuracy: Some(0.98),
+        ..Default::default()
+    });
+    assert!(criteria.has_criteria());
+}
+```
+
+[Vision Evals](../vision/evals.md) covers image fixtures, the `expected_vision` parts, every score,
+and running a vision backend as an eval agent.
 
 ### Criteria That Cannot Be Judged
 
@@ -554,8 +582,8 @@ use adk_eval::{CostTracker, CostMetrics};
 let tracker = CostTracker::new();  // Uses default pricing tables
 
 // Compute cost for a known model
-let cost = tracker.compute_cost("gpt-4o", 2000, 800);
-// → Some(0.013)
+let cost = tracker.compute_cost("claude-sonnet-5-5", 2000, 800);
+// → Some(0.012)
 
 // Extract metrics from event streams
 let metrics = tracker.extract_metrics(&events, duration);

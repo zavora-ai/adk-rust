@@ -112,7 +112,10 @@ if let Some(code) = &event.llm_response.error_code {
 The `EventActions` struct contains metadata and side effects associated with an event:
 
 ```rust
-use adk_rust::{EventCompaction, ToolConfirmationDecision, ToolConfirmationRequest, WorkflowPosition};
+use adk_rust::{
+    EventCompaction, GroundingSource, SteeringMarker, ToolConfirmationDecision,
+    ToolConfirmationRequest, WorkflowPosition,
+};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -128,6 +131,8 @@ pub struct EventActions {
     pub route: Option<Vec<String>>,              // Graph route targets
     pub input_screened: bool,                    // User message screened before it was saved
     pub workflow_positions: HashMap<String, WorkflowPosition>, // Where workflows stopped on a held call
+    pub steering: Option<SteeringMarker>,        // User message delivered by Runner::steer
+    pub grounding_sources: Vec<GroundingSource>, // Sources a retrieval tool gave the model
 }
 ```
 
@@ -177,6 +182,29 @@ actions.transfer_to_agent = Some("specialist_agent".to_string());
 ### escalate
 
 When `true`, ends the enclosing workflow step: a `LoopAgent` stops iterating, and a `ParallelAgent` stops its other branches and passes the escalation on. `ExitLoopTool` sets it. Like `skip_summarization`, an escalating tool result also ends the agent's turn.
+
+### steering
+
+Set on a user message that reached a run while it ran, through `Runner::steer`. The event has
+`author` `"user"`, and the marker carries the message's `steerId`, its `sequence` among the run's
+steering messages (from 1), and its `sender`:
+
+```json
+{ "steering": { "steerId": "steer-5c0e…", "sequence": 1, "sender": "alice" } }
+```
+
+The message is a user turn in later history like any other, but not the run's own message:
+an agent never stands the run's message in for it, and compaction does not count it as an
+invocation. See [Steering a Running Agent](../core/runner.md#steering-a-running-agent).
+
+### grounding_sources
+
+The sources a tool call retrieved and gave the model, recorded by the tool with
+`adk_core::record_grounding_sources` (`adk-rag`'s `RagTool` and `VertexAiRagRetrievalTool` do).
+They stay on the tool call's event in the session. Each `GroundingSource` has the source's `uri`,
+the `tool` that retrieved it, and an optional `title`, `documentId` and `chunkId`. An agent counts
+a link in its final answer as a citation only if it names one of the sources its run recorded;
+see [Grounded Citations](../security/guardrails.md#grounded-citations).
 
 ### input_screened
 

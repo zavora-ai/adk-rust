@@ -360,7 +360,9 @@ so a message never reaches another user's or another session's run.
    user-authored event. The runner saves it like any other event, so the client stream, plugins'
    `on_event`, the session, later agents of the run and later turns all see it. See
    [LlmAgent: Steering a Running Agent](../agents/llm-agent.md#steering-a-running-agent) for
-   where the agent takes it.
+   where the agent takes it. A custom agent takes the queue from
+   `InvocationContext::steering_inbox()`; see
+   [Taking steering messages in a custom agent](traits.md#taking-steering-messages-in-a-custom-agent).
 
 `SteerReceipt::outcome()` resolves once the message has a fate:
 
