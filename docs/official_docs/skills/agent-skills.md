@@ -93,8 +93,8 @@ Leave out changes that only touch tests or CI.
 
 Files under a skill's `references/`, `scripts/` and `agents/` directories are resources, not
 skills. Discovery skips `.git`, `target`, `node_modules`, `dist`, `build` and similar
-directories. A file that fails to parse is left out of the index with a warning, so one broken
-skill does not stop the rest from loading. Each skill gets a content hash and an id made of its
+directories. A file that fails to parse is left out of the index — with a `warn`-level trace when it
+has frontmatter — so one broken skill does not stop the rest from loading. Each skill gets a content hash and an id made of its
 name and the hash's first 12 characters.
 
 `load_skill_index_with_extras(root, &extra_dirs)` adds skill directories outside the project,
@@ -179,13 +179,26 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Run from the project above, it prints `model receives: [skill:release-notes]`, then notes grouped
-under Added and Fixed with the CI change left out. A message no skill matches is sent unchanged.
+Run from the project above on `claude-sonnet-5-5`, it printed:
+
+```text
+model receives: [skill:release-notes]
+## Changed
+- `adk-model` makes `gemini-3.8-flash` the default model.
+
+## Fixed
+- `adk-session` fixes a Redis key collision.
+
+I left out the CI docs-build caching change, since it only touches CI. ...
+```
+
+The model receives the skill's block before the message, and the answer follows the skill. A
+message no skill matches is sent unchanged.
 
 | `LlmAgentBuilder` method | Does |
 |--------------------------|------|
 | `with_skills(index)` | Uses a `SkillIndex` you loaded |
-| `with_skills_from_root(root)` | Loads the index from `root`; fails the build with the load error |
+| `with_skills_from_root(root)` | Loads the index from `root`; returns the load error when it fails |
 | `with_auto_skills()` | `with_skills_from_root(".")` |
 | `with_skill_policy(policy)` | Sets the [`SelectionPolicy`](#selection) (default: the top skill scoring at least 1.0) |
 | `with_skill_budget(chars)` | Cuts the injected body at `chars` characters (default 2,000) |
@@ -228,7 +241,13 @@ same index always gives the same scores; no model is involved.
 | `include_tags` | empty | When set, only skills with one of these tags are scored |
 | `exclude_tags` | empty | Skills with any of these tags are dropped |
 
-Ties are broken by name, then by path. To see how a query scores, run the selection yourself:
+Ties are broken by name, then by path.
+
+Every word of the query counts, common words included, and a short body makes a small divisor.
+In the project above, `What is the capital of Kenya?` selects `incident-triage` at the default
+`min_score` of 1.0, through `is` in its description and `the` in its body. Raise `min_score`, or
+narrow the candidates with `include_tags`, when unrelated messages should reach the model
+unchanged. To see how a query scores, run the selection yourself:
 
 ```rust
 use adk_rust::skill::{SelectionPolicy, load_skill_index, select_skills};
@@ -247,12 +266,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+In the project above it prints:
+
+```text
+indexed agents from ./AGENTS.md
+indexed incident-triage from ./.skills/incident-triage.md
+indexed release-notes from ./.skills/release-notes/SKILL.md
+5.11 release-notes
+0.38 agents
+0.33 incident-triage
+```
+
 ## Inject at the runner
 
 `Runner::with_skill_injector` selects a skill for each run's user message before any agent runs,
 so every agent of the runner sees the skill. The runner prepends the block to the message before
-it saves it, so the session records the message with the block, and the run's span carries
-`adk.skills.selected_name` and `adk.skills.selected_id`. Injection runs before the plugins'
+it saves it, so the session records the message with the block, and the root agent's
+`invoke_agent` span carries `adk.skills.selected_name` and `adk.skills.selected_id`. Injection runs before the plugins'
 `on_user_message` callbacks.
 
 ```rust

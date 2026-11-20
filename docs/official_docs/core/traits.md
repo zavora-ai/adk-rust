@@ -170,8 +170,13 @@ async fn main() -> Result<()> {
 }
 ```
 
-It prints the steering message as a `user` event with `steering: true`, the agent's answer naming
-it, and `Delivered { event_id: … }`.
+It prints:
+
+```text
+user: skip the last step (steering: true)
+stepper: done; steering taken: ["skip the last step"] (steering: false)
+Delivered { event_id: "01a277fa-52a0-4f26-b61c-1531c39bdaa4" }
+```
 
 ## Tool
 
