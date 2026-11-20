@@ -30,7 +30,7 @@ scaffolds one.
 
 | What you get | Where |
 |--------------|-------|
-| Goals that iterate until a check command passes, graded against a rubric, and park on a decision | [Plans and goals](harness/plan-and-goals.md#goals) |
+| Goals that iterate until a check command passes, a grader passes every criterion of a rubric, or both, and park on a decision | [Plans and goals](harness/plan-and-goals.md#goals) |
 | Wake-ups on a schedule, a file change, a signed webhook, a queue message, an approval or a finished run | [Wake-ups](core/wake-ups.md), [Scheduling](kernel/scheduling.md) |
 | The harness and its kernel, durable and background runs, cron and webhook wake-ups, the approvals service, SQLite stores and the signed audit log, in one feature | `autonomy` (in `enterprise` and `full`) |
 | A project with a rubric-graded goal, a weekday schedule, an approval-gated side effect, a run budget and the OS sandbox | `cargo adk new ops-agent --template autonomous` |
