@@ -17,6 +17,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 ## Core
 
 - [Core Types](core/core.md) - Fundamental types: Content, Part, Agent trait, Tool trait, contexts
+- [Implementing the Core Traits](core/traits.md) - Every method of `Agent`, `Tool`, `Toolset` and `Llm` with its default, what a wrapper forwards, and steering in a custom agent
 - [Runner](core/runner.md) - Agent execution runtime and configuration
 - [Plugins](core/plugins.md) - Lifecycle hooks for tool/model interception and middleware
 - [Durable Runtime](core/durable-runtime.md) - Leases with fencing, the durable run queue, schedules, governance state, and agent identity
@@ -212,12 +213,13 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 
 ## Skills
 
+- [Agent Skills](skills/agent-skills.md) - `SKILL.md` files under `.skills/`, selection, injection by an agent or the runner, progressive disclosure, and the `skills` feature
 - [Vertex AI Skill Registry](skills/skill-registry.md) - Reading skills from the Gemini Enterprise Agent Platform Skill Registry
 
 ## Callbacks & Events
 
 - [Callbacks](callbacks/callbacks.md) - Intercept and customize agent behavior
-- [Events](events/events.md) - Understanding the event system and conversation history
+- [Events](events/events.md) - The event system, `EventActions` (state, transfers, steering, grounding sources) and conversation history
 
 ## Artifacts
 
@@ -232,8 +234,8 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 
 - [Launcher](deployment/launcher.md) - Running agents in console or server mode
 - [Server](deployment/server.md) - REST API, streaming and A2A integration
-- [A2A Getting Started](a2a/getting-started.md) - Create and run an A2A agent
-- [A2A Protocol](deployment/a2a.md) - Agent-to-Agent communication
+- [A2A Getting Started](a2a/getting-started.md) - Create and run an A2A agent: the v1 card and endpoints, the 0.3 card and endpoints, and requests that work
+- [A2A Protocol](deployment/a2a.md) - Agent-to-Agent communication: the A2A v1 server surfaces, operations, clients and errors
 - [Agentic Web Protocol 2.0](deployment/awp.md) - The signed site contract: profiles, keys and releases, the edge, verification, and what each crate provides
 - [Spin Up an AWP Website](deployment/website-quickstart.md) - `adk-rust website new`, the `adk-website` binary, or `cargo adk new my-site --template website`: the setup code, keys, onboarding and deployment shapes
 - [Move a WordPress Site to AWP](deployment/wordpress-to-awp.md) - Prove the domain, freeze, migrate, decide the quarantine, publish signed releases and verify
@@ -255,7 +257,7 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 
 ## Evaluation
 
-- [Agent Evaluation](evaluation/evaluation.md) - Testing and validating agent behavior
+- [Agent Evaluation](evaluation/evaluation.md) - Testing and validating agent behavior, vision criteria included
 - [Online Evaluation](evaluation/online-evaluation.md) - Judging a seeded sample of production runs off the request path, under its own budget and the kill switch
 - [Benchmark Results](evaluation/benchmarks.md) - Published performance comparison data
 - [Vertex AI Evaluation](evaluation/vertex-eval.md) - The Gen AI Evaluation Service bridge

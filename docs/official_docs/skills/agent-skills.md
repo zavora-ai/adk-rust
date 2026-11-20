@@ -116,7 +116,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
     let model = AnthropicClient::new(AnthropicConfig::new(
         std::env::var("ANTHROPIC_API_KEY")?,
@@ -260,7 +260,9 @@ use adk_rust::prelude::*;
 use adk_rust::skill::{SkillInjector, SkillInjectorConfig};
 use std::sync::Arc;
 
-fn runner_with_skills(agent: Arc<dyn Agent>) -> Result<Runner, Box<dyn std::error::Error>> {
+fn runner_with_skills(
+    agent: Arc<dyn Agent>,
+) -> std::result::Result<Runner, Box<dyn std::error::Error>> {
     let injector = SkillInjector::from_root(".", SkillInjectorConfig::default())?;
     Ok(Runner::builder()
         .app_name("skills_demo")
@@ -311,7 +313,7 @@ use std::sync::Arc;
 fn agent_with_skill_tools(
     model: Arc<dyn Llm>,
     tools: Arc<dyn ToolRegistry>,
-) -> Result<LlmAgent, Box<dyn std::error::Error>> {
+) -> std::result::Result<LlmAgent, Box<dyn std::error::Error>> {
     let index = Arc::new(load_skill_index(".")?);
     // `tools` resolves the names a skill lists in `allowed-tools`.
     let skills = SkillToolset::new(index, tools, SkillToolsetConfig::default());
