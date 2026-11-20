@@ -26,7 +26,7 @@
 //! |---------|----------|
 //! | `openai` | OpenAI Realtime API over WebSocket |
 //! | `openai-webrtc` | OpenAI Realtime API over WebRTC with Opus |
-//! | `telephony` | Provider-neutral phone-call control and governed call tools ([`telephony`]) |
+//! | `telephony` | Provider-neutral phone-call control and governed call tools (the `telephony` module) |
 //! | `openai-sip` | OpenAI Realtime SIP: incoming-call webhooks, accept, reject, transfer, hang up |
 //! | `gemini` | Gemini Live API |
 //! | `vertex-live` | Vertex AI Live API with Application Default Credentials |
