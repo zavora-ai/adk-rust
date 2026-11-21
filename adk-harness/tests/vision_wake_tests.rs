@@ -24,8 +24,8 @@ use adk_artifact::InMemoryArtifactService;
 use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditTrail, InMemoryAuditRecorder};
 use adk_core::{
     BudgetTracker, Content, DurableRunStore, FinishReason, InMemoryRunStore, Llm, LlmRequest,
-    LlmResponse, LlmResponseStream, ModelCallScope, NewRun, Part, RunBudget, RunState,
-    SessionId, UsageUnit, UserId,
+    LlmResponse, LlmResponseStream, ModelCallScope, NewRun, Part, RunBudget, RunState, SessionId,
+    UsageUnit, UserId,
 };
 use adk_harness::packs::vision::VisionPack;
 use adk_harness::{Harness, HarnessAgent, HarnessMode, InstructionsConfig};
@@ -156,7 +156,8 @@ async fn wake_once(
 
     // The stream's own runtime and the pack's share the detector; the pack's is the one the
     // woken turn's `vision_detect` calls.
-    let stream_runtime = Arc::new(VisionRuntime::builder().detector(detector.clone()).build().unwrap());
+    let stream_runtime =
+        Arc::new(VisionRuntime::builder().detector(detector.clone()).build().unwrap());
     let wakes = Arc::new(VisionWakeSource::new(STREAM).unwrap());
     let budget = Arc::new(BudgetTracker::new(RunBudget::new()));
     let sources = FrameSources::new(
@@ -249,8 +250,14 @@ async fn wake_once(
     let pid = kernel
         .processes()
         .spawn(
-            NewRun::new("background", APP, USER, APP, json!({ "text": "Inspect what the line shows you." }))
-                .with_session_id(SESSION),
+            NewRun::new(
+                "background",
+                APP,
+                USER,
+                APP,
+                json!({ "text": "Inspect what the line shows you." }),
+            )
+            .with_session_id(SESSION),
             ProcessSpec::new(ProcessKind::Goal)
                 .with_wake(WakeSet::any_of([Wake::Queue { source: STREAM.into() }])),
         )
@@ -267,8 +274,8 @@ async fn wake_once(
     assert!(inspector.requests().is_empty(), "asleep, the process makes no model call");
 
     // The operator starts the watch; the stream runs on the device until it is stopped.
-    let cx = VisionCx::new()
-        .with_audit(AuditTrail::new(Arc::new(audit.clone())), AuditActor::default());
+    let cx =
+        VisionCx::new().with_audit(AuditTrail::new(Arc::new(audit.clone())), AuditActor::default());
     sources.start_watch(&cx, &FrameSourceId(STREAM.into()), condition.clone()).await.unwrap();
     eventually("the woken process to complete", Duration::from_secs(120), || {
         let runs = runs.clone();
@@ -514,9 +521,8 @@ mod live {
         )
         .await
         .unwrap();
-        let source = Arc::new(
-            RtspSource::new(FrameSourceId(super::STREAM.into()), &server.url()).unwrap(),
-        );
+        let source =
+            Arc::new(RtspSource::new(FrameSourceId(super::STREAM.into()), &server.url()).unwrap());
         let started = std::time::Instant::now();
         let outcome = super::wake_once(
             source,

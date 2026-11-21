@@ -17,7 +17,7 @@ adk-vision = { version = "3.0.0", features = ["stream", "rtsp", "ffmpeg"] }
 |--------|---------|--------|--------|
 | `RtspSource` | `rtsp` | RTSP cameras through `retina` (MIT OR Apache-2.0): H.264, H.265, MJPEG | MJPEG in process; H.264 and H.265 through a user-installed `ffmpeg` (`ffmpeg` feature) |
 | `FileSource` | `ffmpeg` | MP4 and MOV files | A user-installed `ffmpeg`, spawned through `ffmpeg-sidecar` |
-| `ScreenSource` | `screen` | A `ComputerActuator` screenshot, or a computer-use-mcp observation through a `VisualObserver`, at an interval | PNG, JPEG |
+| `ScreenSource` | `screen` | A `ComputerActuator` screenshot, or a computer-use-mcp observation through a `VisualObserver` — `adk-computer-use`'s `vision::RuntimeObserver` (feature `vision`) over any `ComputerUseRuntime` — at an interval | PNG, JPEG |
 | `BrowserSource` | `browser` | `adk-browser`'s `browser_screenshot` tool at an interval | PNG |
 | `SurfaceCameraSource` | `surface-camera` | Frames the web home pushes through a `CameraFeed` | JPEG |
 
@@ -199,14 +199,15 @@ async fn inspect(runtime: Arc<VisionRuntime>, url: &str) -> adk_vision::Result<(
 | Source and sampler | Frames at the sampling rate and size |
 | Frame governor | Thins or pauses frames to the budget; records each change |
 | Privacy | Redacts every frame first; a failing hook drops the frame |
-| Detector | `VisionRuntime::detect_with`: metered like any vision call, regions in source pixels |
+| Detector | `VisionRuntime::detect_with`: metered in `UsageUnit::Frames`, regions in source pixels |
 | Tracker | Anonymous track identifiers, reset when the stream starts and when it stops |
 | Sink | `ObservationSink::observe` with the frame, its digest, regions and calls |
 
 An `Observation` carries the source session (one per run, the scope its track identifiers
 reset with), the redacted frame (`image`), the digest of its PNG encoding — the regions' image
 and the digest the frame is stored under if kept — the regions with their track identifiers,
-and the detector's metered calls. `ObservationSink::source_event`
+the tracks the tracker still holds (`tracks`: seen in the frame or kept through a brief miss,
+`Tracker::live_tracks`), and the detector's metered calls. `ObservationSink::source_event`
 receives `Started`, each `Governor` step, `Frozen`, `Thawed` and `Stopped`.
 
 The run writes `vision.source.started` and `vision.source.stopped` to the audit trail of the
@@ -215,37 +216,129 @@ governance control is frozen, frames are dropped unprocessed, and the pipeline r
 `vision.source.paused`, then `vision.source.resumed` after the thaw. A run that starts frozen
 is refused.
 
+### Metering
+
+Each detector call the pipeline makes is metered as one frame (`UsageUnit::Frames`), not as
+an image, so a stream counts against frame caps — `RunBudget::max_units(UsageUnit::Frames,
+..)` and the kernel's daily caps — and leaves image caps to the vision tools (spec 3.7 X3,
+§7.9). An on-device detector records its frames at zero cost; a backend priced per image is
+billed one unit per frame. Any runtime call can be metered the same way with
+`CallOptions::as_frames()`. Units are counted in the budget (`BudgetTracker::units`); the
+spend ledger counts money.
+
 ### Watch Conditions and Wakes
 
-`Observation::tracked` gives the `TrackedObservation` a `WatchEvaluator` takes. A sink that
-holds watch conditions keeps the frame of each event as its wake payload — so the frame is
-stored redacted, under the digest the event names — and hands the event, with the frame's
-artifact, to a `WatchSink` such as `adk-kernel`'s `VisionWakeSource`:
+`StreamWatch` is the pipeline's watch stage: an `ObservationSink` that holds watch
+conditions against every observation (`Observation::tracked`, which lists the tracker's held
+tracks so a frame the detector misses does not end a track) and, for each event that passes,
+keeps the frame through a `FrameKeeper` as its wake payload — stored redacted, once however
+many events it carries — names the kept artifact in the event, writes `vision.watch.fired`,
+and delivers the event to a `WatchSink` such as `adk-kernel`'s `VisionWakeSource`:
 
 ```rust
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use adk_vision::stream::{FrameKeeper, KeepReason, Observation, ObservationSink};
-use adk_vision::{VisionCx, WatchEvaluator, WatchSink};
+use adk_artifact::InMemoryArtifactService;
+use adk_vision::stream::{FrameKeeper, NoRedaction, RtspSource, StreamPipeline, StreamWatch};
+use adk_vision::{
+    DetectQuery, FrameSourceId, GreedyIouTracker, MediaScope, Sampling, VisionCx, VisionRuntime,
+    WatchCondition, WatchEvaluator, WatchSink,
+};
 
-struct Watch {
-    evaluator: Mutex<WatchEvaluator>,
-    keeper: FrameKeeper,
+async fn watch(
+    runtime: Arc<VisionRuntime>,
+    url: &str,
     wakes: Arc<dyn WatchSink>,
-}
-
-#[async_trait::async_trait]
-impl ObservationSink for Watch {
-    async fn observe(&self, cx: &VisionCx, observation: Observation) -> adk_vision::Result<()> {
-        let events = self.evaluator.lock().unwrap().observe(&observation.tracked());
-        for event in events {
-            let kept = self.keeper.keep(cx, &observation.image, KeepReason::WakePayload).await?;
-            self.wakes.deliver(&event.with_frame_artifact(kept.image.artifact)).await?;
-        }
-        Ok(())
-    }
+) -> adk_vision::Result<()> {
+    let line = FrameSourceId("conveyor-1".into());
+    // Wake frames are kept where the woken agent's vision tools load them.
+    let keeper = FrameKeeper::new(
+        Arc::new(InMemoryArtifactService::new()),
+        MediaScope::new("inspector", "line-1", "shift-1"),
+        line.clone(),
+    );
+    let conditions = vec![WatchCondition::new("wall-clock", ["clock"]).with_min_frames(3)];
+    let watch = StreamWatch::new(WatchEvaluator::new(conditions)?, Arc::new(keeper), wakes);
+    StreamPipeline::builder(Arc::new(RtspSource::new(line, url)?), Arc::new(NoRedaction))
+        .sampling(Sampling::at(2.0))
+        .detector(runtime, DetectQuery::Classes(vec!["clock".into()]))
+        .tracker(Box::new(GreedyIouTracker::new(0.3, 4)))
+        .sink(Arc::new(watch))
+        .build()?
+        .run(&VisionCx::new())
+        .await?;
+    Ok(())
 }
 ```
+
+Conditions can be added and removed while the stream runs (`StreamWatch::add_condition`,
+`remove_condition`); the others keep their streaks. `StreamWatch::with_observer` hands every
+observation on to a second sink, such as the live camera surface.
+
+## Frame Sources and `vision_watch`
+
+`FrameSources` is the registry an operator fills and an agent watches through the
+`vision_watch` tool. The operator registers each source with a `SourceSpec` — the source,
+its privacy hook, the keeper, the wake sink, and optionally a description, the detector and
+its query, a `TrackerFactory`, the sampling, a budget and an observer — and the agent names
+it; the camera URL and its credentials never reach a tool call, a record or a wake.
+
+```rust
+use std::sync::Arc;
+
+use adk_vision::stream::{FrameKeeper, FrameSource, FrameSources, NoRedaction, SourceSpec};
+use adk_vision::{
+    DetectQuery, FrameSourceId, GreedyIouTracker, Sampling, Tracker, VisionCx, VisionRuntime,
+    WatchCondition, WatchSink,
+};
+
+async fn register(
+    camera: Arc<dyn FrameSource>,
+    keeper: Arc<FrameKeeper>,
+    wakes: Arc<dyn WatchSink>,
+    runtime: Arc<VisionRuntime>,
+    streams: VisionCx,
+) -> adk_vision::Result<FrameSources> {
+    let sources = FrameSources::new(streams);
+    sources.register(
+        SourceSpec::new(camera, Arc::new(NoRedaction), keeper, wakes)
+            .describe("Line 1 conveyor, top camera")
+            .detector(runtime, DetectQuery::Classes(vec!["person".into(), "clock".into()]))
+            .tracker(Arc::new(|| Box::new(GreedyIouTracker::new(0.3, 4)) as Box<dyn Tracker>))
+            .sampling(Sampling::at(2.0)),
+    )?;
+    // An operator can watch directly; an agent does the same through `vision_watch`.
+    let condition = WatchCondition::new("wall-clock", ["clock"]);
+    sources.start_watch(&VisionCx::new(), &FrameSourceId("conveyor-1".into()), condition).await?;
+    Ok(sources)
+}
+```
+
+| Behaviour | How |
+|-----------|-----|
+| Streams only while watched | The first condition on a source starts its pipeline, with a `StreamWatch` as the sink; later ones join it; removing the last stops it |
+| Runs under the registry's context | Each stream runs under the `VisionCx` the registry was made with — its audit trail, metering scope and kill switch — with its own cancellation token, so it outlives the tool call that started it, and a freeze pauses it at its next frame |
+| Idempotent | Registering the same condition again changes nothing; a different condition under a registered name is refused |
+| Checked | A condition naming a label the source's detector never reports, or one on a source without a detector, is refused |
+| Ends on its own | A file's last frame ends the stream; its conditions stay registered and the next registration starts it again; the status keeps how it ended |
+
+`VisionToolsetBuilder::frame_sources` adds `vision_watch` to the toolset, and the
+`adk-harness` vision pack takes the same registry through `VisionPack::frame_sources`:
+
+| Argument | Action | Meaning |
+|----------|--------|---------|
+| `action` | all | `list`, `start` or `stop` |
+| `source` | `start`, `stop` | The source's name, as `list` gives it |
+| `name` | `start`, `stop` | The condition's name: part of every wake key |
+| `labels`, `minScore`, `minFrames` | `start` | As `WatchCondition` takes them |
+| `zone`, `zoneAnchor` | `start` | A polygon of `[x, y]` points in the frame's pixels; `center` or `bottomCenter` |
+| `cooldownSeconds` | `start` | The least time between two wakes of the condition |
+
+`list` answers each source's name, description, labels, whether it streams, its conditions,
+the events its stream delivered and how its last stream ended; `start` and `stop` answer what
+changed (`registered`, `unchanged`, `removed`, `notWatched`) and the source after it. The tool
+is `Idempotent`; the harness classes `list` as `Read` and `start` and `stop` as `External`,
+`Idempotent`, from a trusted origin.
 
 ## Fixtures
 
@@ -287,3 +380,6 @@ async fn serve() -> adk_vision::Result<RtspTestServer> {
 | `vision.governor.step` | Any governor change | source, time, change, quota state |
 | `vision.evidence.kept` | A frame is kept | digest, reason, retention, expiry, scope, artifact, privacy hook, boxes redacted |
 | `vision.evidence.purged` | A kept frame is deleted | digest, cause, reasons, kept and expiry times, scope, artifact |
+| `vision.watch.registered` | A watch condition is registered on a source (on the caller's trail when it has one) | source, condition, condition digest, labels, minimum score and frames, zone, cooldown |
+| `vision.watch.stopped` | A watch condition is removed (on the caller's trail when it has one) | source, condition, condition digest |
+| `vision.watch.fired` | A condition passed and its frame was kept | source, session, condition and its digest, event, track, frame digest and index, artifact |
