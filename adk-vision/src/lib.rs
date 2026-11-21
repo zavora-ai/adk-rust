@@ -43,7 +43,8 @@
 //! | `gemini-video` | `GeminiVideoAnalyzer`: Gemini native video, through the File API above 20 MB, at an explicit frame rate and media resolution (implies `cloud`) |
 //!
 //! [`VisionToolset`] — `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`,
-//! `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure` — is always built: each tool runs on
+//! `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure`, and with feature
+//! `stream` `vision_watch` over registered frame sources — is always built: each tool runs on
 //! the governed path, a remote call is held with the exact egress image as approval
 //! evidence, and every call, release and edit writes its `vision.*` audit record
 //! ([`audit`]).
@@ -207,6 +208,8 @@ pub use runtime::{
 #[cfg(feature = "sam")]
 pub use sam::{SamConfig, SamSegmenter, SamVideoTracker};
 pub use sent::{SentImage, VisionInput};
+#[cfg(feature = "stream")]
+pub use toolset::VISION_WATCH_TOOL;
 pub use toolset::{
     ANSWER_ARTIFACT_PREFIX, EgressApproval, VISION_EGRESS_POLICY_REF, VISION_TOOL_NAMES,
     VisionTool, VisionToolKind, VisionToolset, VisionToolsetBuilder, answer_artifact_name,

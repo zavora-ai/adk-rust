@@ -458,6 +458,7 @@ dependencies = [
  "adk-runner",
  "adk-session",
  "adk-tool",
+ "adk-vision",
  "async-trait",
  "base64 0.22.1",
  "chrono",
