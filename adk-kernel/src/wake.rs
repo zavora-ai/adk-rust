@@ -32,6 +32,7 @@
 //! | File change | [`FileWakeSource`] over `FileWatchTrigger` | [`keys::file`]: `file:<root>:<path>:<modification time>` |
 //! | Webhook | `webhook_wake_hook` over `WebhookIngress` (feature `webhooks`) | [`keys::webhook`]: `hook:<name>:<webhook-id>`, set by the ingress |
 //! | Queue | [`queue_wake_ingress`] over `QueueIngress` | [`keys::queue`]: `queue:<source>:<message id>`, set by the ingress |
+//! | Visual event | [`VisionWakeSource`](crate::VisionWakeSource), fed by a stream's watch conditions | [`keys::vision`]: `queue:<source>:<session>:<track>:<condition>:<event>` |
 //! | Schedule | `DurableScheduler` | [`keys::schedule`]: `schedule:<id>:<time>` |
 //! | Approval decided | [`ApprovalWakeSource`], an `ApprovalNotifier` on `StoreApprovalService` | [`keys::approval`]: the approval request id |
 //! | Run finished | [`RunFinishedWakeSource`], the S1 `on_finish` hook | [`keys::run_finished`]: `run:<pid>:<final state>` |
@@ -386,6 +387,7 @@ impl WakeEvent {
 /// assert_eq!(keys::schedule("nightly-report", at), "schedule:nightly-report:2026-10-22T09:00:00Z");
 /// assert_eq!(keys::webhook("github", "msg_1"), "hook:github:msg_1");
 /// assert_eq!(keys::queue("orders", "m-1"), "queue:orders:m-1");
+/// assert_eq!(keys::vision("conveyor-1", "shift-1", 7, "torn-seal", "detected"), "queue:conveyor-1:shift-1:7:torn-seal:detected");
 /// assert_eq!(keys::run_finished("run-7", adk_core::RunState::Completed), "run:run-7:completed");
 /// assert_eq!(keys::trigger("hook:github:msg_1", "triage"), "hook:github:msg_1#triage");
 /// ```
@@ -421,6 +423,13 @@ pub mod keys {
     /// `queue:<source>:<message id>`, as `QueueIngress::idempotency_key` sets it.
     pub fn queue(source: &str, message_id: &str) -> String {
         adk_core::queue_source::QueueIngress::idempotency_key(source, message_id)
+    }
+
+    /// `queue:<source>:<session>:<track>:<condition>:<event>`, as
+    /// [`VisionWakeSource`](crate::VisionWakeSource) sets it (spec 3.7 §7.10): one track of one
+    /// stream session under one watch condition wakes once, however many frames show it.
+    pub fn vision(source: &str, session: &str, track: u64, condition: &str, event: &str) -> String {
+        queue(source, &format!("{session}:{track}:{condition}:{event}"))
     }
 
     /// `schedule:<id>:<time>`, as `Schedule::run_for` sets it.
@@ -2473,7 +2482,7 @@ const HUB_BACKLOG: usize = 1024;
 /// The fan-out behind the push sources: every subscriber gets every event; events published
 /// with no subscriber attached wait, bounded, for the first one.
 #[derive(Debug, Default)]
-struct WakeHub {
+pub(crate) struct WakeHub {
     state: Mutex<HubState>,
 }
 
@@ -2484,7 +2493,7 @@ struct HubState {
 }
 
 impl WakeHub {
-    fn publish(&self, event: WakeEvent) {
+    pub(crate) fn publish(&self, event: WakeEvent) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.subscribers.retain(|subscriber| !subscriber.is_closed());
         if state.subscribers.is_empty() {
@@ -2498,7 +2507,7 @@ impl WakeHub {
         state.subscribers.retain(|subscriber| subscriber.send(event.clone()).is_ok());
     }
 
-    fn subscribe(&self) -> BoxStream<'static, WakeEvent> {
+    pub(crate) fn subscribe(&self) -> BoxStream<'static, WakeEvent> {
         let (sender, receiver) = mpsc::unbounded_channel();
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         for event in state.backlog.drain(..) {

@@ -215,6 +215,7 @@ from the kernel's own per-process daily totals, fed by a `ProgressSource` or, fo
 | `FileWakeSource` (one per watched root, started when a sleeper needs it) | `Wake::FileChange` | `file:<root>:<path>:<modified>` |
 | `webhook_wake_hook` on a `WebhookIngress` | `Wake::Webhook` | `hook:<name>:<delivery id>` |
 | `queue_wake_ingress` over a `QueueSource` | `Wake::Queue` | `queue:<source>:<message id>` |
+| `VisionWakeSource`, one per camera, screen or browser stream (spec 3.7 §7.10) | `Wake::Queue` | `queue:<source>:<session>:<track>:<condition>:<event>` |
 | `ApprovalWakeSource`, an `ApprovalNotifier` | `Wake::Approval` | the approval request id |
 | `RunFinishedWakeSource`, a `WorkerHooks` | `Wake::RunFinished` | `run:<pid>:<state>` |
 | The tick, on `KernelConfig::clock` | `Wake::At`, wake-set expiry | — |
@@ -529,6 +530,7 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `managed` | off | `managed`: `KernelDef` under the `adk.kernel` metadata key of a managed definition, and `TenantKernel`, one kernel per tenant over its `ManagedStores` on `adk-managed`'s runtime (Experimental); with `charter`, a tenant's signal store and `TenantKernel::signal_sink` for a definition's signal wakes |
 | `channels` | off | The chat channel contract (spec 3.3 §10 K1): `channels`, the binding store on every backend, and with `conformance` the adapter contract suite |
 | `charter` | off | `charter` (spec 3.5 §7.10, §7.11): the charter store, the KPI tracker, autonomy records, signals and the site process kinds over `awp-types` 2.0, the stores on in-memory, SQLite, PostgreSQL and Redis |
+| `vision` | off | The bridge from `adk-vision` (spec 3.7 §7.10): `VisionWakeSource` as a `WatchSink`, `VisualWake` from a `WatchEvent`; the source itself needs no feature |
 
 ## Tests
 
@@ -538,6 +540,7 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `tests/kernel_scenarios.rs` | K2: ten sleepers on ten kinds of wake set make no model call and hold no lease over a clock-controlled hour. K3: a file save, a signed webhook and a queue message each wake one run in under 2 s, and redeliveries wake nothing. K9: two replicas over one SQLite file, six running processes stopped within 1 s of a freeze on both (no model or tool call after it) and parked, resumed by the unfreeze with every tool call once. Chaos: a kernel process killed with `SIGKILL` mid-step, restarted, resumes from its checkpoint |
 | `tests/supervisor_tests.rs`, `tests/supervisor_property_tests.rs` | The process actions, lifecycle and spend attribution; sleepers never call the model and freezes stop everything within a second, with process-store writes delayed up to 120 ms |
 | `tests/wake_*.rs` | Matching, keys, expiry, reconciliation and each wake source |
+| `tests/vision_wake.rs` | Spec 3.7 S10: a process asleep on a stream wakes once for forty frames of one torn seal and reads frame, digest, artifact, track and regions within 4 KiB; with no sleeper a trigger starts a `Triggered` process; a redelivery wakes nothing; with feature `vision`, the same through `adk-vision`'s `WatchEvaluator`; the payload stays within the limit for any regions and texts |
 | `tests/proactivity_scenarios.rs` | K4: in Ask a follow-up waits in the inbox and nothing runs until it is approved, edited or rejected; in Auto it runs after quiet hours within the daily budget, a proposal past `max_proposed_open` is rejected with a reason on the bus, and an over-budget process sleeps until the budget replenishes: a new UTC day, a cap raised in the partition record (twice in a day, each time) or removed, or caps lifted across a restart. K8: three background runs at a quota of three, a typed message runs at once, the youngest background run parks and is requeued, no tool runs twice and the quota is never exceeded. A consolidation item waits for a person in Auto |
 | `tests/process_store_*.rs`, `tests/agenda_store*.rs`, `tests/driver_store_*.rs`, `tests/ledger_store_*.rs` | The conformance suites on every backend; PostgreSQL and Redis run `#[ignore]`d against a server (`scripts/test-postgres.sh`) |
 | `tests/store_conformance_mongodb.rs`, `tests/store_conformance_firestore.rs`, `tests/store_conformance_neo4j.rs` | The process, agenda, driver, ledger, partition and cron watermark suites on MongoDB, Firestore and Neo4j, `#[ignore]`d; CI's nightly `durable-stores` job runs them against MongoDB (a replica set and a standalone server), Neo4j and the Firestore emulator |

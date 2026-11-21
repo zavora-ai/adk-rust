@@ -205,6 +205,8 @@
 # then the library alone with no default features, as a consumer builds it.
 2 adk-kernel charter doc
 2 adk-kernel charter no-default,lib
+# The bridge from adk-vision's watch conditions to VisionWakeSource (spec 3.7 §7.10).
+2 adk-kernel vision
 # The terminal surface (spec 3.3 §5.2): full screen, inline and JSON lines; with `web`, the
 # scripted scenario on a kernel-hosted harness drawn by `TerminalSurface::screen`.
 9 adk-surface tui doc

@@ -19,7 +19,7 @@
 //!
 //! | Feature | Contents |
 //! |---------|----------|
-//! | (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor` |
+//! | (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor`, watch conditions ([`WatchEvaluator`]), calibration and measurement ([`Calibration`]) |
 //! | `fetch` | `ModelFetcher`: Hugging Face downloads by revision, SHA-256 checked before load, `HF_HUB_OFFLINE` honoured |
 //! | `conformance` | `conformance`: the suite every backend runs, and its test macros |
 //! | `eval` | `eval`: any runtime task as an `adk-eval` agent, in process or behind `cargo adk eval --agent-cmd` |
@@ -37,7 +37,7 @@
 //! | `mistralrs-metal`, `mistralrs-cuda` | `mistralrs` on Apple GPUs or CUDA |
 //!
 //! [`VisionToolset`] — `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`,
-//! `vision_crop`, `vision_redact`, `vision_annotate` — is always built: each tool runs on
+//! `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure` — is always built: each tool runs on
 //! the governed path, a remote call is held with the exact egress image as approval
 //! evidence, and every call, release and edit writes its `vision.*` audit record
 //! ([`audit`]).
@@ -110,6 +110,7 @@ mod geometry;
 #[cfg(feature = "guardrail")]
 mod guardrail;
 mod manifest;
+mod measure;
 mod media;
 #[cfg(feature = "mistralrs")]
 pub mod mistralrs;
@@ -131,6 +132,7 @@ mod sent;
 mod toolset;
 mod tracker;
 mod traits;
+mod watch;
 
 pub use backend::{BackendDescriptor, BackendId, InputLimits, Locality, Oversize, PriceRef};
 pub use budget::{ImageTokens, TokenEstimate};
@@ -162,6 +164,10 @@ pub use manifest::{
     AcceptanceStore, FileAcceptanceStore, InMemoryAcceptanceStore, InputSpec, IoSpec,
     LicenceAcceptance, LicenceClass, LicenceGate, LicenceInfo, LicencePolicy, ManifestSet,
     ModelFile, ModelManifest, ModelSource, RuntimeSpec, VerifiedFile, VerifiedModel, VisionTask,
+};
+pub use measure::{
+    Calibration, CalibrationSource, FiducialSpec, MEASUREMENT_VALIDITY, MeasuredGeometry,
+    Measurement,
 };
 pub use media::{
     ArtifactLocator, DecodeLimits, DecodedImage, Frame, FrameMeta, FramePixels, FrameSourceId,
@@ -195,4 +201,9 @@ pub use traits::{
     DocumentPage, DocumentReader, Editor, Embedder, EmbeddingSpace, ImageRegion, Metric,
     ReadOptions, Sampling, SegmentPrompt, Segmenter, TableCell, Tracker, VideoAnalysis,
     VideoAnalyzer, VideoEvent, VideoInput, VideoRequest, Word,
+};
+pub use watch::{
+    FrameRef, TrackedObservation, VISION_WATCH_FIRED, VISION_WATCH_REGISTERED, WatchCondition,
+    WatchEvaluator, WatchEvent, WatchEventKind, WatchSink, Zone, ZoneAnchor,
+    watch_registered_draft,
 };
