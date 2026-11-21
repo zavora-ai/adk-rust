@@ -36,6 +36,9 @@ sha2 = { workspace = true }
 base64 = { version = "0.22", optional = true }
 reqwest = { workspace = true, optional = true }
 http = { version = "1", optional = true }
+# The process's one ONNX Runtime environment (`adk_core::onnx`). How onnxruntime links is left
+# to the crates that run models.
+ort = { workspace = true, optional = true, features = ["std"] }
 
 [features]
 default = []
@@ -55,6 +58,9 @@ webhook-delivery = ["webhooks", "egress-client"]
 # The `RequestContextExtractor` trait an HTTP server authenticates requests through
 # (`adk_core::request_context`); here so `adk-auth` implements it without depending on `adk-server`.
 auth-bridge = ["dep:http"]
+# The process's one ONNX Runtime environment (`adk_core::onnx`), which `ort` allows once per
+# process; here so `adk-audio`, `adk-rag` and `adk-vision` share it.
+ort = ["dep:ort"]
 
 [dev-dependencies]
 # Path-only self dependency, so the crate's own tests run the conformance suites.

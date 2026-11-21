@@ -191,6 +191,13 @@ impl PpOcrReader {
         })?;
         let dict = dictionary(&yaml)?;
         let id = format!("pp-ocrv6-{}", size.name());
+        let environment = adk_core::onnx::ort_environment().map_err(|e| VisionError::Backend {
+            backend: id.clone(),
+            message: format!("ONNX Runtime could not start: {e}"),
+        })?;
+        // `oar-ocr` keeps its own handle and refuses a second one; `ort` allows one environment
+        // per process, so a handle it already holds is this one.
+        let _ = oar_ocr::core::inference::set_ort_environment(environment);
         let engine = OAROCRBuilder::new(det, rec, "")
             .character_dict_content(dict.join("\n"))
             .text_detection_config(size.detection_config())

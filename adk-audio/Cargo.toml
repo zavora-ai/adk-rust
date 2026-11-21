@@ -98,7 +98,7 @@ fx = []
 desktop-audio = ["dep:cpal"]
 
 # Cross-platform local inference
-onnx = ["dep:ort", "dep:tokenizers", "dep:hf-hub"]
+onnx = ["dep:ort", "adk-core/ort", "dep:tokenizers", "dep:hf-hub"]
 # `OnnxExecutionProvider::Cuda` and `CoreMl`; without them a session warns and runs on the CPU.
 # `onnx-cuda` downloads the CUDA build of onnxruntime; `onnx-coreml` links only on Apple targets.
 onnx-cuda = ["onnx", "ort/cuda"]

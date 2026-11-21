@@ -136,7 +136,9 @@ impl OnnxTtsProvider {
             });
         }
 
-        let mut builder = Session::builder().map_err(|e| AudioError::Tts {
+        let mut builder = adk_core::onnx::ort_environment()
+            .and_then(|environment| Session::builder(&environment))
+            .map_err(|e| AudioError::Tts {
             provider: "ONNX".into(),
             message: format!("failed to create session builder: {e}"),
         })?;

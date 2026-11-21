@@ -158,7 +158,8 @@ impl OrtModel {
     /// Loads a verified file. External data (`.onnx_data`) is read from beside it.
     pub fn load(backend: &str, file: &VerifiedFile, options: &OnnxOptions) -> Result<Self> {
         let failed = |message: String| VisionError::Backend { backend: backend.into(), message };
-        let mut builder = Session::builder()
+        let mut builder = adk_core::onnx::ort_environment()
+            .and_then(|environment| Session::builder(&environment))
             .and_then(|b| {
                 b.with_optimization_level(GraphOptimizationLevel::Level3).map_err(Into::into)
             })

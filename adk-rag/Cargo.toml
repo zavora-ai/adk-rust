@@ -71,5 +71,5 @@ agent-retrieval = ["dep:adk-gcp", "dep:google-cloud-auth", "dep:reqwest", "dep:u
 vertex-rag = ["dep:adk-gcp", "dep:google-cloud-auth", "dep:reqwest"]
 # A sentence-transformer ONNX model run in process on the `ort` runtime: no network and no
 # provider key after one download into the Hugging Face hub cache (spec 3.1 §10 R1).
-onnx = ["dep:ort", "dep:tokenizers", "dep:hf-hub"]
+onnx = ["dep:ort", "adk-core/ort", "dep:tokenizers", "dep:hf-hub"]
 full = ["gemini", "openai", "qdrant", "lancedb", "pgvector"]
