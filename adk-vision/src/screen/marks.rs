@@ -125,7 +125,8 @@ pub struct BrowserElements {
 ///     BBox::new(1920.0, 1180.0, 2100.0, 1260.0),
 ///     Some("Save".into()),
 ///     CandidateSource::OcrWord { confidence: Some(0.98) },
-/// );
+/// )
+/// .unwrap();
 /// let target = marks.ground(save).unwrap();
 /// assert_eq!(target.click, [1005.0, 610.0]);
 /// assert!(target.points.contains(target.click));
