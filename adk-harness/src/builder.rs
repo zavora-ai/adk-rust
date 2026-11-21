@@ -2943,6 +2943,10 @@ impl HarnessAgentBuilder {
                 skills: &self.skills,
                 observers: &observers,
                 effort: self.effort,
+                #[cfg(feature = "vision")]
+                vision: vision.as_ref(),
+                #[cfg(feature = "vision")]
+                vision_audit: harness_audit.clone(),
             })?)),
             None => None,
         };

@@ -187,7 +187,7 @@ adk-vision = { path = ".", features = ["conformance"] }
 # The governed-toolset scenarios (S1–S4, S7) run through `Runner` and `LlmAgent` with a
 # scripted model; the cloud contract tests replay recorded responses through the real
 # provider clients.
-adk-agent = { path = "../adk-agent" }
+adk-agent = { path = "../adk-agent", features = ["team-tools"] }
 # The eval agent scored by `adk-eval`'s vision criteria, in process.
 adk-eval = { path = "../adk-eval" }
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic", "gemini", "muse", "openai"] }

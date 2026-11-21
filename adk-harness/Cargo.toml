@@ -92,7 +92,7 @@ computer-use = ["dep:adk-computer-use", "graph"]
 payments = ["dep:adk-payments", "dep:adk-auth"]
 # The vision pack (spec 3.7 X15): adk-vision's governed tools, the `.adk/vision.toml` egress
 # rules and the image privacy guardrail on by default; `web` for the untrusted-text screening.
-vision = ["web", "dep:adk-vision", "adk-vision/guardrail"]
+vision = ["web", "dep:adk-vision", "adk-vision/guardrail", "adk-vision/team"]
 # The vision pack's default on-device redactors: RF-DETR Nano for `faces` and PP-OCRv6 small
 # for `personal_text`, weights from adk-vision's built-in manifest; `ort` downloads the
 # onnxruntime binary at build time. Without it, a release whose rules require a class no

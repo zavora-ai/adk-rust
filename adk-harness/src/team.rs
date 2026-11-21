@@ -11,6 +11,13 @@
 //! | `MemberKind::Acp` (`team-acp`) | an ACP-compatible coding agent over `adk-acp` | each permission request through the governed path |
 //! | `MemberKind::Remote` (`team-a2a`) | `RemoteA2aAgent` | governed by the remote agent |
 //! | [`MemberKind::Agent`] | the agent supplied | the shared policy; its tools are `External` |
+//! | `MemberKind::Perceiver` (`vision`) | an `LlmAgent` on a model that runs on the device, over the read tools and the vision pack's on-device tools | as a local member; a call that would leave the device is refused |
+//!
+//! With the vision pack, [`MemberSpec::perceiver`], [`MemberSpec::reasoner`] and
+//! [`MemberSpec::verifier`] are the three roles of a multimodal team (spec 3.7 §7.12). The
+//! harness refuses to build a perceiver on a remote model or holding any tool that declares
+//! network use, and puts the pack's privacy guardrail on every local member whose model is
+//! remote, so a reasoner sees only images the egress gate released.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
@@ -145,6 +152,17 @@ pub enum MemberKind {
     Remote(adk_server::a2a::RemoteA2aConfig),
     /// Any agent the caller supplies.
     Agent(Arc<dyn Agent>),
+    /// A perceiver (spec 3.7 §7.12, feature `vision`): an `LlmAgent` the harness builds on a
+    /// model that runs on the device, holding the read tools and the vision pack's on-device
+    /// tools only ([`MemberTools::ReadOnly`] or [`MemberTools::LocalPerception`]). The build
+    /// refuses a remote model and any other tools.
+    #[cfg(feature = "vision")]
+    Perceiver {
+        /// The member's instruction.
+        instruction: String,
+        /// Its model; must not send requests off the machine.
+        model: Arc<dyn Llm>,
+    },
 }
 
 /// The tools a member gets (spec 3.1 §7.10).
@@ -163,6 +181,12 @@ pub enum MemberTools {
     Full,
     /// Exactly these tools.
     Custom(Vec<Arc<dyn Tool>>),
+    /// The read tools, the vision pack's tools whose default backend is on the device, and
+    /// these (spec 3.7 §7.12, feature `vision`). Each of these must declare no network use,
+    /// or the build refuses the member; each call of any of them that would leave the device
+    /// is refused when it runs.
+    #[cfg(feature = "vision")]
+    LocalPerception(Vec<Arc<dyn Tool>>),
 }
 
 impl MemberSpec {
@@ -225,10 +249,23 @@ impl MemberSpec {
         }
     }
 
-    /// The member's kind as audit records name it: `local`, `acp`, `a2a` or `agent`.
+    /// Whether the harness builds the member's agent itself: a local member or a perceiver.
+    fn is_built_locally(&self) -> bool {
+        match &self.kind {
+            MemberKind::Local { .. } => true,
+            #[cfg(feature = "vision")]
+            MemberKind::Perceiver { .. } => true,
+            _ => false,
+        }
+    }
+
+    /// The member's kind as audit records name it: `local`, `acp`, `a2a` or `agent`. A
+    /// perceiver is `local`.
     pub fn kind_label(&self) -> &'static str {
         match &self.kind {
             MemberKind::Local { .. } => "local",
+            #[cfg(feature = "vision")]
+            MemberKind::Perceiver { .. } => "local",
             #[cfg(feature = "team-acp")]
             MemberKind::Acp(_) => "acp",
             #[cfg(feature = "team-a2a")]
@@ -261,8 +298,7 @@ impl MemberSpec {
     /// assert_eq!(policy.approval, RelationshipApprovalPolicy::Never);
     /// ```
     pub fn relationship_policy(&self) -> RelationshipPolicy {
-        let read_only_local = matches!(self.kind, MemberKind::Local { .. })
-            && matches!(self.tools, MemberTools::ReadOnly);
+        let read_only_local = self.is_built_locally() && matches!(self.tools, MemberTools::ReadOnly);
         RelationshipPolicy {
             input_schema: None,
             output_schema: self.output_schema.clone(),
@@ -466,6 +502,12 @@ pub(crate) struct TeamInputs<'a> {
     pub(crate) observers: &'a [Arc<dyn crate::toolset::RequestObserver>],
     /// The harness's effort policy; members run at `members` (spec 3.1 §7.23).
     pub(crate) effort: crate::posture::EffortPolicy,
+    /// The vision pack, whose evidence callback and privacy guardrail every local member gets.
+    #[cfg(feature = "vision")]
+    pub(crate) vision: Option<&'a crate::packs::vision::VisionPackRuntime>,
+    /// The harness audit trail the members' privacy guardrails write to.
+    #[cfg(feature = "vision")]
+    pub(crate) vision_audit: Option<adk_core::audit_log::AuditTrail>,
 }
 
 /// Runs `future` to completion from a synchronous caller, inside a runtime or not.
@@ -497,6 +539,8 @@ impl TeamPlan {
             .map(|member| {
                 let kind = match &member.kind {
                     MemberKind::Local { .. } => "local",
+                    #[cfg(feature = "vision")]
+                    MemberKind::Perceiver { .. } => "local",
                     #[cfg(feature = "team-acp")]
                     MemberKind::Acp(_) => "acp",
                     #[cfg(feature = "team-a2a")]
@@ -507,6 +551,8 @@ impl TeamPlan {
                     MemberTools::ReadOnly => "read-only",
                     MemberTools::Full => "full",
                     MemberTools::Custom(_) => "custom",
+                    #[cfg(feature = "vision")]
+                    MemberTools::LocalPerception(_) => "local-perception",
                 };
                 crate::manifest::MemberEntry::new(member.name.clone(), kind, tools)
             })
@@ -616,6 +662,8 @@ impl TeamPlan {
         for member in &self.members {
             match &member.kind {
                 MemberKind::Local { .. } => updated = updated.with_agent(member.name.clone()),
+                #[cfg(feature = "vision")]
+                MemberKind::Perceiver { .. } => updated = updated.with_agent(member.name.clone()),
                 #[cfg(feature = "team-acp")]
                 MemberKind::Acp(_) => {
                     updated = updated.with_agent(member.name.clone());
@@ -720,6 +768,11 @@ fn build_member(member: &MemberSpec, inputs: &TeamInputs<'_>) -> Result<Arc<dyn 
         MemberKind::Local { instruction, model } => {
             Arc::new(build_local(member, instruction, model.clone(), inputs)?)
         }
+        #[cfg(feature = "vision")]
+        MemberKind::Perceiver { instruction, model } => {
+            vision_roles::check_perceiver(member, model.as_ref())?;
+            Arc::new(build_local(member, instruction, Some(model.clone()), inputs)?)
+        }
         #[cfg(feature = "team-acp")]
         MemberKind::Acp(config) => {
             let mut config = config.clone();
@@ -754,7 +807,12 @@ fn build_local(
             .collect(),
         MemberTools::Full => inputs.tools.to_vec(),
         MemberTools::Custom(tools) => tools.clone(),
+        #[cfg(feature = "vision")]
+        MemberTools::LocalPerception(extra) => {
+            vision_roles::local_perception_tools(member, inputs.tools, extra, READ_ONLY_MEMBER_TOOLS)?
+        }
     };
+    let model = model.unwrap_or_else(|| inputs.model.clone());
     let text = format!(
         "{instruction}\n\nYou are the `{name}` member of a harness team, working in the workspace at \
          {root}. You receive one request without the conversation that led to it; work on it with \
@@ -769,7 +827,7 @@ fn build_local(
         Box::pin(async move { Ok(text) })
     });
     let mut builder = LlmAgentBuilder::new(member.name.clone())
-        .model(model.unwrap_or_else(|| inputs.model.clone()))
+        .model(model.clone())
         .description(member.description.clone())
         .instruction_provider(provider)
         .toolset(Arc::new(
@@ -788,6 +846,17 @@ fn build_local(
     }
     if let Some(schema) = &member.output_schema {
         builder = builder.output_schema(schema.clone());
+    }
+    // The vision pack's evidence and privacy guardrail on a member as on the coordinator
+    // (spec 3.7 V-I4): a held remote call carries its egress image, and a remote member model
+    // sees only images the egress gate released.
+    #[cfg(feature = "vision")]
+    if let Some(vision) = inputs.vision {
+        builder = builder.before_tool_callback(vision.toolset.evidence_callback());
+        if model.data_locality().leaves_machine() {
+            let guardrail = vision.guardrail(model.as_ref(), inputs.vision_audit.clone());
+            builder = builder.before_model_callback(guardrail.before_model_callback());
+        }
     }
     builder.build()
 }
@@ -1320,6 +1389,183 @@ mod acp {
                     }
                 }
             }))
+        }
+    }
+}
+
+
+/// The perceiver, reasoner and verifier presets and their build checks (spec 3.7 §7.12).
+#[cfg(feature = "vision")]
+mod vision_roles {
+    use std::sync::Arc;
+
+    use adk_core::egress::ToolEgress;
+    use adk_core::{AdkError, Llm, Result, Tool};
+    use serde_json::json;
+
+    use super::{MEMBER_MAX_ITERATIONS, MEMBER_TIMEOUT, MemberKind, MemberSpec, MemberTools};
+
+    /// Refuses a perceiver on a remote model or holding tools other than the read and local
+    /// perception tools.
+    pub(super) fn check_perceiver(member: &MemberSpec, model: &dyn Llm) -> Result<()> {
+        if model.data_locality().leaves_machine() {
+            return Err(AdkError::config(format!(
+                "the perceiver '{}' would send what it sees to the remote model '{}'; give it a \
+                 model that runs on the device (adk-mistralrs, or a server at a loopback \
+                 address), or bind adk-vision's model-free Perceiver as a MemberKind::Agent \
+                 (spec 3.7 §7.12)",
+                member.name,
+                model.name()
+            )));
+        }
+        match &member.tools {
+            MemberTools::ReadOnly | MemberTools::LocalPerception(_) => Ok(()),
+            MemberTools::Full | MemberTools::Custom(_) => Err(AdkError::config(format!(
+                "the perceiver '{}' holds the read tools and the vision pack's on-device tools \
+                 only: use MemberTools::LocalPerception for more tools that stay on the device",
+                member.name
+            ))),
+        }
+    }
+
+    /// The read tools, the vision pack's tools whose default backend is on the device, and
+    /// `extra`, each refusing a call that would leave the device. `extra` tools that declare
+    /// network use refuse the member.
+    pub(super) fn local_perception_tools(
+        member: &MemberSpec,
+        tools: &[Arc<dyn Tool>],
+        extra: &[Arc<dyn Tool>],
+        read_only: &[&str],
+    ) -> Result<Vec<Arc<dyn Tool>>> {
+        for tool in extra {
+            let egress = tool.egress(&json!({}));
+            if egress != ToolEgress::None || adk_vision::VISION_TOOL_NAMES.contains(&tool.name()) {
+                return Err(AdkError::config(format!(
+                    "the member '{}' holds tools that stay on the device, and `{}` declares \
+                     {egress:?}; give it only tools that declare ToolEgress::None (spec 3.7 \
+                     §7.12)",
+                    member.name,
+                    tool.name()
+                )));
+            }
+        }
+        // A digest that names no image still routes the call, so its declared egress is the
+        // default backend's.
+        let probe = json!({ "image": format!("sha256:{}", "0".repeat(64)) });
+        let selected = tools
+            .iter()
+            .filter(|tool| {
+                read_only.contains(&tool.name())
+                    || (adk_vision::VISION_TOOL_NAMES.contains(&tool.name())
+                        && tool.egress(&probe) == ToolEgress::None)
+            })
+            .cloned()
+            .chain(extra.iter().cloned())
+            .map(|tool| {
+                Arc::new(adk_vision::team::LocalOnlyTool::new(tool, member.name.clone()))
+                    as Arc<dyn Tool>
+            })
+            .collect();
+        Ok(selected)
+    }
+
+    impl MemberSpec {
+        /// A perceiver (spec 3.7 §7.12): sees full images on the device through the read
+        /// tools and the vision pack's on-device tools, on `model`, which must run on the
+        /// device. The build refuses a remote model and any tool that declares network use.
+        ///
+        /// # Example
+        ///
+        /// ```rust,ignore
+        /// let perceiver = adk_harness::MemberSpec::perceiver(qwen3_vl_local);
+        /// assert_eq!(perceiver.name, "perceiver");
+        /// ```
+        pub fn perceiver(model: Arc<dyn Llm>) -> Self {
+            Self {
+                name: "perceiver".to_string(),
+                description: "Looks at an image on this device with the local vision tools and \
+                              reports regions in source pixels, with labels and scores."
+                    .to_string(),
+                kind: MemberKind::Perceiver {
+                    instruction: "Look at the image you are given with your vision tools, which \
+                                  all run on this device. Report what you found as regions in \
+                                  source pixels, with labels and scores, and the image digest."
+                        .to_string(),
+                    model,
+                },
+                tools: MemberTools::LocalPerception(Vec::new()),
+                skills: false,
+                max_iterations: MEMBER_MAX_ITERATIONS,
+                timeout: MEMBER_TIMEOUT,
+                output_schema: None,
+            }
+        }
+
+        /// A reasoner (spec 3.7 §7.12): answers over regions, measurements and crops the
+        /// egress gate released, on `model`, usually a cloud model, with no tools. Its answer
+        /// is an opinion (`adk_agent::opinion_schema`); a remote model gets the pack's privacy
+        /// guardrail.
+        ///
+        /// # Example
+        ///
+        /// ```rust,ignore
+        /// let reasoner = adk_harness::MemberSpec::reasoner(claude);
+        /// assert!(reasoner.output_schema.is_some());
+        /// ```
+        pub fn reasoner(model: Arc<dyn Llm>) -> Self {
+            Self {
+                name: "reasoner".to_string(),
+                description: "Judges a question over the regions, measurements and released \
+                              crop digests it is given, and answers with a verdict, a \
+                              confidence and why."
+                    .to_string(),
+                kind: MemberKind::Local {
+                    instruction: "You never see the whole image: you get regions in source \
+                                  pixels, measurements and the digests of redacted crops. Judge \
+                                  the question and answer with a verdict, the class you judged, \
+                                  a confidence from 0 to 1 and one sentence of rationale."
+                        .to_string(),
+                    model: Some(model),
+                },
+                tools: MemberTools::Custom(Vec::new()),
+                skills: false,
+                max_iterations: MEMBER_MAX_ITERATIONS,
+                timeout: MEMBER_TIMEOUT,
+                output_schema: Some(adk_agent::opinion_schema()),
+            }
+        }
+
+        /// A verifier (spec 3.7 §7.12): re-checks a claim against the pixels with the read
+        /// tools and the vision pack's on-device tools, on `model` — by default another
+        /// provider than the reasoner's, which the caller chooses. Its answer is an opinion.
+        ///
+        /// # Example
+        ///
+        /// ```rust,ignore
+        /// let verifier = adk_harness::MemberSpec::verifier(nemotron);
+        /// assert_eq!(verifier.name, "verifier");
+        /// ```
+        pub fn verifier(model: Arc<dyn Llm>) -> Self {
+            Self {
+                name: "verifier".to_string(),
+                description: "Re-checks a claim about an image against its pixels with the \
+                              local vision tools, and answers with a verdict, a confidence and \
+                              why."
+                    .to_string(),
+                kind: MemberKind::Local {
+                    instruction: "Re-check the claim you are given against the image with your \
+                                  vision tools, which run on this device: look for the claimed \
+                                  class over the claimed region. Answer with a verdict, the class, \
+                                  a confidence from 0 to 1 and one sentence of rationale."
+                        .to_string(),
+                    model: Some(model),
+                },
+                tools: MemberTools::LocalPerception(Vec::new()),
+                skills: false,
+                max_iterations: MEMBER_MAX_ITERATIONS,
+                timeout: MEMBER_TIMEOUT,
+                output_schema: Some(adk_agent::opinion_schema()),
+            }
         }
     }
 }

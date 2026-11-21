@@ -611,6 +611,7 @@ pub struct Reasoner {
     #[cfg(feature = "guardrail")]
     guardrail: Option<crate::guardrail::ImagePrivacyGuardrail>,
     max_output_tokens: Option<i32>,
+    config: adk_core::GenerateContentConfig,
 }
 
 impl std::fmt::Debug for Reasoner {
@@ -634,6 +635,7 @@ pub struct ReasonerBuilder {
     data_class: String,
     provider: Option<String>,
     max_output_tokens: Option<i32>,
+    config: adk_core::GenerateContentConfig,
 }
 
 impl Reasoner {
@@ -650,6 +652,7 @@ impl Reasoner {
             data_class: "team_crop".to_string(),
             provider: None,
             max_output_tokens: None,
+            config: adk_core::GenerateContentConfig::default(),
         }
     }
 
@@ -803,10 +806,11 @@ impl Reasoner {
             }
         }
         let mut request = LlmRequest::new(self.model.name(), vec![content]);
-        request.config = Some(adk_core::GenerateContentConfig {
-            max_output_tokens: self.max_output_tokens,
-            ..Default::default()
-        });
+        let mut config = self.config.clone();
+        if self.max_output_tokens.is_some() {
+            config.max_output_tokens = self.max_output_tokens;
+        }
+        request.config = Some(config);
         let text = answer_text(cx, &self.model, request).await?;
         parse_opinion(self.model.name(), &text, verdicts, &self.name, &self.provider)
     }
@@ -856,6 +860,12 @@ impl ReasonerBuilder {
         self
     }
 
+    /// The generation settings every request starts from, such as a provider extension.
+    pub fn generate_config(mut self, config: adk_core::GenerateContentConfig) -> Self {
+        self.config = config;
+        self
+    }
+
     /// Builds the reasoner.
     ///
     /// # Errors
@@ -899,6 +909,7 @@ impl ReasonerBuilder {
             #[cfg(feature = "guardrail")]
             guardrail,
             max_output_tokens: self.max_output_tokens,
+            config: self.config,
         })
     }
 }
@@ -1098,6 +1109,7 @@ pub struct Verifier {
     iou: f32,
     min_score: f32,
     max_output_tokens: Option<i32>,
+    config: adk_core::GenerateContentConfig,
 }
 
 impl std::fmt::Debug for Verifier {
@@ -1124,6 +1136,7 @@ pub struct VerifierBuilder {
     iou: f32,
     min_score: f32,
     max_output_tokens: Option<i32>,
+    config: adk_core::GenerateContentConfig,
 }
 
 impl Verifier {
@@ -1141,6 +1154,7 @@ impl Verifier {
             iou: 0.3,
             min_score: 0.25,
             max_output_tokens: None,
+            config: adk_core::GenerateContentConfig::default(),
         }
     }
 
@@ -1311,10 +1325,11 @@ impl Verifier {
                 .await;
         }
         let mut llm_request = LlmRequest::new(model.name(), vec![content]);
-        llm_request.config = Some(adk_core::GenerateContentConfig {
-            max_output_tokens: self.max_output_tokens,
-            ..Default::default()
-        });
+        let mut config = self.config.clone();
+        if self.max_output_tokens.is_some() {
+            config.max_output_tokens = self.max_output_tokens;
+        }
+        llm_request.config = Some(config);
         let answer = answer_text(cx, model, llm_request).await?;
         let opinion = parse_opinion(model.name(), &answer, &verdicts, &self.name, &self.provider)?;
         Ok(Verified { opinion, check, released })
@@ -1383,6 +1398,13 @@ impl VerifierBuilder {
         self
     }
 
+    /// The generation settings every model request starts from, such as a provider
+    /// extension.
+    pub fn generate_config(mut self, config: adk_core::GenerateContentConfig) -> Self {
+        self.config = config;
+        self
+    }
+
     /// Builds the verifier.
     ///
     /// # Errors
@@ -1435,6 +1457,7 @@ impl VerifierBuilder {
             iou: self.iou,
             min_score: self.min_score,
             max_output_tokens: self.max_output_tokens,
+            config: self.config,
         })
     }
 }
