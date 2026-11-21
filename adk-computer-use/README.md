@@ -74,7 +74,9 @@ Or use the meta-crate, where the `computer-use` feature (included in `standard`)
 adk-rust = { version = "3.0.0", features = ["computer-use"] }
 ```
 
-The crate has no feature flags of its own.
+| Feature | Default | Contents |
+|---------|---------|----------|
+| `vision` | off | `vision::RuntimeObserver`: `adk-vision`'s `VisualObserver` over any `ComputerUseRuntime`, and `vision::screen_source`, so a computer-use-mcp desktop is a frame source the stream pipeline samples, watches and wakes an agent on ([streams](../docs/official_docs/vision/streams.md)) |
 
 ## How it fits together
 

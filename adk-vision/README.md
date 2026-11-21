@@ -25,7 +25,7 @@ Local-first perception for Rust Agent Development Kit (ADK-Rust) agents.
 | Runtime | `VisionRuntime` | Local-first routing, metering, cancellation, mapping to source pixels, crop escalation |
 | Egress | `EgressGate`, `ReleasedImage`, `ReleasedClip` | A remote backend only ever receives an image the gate cropped, redacted, approved and recorded, or a clip it checked and recorded |
 | Video | `SourceClip`, `VideoSource`, `FramesAnalyzer`, `VisibilityPass`, `SamVideoTracker` | `analyze_video` holds a call's frames before anything leaves; questions over sampled frames on any model (`cloud`), optionally only around the first frame that shows the question's subject; tracks through a clip with `sam-3.1` video (`sam`) |
-| Tools | `VisionToolset` | `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`, `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure` on the governed path; a remote call is held with the exact egress image and releases only that digest |
+| Tools | `VisionToolset` | `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`, `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure`, and `vision_watch` over registered frame sources (`stream`), on the governed path; a remote call is held with the exact egress image and releases only that digest |
 | Watch | `WatchCondition`, `WatchEvaluator`, `WatchSink` | Conditions held on the device against tracked objects; one event per object, keyed for the kernel's `VisionWakeSource`, never carrying pixels |
 | Memory | `VisualMemory`, `VisualQuery`, `SiglipTextEmbedding` | Image embeddings as `adk-rag` chunks in any vector store, found by text or an example image; one embedding space per collection; captions with artifact references in `adk-memory`; erasure by source (`memory`) |
 | Measurement | `Calibration`, `Measurement` | A fiducial of known size gives pixels per millimetre; maximum length and area from masks with their uncertainty, valid only in the fiducial's plane |
@@ -59,7 +59,7 @@ features — `fetch`, `cloud`, `nim`, `sam`, `guardrail` — as `adk_rust::visio
 | `ocr-vl-metal` | `ocr-vl` on Apple GPUs through Candle's Metal backend |
 | `mistralrs` | `LlmDescriber::mistralrs`: Qwen3-VL (`qwen3-vl-2b-instruct`, `qwen3-vl-4b-instruct` and `qwen3-vl-8b-instruct`, built in) or another mistral.rs vision model in this process, verified before load, regions in Qwen3-VL's own 0–1000 frame; implies `cloud`, `fetch` |
 | `mistralrs-metal`, `mistralrs-cuda` | `mistralrs` on Apple GPUs or CUDA |
-| `stream` | `FrameSource`, `Sampler`, the `FrameGovernor`, `FrameKeeper` retention and `StreamPipeline` (source, sampler, governor, privacy hook, detector, tracker, observation sink) |
+| `stream` | `FrameSource`, `Sampler`, the `FrameGovernor`, `FrameKeeper` retention and `StreamPipeline` (source, sampler, governor, privacy hook, detector metered in frames, tracker, observation sink); `StreamWatch`, the watch stage that keeps each event's frame and wakes a `WatchSink`; `FrameSources`, the operator's named sources, and `vision_watch` over them |
 | `rtsp` | `RtspSource`: RTSP cameras through `retina`; MJPEG decoded in process, H.264 and H.265 with `ffmpeg` |
 | `ffmpeg` | `FileSource` (MP4, MOV) and H.264/H.265 decoding through a user-installed `ffmpeg`; nothing vendored or downloaded |
 | `device` | `DeviceSource`: a camera on this machine (AVFoundation on macOS, v4l2 on Linux, DirectShow on Windows) through the same user-installed `ffmpeg`, `DeviceSource::list` and a `testsrc2` stand-in; implies `ffmpeg` |
@@ -297,8 +297,12 @@ holds it to a `FrameBudget` (lower the rate, stop escalating, pause, resume next
 redacts every frame through a required `PrivacyHook` before any other stage, detects and
 tracks on the device, and hands each frame to an `ObservationSink`. Frames stay in memory
 unless a wake, a card or a person keeps them through `FrameKeeper`, which stores only
-redacted frames, for 30 days by default. See
-[Streams](../docs/official_docs/vision/streams.md).
+redacted frames, for 30 days by default. `StreamWatch` holds watch conditions against the
+stream, keeps the frame of each event that passes and wakes a sleeping agent through the
+kernel's `VisionWakeSource`; `FrameSources` and the `vision_watch` tool let an agent start and
+stop those watches on the sources an operator registered. See
+[Streams](../docs/official_docs/vision/streams.md) and
+[Watch conditions and visual wakes](../docs/official_docs/vision/wake.md).
 
 ## Visual Memory
 

@@ -23,7 +23,7 @@
 # | 3  | adk-server, adk-durability-gates, adk-graph, adk-managed, adk-code |
 # | 4  | adk-tool, adk-agent, adk-runner, adk-model, adk-skill |
 # | 5  | adk-cli: voice, website and phone |
-# | 6  | small opt-in surfaces, adk-sandbox, adk-awp, adk-site, adk-vision |
+# | 6  | small opt-in surfaces, adk-sandbox, adk-awp, adk-site, adk-vision, adk-computer-use |
 # | 7  | adk-harness |
 # | 8  | adk-cli: registries, stores, providers, agent-drawn UI |
 # | 9  | adk-surface |
@@ -81,6 +81,10 @@
 7 adk-harness vision
 # The vision pack's default redactors (RF-DETR, PP-OCRv6); the real-weights S3 run is ignored.
 7 adk-harness vision-local
+# A stream wakes a kernel process asleep on it, whose turn loads the kept frame through the
+# vision pack (spec 3.7 §7.10); the RF-DETR run over the in-process RTSP server is ignored.
+7 adk-harness vision,kernel
+7 adk-harness vision-local,vision-fixtures,kernel
 # The harness's ACP standing permissions (spec 3.3 §10 A1): adk-acp's server enters only here.
 7 adk-harness acp-server
 # The crate docs' examples under the default tier: an `artifacts` example once compiled only
@@ -517,6 +521,9 @@
 # frame source conformance check (skipping, saying so, without ffmpeg); the RF-DETR run on a
 # real camera is ignored.
 6 adk-vision device,conformance doc
+# Computer-use observations as a screen frame source (spec 3.7 §7.13): the adapter over a
+# scripted `ComputerUseRuntime`.
+6 adk-computer-use vision
 # `onnx-coreml`, `onnx-cuda` and `ocr-vl-metal` need GPU toolchains a runner does not have, and
 # stay out as adk-mistralrs's `cuda` and `metal` do.
 6 adk-site gen-astro
