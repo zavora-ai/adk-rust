@@ -165,6 +165,13 @@ pub fn device_scope_for(method: &Method, path: &str) -> Option<DeviceScope> {
             | ["surface", "decisions", _, "confirm", "options"],
         ) => Some(DeviceScope::Decide),
         ("POST", ["surface", "stop"]) => Some(DeviceScope::Stop),
+        // A phone switches a camera off and stops its stream as it stops all; switching on,
+        // trying again and raising a card need the decide scope; zones are edited in the home
+        // (spec 3.7 §8.2, board choice C14).
+        ("POST", ["surface", "cameras", _, "off" | "stop"]) => Some(DeviceScope::Stop),
+        ("POST", ["surface", "cameras", _, "on" | "retry" | "freeze" | "cards"]) => {
+            Some(DeviceScope::Decide)
+        }
         ("GET", ["surface", ..]) => Some(DeviceScope::Read),
         _ => None,
     }
@@ -206,6 +213,22 @@ mod tests {
             ),
             (Method::GET, "/api/surface/vision/s1/images/sha256%3Aab", Some(DeviceScope::Read)),
             (Method::POST, "/api/surface/vision/s1/examples", None),
+            // The live camera surface (spec 3.7 §8.2, board choice C14).
+            (Method::GET, "/api/surface/cameras", Some(DeviceScope::Read)),
+            (Method::GET, "/api/surface/cameras/line-2", Some(DeviceScope::Read)),
+            (
+                Method::GET,
+                "/api/surface/cameras/line-2/frames/sha256%3Aab",
+                Some(DeviceScope::Read),
+            ),
+            (Method::GET, "/api/surface/cameras/line-2/feed", Some(DeviceScope::Read)),
+            (Method::POST, "/api/surface/cameras/line-2/off", Some(DeviceScope::Stop)),
+            (Method::POST, "/api/surface/cameras/line-2/stop", Some(DeviceScope::Stop)),
+            (Method::POST, "/api/surface/cameras/line-2/on", Some(DeviceScope::Decide)),
+            (Method::POST, "/api/surface/cameras/line-2/retry", Some(DeviceScope::Decide)),
+            (Method::POST, "/api/surface/cameras/line-2/freeze", Some(DeviceScope::Decide)),
+            (Method::POST, "/api/surface/cameras/line-2/cards", Some(DeviceScope::Decide)),
+            (Method::PUT, "/api/surface/cameras/line-2/zones/inspection-window", None),
             (Method::POST, "/api/surface/commands", None),
             (Method::POST, "/api/surface/phone/qr", None),
             (Method::GET, "/api/surface/phone/devices", None),

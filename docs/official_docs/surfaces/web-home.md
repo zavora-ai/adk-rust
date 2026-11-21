@@ -319,6 +319,7 @@ Every card is drawn from its inbox entry (spec 3.3 §7.1, §11 S-I1) and answers
 | High risk | Offered as **Confirm it's you and approve**; the server, not the page, says the person confirmed it is them |
 | A call with images | The exact image that would leave, with its regions, what was covered, where it goes and the cost, loaded as the viewer; **Allow once** names its digest, and **Tighten the crop** and **Add a redaction** hold the call again with a new image. See [Approve with the Image](approve-with-image.md) |
 | A vision tool's answer | The tool line links to the annotated viewer at `/ui/vision/<session>/<image>`: the regions it found over the image, filterable, with each region's backend, frame and transform chain; compare backends, correct a region and save it as an eval case, export the `RegionSet`. See [The Annotated Viewer](annotated-viewer.md) |
+| An agent that watches a camera | Its thread links to the live camera surface at `/ui/cameras/<camera>`: live frames with overlays, the frame governor, watches and zones; **Camera on / Off**, **Stop the stream**, edit a zone, raise a card from a frame. See [The Live Camera Surface](live-camera.md) |
 
 | Take over (light) | Take over (dark) |
 |---|---|

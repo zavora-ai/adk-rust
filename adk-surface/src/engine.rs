@@ -545,6 +545,7 @@ pub struct SurfaceEngineBuilder {
     granted: Vec<GrantedUse>,
     #[cfg(feature = "genui")]
     seals: Option<crate::genui::ApprovalSeals>,
+    cameras: Option<crate::camera::Cameras>,
 }
 
 impl fmt::Debug for SurfaceEngineBuilder {
@@ -773,6 +774,27 @@ impl SurfaceEngineBuilder {
         self
     }
 
+    /// Serves the live camera surface over `cameras` (spec 3.7 §8.2): the routes under
+    /// `/surface/cameras` read and act on them. Without it they answer `surface.unsupported`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    /// use adk_surface::camera::Cameras;
+    /// use adk_surface::{LocalSource, SurfaceEngine};
+    ///
+    /// # fn example(source: LocalSource, cameras: Cameras) {
+    /// let engine = SurfaceEngine::builder(Arc::new(source)).cameras(cameras).build();
+    /// # let _ = engine;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn cameras(mut self, cameras: crate::camera::Cameras) -> Self {
+        self.cameras = Some(cameras);
+        self
+    }
+
     /// The engine.
     pub fn build(mut self) -> SurfaceEngine {
         if !self.quiet_set {
@@ -809,6 +831,7 @@ impl SurfaceEngineBuilder {
                 stops_need: self.stops_need,
                 card_hints: self.card_hints,
                 granted: self.granted,
+                cameras: self.cameras,
                 #[cfg(feature = "genui")]
                 drawn,
                 #[cfg(feature = "genui")]
@@ -870,6 +893,8 @@ struct Inner {
     card_hints: Vec<Arc<dyn CardHints>>,
     /// What every agent the home runs may also do (spec 3.3 §5.7).
     granted: Vec<GrantedUse>,
+    /// The cameras of the live camera surface (spec 3.7 §8.2).
+    cameras: Option<crate::camera::Cameras>,
     /// The cards of drawn forms this engine sent (spec 3.3 §7.4 rule 5).
     #[cfg(feature = "genui")]
     drawn: Arc<crate::genui::DrawnHints>,
@@ -954,6 +979,7 @@ impl SurfaceEngine {
             granted: Vec::new(),
             #[cfg(feature = "genui")]
             seals: None,
+            cameras: None,
         }
     }
 
@@ -964,6 +990,37 @@ impl SurfaceEngine {
 
     fn now(&self) -> DateTime<Utc> {
         self.inner.clock.now()
+    }
+
+    /// The cameras of the live camera surface, when the engine serves them (spec 3.7 §8.2).
+    pub fn camera_hub(&self) -> Option<&crate::camera::Cameras> {
+        self.inner.cameras.as_ref()
+    }
+
+    /// The engine's clock, for the camera views.
+    pub(crate) fn clock_now(&self) -> DateTime<Utc> {
+        self.now()
+    }
+
+    /// How agents are named and times are shown.
+    pub(crate) fn projector(&self) -> &Projector {
+        &self.inner.projector
+    }
+
+    /// `Ok` when `session` is one of `caller`'s (S-I8), `surface.not_found` otherwise.
+    pub(crate) async fn owns_session(&self, caller: &Caller, session: &str) -> Result<()> {
+        self.transcript(caller, session).await.map(|_| ())
+    }
+
+    /// Sends `text` to `session` as `caller`'s message, queued behind an open decision or a
+    /// running turn as a typed message is.
+    pub(crate) async fn send_message(
+        &self,
+        caller: &Caller,
+        session: &str,
+        text: String,
+    ) -> Result<CommandOutcome> {
+        self.send(caller, session.to_string(), text, Vec::new(), false, true).await
     }
 
     /// What every agent the home runs may also do, as the host granted it (spec 3.3 §5.7).

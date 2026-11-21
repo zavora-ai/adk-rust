@@ -30,8 +30,14 @@ import type {
   VoiceTicket,
   VoiceTicketRequest,
   ViewerView,
+  CameraView,
+  CamerasView,
+  CardRaised,
+  StageView,
+  ZoneSaved,
 } from "./generated/api";
 import type { ViewerClient } from "./viewer/Viewer";
+import type { CameraClient, CameraFeedMessage } from "./camera/client";
 import type { ViewerPlace } from "./viewer/route";
 import type { AgentsSeam } from "./agents/client";
 import { httpAgents } from "./agents/client";
@@ -181,6 +187,8 @@ export interface HomeClient {
   apps?(): AppsSeam;
   /** The annotated viewer's routes (spec 3.7 §8.2, §8.3). */
   viewerClient?(): ViewerClient;
+  /** The live camera surface's routes (spec 3.7 §8.2). */
+  cameraClient?(): CameraClient;
 }
 
 async function problem(response: Response): Promise<ApiError> {
@@ -320,7 +328,11 @@ export class HttpClient implements HomeClient {
 
   async image(href: string) {
     // Only the engine's own image routes on this server: a card or a viewer never names another address.
-    if (!href.startsWith(`${this.base}/surface/decisions/`) && !href.startsWith(`${this.base}/surface/vision/`)) {
+    if (
+      !href.startsWith(`${this.base}/surface/decisions/`) &&
+      !href.startsWith(`${this.base}/surface/vision/`) &&
+      !href.startsWith(`${this.base}/surface/cameras/`)
+    ) {
       throw new ApiError(400, labels.cantReach);
     }
     const response = await fetch(`${href}?surface=${this.surface}`, {
@@ -350,6 +362,42 @@ export class HttpClient implements HomeClient {
       saveExample: (session: string, example: LabelledExample) =>
         this.post<SavedExample>(`/surface/vision/${segment(session)}/examples`, example),
     };
+  }
+
+  cameraClient(): CameraClient {
+    const camera = (id: string) => `/surface/cameras/${encodeURIComponent(id)}`;
+    const query = `surface=${this.surface}`;
+    return {
+      cameras: () => this.request<CamerasView>(`/surface/cameras?${query}`),
+      camera: (id) => this.request<CameraView>(`${camera(id)}?${query}`),
+      feed: (id, signal) => this.cameraFeed(camera(id), signal),
+      switchTo: (id, on) => this.request<CameraView>(`${camera(id)}/${on ? "on" : "off"}?${query}`, { method: "POST" }),
+      stop: (id) => this.request<CameraView>(`${camera(id)}/stop?${query}`, { method: "POST" }),
+      retry: (id) => this.request<CameraView>(`${camera(id)}/retry?${query}`, { method: "POST" }),
+      saveZone: (id, zone, change) =>
+        this.request<ZoneSaved>(`${camera(id)}/zones/${encodeURIComponent(zone)}`, {
+          method: "PUT",
+          body: JSON.stringify(change),
+        }),
+      freeze: (id, frame) => this.post<StageView>(`${camera(id)}/freeze?${query}`, { frame }),
+      raiseCard: (id, card) => this.post<CardRaised>(`${camera(id)}/cards?${query}`, card),
+      decide: (command, origin) => this.command(command, origin),
+    };
+  }
+
+  /** A camera's picture after each frame (spec 3.7 §8.2), until `signal` aborts. */
+  private async *cameraFeed(path: string, signal: AbortSignal): AsyncIterable<CameraFeedMessage> {
+    const response = await fetch(`${this.base}${path}/feed?surface=${this.surface}`, {
+      headers: this.headers({ accept: "text/event-stream" }),
+      signal,
+      credentials: "same-origin",
+    });
+    if (!response.ok) throw await problem(response);
+    if (!response.body) throw new ApiError(response.status, "the feed sent no stream");
+    for await (const frame of parseSse(response.body)) {
+      if (frame.event === "frame" && frame.data) yield { type: "frame", stage: JSON.parse(frame.data) as StageView };
+      else if (frame.event === "changed") yield { type: "changed" };
+    }
   }
 
   briefing(since?: string) {

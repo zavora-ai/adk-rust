@@ -37,9 +37,14 @@ import type { Correction } from "./viewer/Viewer";
 import type { ViewerPlace } from "./viewer/route";
 import { viewerOf, viewerPath } from "./viewer/route";
 import type { WorkflowClient } from "./workflow/client";
+import type { Opened } from "./camera/Camera";
+import type { CameraPlace } from "./camera/route";
+import { cameraOf, cameraPath } from "./camera/route";
 
 // The annotated viewer loads only when it opens: the home's main chunk stays within its budget.
 const Viewer = lazy(() => import("./viewer/Viewer").then((module) => ({ default: module.Viewer })));
+// So does the live camera surface (spec 3.7 §8.2).
+const Camera = lazy(() => import("./camera/Camera").then((module) => ({ default: module.Camera })));
 
 /** Where this tab keeps the session each agent's thread follows. */
 const FOLLOWED_KEY = "adk.home.followed";
@@ -63,6 +68,7 @@ export function App({
   verbs,
   workflow,
   initialViewer,
+  initialCamera,
 }: {
   client: HomeClient;
   seams?: Seams;
@@ -78,6 +84,8 @@ export function App({
   workflow?: WorkflowClient;
   /** The annotated viewer open first, with a correction under way (fixtures). */
   initialViewer?: { place: ViewerPlace; correction?: Correction };
+  /** The live camera surface open first, a zone editor or a card open on it (fixtures). */
+  initialCamera?: { place: CameraPlace; opened?: Opened };
 }) {
   const [section, setSection] = useState<Section>(() => initialSection ?? sectionOf(window.location.pathname));
   const [theme, setTheme] = useState<Theme>(storedTheme);
@@ -112,11 +120,17 @@ export function App({
   const [viewing, setViewing] = useState<ViewerPlace | undefined>(
     () => initialViewer?.place ?? viewerOf(window.location),
   );
+  // The live camera surface (spec 3.7 §8.2, board choice C1): a view under the agent, in place
+  // of the section, under Threads.
+  const [watching, setWatching] = useState<CameraPlace | undefined>(
+    () => initialCamera?.place ?? cameraOf(window.location),
+  );
   useEffect(() => {
     const back = () => {
       setSection(sectionOf(window.location.pathname));
       setAgentsPlace(agentsPlaceOf(window.location));
       setViewing(viewerOf(window.location));
+      setWatching(cameraOf(window.location));
     };
     window.addEventListener("popstate", back);
     return () => window.removeEventListener("popstate", back);
@@ -179,6 +193,7 @@ export function App({
   const content = useRef<HTMLDivElement>(null);
   const navigate = useCallback((next: Section) => {
     setViewing(undefined);
+    setWatching(undefined);
     setSection(next);
     if (window.location.pathname !== pathOf(next)) window.history.pushState(null, "", pathOf(next));
     if (content.current) content.current.scrollTop = 0;
@@ -244,27 +259,68 @@ export function App({
     const path = viewerPath(place);
     if (`${window.location.pathname}${window.location.search}` !== path) window.history.pushState(null, "", path);
     setSection("threads");
+    setWatching(undefined);
     setViewing(place);
     if (content.current) content.current.scrollTop = 0;
   }, []);
-  // Every link to the viewer — a tool line's, a card's "Open the source image" — opens it in
-  // place, keeping the home's state; a modified click still opens a new tab.
+  const cameraClient = useMemo(() => client.cameraClient?.(), [client]);
+  const openCamera = useCallback((place: CameraPlace) => {
+    const path = cameraPath(place);
+    if (`${window.location.pathname}${window.location.search}` !== path) window.history.pushState(null, "", path);
+    setSection("threads");
+    setViewing(undefined);
+    setWatching(place);
+    if (content.current) content.current.scrollTop = 0;
+  }, []);
+  // Every link to the viewer — a tool line's, a card's "Open the source image" — and to a camera
+  // opens it in place, keeping the home's state; a modified click still opens a new tab.
   useEffect(() => {
-    if (!viewerClient) return;
+    if (!viewerClient && !cameraClient) return;
     const onClick = (event: MouseEvent) => {
       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       const link = (event.target as Element | null)?.closest?.("a[href]");
       if (!(link instanceof HTMLAnchorElement) || link.target) return;
       const url = new URL(link.href, window.location.href);
       if (url.origin !== window.location.origin) return;
-      const place = viewerOf(url);
-      if (!place) return;
+      const place = viewerClient ? viewerOf(url) : undefined;
+      if (place) {
+        event.preventDefault();
+        openViewer(place);
+        return;
+      }
+      const camera = cameraClient ? cameraOf(url) : undefined;
+      if (!camera) return;
       event.preventDefault();
-      openViewer(place);
+      openCamera(camera);
     };
     document.addEventListener("click", onClick);
     return () => document.removeEventListener("click", onClick);
-  }, [viewerClient, openViewer]);
+  }, [viewerClient, cameraClient, openViewer, openCamera]);
+  // Which agents watch a camera: their thread links to it (board choice C1). A server that serves
+  // no cameras says so once and is not asked again.
+  const noCameras = useRef(false);
+  const cameras = usePoll(async () => {
+    if (!cameraClient || noCameras.current) return null;
+    try {
+      return await cameraClient.cameras();
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "surface.unsupported") noCameras.current = true;
+      return null;
+    }
+  }, 30_000);
+  const cameraLinks = useMemo(() => {
+    const links: Record<string, { href: string; text: string }> = {};
+    const view = cameras.value;
+    const agent = view?.agent?.agent.name;
+    if (view && agent && view.tiles.length > 0) {
+      const first = view.tiles[0];
+      links[agent] =
+        view.tiles.length === 1
+          ? { href: cameraPath({ camera: first.id }), text: first.name }
+          : { href: cameraPath({}), text: `${view.title} · ${view.countText}` };
+    }
+    return links;
+  }, [cameras.value]);
   const closeViewer = useCallback(
     (agent: string, session: string) => {
       if (agent) {
@@ -420,7 +476,20 @@ export function App({
         />
       )}
       <div id="content" className="content" key={signIns} ref={content}>
-        {viewing && viewerClient && (
+        {watching && cameraClient && (
+          <Suspense fallback={<div className="vw-loading" aria-busy="true" />}>
+            <Camera
+              client={cameraClient}
+              place={watching}
+              onNavigate={openCamera}
+              onOpenThread={closeViewer}
+              onOpenDecision={openDecision}
+              onMemory={() => navigate("memory")}
+              initialOpened={watching === initialCamera?.place ? initialCamera.opened : undefined}
+            />
+          </Suspense>
+        )}
+        {!(watching && cameraClient) && viewing && viewerClient && (
           <Suspense fallback={<div className="vw-loading" aria-busy="true" />}>
             <Viewer
               client={viewerClient}
@@ -431,7 +500,7 @@ export function App({
             />
           </Suspense>
         )}
-        {!(viewing && viewerClient) && section === "threads" && (
+        {!(viewing && viewerClient) && !(watching && cameraClient) && section === "threads" && (
           <Threads
             client={client}
             agents={rows}
@@ -464,6 +533,7 @@ export function App({
             removed={roster.value?.removed ?? []}
             verbs={screens.value ?? undefined}
             snooze={verbs ? (item, choice, origin) => verbs.snooze(item, choice, origin) : undefined}
+            cameraLinks={cameraLinks}
           />
         )}
         {section === "decisions" && (

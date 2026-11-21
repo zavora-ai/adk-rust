@@ -131,6 +131,10 @@ under "On this home it can also:" (§5.7).
 | `GET /surface/vision/{session}/images/{image}` | One image of the session, served only when its bytes match its digest |
 | `GET /surface/vision/{session}/answers/{answer}/regions` | One answer's `RegionSet` as a file; `?with=` exports two |
 | `POST /surface/vision/{session}/examples` | Saves a corrected region as an `adk-eval` case under `LocalSourceBuilder::eval_fixtures`; closed to paired devices |
+| `GET /surface/cameras`, `GET /surface/cameras/{camera}` | The live camera surface (spec 3.7 §8.2, [The Live Camera Surface](../docs/official_docs/surfaces/live-camera.md)): every camera of the caller's sessions, or one with its picture, decisions, watches, frame budget, tracks and sources; served with `SurfaceEngineBuilder::cameras` |
+| `GET /surface/cameras/{camera}/frames/{frame}`, `GET …/feed` | A frame the server holds in memory, digest checked and never cached; the picture after each frame as server-sent events |
+| `POST /surface/cameras/{camera}/on`, `/off`, `/stop`, `/retry` | Switching a camera off drops its frames on the server from then on; each act recorded |
+| `PUT /surface/cameras/{camera}/zones/{zone}`, `POST …/freeze`, `POST …/cards` | Edit a zone (not from a paired device); freeze the frame on screen; raise a card that keeps only that frame, covered first, and sends it to the agent |
 | `GET /surface/sessions/{session}/thread` | The session's entries |
 | `GET /surface/sessions/{session}/feed` | Server-sent events, resumable with `Last-Event-ID` |
 | `GET /surface/sessions/{session}/queued` | What the caller typed while a decision of the session was open or a turn ran, not yet sent |

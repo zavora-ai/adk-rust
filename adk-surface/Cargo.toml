@@ -233,6 +233,12 @@ required-features = ["web"]
 name = "vision_viewer"
 required-features = ["web"]
 
+# The live camera surface (spec 3.7 §8.2, S12): four scripted cameras as the boards draw them,
+# the Inspector's held line stop with its frame, switch-off, zones and cards on the real routes.
+[[example]]
+name = "scripted_camera_home"
+required-features = ["web"]
+
 # The tray panel over a scripted kernel with two agents (spec 3.3 §5.5).
 [[example]]
 name = "scripted_tray"

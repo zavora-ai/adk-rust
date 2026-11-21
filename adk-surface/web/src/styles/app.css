@@ -670,6 +670,20 @@ pre {
   font-size: var(--fs-sm);
 }
 
+/* The camera an agent watches (spec 3.7 §8.2): the live camera surface opens from its thread. */
+.thread-camera {
+  margin-left: auto;
+  align-self: center;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
 .thread {
   display: flex;
   flex: 1;
@@ -717,6 +731,8 @@ pre {
   font-size: var(--fs-lg);
   line-height: var(--lh-lg);
   white-space: pre-wrap;
+  /* A digest or an address stays inside the bubble: a card from a camera names its frame in full. */
+  overflow-wrap: anywhere;
 }
 
 .activity {

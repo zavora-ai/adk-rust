@@ -69,7 +69,7 @@ use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Extension, Json, Router};
 use chrono::{DateTime, Utc};
 use futures::{FutureExt as _, StreamExt};
@@ -130,6 +130,28 @@ pub mod paths {
     pub const VISION_REGIONS: &str = "/surface/vision/{session}/answers/{answer}/regions";
     /// `POST`: save a labelled example from an answer (board choice V13).
     pub const VISION_EXAMPLES: &str = "/surface/vision/{session}/examples";
+    /// `GET`: every camera the caller may see, as a grid (spec 3.7 §8.2, board choice C8).
+    pub const CAMERAS: &str = "/surface/cameras";
+    /// `GET`: one camera, watched large (board choice C1).
+    pub const CAMERA: &str = "/surface/cameras/{camera}";
+    /// `GET`: a frame the hub holds in memory, its digest checked; never cached.
+    pub const CAMERA_FRAME: &str = "/surface/cameras/{camera}/frames/{frame}";
+    /// `GET`: a camera's picture after each frame, as server-sent events.
+    pub const CAMERA_FEED: &str = "/surface/cameras/{camera}/feed";
+    /// `POST`: switch a camera on (board choice C2).
+    pub const CAMERA_ON: &str = "/surface/cameras/{camera}/on";
+    /// `POST`: switch a camera off: its frames are dropped on the server from then on.
+    pub const CAMERA_OFF: &str = "/surface/cameras/{camera}/off";
+    /// `POST`: end a camera's stream.
+    pub const CAMERA_STOP: &str = "/surface/cameras/{camera}/stop";
+    /// `POST`: try a lost camera again (board choice C6).
+    pub const CAMERA_RETRY: &str = "/surface/cameras/{camera}/retry";
+    /// `PUT`: change a zone (board choice C12).
+    pub const CAMERA_ZONE: &str = "/surface/cameras/{camera}/zones/{zone}";
+    /// `POST`: freeze the frame on screen for a card; held in memory, never written.
+    pub const CAMERA_FREEZE: &str = "/surface/cameras/{camera}/freeze";
+    /// `POST`: raise a card from a frozen frame (board choice C11).
+    pub const CAMERA_CARDS: &str = "/surface/cameras/{camera}/cards";
     /// `GET`: the roster.
     pub const AGENTS: &str = "/surface/agents";
     /// `GET`: one agent a person added (spec 3.3 §5.7).
@@ -218,6 +240,17 @@ pub fn router(engine: SurfaceEngine) -> Router {
         .route(paths::VISION_IMAGE, get(vision_image))
         .route(paths::VISION_REGIONS, get(vision_regions))
         .route(paths::VISION_EXAMPLES, post(vision_example))
+        .route(paths::CAMERAS, get(cameras))
+        .route(paths::CAMERA, get(camera))
+        .route(paths::CAMERA_FRAME, get(camera_frame))
+        .route(paths::CAMERA_FEED, get(camera_feed))
+        .route(paths::CAMERA_ON, post(camera_on))
+        .route(paths::CAMERA_OFF, post(camera_off))
+        .route(paths::CAMERA_STOP, post(camera_stop))
+        .route(paths::CAMERA_RETRY, post(camera_retry))
+        .route(paths::CAMERA_ZONE, put(camera_zone))
+        .route(paths::CAMERA_FREEZE, post(camera_freeze))
+        .route(paths::CAMERA_CARDS, post(camera_card))
         .route(paths::THREAD, get(thread))
         .route(paths::FEED, get(feed))
         .route(paths::QUEUED, get(queued))
@@ -609,6 +642,215 @@ async fn vision_example(
     let caller = try_or_respond!(caller(context, SurfaceKind::Web, None));
     match engine.save_example(&caller, &session, &example).await {
         Ok(saved) => Json(saved).into_response(),
+        Err(error) => failed(error),
+    }
+}
+
+/// Every camera the caller may see (spec 3.7 §8.2, board choice C8).
+async fn cameras(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Query(query): Query<SurfaceQuery>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine.cameras_view(&caller).await {
+        Ok(view) => Json(view).into_response(),
+        Err(error) => failed(error),
+    }
+}
+
+/// One camera, watched large (board choice C1).
+async fn camera(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path(camera): Path<String>,
+    Query(query): Query<SurfaceQuery>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine.camera_view(&caller, &camera).await {
+        Ok(view) => Json(view).into_response(),
+        Err(error) => failed(error),
+    }
+}
+
+/// A frame the hub holds in memory: the exact bytes whose digest the picture names, never cached
+/// and never sniffed. A camera that is off holds none.
+async fn camera_frame(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path((camera, frame)): Path<(String, String)>,
+    Query(query): Query<SurfaceQuery>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine.camera_frame(&caller, &camera, &frame).await {
+        Ok(image) => image_response(image),
+        Err(error) => failed(error),
+    }
+}
+
+/// A camera's picture after each frame (`frame`, a [`StageView`](crate::camera::StageView)) and
+/// a note when anything else changed (`changed`), as server-sent events.
+async fn camera_feed(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    ends: Option<Extension<devices::DeviceEnds>>,
+    Path(camera): Path<String>,
+    Query(query): Query<SurfaceQuery>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    // Refuse a camera the caller may not see before the stream starts (S-I8).
+    if let Err(error) = engine.camera_view(&caller, &camera).await {
+        return failed(error);
+    }
+    let Some(hub) = engine.camera_hub() else {
+        return failed(SurfaceError::unsupported("the live camera surface"));
+    };
+    let device_ends = match (ends, caller.device.clone()) {
+        (Some(Extension(devices::DeviceEnds(pairing))), Some(device)) => {
+            pairing.until_device_ends(device).boxed()
+        }
+        _ => futures::future::pending().boxed(),
+    };
+    let updates = camera_updates(hub.subscribe());
+    let frames = updates
+        .filter(move |update| futures::future::ready(update.camera() == camera))
+        .then(move |update| {
+            let engine = engine.clone();
+            let caller = caller.clone();
+            async move {
+                let event = match update {
+                    crate::camera::CameraUpdate::Frame { camera, .. } => {
+                        match engine.camera_stage_after_check(&caller, &camera).await {
+                            Ok(stage) => SseEvent::default().event("frame").json_data(&stage),
+                            Err(error) => SseEvent::default()
+                                .event("error")
+                                .json_data(AdkError::from(error).to_problem_json()),
+                        }
+                    }
+                    crate::camera::CameraUpdate::Changed { .. } => {
+                        SseEvent::default().event("changed").json_data(serde_json::json!({}))
+                    }
+                };
+                Ok::<_, std::convert::Infallible>(event.unwrap_or_else(|_| {
+                    SseEvent::default().comment("a frame could not be encoded")
+                }))
+            }
+        })
+        .take_until(device_ends);
+    Sse::new(frames).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))).into_response()
+}
+
+/// Every update of the hub, a slow reader skipping what it missed.
+fn camera_updates(
+    updates: tokio::sync::broadcast::Receiver<crate::camera::CameraUpdate>,
+) -> impl futures::Stream<Item = crate::camera::CameraUpdate> + Send {
+    futures::stream::unfold(updates, |mut updates| async move {
+        loop {
+            match updates.recv().await {
+                Ok(update) => return Some((update, updates)),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    })
+}
+
+/// Switches a camera on.
+async fn camera_on(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path(camera): Path<String>,
+    Query(query): Query<SurfaceQuery>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine.switch_camera(&caller, &camera, true).await {
+        Ok(view) => Json(view).into_response(),
+        Err(error) => failed(error),
+    }
+}
+
+/// Switches a camera off: the server drops its frames from then on (spec 3.7 §8.2).
+async fn camera_off(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path(camera): Path<String>,
+    Query(query): Query<SurfaceQuery>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine.switch_camera(&caller, &camera, false).await {
+        Ok(view) => Json(view).into_response(),
+        Err(error) => failed(error),
+    }
+}
+
+/// Ends a camera's stream.
+async fn camera_stop(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path(camera): Path<String>,
+    Query(query): Query<SurfaceQuery>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine.stop_camera(&caller, &camera).await {
+        Ok(view) => Json(view).into_response(),
+        Err(error) => failed(error),
+    }
+}
+
+/// Tries a lost camera again now.
+async fn camera_retry(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path(camera): Path<String>,
+    Query(query): Query<SurfaceQuery>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine.retry_camera(&caller, &camera).await {
+        Ok(view) => Json(view).into_response(),
+        Err(error) => failed(error),
+    }
+}
+
+/// Changes a zone; closed to paired devices, which open the zone in the web home.
+async fn camera_zone(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path((camera, zone)): Path<(String, String)>,
+    Json(change): Json<crate::camera::ZoneChange>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, SurfaceKind::Web, None));
+    match engine.save_camera_zone(&caller, &camera, &zone, &change).await {
+        Ok(saved) => Json(saved).into_response(),
+        Err(error) => failed(error),
+    }
+}
+
+/// Freezes the frame on screen for a card: held in memory while the person writes it.
+async fn camera_freeze(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path(camera): Path<String>,
+    Query(query): Query<SurfaceQuery>,
+    Json(freeze): Json<crate::camera::FreezeFrame>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine.freeze_camera_frame(&caller, &camera, &freeze.frame).await {
+        Ok(stage) => Json(stage).into_response(),
+        Err(error) => failed(error),
+    }
+}
+
+/// Raises a card from a frozen frame: that frame alone is kept as evidence.
+async fn camera_card(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path(camera): Path<String>,
+    Query(query): Query<SurfaceQuery>,
+    Json(card): Json<crate::camera::RaiseCard>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine.raise_camera_card(&caller, &camera, &card).await {
+        Ok(raised) => Json(raised).into_response(),
         Err(error) => failed(error),
     }
 }
