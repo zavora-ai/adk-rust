@@ -203,19 +203,26 @@ macro_rules! tracker_conformance_tests {
     };
 }
 
-/// One video case: evaluates the target and fixture in the case's async body.
+/// The video cases, each through [`__vision_video_case!`].
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __vision_video_cases {
-    ([$($attr:meta),*] $target:expr, $fixture:expr; $($name:ident => $case:ident),* $(,)?) => {
-        $(
-            $(#[$attr])*
-            #[::tokio::test(flavor = "multi_thread", worker_threads = 2)]
-            async fn $name() {
-                let fixture = $fixture;
-                $crate::conformance::$case($target, &fixture).await;
-            }
-        )*
+    ($attrs:tt $target:expr, $fixture:expr; $($name:ident => $case:ident),* $(,)?) => {
+        $( $crate::__vision_video_case!($attrs $name, $case, $target, $fixture); )*
+    };
+}
+
+/// One video case: evaluates the target and fixture in the case's async body.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __vision_video_case {
+    ([$($attr:meta),*] $name:ident, $case:ident, $target:expr, $fixture:expr) => {
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn $name() {
+            let fixture = $fixture;
+            $crate::conformance::$case($target, &fixture).await;
+        }
     };
 }
 

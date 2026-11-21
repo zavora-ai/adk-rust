@@ -173,8 +173,8 @@ async fn analyze(
 }
 
 /// One call records its frames as `UsageUnit::Frames` in its call record and the run's
-/// budget, and reports frames and requests in its usage; a local analyzer costs nothing, a
-/// priced remote one reports a cost and spends it.
+/// budget, and reports frames and requests in its usage; a local analyzer costs nothing; a
+/// remote one priced per unit reports at least its unit price, and a reported cost is spent.
 pub async fn video_usage(target: VideoAnalyzerTarget, fixture: &VideoFixture) {
     let descriptor = descriptor(&target);
     let harness = harness(&target, true, RunBudget::new());
@@ -194,16 +194,19 @@ pub async fn video_usage(target: VideoAnalyzerTarget, fixture: &VideoFixture) {
     let usage = &out.value.usage;
     assert!(usage.frames > 0 && usage.requests > 0, "`{}` reported {usage:?}", descriptor.id);
     if descriptor.locality.is_remote() {
-        if descriptor.price.is_some() {
+        // A per-unit price is always known; a token price only when the catalog has the model.
+        if let Some(unit_cost) = descriptor.price.as_ref().and_then(|p| p.request_cost(1)) {
             assert!(
-                usage.cost_micro_usd.is_some_and(|c| c > 0),
-                "`{}` is priced but reported cost {:?}",
+                usage.cost_micro_usd.is_some_and(|c| c >= unit_cost),
+                "`{}` is priced per unit but reported cost {:?}",
                 descriptor.id,
                 usage.cost_micro_usd
             );
+        }
+        if usage.cost_micro_usd.is_some_and(|c| c > 0) {
             assert!(
                 harness.budget.usage().cost_micro_usd > 0,
-                "`{}` is priced but spent nothing",
+                "`{}` reported a cost but spent nothing",
                 descriptor.id
             );
         }

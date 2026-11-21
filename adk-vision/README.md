@@ -24,7 +24,7 @@ Local-first perception for Rust Agent Development Kit (ADK-Rust) agents.
 | Traits | `Detector`, `Segmenter`, `DocumentReader`, `Embedder`, `Describer`, `Tracker`, `VideoAnalyzer`, `Editor` | One contract per perception task, each with a conformance suite |
 | Runtime | `VisionRuntime` | Local-first routing, metering, cancellation, mapping to source pixels, crop escalation |
 | Egress | `EgressGate`, `ReleasedImage`, `ReleasedClip` | A remote backend only ever receives an image the gate cropped, redacted, approved and recorded, or a clip it checked and recorded |
-| Video | `SourceClip`, `VideoSource`, `FramesAnalyzer`, `SamVideoTracker` | `analyze_video` holds a call's frames before anything leaves; questions over sampled frames on any model (`cloud`), tracks through a clip with `sam-3.1` video (`sam`) |
+| Video | `SourceClip`, `VideoSource`, `FramesAnalyzer`, `VisibilityPass`, `SamVideoTracker` | `analyze_video` holds a call's frames before anything leaves; questions over sampled frames on any model (`cloud`), optionally only around the first frame that shows the question's subject; tracks through a clip with `sam-3.1` video (`sam`) |
 | Tools | `VisionToolset` | `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`, `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure` on the governed path; a remote call is held with the exact egress image and releases only that digest |
 | Watch | `WatchCondition`, `WatchEvaluator`, `WatchSink` | Conditions held on the device against tracked objects; one event per object, keyed for the kernel's `VisionWakeSource`, never carrying pixels |
 | Measurement | `Calibration`, `Measurement` | A fiducial of known size gives pixels per millimetre; maximum length and area from masks with their uncertainty, valid only in the fiducial's plane |
@@ -56,7 +56,7 @@ features — `fetch`, `cloud`, `nim`, `sam`, `guardrail` — as `adk_rust::visio
 | `ocr` | `PpOcrReader`: PP-OCRv6 text lines and words through `oar-ocr` on ONNX Runtime |
 | `ocr-vl` | `PaddleOcrVlReader`: PaddleOCR-VL-1.6 with PP-DocLayoutV3 through `oar-ocr-vl` on Candle |
 | `ocr-vl-metal` | `ocr-vl` on Apple GPUs through Candle's Metal backend |
-| `mistralrs` | `LlmDescriber::mistralrs`: Qwen3-VL (`qwen3-vl-2b-instruct`, built in) or another mistral.rs vision model in this process, verified before load, regions in Qwen3-VL's own 0–1000 frame; implies `cloud`, `fetch` |
+| `mistralrs` | `LlmDescriber::mistralrs`: Qwen3-VL (`qwen3-vl-2b-instruct`, `qwen3-vl-4b-instruct` and `qwen3-vl-8b-instruct`, built in) or another mistral.rs vision model in this process, verified before load, regions in Qwen3-VL's own 0–1000 frame; implies `cloud`, `fetch` |
 | `mistralrs-metal`, `mistralrs-cuda` | `mistralrs` on Apple GPUs or CUDA |
 | `stream` | `FrameSource`, `Sampler`, the `FrameGovernor`, `FrameKeeper` retention and `StreamPipeline` (source, sampler, governor, privacy hook, detector, tracker, observation sink) |
 | `rtsp` | `RtspSource`: RTSP cameras through `retina`; MJPEG decoded in process, H.264 and H.265 with `ffmpeg` |
@@ -260,7 +260,9 @@ acceptance. Backends take a `VerifiedModel`, which only verification constructs.
 
 Every backend runs the same suite through a `VisionRuntime`: coordinates in source pixels,
 usage recorded, cancellation, the kill switch, no egress from local backends, oversized
-input, and rate-limit mapping. Enable `conformance` in `[dev-dependencies]`:
+input, and rate-limit mapping; a video analyzer runs `video_analyzer_conformance_tests!`
+(frame metering, egress, event times, refusals). Enable `conformance` in
+`[dev-dependencies]`:
 
 ```rust,ignore
 mod my_detector {

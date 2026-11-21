@@ -600,3 +600,42 @@ impl VideoAnalyzer<ReleasedImage> for FramesAnalyzer<ReleasedImage> {
         .await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::Locality;
+    use crate::budget::{ImageTokens, TokenEstimate};
+    use crate::geometry::CoordFrame;
+
+    #[test]
+    fn the_hold_covers_every_check_and_refine_of_a_visibility_pass() {
+        let estimate = TokenEstimate::new(ImageTokens::Claude, 3_000_000, 15_000_000);
+        let descriptor = BackendDescriptor::new(
+            "claude-sonnet-5-5",
+            Locality::Remote { hosts: vec!["api.anthropic.com".into()] },
+            CoordFrame::SentPixels,
+        )
+        .with_token_estimate(estimate);
+        let llm: Arc<dyn Llm> = Arc::new(adk_model::MockLlm::new("claude-sonnet-5-5"));
+        let plan = VideoPlan {
+            clip: None,
+            frame_sizes: vec![(448, 252); 24],
+            duration_ms: 120_000,
+            sampling: Sampling::at(0.2),
+        };
+        let cost = |frames: usize| {
+            estimate.estimate_micro_usd(&vec![(448, 252); frames], 1_024, Some(1_024))
+        };
+        let direct = FramesAnalyzer::<ReleasedImage>::with(Arc::clone(&llm), descriptor.clone());
+        assert_eq!(direct.estimate(&plan), Some(3 * cost(8)));
+        // The target, 24 checks of one frame, and a refine of three frames after each.
+        let pass = FramesAnalyzer::<ReleasedImage>::with(Arc::clone(&llm), descriptor.clone())
+            .with_visibility_pass(VisibilityPass::new());
+        assert_eq!(pass.estimate(&plan), Some(cost(0) + 24 * cost(1) + 24 * cost(3)));
+        // Every fifth frame, four a check, and refines of at most eight frames.
+        let strided = FramesAnalyzer::<ReleasedImage>::with(llm, descriptor)
+            .with_visibility_pass(VisibilityPass::new().with_stride(5).with_frames_per_check(4));
+        assert_eq!(strided.estimate(&plan), Some(cost(0) + cost(4) + cost(1) + 5 * cost(8)));
+    }
+}

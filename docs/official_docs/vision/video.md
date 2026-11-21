@@ -152,10 +152,88 @@ let runtime = VisionRuntime::builder()
 # }
 ```
 
-> **Note:** On the two-minute aisle fixture sampled once every 5 s, Qwen3-VL-2B on the CPU
-> places the forklift's entry at 0:45.0 in the batch that shows it, but also names an event
-> in batches that do not, and asked about all 24 frames at once it answers 0:35.0 (the entry
-> is at 0:45). Use a larger model for questions that need one answer across a whole clip.
+### Finding the Moment First: the Visibility Pass
+
+A small model asked about many frames at once misplaces the moment, or names one in frames
+that do not show it. `with_visibility_pass` splits a question about when something happens
+into steps the model answers reliably:
+
+1. **Target.** The thing the question is about: `VisibilityPass::with_target`, or named by
+   the model from the question in one text-only call.
+2. **Visibility.** Every `stride`-th frame, in order, is checked for the target: one
+   yes-or-no question per image, or `frames_per_check` images a call, until one shows it.
+3. **Refine.** The question is asked over every frame from the last check without the
+   target to `stride` frames past the first with it (at most `frames_per_call`, evenly
+   spaced). An event named there is the answer. When the model names none, the positive
+   counts as a false alarm and the checks resume after it.
+
+```rust,no_run
+use std::sync::Arc;
+use adk_vision::{FramesAnalyzer, LlmDescriber, VisibilityPass, VisionRuntime};
+
+# fn build(qwen: LlmDescriber<adk_vision::SentImage>) -> adk_vision::Result<()> {
+// Frames sampled at 1 fps: check one in five, then ask over the eleven seconds around the
+// first frame that shows the forklift.
+let pass = VisibilityPass::new().with_target("the orange forklift").with_stride(5);
+let runtime = VisionRuntime::builder()
+    .video_analyzer(Arc::new(FramesAnalyzer::local(&qwen).with_frames_per_call(16).with_visibility_pass(pass)))
+    .build()?;
+# Ok(())
+# }
+```
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `with_target` | named by the model | The noun phrase each check asks about |
+| `with_stride` | 1 | Check every `stride`-th frame; the refine step reads every frame within `stride` of the first positive |
+| `with_frames_per_check` | 1 | Images per visibility call: one is what a small model answers most reliably, more is cheaper |
+
+Event times still come from the timestamps of the frames the model names. When no frame
+shows the target, the answer says so and names no event. Every call — target, checks and
+refine — counts in `VideoAnalysis::usage`, and for a remote model the hold covers the target
+call, a check of every `stride`-th frame and a refine after each.
+
+<!-- S13 results -->
+
+## Conformance for Video Analyzers
+
+`video_analyzer_conformance_tests!` (feature `conformance`) runs a `VideoAnalyzer` through
+`VisionRuntime::analyze_video` on a `VideoFixture` — a clip or sampled frames, the request
+it answers, and optionally when the answer's first event should start:
+
+```rust,ignore
+mod gemini_video {
+    use std::sync::Arc;
+    use adk_vision::conformance::{VideoAnalyzerTarget, VideoFixture};
+    use adk_vision::{Sampling, SourceClip, VideoRequest};
+
+    adk_vision::video_analyzer_conformance_tests! {
+        backend = VideoAnalyzerTarget::Remote(Arc::new(my_crate::analyzer().await)),
+        fixture = VideoFixture::clip(
+            SourceClip::decode(std::fs::read("aisle.mp4").unwrap()).unwrap(),
+            Sampling::at(1.0),
+            VideoRequest::Ask { question: "When does the forklift enter the aisle?".into() },
+        )
+        .with_expected_event(45_000, 5_000),
+    }
+}
+```
+
+Both expressions are evaluated inside each case's async body, so they may `.await`, for
+example to start the local server a recorded answer replays from.
+
+| Case | Checks |
+|------|--------|
+| Usage | The call records its frames as `UsageUnit::Frames` in its call record and the run budget; a local analyzer costs nothing, a per-unit price is charged at least once, a reported cost is spent |
+| Egress | A local analyzer leaves the egress recorder empty; every release of a remote one — the clip or each frame — is in the call record and names the fixture's media |
+| Normalisation | Events in milliseconds from the start, ordered, inside the video, the first within the fixture's tolerance; an `Ask` has an answer; track regions in source pixels of the clip or their frame, in frame order, each with its track |
+| Unsupported | A request the analyzer does not answer (`Caption` by default) is refused as `Unsupported` and its frames go back to the budget |
+| Cancellation, kill switch | Refused before anything is released |
+| Frame cap | A run capped at one frame is refused before anything is released, naming the unit |
+| Unreleased | A remote analyzer without an egress gate is refused as `Forbidden` |
+
+`FramesAnalyzer` (local, remote, and with a visibility pass), `GeminiVideoAnalyzer` and
+`SamVideoTracker` pass the suite against local servers replaying recorded answers.
 
 ## Tracking Through a Clip with `sam-3.1`
 
