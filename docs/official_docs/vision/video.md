@@ -152,6 +152,11 @@ let runtime = VisionRuntime::builder()
 # }
 ```
 
+> **Note:** On the two-minute aisle fixture sampled once every 5 s, Qwen3-VL-2B on the CPU
+> places the forklift's entry at 0:45.0 in the batch that shows it, but also names an event
+> in batches that do not, and asked about all 24 frames at once it answers 0:35.0 (the entry
+> is at 0:45). Use a larger model for questions that need one answer across a whole clip.
+
 ## Tracking Through a Clip with `sam-3.1`
 
 `SamVideoTracker` answers `VideoRequest::Track` with Meta's `sam-3.1` video: masks with

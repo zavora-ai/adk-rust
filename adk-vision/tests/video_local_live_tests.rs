@@ -69,9 +69,14 @@ async fn qwen3_vl_answers_when_the_forklift_enters_over_sampled_frames() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video/aisle-forklift-120s.mp4");
     let frames = sample(&clip, 5, 448);
     assert_eq!(frames.len(), 24);
+    // Qwen3-VL-2B misses S13's 5 s window both ways (recorded 2026-11-21): 8 frames a call
+    // (the default) puts the right batch's event at 0:45.0 but names events in batches without
+    // the forklift too; all 24 in one call answers 0:35.0. The spec's local default is 4B or 8B.
+    let per_call =
+        std::env::var("ADK_VISION_FRAMES_PER_CALL").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
     let recorder = Arc::new(InMemoryEgressRecorder::new());
     let runtime = VisionRuntime::builder()
-        .video_analyzer(Arc::new(FramesAnalyzer::local(&qwen).with_frames_per_call(8)))
+        .video_analyzer(Arc::new(FramesAnalyzer::local(&qwen).with_frames_per_call(per_call)))
         .egress_gate(EgressGate::new(
             adk_core::egress::EgressPolicy::public_only(),
             EgressConfig::default().with_default(EgressAction::Allow),
