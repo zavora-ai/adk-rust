@@ -1063,12 +1063,16 @@ fn shows_own_arguments(request: &ApprovalRequest) -> bool {
     request.fingerprint.is_empty() || request.shows_call_args()
 }
 
-/// `tool(key: value, …)`, each value as JSON.
+/// `tool(key: value, …)`, each value as JSON, keys in sorted order.
 fn call_text(tool: &str, args: &Value) -> String {
     match args {
         Value::Object(map) => {
+            // Sorted, so the text is the same whether serde_json keeps insertion order
+            // (`preserve_order`, which a workspace build turns on) or not.
+            let mut entries: Vec<(&String, &Value)> = map.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
             let fields: Vec<String> =
-                map.iter().map(|(key, value)| format!("{key}: {value}")).collect();
+                entries.into_iter().map(|(key, value)| format!("{key}: {value}")).collect();
             format!("{tool}({})", fields.join(", "))
         }
         Value::Null => format!("{tool}()"),
