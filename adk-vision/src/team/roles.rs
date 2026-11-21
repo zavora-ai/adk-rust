@@ -686,12 +686,14 @@ impl Reasoner {
         &self.data_class
     }
 
-    /// Stages `crop` of `source` for a person's approval: the destination, minimise and
-    /// redact steps, the egress copy stored. `None` for a reasoner on the device.
+    /// Stages `crop` of `source` for a person's approval when its egress rule asks: the
+    /// destination, minimise and redact steps, the egress copy stored. `None` for a reasoner
+    /// on the device, or under a rule that allows the release.
     ///
     /// # Errors
     ///
-    /// The gate's refusals ([`EgressGate::stage`]).
+    /// The gate's refusals ([`EgressGate::stage`]), [`VisionError::EgressRefused`] for a
+    /// rule that denies.
     pub async fn stage(
         &self,
         cx: &VisionCx,
@@ -701,6 +703,9 @@ impl Reasoner {
         let Some(gate) = self.gate.as_ref().filter(|_| self.is_remote()) else {
             return Ok(None);
         };
+        if allows(gate, &self.destination, &self.data_class) {
+            return Ok(None);
+        }
         let request = ReleaseRequest::new(source, &self.destination, self.data_class.clone())
             .with_crop(with_margin(crop, source));
         gate.stage(cx, &request).await.map(Some)
@@ -974,6 +979,16 @@ impl Agent for Reasoner {
     }
 }
 
+/// Whether the egress rules release an image of `class` to `destination` without asking.
+fn allows(gate: &EgressGate, destination: &BackendDescriptor, class: &DataClass) -> bool {
+    match &destination.locality {
+        Locality::Remote { hosts } => {
+            gate.decide(hosts, class).0 == crate::egress::EgressAction::Allow
+        }
+        _ => true,
+    }
+}
+
 fn with_margin(crop: BBox, source: &SourceImage) -> BBox {
     let (w, h) = source.size();
     crop.expanded(CROP_MARGIN).clamped(w, h)
@@ -1176,8 +1191,8 @@ impl Verifier {
         self.gate.as_ref()
     }
 
-    /// Stages a crop for a remote verifier model, as [`Reasoner::stage`] does. `None` when
-    /// nothing would leave.
+    /// Stages a crop for a remote verifier model when its egress rule asks, as
+    /// [`Reasoner::stage`] does. `None` when nothing would leave or the rule allows it.
     ///
     /// # Errors
     ///
@@ -1191,7 +1206,7 @@ impl Verifier {
         let (Some(gate), Some(destination)) = (&self.gate, &self.destination) else {
             return Ok(None);
         };
-        if !self.is_remote() {
+        if !self.is_remote() || allows(gate, destination, &self.data_class) {
             return Ok(None);
         }
         let request = ReleaseRequest::new(source, destination, self.data_class.clone())
