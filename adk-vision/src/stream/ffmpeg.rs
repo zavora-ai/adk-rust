@@ -93,7 +93,7 @@ impl FfmpegBinary {
         }
     }
 
-    fn missing(&self, why: &str) -> VisionError {
+    pub(super) fn missing(&self, why: &str) -> VisionError {
         VisionError::Unavailable {
             backend: "ffmpeg".into(),
             message: format!(
@@ -103,7 +103,7 @@ impl FfmpegBinary {
         }
     }
 
-    fn command(&self) -> FfmpegCommand {
+    pub(super) fn command(&self) -> FfmpegCommand {
         let mut command = FfmpegCommand::new_with_path(&self.path);
         command.hide_banner();
         command
@@ -111,7 +111,7 @@ impl FfmpegBinary {
 }
 
 /// The video filter that samples at `fps` and scales down to `max_long_edge`.
-fn filter(fps: Option<f32>, max_long_edge: Option<u32>) -> Option<String> {
+pub(super) fn filter(fps: Option<f32>, max_long_edge: Option<u32>) -> Option<String> {
     let mut filters = Vec::new();
     if let Some(fps) = fps {
         filters.push(format!("fps={fps}"));
@@ -125,10 +125,13 @@ fn filter(fps: Option<f32>, max_long_edge: Option<u32>) -> Option<String> {
 }
 
 /// One decoded frame from ffmpeg.
-struct Raw {
-    pixels: DecodedImage,
+pub(super) struct Raw {
+    pub(super) pixels: DecodedImage,
     /// ffmpeg's output timestamp.
-    pts: Duration,
+    pub(super) pts: Duration,
+    /// The frame's number in ffmpeg's output, from 0.
+    #[cfg_attr(not(feature = "device"), allow(dead_code, reason = "only DeviceSource reads it"))]
+    pub(super) number: u32,
 }
 
 /// A running ffmpeg whose decoded RGBA frames arrive on a channel; killed and reaped when
@@ -149,7 +152,11 @@ impl Drop for Decoder {
 impl Decoder {
     /// Spawns `command` (which must write `-f rawvideo -pix_fmt rgba -`) and forwards its
     /// frames, `buffer` at most in flight, from a reader thread.
-    fn spawn(binary: &FfmpegBinary, mut command: FfmpegCommand, buffer: usize) -> Result<Self> {
+    pub(super) fn spawn(
+        binary: &FfmpegBinary,
+        mut command: FfmpegCommand,
+        buffer: usize,
+    ) -> Result<Self> {
         command.args(["-f", "rawvideo", "-pix_fmt", "rgba", "-"]);
         let mut child = command.spawn().map_err(|err| binary.missing(&err.to_string()))?;
         let events = child.iter().map_err(|err| VisionError::Backend {
@@ -164,14 +171,15 @@ impl Decoder {
         Ok(Self { child, frames })
     }
 
-    async fn next(&mut self) -> Option<Result<Raw>> {
+    pub(super) async fn next(&mut self) -> Option<Result<Raw>> {
         self.frames.recv().await
     }
 }
 
-/// Forwards decoded frames until ffmpeg ends or the receiver goes; ends with ffmpeg's last
-/// error when it produced none.
+/// Forwards decoded frames until ffmpeg ends or the receiver goes; ends with ffmpeg's first
+/// and last errors when it produced none.
 fn forward(events: ffmpeg_sidecar::iter::FfmpegIterator, tx: &mpsc::Sender<Result<Raw>>) {
+    let mut first_error: Option<String> = None;
     let mut last_error = None;
     let mut produced = false;
     for event in events {
@@ -180,20 +188,30 @@ fn forward(events: ffmpeg_sidecar::iter::FfmpegIterator, tx: &mpsc::Sender<Resul
                 produced = true;
                 let pts = Duration::from_secs_f64(f64::from(frame.timestamp.max(0.0)));
                 let raw = DecodedImage::from_rgba(frame.width, frame.height, frame.data)
-                    .map(|pixels| Raw { pixels, pts });
+                    .map(|pixels| Raw { pixels, pts, number: frame.frame_num });
                 if tx.blocking_send(raw).is_err() {
                     return;
                 }
             }
             FfmpegEvent::Log(LogLevel::Error | LogLevel::Fatal, message)
             | FfmpegEvent::Error(message) => {
-                last_error = Some(message);
+                if first_error.is_none() {
+                    first_error = Some(message);
+                } else {
+                    last_error = Some(message);
+                }
             }
             FfmpegEvent::Done | FfmpegEvent::LogEOF => {}
             _ => {}
         }
     }
-    if !produced && let Some(message) = last_error {
+    if !produced && let Some(first) = first_error {
+        // The first error names the cause, such as a camera that refused to open; the last,
+        // what ffmpeg gave up on.
+        let message = match last_error {
+            Some(last) => format!("{first}; {last}"),
+            None => first,
+        };
         let _ = tx.blocking_send(Err(VisionError::Backend { backend: "ffmpeg".into(), message }));
     }
 }

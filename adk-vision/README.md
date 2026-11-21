@@ -62,6 +62,7 @@ features — `fetch`, `cloud`, `nim`, `sam`, `guardrail` — as `adk_rust::visio
 | `stream` | `FrameSource`, `Sampler`, the `FrameGovernor`, `FrameKeeper` retention and `StreamPipeline` (source, sampler, governor, privacy hook, detector, tracker, observation sink) |
 | `rtsp` | `RtspSource`: RTSP cameras through `retina`; MJPEG decoded in process, H.264 and H.265 with `ffmpeg` |
 | `ffmpeg` | `FileSource` (MP4, MOV) and H.264/H.265 decoding through a user-installed `ffmpeg`; nothing vendored or downloaded |
+| `device` | `DeviceSource`: a camera on this machine (AVFoundation on macOS, v4l2 on Linux, DirectShow on Windows) through the same user-installed `ffmpeg`, `DeviceSource::list` and a `testsrc2` stand-in; implies `ffmpeg` |
 | `screen`, `browser`, `surface-camera` | `ScreenSource` (a `ComputerActuator` or computer-use-mcp observations), `BrowserSource` (`browser_screenshot`), `SurfaceCameraSource` (frames the web home pushes) |
 | `stream-fixtures` | The generated conveyor clip and an in-process RTSP test server |
 | `track` | `ByteTracker`: ByteTrack through `trackforge` 0.5, anonymous tracks that keep their identifiers through jitter and occlusion |

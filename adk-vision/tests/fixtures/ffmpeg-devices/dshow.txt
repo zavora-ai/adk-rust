@@ -1,0 +1,9 @@
+[dshow @ 000001e3c0a4e740] "Huddly GO" (video)
+[dshow @ 000001e3c0a4e740]   Alternative name "@device_pnp_\\?\usb#vid_2bd9&pid_0011&mi_00#7&1a2b3c4d&0&0000#{65e8773d-8f56-11d0-a3b9-00a0c9223196}\global"
+[dshow @ 000001e3c0a4e740] "OBS Virtual Camera" (video)
+[dshow @ 000001e3c0a4e740]   Alternative name "@device_sw_{860BB310-5D01-11D0-BD3B-00A0C911CE86}\{A3FCE0F5-3493-419F-958A-ABA1250EC20B}"
+[dshow @ 000001e3c0a4e740] "Elgato Cam Link 4K" (audio, video)
+[dshow @ 000001e3c0a4e740]   Alternative name "@device_pnp_\\?\usb#vid_0fd9&pid_0066&mi_00#8&2c3d4e5f&0&0000#{65e8773d-8f56-11d0-a3b9-00a0c9223196}\global"
+[dshow @ 000001e3c0a4e740] "Microphone (Huddly GO)" (audio)
+[dshow @ 000001e3c0a4e740]   Alternative name "@device_cm_{33D9A762-90C8-11D0-BD43-00A0C911CE86}\wave_{6A1F2B3C-4D5E-4F60-8172-93A4B5C6D7E8}"
+dummy: Immediate exit requested

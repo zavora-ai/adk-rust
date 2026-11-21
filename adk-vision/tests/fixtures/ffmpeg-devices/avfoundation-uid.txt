@@ -1,0 +1,9 @@
+[AVFoundation indev @ 0x600002d3c0b0] AVFoundation video devices:
+[AVFoundation indev @ 0x600002d3c0b0] [0] FaceTime HD Camera  [uid:47B4B64B70674B9CAD2BAE273A71F4B5]
+[AVFoundation indev @ 0x600002d3c0b0] [1] Huddly GO  [uid:0x14200000046d0825] [serial:A1B2C3D4]
+[AVFoundation indev @ 0x600002d3c0b0] [2] Capture screen 0
+[AVFoundation indev @ 0x600002d3c0b0] [3] Capture screen 1
+[AVFoundation indev @ 0x600002d3c0b0] AVFoundation audio devices:
+[AVFoundation indev @ 0x600002d3c0b0] [0] MacBook Pro Microphone  [uid:BuiltInMicrophoneDevice]
+[in#0 @ 0x600002a3c000] Error opening input: Immediate exit requested
+Error opening input file .

@@ -38,6 +38,7 @@
 //! | `mistralrs-metal`, `mistralrs-cuda` | `mistralrs` on Apple GPUs or CUDA |
 //! | `stream` | `stream`: `FrameSource`, the sampler, the frame governor, frame retention and the stream pipeline |
 //! | `rtsp`, `ffmpeg`, `screen`, `browser`, `surface-camera` | The frame sources: `RtspSource`, `FileSource` (and H.264/H.265 through a user-installed ffmpeg), `ScreenSource`, `BrowserSource`, `SurfaceCameraSource` |
+//! | `device` | `DeviceSource`: a camera on this machine through a user-installed ffmpeg (AVFoundation, v4l2, DirectShow), and `DeviceSource::list` (implies `ffmpeg`) |
 //! | `stream-fixtures` | `stream::fixtures`: the generated conveyor clip and an in-process RTSP test server |
 //! | `track` | `ByteTracker`: ByteTrack through `trackforge`, anonymous tracks with stable identifiers across frames |
 //! | `gemini-video` | `GeminiVideoAnalyzer`: Gemini native video, through the File API above 20 MB, at an explicit frame rate and media resolution (implies `cloud`) |

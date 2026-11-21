@@ -1,0 +1,7 @@
+[dshow @ 0000020c3c2d6e40] DirectShow video devices (some may be both video and audio devices)
+[dshow @ 0000020c3c2d6e40]  "Integrated Camera"
+[dshow @ 0000020c3c2d6e40]     Alternative name "@device_pnp_\\?\usb#vid_04f2&pid_b6d9&mi_00#6&2b5e5b6&0&0000#{65e8773d-8f56-11d0-a3b9-00a0c9223196}\global"
+[dshow @ 0000020c3c2d6e40] DirectShow audio devices
+[dshow @ 0000020c3c2d6e40]  "Microphone Array (Realtek(R) Audio)"
+[dshow @ 0000020c3c2d6e40]     Alternative name "@device_cm_{33D9A762-90C8-11D0-BD43-00A0C911CE86}\wave_{3E1A5C2B-7F4D-4E8A-9B6C-1D2E3F4A5B6C}"
+dummy: Immediate exit requested
