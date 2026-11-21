@@ -3075,6 +3075,13 @@ impl SurfaceEngine {
                 })
                 .collect()
         };
+        // Every camera's gate closes before anything else (spec 3.7 V-I17): no frame passes
+        // the hub from here on, wherever the freeze reaches next.
+        if let Some(cameras) = &self.inner.cameras
+            && let Err(error) = cameras.freeze_all().await
+        {
+            tracing::warn!(error = %error, "the cameras' gate closed; their source refused the pause");
+        }
         // Stopping never waits on the audit log (spec 3.2 K-I8): record after, warn on failure.
         self.inner.source.stop_all(caller, &reason).await?;
         let mut fields = json!({ "reason": reason });
@@ -3097,6 +3104,9 @@ impl SurfaceEngine {
         }
         self.audit_command(caller, SURFACE_AUDIT_RESUME_ALL, json!({})).await?;
         self.inner.source.resume_all(caller).await?;
+        if let Some(cameras) = &self.inner.cameras {
+            cameras.thaw_all().await?;
+        }
         Ok(CommandOutcome::Resumed)
     }
 

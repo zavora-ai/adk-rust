@@ -20,7 +20,7 @@
 //! adk-vision's [`SurfaceCameraSource`].
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
@@ -112,6 +112,20 @@ impl LiveWatch {
         self.wakes_for = Some(what.into());
         self
     }
+}
+
+/// What a camera's pipeline did with its frames since it started, for a test or a probe.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameCounts {
+    /// Frames the source delivered.
+    pub arrived: u64,
+    /// Frames dropped before the pipeline looked at them: the camera off, or Stop all.
+    pub dropped: u64,
+    /// Frames the pipeline looked at and offered to the hub.
+    pub observed: u64,
+    /// Watch events.
+    pub fired: u64,
 }
 
 /// Builds a fresh tracker for each run of a camera's pipeline.
@@ -310,6 +324,10 @@ struct Run {
     escalation: Option<(String, u64)>,
     on: AtomicBool,
     stopped: AtomicBool,
+    arrived: AtomicU64,
+    dropped: AtomicU64,
+    observed: AtomicU64,
+    fired: AtomicU64,
     cancel: CancellationToken,
     retry_now: Notify,
     state: Mutex<RunState>,
@@ -616,6 +634,10 @@ impl PipelineCamerasBuilder {
                 sampling: camera.sampling,
                 escalation: camera.escalation,
                 stopped: AtomicBool::new(false),
+                arrived: AtomicU64::new(0),
+                dropped: AtomicU64::new(0),
+                observed: AtomicU64::new(0),
+                fired: AtomicU64::new(0),
                 cancel,
                 retry_now: Notify::new(),
                 state: Mutex::new(RunState {
@@ -685,6 +707,17 @@ impl PipelineCameras {
             .iter()
             .find(|run| run.base.id == camera)
             .ok_or_else(|| SurfaceError::not_found(format!("camera '{camera}'")))
+    }
+
+    /// What camera `camera`'s pipeline did with its frames so far.
+    pub fn counts(&self, camera: &str) -> Option<FrameCounts> {
+        let run = self.run(camera).ok()?;
+        Some(FrameCounts {
+            arrived: run.arrived.load(Ordering::SeqCst),
+            dropped: run.dropped.load(Ordering::SeqCst),
+            observed: run.observed.load(Ordering::SeqCst),
+            fired: run.fired.load(Ordering::SeqCst),
+        })
     }
 
     /// Camera `camera`'s frame governor, once its pipeline runs.
@@ -1161,9 +1194,11 @@ impl FrameSource for Watched {
                 match next {
                     Some(Ok(mut frame)) => {
                         reading.arrived(frame.captured_at);
+                        reading.run.arrived.fetch_add(1, Ordering::SeqCst);
                         if !reading.run.on.load(Ordering::SeqCst)
                             || reading.shared.frozen.load(Ordering::SeqCst)
                         {
+                            reading.run.dropped.fetch_add(1, Ordering::SeqCst);
                             continue;
                         }
                         frame.index = reading.next_index;
@@ -1461,6 +1496,8 @@ impl ObservationSink for Sink {
             .with_overlays(overlays)
             .with_latency_ms(u32::try_from(latency).unwrap_or(u32::MAX));
         hub.offer(&run.base.id, frame).await;
+        run.observed.fetch_add(1, Ordering::SeqCst);
+        run.fired.fetch_add(events.len() as u64, Ordering::SeqCst);
         if !events.is_empty() {
             hub.changed(&run.base.id);
         }

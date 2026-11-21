@@ -182,8 +182,9 @@ adk-devtools = { path = "../adk-devtools" }
 adk-kernel = { path = "../adk-kernel", features = ["channels", "conformance", "postgres"] }
 # The kernel-hosted harness of the scenario tests; `vision` for the approve-with-image example.
 adk-harness = { path = "../adk-harness", features = ["kernel", "vision"] }
-# The vision pack's runtime, egress gate and redactors of `vision_home` (spec 3.7 §8.2).
-adk-vision = { path = "../adk-vision" }
+# The vision pack's runtime, egress gate and redactors of `vision_home` (spec 3.7 §8.2); the
+# conveyor clip over the in-process RTSP server of `live_camera_home` and the camera tests.
+adk-vision = { path = "../adk-vision", features = ["rtsp", "stream-fixtures"] }
 # Loads the labelled examples the annotated viewer saves, as `cargo adk eval` does.
 adk-eval = { path = "../adk-eval" }
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic", "openai", "gemini"] }
@@ -250,6 +251,14 @@ required-features = ["web"]
 [[example]]
 name = "scripted_camera_home"
 required-features = ["web"]
+
+# The live camera surface on the real frame pipeline (spec 3.7 §8.2, S12): the conveyor clip
+# over RTSP, two cameras through `StreamPipeline`, a zone, a watch and the governor, which
+# `web/e2e/camera.spec.ts` opens.
+[[example]]
+name = "live_camera_home"
+path = "examples/live_camera_home/main.rs"
+required-features = ["web", "vision-camera"]
 
 # The tray panel over a scripted kernel with two agents (spec 3.3 §5.5).
 [[example]]

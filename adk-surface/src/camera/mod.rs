@@ -45,7 +45,7 @@ pub use hub::{
     FrameIntake, HELD_FRAMES, Offered,
 };
 #[cfg(feature = "vision-camera")]
-pub use live::{LiveCamera, LiveWatch, PipelineCameras, PipelineCamerasBuilder};
+pub use live::{FrameCounts, LiveCamera, LiveWatch, PipelineCameras, PipelineCamerasBuilder};
 #[cfg(feature = "web")]
 pub use scripted::{CameraBoard, ScriptedCameras};
 pub use view::{
