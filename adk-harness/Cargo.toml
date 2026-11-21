@@ -93,16 +93,16 @@ payments = ["dep:adk-payments", "dep:adk-auth"]
 # The vision pack (spec 3.7 X15): adk-vision's governed tools, the `.adk/vision.toml` egress
 # rules and the image privacy guardrail on by default; `web` for the untrusted-text screening;
 # `stream` for `vision_watch` over the operator's frame sources.
-# With `kernel`, the kernel's `VisionWakeSource` takes the watches' events.
-vision = ["web", "dep:adk-vision", "adk-vision/guardrail", "adk-vision/stream", "adk-kernel?/vision"]
+vision = ["web", "dep:adk-vision", "adk-vision/guardrail", "adk-vision/stream"]
 # The vision pack's default on-device redactors: RF-DETR Nano for `faces` and PP-OCRv6 small
 # for `personal_text`, weights from adk-vision's built-in manifest; `ort` downloads the
 # onnxruntime binary at build time. Without it, a release whose rules require a class no
 # installed redactor covers is refused.
 vision-local = ["vision", "adk-vision/onnx", "adk-vision/ocr"]
-# Test fixtures only: adk-vision's generated conveyor clip and in-process RTSP server, for the
-# vision wake tests (never on in adk-cli).
-vision-fixtures = ["vision", "adk-vision/rtsp", "adk-vision/stream-fixtures"]
+# Test fixtures only: the vision wake tests on a kernel, with the kernel's `VisionWakeSource`
+# as the watches' sink, adk-vision's generated conveyor clip and its in-process RTSP server
+# (never on in adk-cli).
+vision-fixtures = ["vision", "kernel", "adk-kernel/vision", "adk-vision/rtsp", "adk-vision/stream-fixtures"]
 # The voice surface (spec 3.1 §7.17): the harness as the agent of an `IntegratedRealtimeRunner`.
 voice = ["dep:adk-realtime", "adk-realtime/integration"]
 # The managed form (spec 3.1 §7.18): adk-managed runs on adk-runner and adk-session already.

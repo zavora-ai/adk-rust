@@ -81,8 +81,8 @@
 7 adk-harness vision-local
 # A stream wakes a kernel process asleep on it, whose turn loads the kept frame through the
 # vision pack (spec 3.7 §7.10); the RF-DETR run over the in-process RTSP server is ignored.
-7 adk-harness vision,kernel
-7 adk-harness vision-local,vision-fixtures,kernel
+7 adk-harness vision-fixtures
+7 adk-harness vision-local,vision-fixtures
 # The harness's ACP standing permissions (spec 3.3 §10 A1): adk-acp's server enters only here.
 7 adk-harness acp-server
 # The crate docs' examples under the default tier: an `artifacts` example once compiled only
