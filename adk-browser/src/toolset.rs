@@ -41,20 +41,20 @@ impl SessionResolver {
 ///
 /// let browser = Arc::new(BrowserSession::new(BrowserConfig::default()));
 /// let toolset = BrowserToolset::with_profile(browser, BrowserProfile::FormFilling);
-/// let tools = toolset.all_tools(); // 19 tools instead of 44
+/// let tools = toolset.all_tools(); // 20 tools instead of 45
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BrowserProfile {
-    /// 19 tools: navigation + interaction + extraction + wait + screenshot.
+    /// 20 tools: navigation + interaction + extraction + wait + screenshot.
     /// Best for simple browsing tasks.
     Minimal,
-    /// 19 tools: same categories as Minimal (navigation + interaction + extraction + wait + screenshot).
+    /// 20 tools: same categories as Minimal (navigation + interaction + extraction + wait + screenshot).
     /// Best for form-filling agents.
     FormFilling,
-    /// 13 tools: navigation + extraction + screenshot + scroll, hover, and alert handling.
+    /// 14 tools: navigation + extraction + screenshot + scroll, hover, and alert handling.
     /// Best for data extraction / scraping agents (no interaction tools).
     Scraping,
-    /// 44 tools: every tool except `browser_evaluate_js` and `browser_file_upload`. Use
+    /// 45 tools: every tool except `browser_evaluate_js` and `browser_file_upload`. Use
     /// only when the agent needs full browser control.
     Full,
 }
@@ -483,6 +483,7 @@ impl BrowserToolset {
             tools.push(Arc::new(ExtractLinksTool::new(browser.clone())));
             tools.push(Arc::new(PageInfoTool::new(browser.clone())));
             tools.push(Arc::new(PageSourceTool::new(browser.clone())));
+            tools.push(Arc::new(ElementsTool::new(browser.clone())));
         }
 
         if self.include_wait {
@@ -608,8 +609,8 @@ mod tests {
         let toolset = BrowserToolset::new(browser);
         let tools = toolset.all_tools();
 
-        // Every tool except browser_evaluate_js and browser_file_upload (44)
-        assert_eq!(tools.len(), 44);
+        // Every tool except browser_evaluate_js and browser_file_upload (45)
+        assert_eq!(tools.len(), 45);
 
         // Check some tool names exist
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
@@ -617,6 +618,7 @@ mod tests {
         assert!(tool_names.contains(&"browser_click"));
         assert!(tool_names.contains(&"browser_type"));
         assert!(tool_names.contains(&"browser_screenshot"));
+        assert!(tool_names.contains(&"browser_elements"));
         // New tools
         assert!(tool_names.contains(&"browser_get_cookies"));
         assert!(tool_names.contains(&"browser_new_tab"));
@@ -659,7 +661,7 @@ mod tests {
         let toolset = BrowserToolset::with_profile(browser, BrowserProfile::FormFilling);
         let tools = toolset.all_tools();
 
-        // Navigation (4) + Interaction (5) + Extraction (5) + Wait (4) + Screenshot (1) = 19
+        // Navigation (4) + Interaction (5) + Extraction (6) + Wait (4) + Screenshot (1) = 20
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(tool_names.contains(&"browser_navigate"));
         assert!(tool_names.contains(&"browser_click"));

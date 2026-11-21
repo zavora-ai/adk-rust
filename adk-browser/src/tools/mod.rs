@@ -4,7 +4,7 @@
 //!
 //! - Navigation: `NavigateTool`, `BackTool`, `ForwardTool`, `RefreshTool`
 //! - Interaction: `ClickTool`, `DoubleClickTool`, `TypeTool`, `ClearTool`, `SelectTool`
-//! - Extraction: `ExtractTextTool`, `ExtractAttributeTool`, `ExtractLinksTool`, `PageInfoTool`, `PageSourceTool`
+//! - Extraction: `ExtractTextTool`, `ExtractAttributeTool`, `ExtractLinksTool`, `PageInfoTool`, `PageSourceTool`, `ElementsTool`
 //! - Screenshots: `ScreenshotTool`
 //! - Waiting: `WaitForElementTool`, `WaitTool`, `WaitForPageLoadTool`, `WaitForTextTool`
 //! - JavaScript: `EvaluateJsTool`, `ScrollTool`, `HoverTool`, `AlertTool`
@@ -16,6 +16,7 @@
 mod actions;
 mod click;
 mod cookies;
+mod elements;
 mod evaluate;
 mod extract;
 mod frames;
@@ -42,6 +43,9 @@ pub use type_text::{ClearTool, SelectTool, TypeTool};
 
 // Screenshot tools
 pub use screenshot::ScreenshotTool;
+
+// Set-of-marks grounding
+pub use elements::ElementsTool;
 
 // Extraction tools
 pub use extract::{
