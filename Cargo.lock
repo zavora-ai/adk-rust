@@ -1611,6 +1611,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-vision-sam-codec"
+version = "3.0.0"
+dependencies = [
+ "proptest",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "adk-website"
 version = "3.0.0"
 dependencies = [

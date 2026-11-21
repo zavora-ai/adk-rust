@@ -1,0 +1,37 @@
+adk-vision-sam-codec
+
+This crate is a Rust port of the mask codec in Meta's `@meta-sam/parser`, which Meta
+distributes under the SAM License. It is a derivative work of the SAM Materials and is
+distributed under the SAM License, whose full text is in LICENSE. By using or
+distributing this crate you agree to be bound by that licence.
+
+Original work
+  Package:    @meta-sam/parser 0.1.0
+              https://registry.npmjs.org/@meta-sam/parser/-/parser-0.1.0.tgz
+              sha256 14935a735fe259b06f9fe782c842a8293833fadae733b48b4e672c05ad73b387
+  Source:     typescript/packages/parser/src/mask-codec.ts
+              https://github.com/meta-models/meta-sam at
+              5f2e6e7f1da5b41dcd10bec971201e5910efc18a
+  Test data:  the mask vectors of conformance/cases at the same commit
+              (tests/fixtures/meta-conformance-masks.json, not part of the package)
+  Copyright:  Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved.
+  Licence:    SAM License, Last Updated: November 19, 2025
+              sha256 4dea99bfaa016e21bc860d73f344236bd1e5c4977d1a9a8fd32f822b500ae1be
+              (identical in the npm package, github.com/meta-models/meta-sam and
+              github.com/facebookresearch/sam3)
+
+Changes in this port
+  - Translated from TypeScript to Rust; the raster decoder, its base85 envelope and
+    the one_bit encoder used for the canonical check are ported. The stream parser,
+    object-prompt builder, COCO run-length and SVG conversions are not.
+  - Typed inputs: widths and heights are u32, and the caller passes the largest raster
+    area it accepts, checked before any allocation.
+  - Errors are a Rust error type carrying Meta's messages.
+
+The port was made by the ADK-Rust contributors (https://github.com/zavora-ai/adk-rust).
+As between them and Meta, clause 5.a of the SAM License governs ownership of the port.
+
+Meta provides the SAM Materials "as is" and offers no support for them (clauses 2 to 4).
+The SAM License restricts some uses (clause 1.b.v) and may be modified by Meta
+(clause 8). Research published using this crate must acknowledge the use of SAM
+Materials (clause 1.b.ii).

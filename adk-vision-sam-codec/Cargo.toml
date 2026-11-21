@@ -1,0 +1,24 @@
+[package]
+name = "adk-vision-sam-codec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+# A port of Meta's `@meta-sam/parser` mask codec, so it is distributed under the SAM License
+# (clause 1.b.i) and never under the workspace's Apache-2.0.
+license-file = "LICENSE"
+authors.workspace = true
+description = "Decodes Meta sam-3.1 mask payloads into rasters: a Rust port of the mask codec in Meta's @meta-sam/parser, distributed under the SAM License"
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/adk-vision-sam-codec"
+readme = "README.md"
+include = ["src/**", "Cargo.toml", "LICENSE", "NOTICE", "README.md"]
+keywords = ["adk", "sam", "segmentation", "mask", "vision"]
+categories = ["computer-vision", "encoding"]
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest = "1.5"
+serde_json.workspace = true

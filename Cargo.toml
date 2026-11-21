@@ -88,6 +88,9 @@ members = [
 
     # Local-first perception: media, regions, manifests, traits, runtime (spec 3.7)
     "adk-vision",
+
+    # The sam-3.1 mask codec, ported from Meta's @meta-sam/parser: SAM License, not Apache-2.0
+    "adk-vision-sam-codec",
 ]
 exclude = [
     # Extracted to standalone repo: https://github.com/zavora-ai/adk-studio
@@ -255,3 +258,4 @@ adk-acp = { path = "adk-acp", version = "3.0.0" }
 adk-site = { path = "adk-site", version = "3.0.0" }
 adk-website = { path = "adk-website", version = "3.0.0" }
 adk-vision = { path = "adk-vision", version = "3.0.0" }
+adk-vision-sam-codec = { path = "adk-vision-sam-codec", version = "3.0.0" }
