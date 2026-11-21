@@ -276,11 +276,18 @@ export function App({
     document.addEventListener("click", onClick);
     return () => document.removeEventListener("click", onClick);
   }, [viewerClient, cameraClient, openViewer, openCamera]);
-  // Which agents watch a camera: their thread links to it (board choice C1).
-  const cameras = usePoll(
-    async () => (cameraClient ? await cameraClient.cameras().catch(() => null) : null),
-    30_000,
-  );
+  // Which agents watch a camera: their thread links to it (board choice C1). A server that serves
+  // no cameras says so once and is not asked again.
+  const noCameras = useRef(false);
+  const cameras = usePoll(async () => {
+    if (!cameraClient || noCameras.current) return null;
+    try {
+      return await cameraClient.cameras();
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "surface.unsupported") noCameras.current = true;
+      return null;
+    }
+  }, 30_000);
   const cameraLinks = useMemo(() => {
     const links: Record<string, { href: string; text: string }> = {};
     const view = cameras.value;
