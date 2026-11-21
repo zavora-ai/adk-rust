@@ -160,7 +160,15 @@ impl VisionRuntime {
                 // The image is processed once per request the backend makes for the query.
                 let requests = descriptor.requests_for(concepts, false) as usize;
                 let hold = self
-                    .preflight(cx, task.task(), descriptor, &vec![sent; requests], 0, None)
+                    .preflight(
+                        cx,
+                        task.task(),
+                        descriptor,
+                        &vec![sent; requests],
+                        0,
+                        None,
+                        options.image_unit(),
+                    )
                     .await?;
                 let prepared =
                     self.prepare(cx, descriptor, backend.is_remote(), image, crop, options).await?;
@@ -182,7 +190,15 @@ impl VisionRuntime {
                 // The image is processed once per request the backend makes for the prompts.
                 let requests = descriptor.requests_for(concepts, concepts < prompts.len()) as usize;
                 let hold = self
-                    .preflight(cx, task.task(), descriptor, &vec![sent; requests], 0, None)
+                    .preflight(
+                        cx,
+                        task.task(),
+                        descriptor,
+                        &vec![sent; requests],
+                        0,
+                        None,
+                        options.image_unit(),
+                    )
                     .await?;
                 let prepared =
                     self.prepare(cx, descriptor, backend.is_remote(), image, crop, options).await?;
@@ -450,7 +466,9 @@ impl VisionRuntime {
     ) -> Result<DocumentPage> {
         let (descriptor, backend) = self.readers.get(id)?;
         let sent = planned_size(page.size(), crop, &descriptor.limits);
-        let hold = self.preflight(cx, VisionTask::Read, descriptor, &[sent], 0, None).await?;
+        let hold = self
+            .preflight(cx, VisionTask::Read, descriptor, &[sent], 0, None, options.image_unit())
+            .await?;
         let prepared =
             self.prepare(cx, descriptor, backend.is_remote(), page, crop, options).await?;
         let work = match (backend, &prepared) {
@@ -565,6 +583,7 @@ impl VisionRuntime {
                 &sizes,
                 spec.prompt.len(),
                 spec.max_output_tokens,
+                options.image_unit(),
             )
             .await?;
         let prepared =
@@ -642,7 +661,9 @@ impl VisionRuntime {
             .iter()
             .map(|i| planned_size(i.size(), options.region, &descriptor.limits))
             .collect();
-        let hold = self.preflight(cx, VisionTask::Embed, descriptor, &sizes, 0, Some(0)).await?;
+        let hold = self
+            .preflight(cx, VisionTask::Embed, descriptor, &sizes, 0, Some(0), options.image_unit())
+            .await?;
         let prepared =
             self.prepare_all(cx, descriptor, backend.is_remote(), images, options).await?;
         let inputs = Inputs::of(&prepared);
@@ -681,7 +702,9 @@ impl VisionRuntime {
         let route = self.route_for(VisionTask::Embed, options, self.embedders.default_id())?;
         let (descriptor, backend) = self.embedders.get(&route.primary)?;
         let chars = texts.iter().map(|t| t.len()).sum();
-        let hold = self.preflight(cx, VisionTask::Embed, descriptor, &[], chars, Some(0)).await?;
+        let hold = self
+            .preflight(cx, VisionTask::Embed, descriptor, &[], chars, Some(0), options.image_unit())
+            .await?;
         let inputs = Inputs::default();
         let task = VisionTask::Embed;
         let (vectors, dims, record) = match backend {
@@ -725,7 +748,9 @@ impl VisionRuntime {
         let route = self.route_for(VisionTask::Edit, options, self.editors.default_id())?;
         let (descriptor, backend) = self.editors.get(&route.primary)?;
         let sent = planned_size(image.size(), None, &descriptor.limits);
-        let hold = self.preflight(cx, VisionTask::Edit, descriptor, &[sent], 0, None).await?;
+        let hold = self
+            .preflight(cx, VisionTask::Edit, descriptor, &[sent], 0, None, options.image_unit())
+            .await?;
         let prepared =
             self.prepare(cx, descriptor, backend.is_remote(), image, None, options).await?;
         let work = match (backend, &prepared) {

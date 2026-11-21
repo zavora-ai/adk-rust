@@ -299,7 +299,7 @@ struct Detection {
 /// | Source and sampler | Frames at the sampling rate and size; the source drops what the pipeline cannot keep up with |
 /// | Frame governor | Thins, or pauses, frames to the [`FrameBudget`]; records each change |
 /// | Privacy | The [`PrivacyHook`] redacts every frame first; a failing hook drops the frame |
-/// | Detector | [`VisionRuntime::detect_with`], metered, regions in source pixels |
+/// | Detector | [`VisionRuntime::detect_with`], metered in frames, regions in source pixels |
 /// | Tracker | Anonymous track identifiers, reset when the stream starts and stops (V-I8) |
 /// | Sink | [`ObservationSink::observe`] |
 ///
@@ -413,16 +413,20 @@ impl StreamPipelineBuilder {
         self
     }
 
-    /// Detects `query` on every processed frame through `runtime`'s detection route.
+    /// Detects `query` on every processed frame through `runtime`'s detection route. Each
+    /// call is metered in [`UsageUnit::Frames`](adk_core::UsageUnit::Frames), so a stream
+    /// counts against frame caps and quotas, not image ones (spec 3.7 X3).
     pub fn detector(mut self, runtime: Arc<VisionRuntime>, query: DetectQuery) -> Self {
-        self.detection = Some(Detection { runtime, query, options: CallOptions::default() });
+        self.detection =
+            Some(Detection { runtime, query, options: CallOptions::default().as_frames() });
         self
     }
 
-    /// Sets the detection call's options: a route, a region of interest.
+    /// Sets the detection call's options: a route, a region of interest. The calls stay
+    /// metered as frames.
     pub fn detect_options(mut self, options: CallOptions) -> Self {
         if let Some(detection) = &mut self.detection {
-            detection.options = options;
+            detection.options = options.as_frames();
         }
         self
     }
