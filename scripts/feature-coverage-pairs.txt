@@ -405,6 +405,9 @@
 6 adk-auth agent-federation doc
 # The egress-guarded HTTP client and its redirect and resolution tests (#1281).
 6 adk-core egress-client doc
+# The process's one ONNX Runtime environment (`adk_core::onnx`): linted only, since adk-core
+# leaves linking onnxruntime to the crates that run models; their tests exercise it.
+6 adk-core ort lib
 # The GCS artifact backend must keep blob-name parity with adk-python.
 6 adk-artifact gcs
 6 adk-telemetry gcp
