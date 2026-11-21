@@ -185,6 +185,9 @@ pub mod lease;
 pub mod metering;
 /// LLM trait, request/response types, and caching configuration.
 pub mod model;
+/// The process's one ONNX Runtime environment, shared by every crate that runs ONNX models.
+#[cfg(feature = "ort")]
+pub mod onnx;
 /// Tool execution policy: allow, deny, or require approval per call.
 pub mod policy;
 /// Agent identity: agent identifiers, principals, and acting contexts.

@@ -87,7 +87,7 @@ pub struct ModelRef {
 pub struct VisionBackend {
     /// The row name, such as `rf-detr-n`.
     pub id: String,
-    /// The runtime and execution provider, such as `ort 2.0.0-rc.13, CPU`.
+    /// The runtime and execution provider, such as `ort, CPU`.
     pub runtime: String,
     /// The models it loads.
     pub models: Vec<ModelRef>,

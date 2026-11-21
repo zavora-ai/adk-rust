@@ -53,6 +53,7 @@ No feature is enabled by default.
 | `egress-client` | `egress::GuardedClient` and `egress::EgressResolver`: HTTP clients that enforce an `EgressPolicy` (implies `egress-dns`) |
 | `webhook-delivery` | The `webhook_delivery` module: signed outbound webhook delivery (implies `webhooks`, `egress-client`) |
 | `auth-bridge` | `request_context::RequestContextExtractor`, the trait an HTTP server authenticates requests through |
+| `ort` | The `onnx` module: the process's one ONNX Runtime environment, which `ort` allows once per process and `adk-audio`, `adk-rag` and `adk-vision` share |
 
 ## Core Traits
 

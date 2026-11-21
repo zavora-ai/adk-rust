@@ -55,9 +55,6 @@ ignore = [
     #     pinned because 0.3.21's libwebrtc breaks webrtc-sys 0.3.40. Its build
     #     script extracts LiveKit's own libwebrtc release archive, fetched over HTTPS,
     #     with `ZipArchive`.
-    #   * zip 8.6.0 — adk-vision -> oar-ocr 0.10.3 (`adk-vision/ocr`). Reads the Indra OCR
-    #     language-model archive by entry name with `ZipArchive` (`indra/lm.rs`), a
-    #     pipeline adk-vision never builds; never extracts or streams.
     # The crates this workspace declares require zip 9.0.5, and the `[[bans.deny]]`
     # entry below keeps zip 9 enforced.
     "RUSTSEC-2026-0367",
@@ -194,7 +191,7 @@ wrappers = ["inferno"]
 # Keep declared zip usage on the patched line. The wrappers are the third-party
 # crates named in the zip advisory ignore above.
 crate = "zip:<9"
-wrappers = ["candle-core", "oar-ocr", "webrtc-sys-build"]
+wrappers = ["candle-core", "webrtc-sys-build"]
 
 [sources]
 unknown-registry = "deny"

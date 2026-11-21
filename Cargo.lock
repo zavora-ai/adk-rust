@@ -489,6 +489,7 @@ dependencies = [
  "futures",
  "hmac 0.12.1",
  "http",
+ "ort",
  "proptest",
  "reqwest 0.13.5",
  "rustls",
@@ -4321,25 +4322,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "candle-transformers"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b1e1abeac23d7df4f94e8a3852b3dbb661d332e37c3bef479507bac867187b2"
-dependencies = [
- "byteorder",
- "candle-core 0.11.1",
- "candle-nn 0.11.1",
- "fancy-regex 0.19.2",
- "num-traits",
- "rand 0.9.5",
- "rayon",
- "serde",
- "serde_json",
- "serde_plain",
- "tracing",
-]
-
-[[package]]
 name = "candle-ug"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7305,17 +7287,6 @@ name = "fancy-regex"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1e1dacd0d2082dfcf1351c4bdd566bbe89a2b263235a2b50058f1e130a47277"
-dependencies = [
- "bit-set 0.8.0",
- "regex-automata",
- "regex-syntax",
-]
-
-[[package]]
-name = "fancy-regex"
-version = "0.19.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d301f5bf187b3c295fce6468d3875037a0bccc5f6b151c63cac2f85babf21912"
 dependencies = [
  "bit-set 0.8.0",
  "regex-automata",
@@ -12989,9 +12960,9 @@ checksum = "830b246a0e5f20af87141b25c173cd1b609bd7779a4617d6ec582abaf90870f3"
 
 [[package]]
 name = "oar-ocr"
-version = "0.10.3"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78cb99ec4852e3e974c8cae724f8808fe7f5a0e0b160652957686612543e22cf"
+checksum = "bd048ac32b74560ee29ad643c7b7b4a62bdc8a8fe7fd360c2117edd680863866"
 dependencies = [
  "image",
  "imageproc",
@@ -13007,19 +12978,18 @@ dependencies = [
  "unicode-bidi",
  "unicode-normalization",
  "unicode-properties",
- "zip 8.6.0",
+ "zip 9.6.0",
 ]
 
 [[package]]
 name = "oar-ocr-core"
-version = "0.10.3"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d89c2f088e39ea4ef5d8b29d454075f5d07387bd586b10c01977a70837a587b0"
+checksum = "e0744c4a4795f98a00b7eda9022061bf3876d3a972a9d1a3cfbb5b8f64903a14"
 dependencies = [
  "clipper2-rust",
  "image",
  "imageproc",
- "itertools 0.15.0",
  "multiversion 0.9.2",
  "nalgebra 0.35.0",
  "ndarray 0.17.2",
@@ -13037,9 +13007,9 @@ dependencies = [
 
 [[package]]
 name = "oar-ocr-derive"
-version = "0.10.3"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26e195e31988942c187eef316a16d2c225e362d639844754e67a8d79f811720a"
+checksum = "74ba5762de2ffa9d83badc7e79d25c11bbac7968d832896fea0d65c1e0aa72e0"
 dependencies = [
  "darling 0.24.1",
  "proc-macro2",
@@ -13049,13 +13019,12 @@ dependencies = [
 
 [[package]]
 name = "oar-ocr-vl"
-version = "0.10.3"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd9b3ae3ba039cc653bb0ad3a080cd8cb37dd094f54ba9fdd5cce250cd6fc5a8"
+checksum = "60cede5baeb28dffa9188430b32254111d4d2b6ace128cab8e362d137767abc3"
 dependencies = [
  "candle-core 0.11.1",
  "candle-nn 0.11.1",
- "candle-transformers 0.11.1",
  "half",
  "html-escape",
  "image",
@@ -13712,9 +13681,9 @@ dependencies = [
 
 [[package]]
 name = "ort"
-version = "2.0.0-rc.13"
+version = "2.0.0-rc.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4336a1e2b38848325241c72889086886004e589b7c74f335e60a8e8db5138a0b"
+checksum = "37c87aa7a90b7ff3e0fe36cccd475df8d67f15f07f4d6c370c4b38464232813c"
 dependencies = [
  "libloading 0.9.1",
  "ndarray 0.17.2",
@@ -13726,9 +13695,9 @@ dependencies = [
 
 [[package]]
 name = "ort-sys"
-version = "2.0.0-rc.13"
+version = "2.0.0-rc.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf211e3776eea6aec988552fa118dd746d70e1b1e5e244058d1c98015f3e5872"
+checksum = "8d22b0417f1838db5a3ac0b3f98dfe39f6fb73624aa0a27c6bbb5040b9c7db2b"
 dependencies = [
  "hmac-sha256",
  "lzma-rust2",
@@ -15034,7 +15003,7 @@ dependencies = [
  "bytemuck",
  "candle-core 0.9.2",
  "candle-nn 0.9.2",
- "candle-transformers 0.9.2",
+ "candle-transformers",
  "float8 0.5.0",
  "hf-hub 0.4.3",
  "hound",
@@ -21725,19 +21694,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc12baa6db2b15a140161ce53d72209dacea594230798c24774139b54ecaa980"
 dependencies = [
  "crc32fast",
- "indexmap 2.14.2",
- "memchr",
- "typed-path 0.12.4",
-]
-
-[[package]]
-name = "zip"
-version = "8.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
-dependencies = [
- "crc32fast",
- "flate2",
  "indexmap 2.14.2",
  "memchr",
  "typed-path 0.12.4",

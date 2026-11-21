@@ -212,7 +212,8 @@ impl OnnxEmbeddingProvider {
             .map_err(|e| error(format!("failed to configure truncation: {e}")))?;
         tokenizer.with_padding(Some(PaddingParams::default()));
 
-        let mut builder = Session::builder()
+        let mut builder = adk_core::onnx::ort_environment()
+            .and_then(|environment| Session::builder(&environment))
             .and_then(|builder| {
                 builder.with_optimization_level(GraphOptimizationLevel::Level3).map_err(Into::into)
             })

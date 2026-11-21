@@ -246,7 +246,7 @@ assert_eq!(options.execution_provider, OnnxExecutionProvider::CoreMl);
 
 | `OnnxExecutionProvider` | Needs | Behaviour |
 |-------------------------|-------|-----------|
-| `Cpu` (default) | — | The session is pinned to the CPU. `ort` otherwise asks onnxruntime to pick a device for efficiency, which an onnxruntime build with CoreML resolves to CoreML |
+| `Cpu` (default) | — | No accelerator is registered and onnxruntime picks no device itself: the workspace turns on no `ort` API level of 22 or more, from which `ort` asks onnxruntime to pick a device for efficiency, CoreML on Apple silicon |
 | `CoreMl` | `onnx-coreml` | CoreML takes the nodes it supports; the CPU runs the rest |
 | `Cuda` | `onnx-cuda` | CUDA takes the nodes it supports; the CPU runs the rest |
 
@@ -269,8 +269,46 @@ HF_HUB_CACHE=/var/lib/models HF_HUB_OFFLINE=1 \
   ./my-agent
 ```
 
-The crate's live tests pass against onnxruntime 1.28 (the `ort` download) and against
-onnxruntime 1.32 loaded this way.
+The crate's live tests pass against onnxruntime 1.31 (the `ort` download); with `ort`
+2.0.0-rc.13 they also passed against onnxruntime 1.32 loaded this way.
+
+## One ONNX Runtime Environment
+
+`ort` allows one ONNX Runtime environment per process. `adk-vision`, `adk-audio` and
+`adk-rag` take theirs from `adk_core::onnx::ort_environment`, which builds it with `ort`'s
+defaults on first use, and `adk-vision` hands the same one to `oar-ocr`. An application that
+wants its own environment, for one thread pool across every model or its own logger, installs
+it before the first model loads:
+
+```toml
+[dependencies]
+adk-core = { version = "3.0.0", features = ["ort"] }
+adk-vision = { version = "3.0.0", features = ["onnx"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std"] }
+```
+
+```rust
+use ort::environment::GlobalThreadPoolOptions;
+
+fn main() -> ort::Result<()> {
+    let threads = GlobalThreadPoolOptions::default().with_intra_threads(4)?;
+    let environment = ort::init().with_global_thread_pool(threads).build()?;
+    adk_core::onnx::set_ort_environment(environment)?;
+    // Every session ADK-Rust and oar-ocr create from here on runs on this pool.
+    Ok(())
+}
+```
+
+| Situation | Result |
+|-----------|--------|
+| Nothing installed | The first model load builds the environment; it lives until the process exits |
+| `set_ort_environment` after a model loaded, or called twice | An error: the environment is already installed |
+| Other code built an environment first and did not install it | Loading a model fails with an error that names `set_ort_environment` |
+
+> **Note:** Keep `ort`'s `api-*` features below 22 in a build that runs ADK-Rust's ONNX models,
+> `ort`'s own default features included. From 22, `ort` lets onnxruntime pick each session's
+> device; on Apple silicon it picks CoreML for PP-OCRv6, which then reads at about half the speed
+> with two to three times the memory, and `oar-ocr` sessions cannot be pinned back to the CPU.
 
 ## Measured Results
 
@@ -288,6 +326,9 @@ cores, 24 GB, macOS 26.2), onnxruntime 1.28 on the CPU, one image at a time:
 
 The 4-bit RF-DETR export scores the same objects lower than the full-precision one (the bear
 at 0.43 against 0.97), so `rf-detr-n` is the default in the examples.
+
+On onnxruntime 1.31 (`ort` 2.0.0-rc.15) every accuracy column above is unchanged except
+`rf-detr-n-q4f16`'s, which reads IoU 0.853–0.969 and scores 0.423–0.888.
 
 ## Related
 

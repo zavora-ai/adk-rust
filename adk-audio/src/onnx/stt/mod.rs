@@ -310,10 +310,12 @@ impl OnnxSttProvider {
         ep: &OnnxExecutionProvider,
         session_name: &str,
     ) -> AudioResult<Session> {
-        let builder = Session::builder().map_err(|e| AudioError::Stt {
-            provider: "ONNX".into(),
-            message: format!("failed to create {session_name} session builder: {e}"),
-        })?;
+        let builder = adk_core::onnx::ort_environment()
+            .and_then(|environment| Session::builder(&environment))
+            .map_err(|e| AudioError::Stt {
+                provider: "ONNX".into(),
+                message: format!("failed to create {session_name} session builder: {e}"),
+            })?;
 
         let mut builder = match ep.dispatch() {
             Some(provider) => builder.with_execution_providers([provider]).unwrap_or_else(|e| {
