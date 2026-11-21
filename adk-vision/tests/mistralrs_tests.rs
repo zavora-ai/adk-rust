@@ -20,11 +20,12 @@ use adk_core::{
 use adk_mistralrs::MistralRsConfig;
 use adk_vision::cloud::Normalized1000;
 use adk_vision::conformance::{DescriberTarget, Fixture};
-use adk_vision::mistralrs::QWEN3_VL_2B;
+use adk_vision::mistralrs::{QWEN3_VL_2B, QWEN3_VL_4B, QWEN3_VL_8B};
 use adk_vision::{
     AxisOrder, BBox, CoordFrame, DecodeLimits, DescribeSpec, Describer, Digest, FetchConfig,
-    InMemoryAcceptanceStore, LicenceGate, LicencePolicy, LlmDescriber, Locality, ManifestSet,
-    ModelFetcher, ModelManifest, SourceImage, VerifiedModel, VisionCx, VisionError, VisionRuntime,
+    InMemoryAcceptanceStore, LicenceClass, LicenceGate, LicencePolicy, LlmDescriber, Locality,
+    ManifestSet, ModelFetcher, ModelManifest, SourceImage, VerifiedModel, VisionCx, VisionError,
+    VisionRuntime,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -206,6 +207,50 @@ fn the_builtin_manifest_pins_qwen3_vl_2b() {
         serde_json::to_value(&qwen.runtime).unwrap(),
         json!({"kind": "mistralRs", "architecture": "qwen3vl"})
     );
+}
+
+#[test]
+fn the_builtin_manifest_pins_qwen3_vl_4b_and_8b_in_shards() {
+    let manifests = ManifestSet::builtin().unwrap();
+    for (id, repo, revision, shards, bytes) in [
+        (
+            QWEN3_VL_4B,
+            "Qwen/Qwen3-VL-4B-Instruct",
+            "ebb281ec70b05090aa6165b016eac8ec08e71b17",
+            2,
+            8_875_719_344,
+        ),
+        (
+            QWEN3_VL_8B,
+            "Qwen/Qwen3-VL-8B-Instruct",
+            "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b",
+            4,
+            17_534_339_512,
+        ),
+    ] {
+        let qwen = manifests.get(id).expect("built in");
+        assert_eq!(
+            serde_json::to_value(&qwen.source).unwrap(),
+            json!({"kind": "huggingFace", "repo": repo, "revision": revision})
+        );
+        assert_eq!(
+            (qwen.licence.id.as_str(), qwen.licence.class),
+            ("Apache-2.0", LicenceClass::Permissive)
+        );
+        assert_eq!(
+            serde_json::to_value(&qwen.runtime).unwrap(),
+            json!({"kind": "mistralRs", "architecture": "qwen3vl"})
+        );
+        // Every shard is pinned, beside the index and the tokenizer, in one directory.
+        let weights: Vec<_> =
+            qwen.files.iter().filter(|f| f.path.ends_with(".safetensors")).collect();
+        assert_eq!(weights.len(), shards);
+        assert_eq!(weights.iter().map(|f| f.size).sum::<u64>(), bytes);
+        for path in ["model.safetensors.index.json", "tokenizer.json", "preprocessor_config.json"] {
+            assert!(qwen.file(path).is_some(), "{id} pins no {path}");
+        }
+        assert!(qwen.files.iter().all(|f| !f.path.contains('/')));
+    }
 }
 
 // --- Live: Qwen/Qwen3-VL-2B-Instruct in this process -----------------------------------------

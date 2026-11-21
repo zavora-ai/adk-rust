@@ -9,6 +9,7 @@
 //! | [`Embedder`] | [`embedder_conformance_tests!`](crate::embedder_conformance_tests) | usage, cancellation, kill switch, egress, oversized input, unreleased images, dimensions |
 //! | [`Editor`] | [`editor_conformance_tests!`](crate::editor_conformance_tests) | the same, provenance |
 //! | [`Tracker`](crate::Tracker) | [`tracker_conformance_tests!`](crate::tracker_conformance_tests) | stable identifiers, new objects, reset |
+//! | [`VideoAnalyzer`](crate::VideoAnalyzer) | [`video_analyzer_conformance_tests!`](crate::video_analyzer_conformance_tests) | usage, egress, event times and track regions, unsupported requests, cancellation, kill switch, frame cap, unreleased media |
 //!
 //! Every case runs the backend through a [`VisionRuntime`](crate::VisionRuntime), so the image it sees, the
 //! metering, the egress gate and the mapping to source pixels are the ones production uses:
@@ -26,6 +27,10 @@
 //! - **Oversized input.** Refused with the limit in the message, or downscaled with the
 //!   resize recorded, as the descriptor says.
 //! - **Errors.** A rate-limited backend maps to `RateLimited` with a retry hint.
+//! - **Video.** A video call records its frames as `UsageUnit::Frames`; event times are
+//!   milliseconds from the start of the video, ordered and inside it; track regions are in
+//!   source pixels of the clip or their frame; an unsupported request, a cancelled call, the
+//!   kill switch and a frame cap each refuse before anything leaves.
 //!
 //! The macros expand to `#[tokio::test]`s on a multi-threaded runtime, so the calling crate
 //! needs `tokio` with the `macros` and `rt-multi-thread` features. Invoke each macro in its
@@ -47,9 +52,11 @@
 mod checks;
 mod macros;
 mod probe;
+mod video;
 
 pub use checks::*;
 pub use probe::{AnyProbe, Expected, Fixture, Harness, ProbeOutput, Target};
+pub use video::*;
 
 use crate::egress::ReleasedImage;
 use crate::traits::{Describer, Detector, DocumentReader, Editor, Embedder, Segmenter};

@@ -220,9 +220,9 @@ pub use traits::{
     ReadOptions, Sampling, SegmentPrompt, Segmenter, TableCell, Tracker, VideoAnalysis,
     VideoAnalyzer, VideoEvent, VideoFrame, VideoInput, VideoPlan, VideoRequest, VideoUsage, Word,
 };
-#[cfg(feature = "cloud")]
-pub use video::FramesAnalyzer;
 pub use video::{ClipInfo, MAX_CLIP_BYTES, SentClip, SourceClip, VideoCodec};
+#[cfg(feature = "cloud")]
+pub use video::{FramesAnalyzer, VisibilityPass};
 #[cfg(feature = "gemini-video")]
 pub use video::{GEMINI_INLINE_LIMIT, GeminiVideoAnalyzer, MediaResolution};
 pub use watch::{

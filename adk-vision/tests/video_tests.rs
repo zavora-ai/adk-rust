@@ -1,8 +1,9 @@
 //! Video analysis through the runtime (spec 3.7 §7.13, S11, S13): clips leave only through
 //! the egress gate, `sam-3.1` video tracks with stable identifiers and bills its 50-frame
 //! minimum per request, Gemini native video uploads a large clip once and sends a file part,
-//! and questions over sampled frames name events by frame. Every provider runs as its real
-//! client against a local server.
+//! questions over sampled frames name events by frame, and a visibility pass finds the frames
+//! that show the question's subject before asking. Every provider runs as its real client
+//! against a local server, and every analyzer runs `video_analyzer_conformance_tests!`.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -14,13 +15,14 @@ use adk_core::{
     UsageMetadata, UsageUnit,
 };
 use adk_model::GeminiModel;
+use adk_vision::conformance::{VideoAnalyzerTarget, VideoFixture};
 use adk_vision::sam::{SamConfig, SamVideoTracker};
 use adk_vision::{
-    CallOptions, DecodedImage, Digest, EgressAction, EgressConfig, EgressGate, EgressRecord,
-    FrameMeta, FrameSourceId, FramesAnalyzer, GeminiVideoAnalyzer, InMemoryEgressRecorder,
-    LlmDescriber, MediaResolution, RedactionClass, Sampling, SegmentPrompt, SourceClip,
-    SourceImage, TrackId, VideoCodec, VideoRequest, VideoSource, VisionCx, VisionError,
-    VisionRuntime,
+    CallOptions, DecodeLimits, DecodedImage, Digest, EgressAction, EgressConfig, EgressGate,
+    EgressRecord, FrameMeta, FrameSourceId, FramesAnalyzer, GeminiVideoAnalyzer,
+    InMemoryEgressRecorder, LlmDescriber, MediaResolution, RedactionClass, Sampling, SegmentPrompt,
+    SourceClip, SourceImage, TrackId, VideoCodec, VideoRequest, VideoSource, VisibilityPass,
+    VisionCx, VisionError, VisionRuntime,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -713,4 +715,358 @@ async fn the_recorded_gemini_exchange_replays_and_the_overload_is_reported() {
     )
     .unwrap();
     assert_eq!(sent, ex[4]["request"]);
+}
+
+/// What the judge was asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Asked {
+    Target,
+    Check(Vec<u64>),
+    Question(Vec<u64>),
+}
+
+/// A vision-language model that answers from the frames it is shown, recognising each by its
+/// width (`40 + index`, see [`numbered_frames`]): the orange forklift is visible in `seen` and
+/// enters the aisle at frame `enters`; a frame in `false_alarm` looks like it to a visibility
+/// check but not to the question.
+struct Judge {
+    seen: std::ops::RangeInclusive<u64>,
+    enters: u64,
+    false_alarm: Vec<u64>,
+    locality: DataLocality,
+    asked: Mutex<Vec<Asked>>,
+}
+
+impl Judge {
+    fn new(seen: std::ops::RangeInclusive<u64>, enters: u64) -> Self {
+        Self {
+            seen,
+            enters,
+            false_alarm: Vec::new(),
+            locality: DataLocality::InProcess,
+            asked: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn looks_visible(&self, index: u64) -> bool {
+        self.seen.contains(&index) || self.false_alarm.contains(&index)
+    }
+
+    fn answer(&self, prompt: &str, frames: &[u64]) -> (Asked, Value) {
+        if prompt.contains("What must be visible") {
+            return (Asked::Target, json!({"target": "the orange forklift"}));
+        }
+        if prompt.contains("Is the orange forklift visible in this image?") {
+            return (
+                Asked::Check(frames.to_vec()),
+                json!({"visible": self.looks_visible(frames[0])}),
+            );
+        }
+        if prompt.contains("In which of them is the orange forklift visible?") {
+            let visible: Vec<usize> =
+                (1..=frames.len()).filter(|&n| self.looks_visible(frames[n - 1])).collect();
+            return (Asked::Check(frames.to_vec()), json!({"visible": visible}));
+        }
+        assert!(prompt.contains("Question:"), "an unexpected prompt: {prompt}");
+        let inside = |i: &u64| self.seen.contains(i) && *i >= self.enters;
+        let answer = match frames.iter().position(inside) {
+            Some(first) => {
+                let last = frames.iter().rposition(|i| self.seen.contains(i)).unwrap();
+                json!({"answer": "The forklift crosses the yellow line.",
+                       "events": [{"start": first + 1, "end": last + 1, "text": "the forklift enters aisle 3"}]})
+            }
+            None => json!({"answer": "No forklift enters in these images.", "events": []}),
+        };
+        (Asked::Question(frames.to_vec()), answer)
+    }
+}
+
+#[async_trait]
+impl Llm for Judge {
+    fn name(&self) -> &str {
+        "qwen3-vl-4b-instruct"
+    }
+
+    async fn generate_content(
+        &self,
+        req: LlmRequest,
+        _stream: bool,
+    ) -> adk_core::Result<LlmResponseStream> {
+        let parts = &req.contents[0].parts;
+        let frames: Vec<u64> = parts
+            .iter()
+            .filter_map(|p| match p {
+                adk_core::Part::InlineData { data, .. } => {
+                    let image = SourceImage::decode(data, &DecodeLimits::default()).unwrap();
+                    Some(u64::from(image.size().0) - 40)
+                }
+                _ => None,
+            })
+            .collect();
+        let prompt = parts.last().and_then(adk_core::Part::text).unwrap_or_default().to_string();
+        let (asked, answer) = self.answer(&prompt, &frames);
+        self.asked.lock().unwrap().push(asked);
+        let mut response = LlmResponse::new(Content::new("model").with_text(answer.to_string()));
+        response.usage_metadata = Some(UsageMetadata {
+            prompt_token_count: 100 * frames.len() as i32 + 50,
+            candidates_token_count: 10,
+            total_token_count: 100 * frames.len() as i32 + 60,
+            ..Default::default()
+        });
+        response.turn_complete = true;
+        Ok(Box::pin(futures::stream::iter([Ok(response)])))
+    }
+
+    fn data_locality(&self) -> DataLocality {
+        self.locality
+    }
+}
+
+/// `n` frames `every_ms` apart, frame `i` being `40 + i` pixels wide so the judge knows it.
+fn numbered_frames(n: u64, every_ms: u64) -> Vec<(FrameMeta, SourceImage)> {
+    (0..n)
+        .map(|i| {
+            let meta = FrameMeta {
+                source: FrameSourceId("aisle".into()),
+                index: i,
+                pts_ms: i * every_ms,
+                captured_at: chrono::Utc::now(),
+            };
+            let image = DecodedImage::filled(40 + i as u32, 24, [90, 90, 90, 255]);
+            (meta, SourceImage::from_pixels(image).unwrap())
+        })
+        .collect()
+}
+
+fn ask_when_it_enters() -> VideoRequest {
+    VideoRequest::Ask { question: "When does the forklift enter the aisle?".into() }
+}
+
+fn local_runtime(analyzer: FramesAnalyzer) -> (VisionRuntime, Arc<InMemoryEgressRecorder>) {
+    let recorder = Arc::new(InMemoryEgressRecorder::new());
+    let runtime = VisionRuntime::builder()
+        .video_analyzer(Arc::new(analyzer))
+        .egress_gate(gate(allow(), &recorder))
+        .build()
+        .unwrap();
+    (runtime, recorder)
+}
+
+#[tokio::test]
+async fn a_visibility_pass_asks_only_around_the_first_frame_that_shows_the_subject() {
+    // 24 frames 5 s apart: the forklift is in frames 9–12 (0:45–1:00) and frame 3 fools a
+    // check. The question over all 24 at once is what a small model gets wrong.
+    let judge = Arc::new(Judge { false_alarm: vec![3], ..Judge::new(9..=12, 9) });
+    let describer = LlmDescriber::local(judge.clone()).unwrap();
+    let analyzer = FramesAnalyzer::local(&describer).with_visibility_pass(VisibilityPass::new());
+    let (runtime, recorder) = local_runtime(analyzer);
+    let sampled = numbered_frames(24, 5_000);
+    let (cx, budget, _) = metered();
+    let out = runtime
+        .analyze_video(&cx, VideoSource::frames(&sampled, Sampling::at(0.2)), &ask_when_it_enters())
+        .await
+        .unwrap();
+
+    let events: Vec<(u64, u64)> = out.value.events.iter().map(|e| (e.start_ms, e.end_ms)).collect();
+    assert_eq!(events, vec![(45_000, 50_000)]);
+    assert_eq!(out.value.answer.as_deref(), Some("The forklift crosses the yellow line."));
+    // The target, frames 0–3 checked one by one, the false alarm refined over 2–4 and
+    // dismissed, frames 4–9 checked, then the question over 8–10.
+    let check = |i: u64| Asked::Check(vec![i]);
+    let mut expected = vec![Asked::Target];
+    expected.extend((0..=3).map(check));
+    expected.push(Asked::Question(vec![2, 3, 4]));
+    expected.extend((4..=9).map(check));
+    expected.push(Asked::Question(vec![8, 9, 10]));
+    assert_eq!(*judge.asked.lock().unwrap(), expected);
+    let usage = &out.value.usage;
+    // Thirteen calls: one text-only, ten of one image, two of three.
+    assert_eq!(
+        (usage.requests, usage.input_tokens, usage.output_tokens, usage.cost_micro_usd),
+        (13, Some(13 * 50 + 16 * 100), Some(130), Some(0))
+    );
+    assert_eq!((usage.frames, budget.units().get(UsageUnit::Frames)), (24, 24));
+    assert!(recorder.is_empty(), "an on-device analyzer sends nothing off the machine");
+}
+
+#[tokio::test]
+async fn a_strided_visibility_pass_checks_in_batches_and_refines_every_frame() {
+    // Two minutes at 1 fps; the forklift is on screen from 0:41 to 1:01 and enters at 0:45.
+    let judge = Arc::new(Judge::new(41..=61, 45));
+    let describer = LlmDescriber::local(judge.clone()).unwrap();
+    let pass = VisibilityPass::new()
+        .with_target("the orange forklift")
+        .with_stride(5)
+        .with_frames_per_check(4);
+    let analyzer =
+        FramesAnalyzer::local(&describer).with_frames_per_call(16).with_visibility_pass(pass);
+    let (runtime, _) = local_runtime(analyzer);
+    let sampled = numbered_frames(120, 1_000);
+    let out = runtime
+        .analyze_video(
+            &VisionCx::new(),
+            VideoSource::frames(&sampled, Sampling::at(1.0)),
+            &ask_when_it_enters(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(out.value.events[0].start_ms, 45_000);
+    // Every fifth frame, four a call, until 0:45; then every frame from 0:40 to 0:50.
+    assert_eq!(
+        *judge.asked.lock().unwrap(),
+        vec![
+            Asked::Check(vec![0, 5, 10, 15]),
+            Asked::Check(vec![20, 25, 30, 35]),
+            Asked::Check(vec![40, 45, 50, 55]),
+            Asked::Question((40..=50).collect()),
+        ]
+    );
+    assert_eq!(out.value.usage.requests, 4);
+
+    // Capped at four frames a call, the refine step reads every third frame of the window.
+    let judge = Arc::new(Judge::new(41..=61, 45));
+    let describer = LlmDescriber::local(judge.clone()).unwrap();
+    let pass = VisibilityPass::new().with_target("the orange forklift").with_stride(5);
+    let (runtime, _) = local_runtime(
+        FramesAnalyzer::local(&describer).with_frames_per_call(4).with_visibility_pass(pass),
+    );
+    let out = runtime
+        .analyze_video(
+            &VisionCx::new(),
+            VideoSource::frames(&sampled, Sampling::at(1.0)),
+            &ask_when_it_enters(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(judge.asked.lock().unwrap().last(), Some(&Asked::Question(vec![40, 43, 46, 49])));
+    assert_eq!(out.value.events[0].start_ms, 46_000);
+}
+
+#[tokio::test]
+async fn a_subject_no_frame_shows_names_no_event() {
+    let judge = Arc::new(Judge::new(1..=0, 0));
+    let describer = LlmDescriber::local(judge.clone()).unwrap();
+    let pass = VisibilityPass::new().with_target("the orange forklift");
+    let (runtime, _) = local_runtime(FramesAnalyzer::local(&describer).with_visibility_pass(pass));
+    let sampled = numbered_frames(6, 5_000);
+    let out = runtime
+        .analyze_video(
+            &VisionCx::new(),
+            VideoSource::frames(&sampled, Sampling::at(0.2)),
+            &ask_when_it_enters(),
+        )
+        .await
+        .unwrap();
+    assert!(out.value.events.is_empty());
+    assert_eq!(
+        out.value.answer.as_deref(),
+        Some("the orange forklift is not seen in any of the 6 frames checked.")
+    );
+    assert_eq!(judge.asked.lock().unwrap().len(), 6);
+}
+
+/// A Gemini analyzer against a local server that answers `generateContent` with the
+/// forklift entering at 0:46, kept alive for the rest of the test process.
+async fn gemini_answering() -> GeminiVideoAnalyzer {
+    let answer = r#"{"answer": "The forklift enters aisle 3 at about 0:46.", "events": [{"start": "0:46.0", "end": "0:50.0", "text": "the forklift crosses the yellow line"}]}"#;
+    let server: &'static MockServer = Box::leak(Box::new(gemini_server(answer).await));
+    gemini(server)
+}
+
+/// A `sam-3.1` video tracker against a local server replaying the live answer for the
+/// crossing clip, kept alive for the rest of the test process.
+async fn sam_replaying() -> SamVideoTracker {
+    let recording: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture(
+            "recorded/sam-3-1.forklift-crossing-orange-rectangle.json",
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(recording["response"].as_str().unwrap().to_string()),
+        )
+        .mount(&server)
+        .await;
+    sam(Box::leak(Box::new(server)))
+}
+
+/// The judge with the forklift in frames 9–12, entering at frame 9.
+fn judge(locality: DataLocality) -> Arc<dyn Llm> {
+    Arc::new(Judge { locality, ..Judge::new(9..=12, 9) })
+}
+
+/// Frames 5 s apart, the forklift entering at 0:45.
+fn entering_frames() -> VideoFixture {
+    VideoFixture::frames(numbered_frames(24, 5_000), Sampling::at(0.2), ask_when_it_enters())
+        .with_expected_event(45_000, 5_000)
+}
+
+mod frames_local_conformance {
+    use super::*;
+
+    adk_vision::video_analyzer_conformance_tests! {
+        backend = VideoAnalyzerTarget::Local(Arc::new(FramesAnalyzer::local(
+            &LlmDescriber::local(judge(DataLocality::InProcess)).unwrap(),
+        ))),
+        fixture = entering_frames(),
+    }
+}
+
+mod frames_visibility_conformance {
+    use super::*;
+
+    adk_vision::video_analyzer_conformance_tests! {
+        backend = VideoAnalyzerTarget::Local(Arc::new(
+            FramesAnalyzer::local(
+                &LlmDescriber::local(judge(DataLocality::InProcess)).unwrap(),
+            )
+            .with_visibility_pass(VisibilityPass::new()),
+        )),
+        fixture = entering_frames(),
+    }
+}
+
+mod frames_remote_conformance {
+    use super::*;
+
+    adk_vision::video_analyzer_conformance_tests! {
+        backend = VideoAnalyzerTarget::Remote(Arc::new(
+            FramesAnalyzer::remote(
+                &LlmDescriber::remote(judge(DataLocality::Remote), ["api.anthropic.com"])
+                    .unwrap(),
+            )
+            .with_visibility_pass(VisibilityPass::new().with_frames_per_check(8)),
+        )),
+        fixture = entering_frames(),
+    }
+}
+
+mod gemini_conformance {
+    use super::*;
+
+    adk_vision::video_analyzer_conformance_tests! {
+        backend = VideoAnalyzerTarget::Remote(Arc::new(gemini_answering().await)),
+        fixture = VideoFixture::clip(clip("aisle-forklift-120s.mp4"), Sampling::at(1.0), ask_when_it_enters())
+            .with_expected_event(45_000, 5_000),
+    }
+}
+
+mod sam_conformance {
+    use super::*;
+
+    adk_vision::video_analyzer_conformance_tests! {
+        backend = VideoAnalyzerTarget::Remote(Arc::new(sam_replaying().await)),
+        fixture = VideoFixture::clip(
+            clip("forklift-crossing-3s.mp4"),
+            Sampling::at(10.0),
+            track(&["orange rectangle"]),
+        ),
+    }
 }
