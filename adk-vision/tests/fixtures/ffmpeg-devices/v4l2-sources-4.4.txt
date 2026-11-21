@@ -1,0 +1,3 @@
+Auto-detected sources for v4l2:
+  /dev/video0 [Integrated Camera: Integrated C]
+  /dev/video2 [Huddly GO: Huddly GO]

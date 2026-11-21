@@ -82,6 +82,9 @@ rtsp = ["stream", "dep:retina", "dep:url"]
 # spawned through `ffmpeg-sidecar` with its download feature off: nothing is vendored or
 # downloaded (spec 3.7 D-11, Q9).
 ffmpeg = ["stream", "dep:ffmpeg-sidecar"]
+# `DeviceSource`: a camera on this machine through the same user-installed `ffmpeg` —
+# AVFoundation on macOS, v4l2 on Linux, DirectShow on Windows — and `DeviceSource::list`.
+device = ["ffmpeg"]
 # `ScreenSource`: screenshots from a `ComputerActuator` or computer-use-mcp observations at an
 # interval.
 screen = ["stream", "dep:base64"]
@@ -269,6 +272,10 @@ required-features = ["rtsp", "stream-fixtures"]
 [[test]]
 name = "stream_file_tests"
 required-features = ["ffmpeg", "stream-fixtures"]
+
+[[test]]
+name = "stream_device_tests"
+required-features = ["device"]
 
 [[test]]
 name = "stream_sources_tests"

@@ -1,0 +1,3 @@
+Auto-detected sources for v4l2:
+  /dev/video2 [Huddly GO: Huddly GO] (none)
+* /dev/video0 [Integrated_Webcam_HD: Integrate] (none)
