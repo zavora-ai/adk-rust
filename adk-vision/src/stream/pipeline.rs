@@ -22,7 +22,7 @@ use super::records::{
 use crate::cx::VisionCx;
 use crate::digest::Digest;
 use crate::error::{Result, VisionError};
-use crate::geometry::Region;
+use crate::geometry::{Region, TrackId};
 use crate::media::{FrameMeta, FrameSourceId, SourceImage};
 use crate::runtime::{CallOptions, CallRecord, VisionRuntime};
 use crate::traits::{DetectQuery, Sampling, Tracker};
@@ -50,6 +50,9 @@ pub struct Observation {
     /// What the detector found, in source pixels, with the tracker's anonymous track
     /// identifiers.
     pub regions: Vec<Region>,
+    /// The tracks the tracker holds after this frame, seen in it or kept through a brief
+    /// miss ([`Tracker::live_tracks`]).
+    pub tracks: Vec<TrackId>,
     /// The detector's metered calls.
     pub calls: Vec<CallRecord>,
 }
@@ -63,7 +66,7 @@ impl Observation {
     }
 
     /// The observation as a [`WatchEvaluator`](crate::WatchEvaluator) takes it: source,
-    /// session, frame and tracked regions.
+    /// session, frame, tracked regions and the tracks the tracker still holds.
     pub fn tracked(&self) -> TrackedObservation {
         TrackedObservation::new(
             self.source.clone(),
@@ -71,6 +74,7 @@ impl Observation {
             self.frame_ref(),
             self.regions.clone(),
         )
+        .with_tracks(self.tracks.iter().copied())
     }
 }
 
@@ -695,12 +699,14 @@ impl StreamPipeline {
                     }
                 }
             };
-            let regions = match &self.tracker {
-                Some(tracker) => tracker
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .update(&meta, regions),
-                None => regions,
+            let (regions, tracks) = match &self.tracker {
+                Some(tracker) => {
+                    let mut tracker =
+                        tracker.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let regions = tracker.update(&meta, regions);
+                    (regions, tracker.live_tracks())
+                }
+                None => (regions, Vec::new()),
             };
             self.sink
                 .observe(
@@ -712,6 +718,7 @@ impl StreamPipeline {
                         image: redacted,
                         digest,
                         regions,
+                        tracks,
                         calls,
                     },
                 )

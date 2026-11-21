@@ -207,6 +207,13 @@ impl Tracker for ByteTracker {
         self.next = 0;
         self.updates = 0;
     }
+
+    fn live_tracks(&self) -> Vec<TrackId> {
+        let mut live: Vec<TrackId> =
+            self.lanes.values().flat_map(|lane| lane.ids.values().map(|(id, _)| *id)).collect();
+        live.sort_unstable();
+        live
+    }
 }
 
 #[cfg(test)]

@@ -81,6 +81,8 @@ use crate::media::{ArtifactLocator, FrameSourceId, ImageRef};
 pub const VISION_WATCH_REGISTERED: &str = "vision.watch.registered";
 /// Action of the record a watch event writes.
 pub const VISION_WATCH_FIRED: &str = "vision.watch.fired";
+/// Action of the record a watch condition removed from a source writes.
+pub const VISION_WATCH_STOPPED: &str = "vision.watch.stopped";
 
 /// The frame an observation was made on: its place in the stream, the digest of its encoded
 /// bytes, its size, and the artifact it is stored as once it is kept.
