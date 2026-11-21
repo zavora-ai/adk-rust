@@ -272,6 +272,39 @@ HF_HUB_CACHE=/var/lib/models HF_HUB_OFFLINE=1 \
 The crate's live tests pass against onnxruntime 1.28 (the `ort` download) and against
 onnxruntime 1.32 loaded this way.
 
+## One ONNX Runtime Environment
+
+`ort` allows one ONNX Runtime environment per process. `adk-vision`, `adk-audio` and
+`adk-rag` take theirs from `adk_core::onnx::ort_environment`, which builds it with `ort`'s
+defaults on first use, and `adk-vision` hands the same one to `oar-ocr`. An application that
+wants its own environment, for one thread pool across every model or its own logger, installs
+it before the first model loads:
+
+```toml
+[dependencies]
+adk-core = { version = "3.0.0", features = ["ort"] }
+adk-vision = { version = "3.0.0", features = ["onnx"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std"] }
+```
+
+```rust
+use ort::environment::GlobalThreadPoolOptions;
+
+fn main() -> ort::Result<()> {
+    let threads = GlobalThreadPoolOptions::default().with_intra_threads(4)?;
+    let environment = ort::init().with_global_thread_pool(threads).build()?;
+    adk_core::onnx::set_ort_environment(environment)?;
+    // Every session ADK-Rust and oar-ocr create from here on runs on this pool.
+    Ok(())
+}
+```
+
+| Situation | Result |
+|-----------|--------|
+| Nothing installed | The first model load builds the environment; it lives until the process exits |
+| `set_ort_environment` after a model loaded, or called twice | An error: the environment is already installed |
+| Other code built an environment first and did not install it | Loading a model fails with an error that names `set_ort_environment` |
+
 ## Measured Results
 
 From the crate's live tests (`adk-vision/tests/onnx_live_tests.rs`) on an Apple M4 (10
