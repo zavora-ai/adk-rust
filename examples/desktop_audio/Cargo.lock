@@ -105,6 +105,7 @@ dependencies = [
  "chrono",
  "futures",
  "httpdate",
+ "mime",
  "reqwest",
  "serde",
  "serde_json",

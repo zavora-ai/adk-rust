@@ -106,6 +106,7 @@ dependencies = [
  "futures",
  "http",
  "httpdate",
+ "mime",
  "reqwest",
  "serde",
  "serde_json",
