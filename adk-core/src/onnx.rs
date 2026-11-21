@@ -22,6 +22,7 @@
 use std::sync::{Mutex, MutexGuard};
 
 use ort::environment::Environment;
+use ort::logging::LogLevel;
 
 /// The message `ort` gives when a second environment is built in one process.
 const ONE_PER_PROCESS: &str = "only one environment is allowed per process";
@@ -48,6 +49,10 @@ fn installed() -> MutexGuard<'static, Option<Environment>> {
 
 /// Returns the process's ONNX Runtime environment, building it with `ort`'s defaults on first
 /// use. The environment lives until the process exits.
+///
+/// onnxruntime's warnings and errors reach `tracing`; call
+/// [`Environment::set_log_level`] on the returned handle for its informational and verbose
+/// records too.
 ///
 /// # Example
 ///
@@ -78,6 +83,9 @@ pub fn ort_environment() -> ort::Result<Environment> {
             error
         }
     })?;
+    // `ort` forwards every verbose record to `tracing`, and onnxruntime formats each one while
+    // it builds a session; warnings and errors are what an application acts on.
+    environment.set_log_level(LogLevel::Warning);
     tracing::debug!("onnx runtime environment created");
     Ok(installed.insert(environment).clone())
 }
