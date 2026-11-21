@@ -1,0 +1,763 @@
+{
+  "actions": {
+    "raiseCard": true,
+    "retry": false,
+    "stop": true,
+    "switch": true,
+    "zone": true
+  },
+  "agent": {
+    "agent": {
+      "avatar": {
+        "color": "#0E7490",
+        "monogram": "I"
+      },
+      "displayName": "Inspector",
+      "name": "inspector"
+    },
+    "line": "Asleep until a defect",
+    "sessionId": "s-line",
+    "tone": "muted"
+  },
+  "budget": {
+    "meters": [
+      {
+        "label": "Looking",
+        "note": "Lowered from 5 at 14:02",
+        "percent": 40,
+        "tone": "warn",
+        "value": "2 a second"
+      },
+      {
+        "label": "Asking sam-3.1 about unclear tracks",
+        "note": "Resumes when the budget renews",
+        "percent": 0,
+        "tone": "warn",
+        "value": "Stopped at 14:31"
+      },
+      {
+        "label": "Frames today",
+        "note": "96% · at 100% the camera pauses until midnight",
+        "percent": 96,
+        "tone": "warn",
+        "value": "287,400 of 300,000"
+      }
+    ],
+    "rows": [
+      {
+        "label": "Looking",
+        "tone": "warn",
+        "value": "2 a second (was 5)"
+      },
+      {
+        "label": "Asking sam-3.1",
+        "tone": "warn",
+        "value": "Stopped at 14:31"
+      },
+      {
+        "label": "Frames today",
+        "tone": "warn",
+        "value": "287,400 of 300,000"
+      }
+    ],
+    "scope": "for line 2",
+    "steps": [
+      {
+        "at": "14:02",
+        "next": false,
+        "text": "Looked less often: 5 → 2 a second (90% used)"
+      },
+      {
+        "at": "14:31",
+        "next": false,
+        "text": "Stopped asking sam-3.1 (95% used)"
+      },
+      {
+        "at": "next",
+        "next": true,
+        "text": "At 100%: pause the camera until midnight"
+      }
+    ]
+  },
+  "decisions": [],
+  "id": "line-2",
+  "ingest": "RTSP · 1920 × 1080 · on the line 2 server",
+  "name": "Line 2 camera",
+  "nothingWaiting": "Nothing is waiting for you.",
+  "notice": {
+    "shortText": "Looking 2 a second, not asking sam-3.1. 96% of today's frames used.",
+    "shortTitle": "Saving frames.",
+    "text": "Looking 2 times a second instead of 5, and no longer asking sam-3.1 about unclear tracks. Today's frames are 96% used.",
+    "title": "Saving frames.",
+    "tone": "warn"
+  },
+  "on": true,
+  "sources": [
+    {
+      "id": "line-2",
+      "name": "Line 2 camera",
+      "selected": true,
+      "stage": {
+        "frame": {
+          "at": "2026-11-18T14:40:12Z",
+          "atText": "14:40:12",
+          "digest": "sha256:41cdbcc844bcbcee09d33bc5fd96e8fa432fc985764d36f525d7b6202afdc145",
+          "href": "/api/surface/cameras/line-2/frames/sha256%3A41cdbcc844bcbcee09d33bc5fd96e8fa432fc985764d36f525d7b6202afdc145"
+        },
+        "height": 1080,
+        "look": "live",
+        "regions": [
+          {
+            "bbox": [
+              330.0,
+              300.0,
+              630.0,
+              530.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T91",
+            "tag": "part · T91",
+            "tagAt": "above",
+            "track": 91
+          },
+          {
+            "bbox": [
+              840.0,
+              400.0,
+              1140.0,
+              630.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T90",
+            "tag": "part · T90",
+            "tagAt": "above",
+            "track": 90
+          },
+          {
+            "bbox": [
+              1290.0,
+              250.0,
+              1590.0,
+              480.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T89",
+            "tag": "part · T89",
+            "tagAt": "above",
+            "track": 89
+          },
+          {
+            "bbox": [
+              1720.0,
+              470.0,
+              1920.0,
+              700.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T88",
+            "tag": "part · T88",
+            "tagAt": "in",
+            "track": 88
+          },
+          {
+            "bbox": [
+              40.0,
+              660.0,
+              285.0,
+              905.0
+            ],
+            "finding": false,
+            "label": "fiducial",
+            "shortTag": "",
+            "tag": "fiducial",
+            "tagAt": "in"
+          }
+        ],
+        "trails": [
+          {
+            "points": [
+              [
+                434.0,
+                415.0
+              ],
+              [
+                388.0,
+                415.0
+              ],
+              [
+                342.0,
+                415.0
+              ],
+              [
+                296.0,
+                415.0
+              ]
+            ],
+            "track": 91
+          },
+          {
+            "points": [
+              [
+                944.0,
+                515.0
+              ],
+              [
+                898.0,
+                515.0
+              ],
+              [
+                852.0,
+                515.0
+              ],
+              [
+                806.0,
+                515.0
+              ]
+            ],
+            "track": 90
+          },
+          {
+            "points": [
+              [
+                1394.0,
+                365.0
+              ],
+              [
+                1348.0,
+                365.0
+              ],
+              [
+                1302.0,
+                365.0
+              ],
+              [
+                1256.0,
+                365.0
+              ]
+            ],
+            "track": 89
+          },
+          {
+            "points": [
+              [
+                1774.0,
+                585.0
+              ],
+              [
+                1728.0,
+                585.0
+              ],
+              [
+                1682.0,
+                585.0
+              ],
+              [
+                1636.0,
+                585.0
+              ]
+            ],
+            "track": 88
+          }
+        ],
+        "width": 1920,
+        "zones": [
+          {
+            "corners": [
+              760.0,
+              170.0,
+              1560.0,
+              910.0
+            ],
+            "cornersText": "760, 170 → 1560, 910",
+            "id": "inspection-window",
+            "name": "Inspection window",
+            "usedBy": [
+              "Seal tear watch"
+            ]
+          }
+        ]
+      },
+      "state": "savingFrames",
+      "stateText": "Saving frames",
+      "tone": "warn"
+    },
+    {
+      "id": "line-3",
+      "name": "Line 3 camera",
+      "selected": false,
+      "stage": {
+        "frame": {
+          "at": "2026-11-18T14:40:14Z",
+          "atText": "14:40:14",
+          "digest": "sha256:aeabde37525b6d416f73c42fb07488dd51b6804a8886d64699217ded3f6eff2f",
+          "href": "/api/surface/cameras/line-3/frames/sha256%3Aaeabde37525b6d416f73c42fb07488dd51b6804a8886d64699217ded3f6eff2f"
+        },
+        "height": 1080,
+        "look": "live",
+        "regions": [
+          {
+            "bbox": [
+              330.0,
+              300.0,
+              630.0,
+              530.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T45",
+            "tag": "part · T45",
+            "tagAt": "above",
+            "track": 45
+          },
+          {
+            "bbox": [
+              840.0,
+              400.0,
+              1140.0,
+              630.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T43",
+            "tag": "part · T43",
+            "tagAt": "above",
+            "track": 43
+          },
+          {
+            "bbox": [
+              1290.0,
+              250.0,
+              1590.0,
+              480.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T42",
+            "tag": "part · T42",
+            "tagAt": "above",
+            "track": 42
+          },
+          {
+            "bbox": [
+              1720.0,
+              470.0,
+              1920.0,
+              700.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T41",
+            "tag": "part · T41",
+            "tagAt": "in",
+            "track": 41
+          }
+        ],
+        "trails": [
+          {
+            "points": [
+              [
+                434.0,
+                415.0
+              ],
+              [
+                388.0,
+                415.0
+              ],
+              [
+                342.0,
+                415.0
+              ],
+              [
+                296.0,
+                415.0
+              ]
+            ],
+            "track": 45
+          },
+          {
+            "points": [
+              [
+                944.0,
+                515.0
+              ],
+              [
+                898.0,
+                515.0
+              ],
+              [
+                852.0,
+                515.0
+              ],
+              [
+                806.0,
+                515.0
+              ]
+            ],
+            "track": 43
+          },
+          {
+            "points": [
+              [
+                1394.0,
+                365.0
+              ],
+              [
+                1348.0,
+                365.0
+              ],
+              [
+                1302.0,
+                365.0
+              ],
+              [
+                1256.0,
+                365.0
+              ]
+            ],
+            "track": 42
+          },
+          {
+            "points": [
+              [
+                1774.0,
+                585.0
+              ],
+              [
+                1728.0,
+                585.0
+              ],
+              [
+                1682.0,
+                585.0
+              ],
+              [
+                1636.0,
+                585.0
+              ]
+            ],
+            "track": 41
+          }
+        ],
+        "width": 1920,
+        "zones": []
+      },
+      "state": "savingFrames",
+      "stateText": "Saving frames",
+      "tone": "warn"
+    },
+    {
+      "id": "packing-bench",
+      "name": "Packing bench",
+      "selected": false,
+      "stage": {
+        "frame": {
+          "at": "2026-11-18T14:40:14Z",
+          "atText": "14:40:14",
+          "digest": "sha256:bc878ffe74159d0b7c7a8b01897601fb653e51b876b89e2ffe126a7e7c641dd6",
+          "href": "/api/surface/cameras/packing-bench/frames/sha256%3Abc878ffe74159d0b7c7a8b01897601fb653e51b876b89e2ffe126a7e7c641dd6"
+        },
+        "height": 1080,
+        "look": "live",
+        "regions": [
+          {
+            "bbox": [
+              200.0,
+              150.0,
+              720.0,
+              720.0
+            ],
+            "finding": false,
+            "label": "person",
+            "shortTag": "person · blurred",
+            "tag": "person · blurred",
+            "tagAt": "in"
+          }
+        ],
+        "trails": [],
+        "width": 1920,
+        "zones": []
+      },
+      "state": "live",
+      "stateText": "Live",
+      "tone": "ok"
+    },
+    {
+      "id": "this-computer",
+      "name": "This computer's camera",
+      "selected": false,
+      "stage": {
+        "height": 720,
+        "look": "dark",
+        "regions": [],
+        "trails": [],
+        "width": 1280,
+        "zones": []
+      },
+      "state": "off",
+      "stateText": "Off",
+      "tone": "muted"
+    }
+  ],
+  "stage": {
+    "badge": {
+      "text": "Live · 14:40:12",
+      "tone": "warn"
+    },
+    "frame": {
+      "at": "2026-11-18T14:40:12Z",
+      "atText": "14:40:12",
+      "digest": "sha256:41cdbcc844bcbcee09d33bc5fd96e8fa432fc985764d36f525d7b6202afdc145",
+      "href": "/api/surface/cameras/line-2/frames/sha256%3A41cdbcc844bcbcee09d33bc5fd96e8fa432fc985764d36f525d7b6202afdc145"
+    },
+    "height": 1080,
+    "look": "live",
+    "rate": "Looking 2 a second · overlays 0.2 s behind",
+    "regions": [
+      {
+        "bbox": [
+          330.0,
+          300.0,
+          630.0,
+          530.0
+        ],
+        "finding": false,
+        "label": "part",
+        "shortTag": "T91",
+        "tag": "part · T91",
+        "tagAt": "above",
+        "track": 91
+      },
+      {
+        "bbox": [
+          840.0,
+          400.0,
+          1140.0,
+          630.0
+        ],
+        "finding": false,
+        "label": "part",
+        "shortTag": "T90",
+        "tag": "part · T90",
+        "tagAt": "above",
+        "track": 90
+      },
+      {
+        "bbox": [
+          1290.0,
+          250.0,
+          1590.0,
+          480.0
+        ],
+        "finding": false,
+        "label": "part",
+        "shortTag": "T89",
+        "tag": "part · T89",
+        "tagAt": "above",
+        "track": 89
+      },
+      {
+        "bbox": [
+          1720.0,
+          470.0,
+          1920.0,
+          700.0
+        ],
+        "finding": false,
+        "label": "part",
+        "shortTag": "T88",
+        "tag": "part · T88",
+        "tagAt": "in",
+        "track": 88
+      },
+      {
+        "bbox": [
+          40.0,
+          660.0,
+          285.0,
+          905.0
+        ],
+        "finding": false,
+        "label": "fiducial",
+        "shortTag": "",
+        "tag": "fiducial",
+        "tagAt": "in"
+      }
+    ],
+    "trails": [
+      {
+        "points": [
+          [
+            434.0,
+            415.0
+          ],
+          [
+            388.0,
+            415.0
+          ],
+          [
+            342.0,
+            415.0
+          ],
+          [
+            296.0,
+            415.0
+          ]
+        ],
+        "track": 91
+      },
+      {
+        "points": [
+          [
+            944.0,
+            515.0
+          ],
+          [
+            898.0,
+            515.0
+          ],
+          [
+            852.0,
+            515.0
+          ],
+          [
+            806.0,
+            515.0
+          ]
+        ],
+        "track": 90
+      },
+      {
+        "points": [
+          [
+            1394.0,
+            365.0
+          ],
+          [
+            1348.0,
+            365.0
+          ],
+          [
+            1302.0,
+            365.0
+          ],
+          [
+            1256.0,
+            365.0
+          ]
+        ],
+        "track": 89
+      },
+      {
+        "points": [
+          [
+            1774.0,
+            585.0
+          ],
+          [
+            1728.0,
+            585.0
+          ],
+          [
+            1682.0,
+            585.0
+          ],
+          [
+            1636.0,
+            585.0
+          ]
+        ],
+        "track": 88
+      }
+    ],
+    "width": 1920,
+    "zones": [
+      {
+        "corners": [
+          760.0,
+          170.0,
+          1560.0,
+          910.0
+        ],
+        "cornersText": "760, 170 → 1560, 910",
+        "id": "inspection-window",
+        "name": "Inspection window",
+        "usedBy": [
+          "Seal tear watch"
+        ]
+      }
+    ]
+  },
+  "state": "savingFrames",
+  "stateText": "Saving frames",
+  "tone": "warn",
+  "tracks": [
+    {
+      "finding": false,
+      "id": "T90",
+      "label": "part",
+      "note": "in the zone",
+      "shortNote": "in the zone",
+      "swatch": "part"
+    },
+    {
+      "finding": false,
+      "id": "T89",
+      "label": "part",
+      "note": "in the zone",
+      "shortNote": "in the zone",
+      "swatch": "part"
+    },
+    {
+      "finding": false,
+      "id": "T91",
+      "label": "part",
+      "note": "entering",
+      "shortNote": "entering",
+      "swatch": "part"
+    },
+    {
+      "finding": false,
+      "id": "T88",
+      "label": "part",
+      "note": "leaving",
+      "shortNote": "leaving",
+      "swatch": "part"
+    }
+  ],
+  "tracksNote": "Tracks are anonymous and start again when the camera does.",
+  "watches": [
+    {
+      "active": true,
+      "after": ". Then wait 30 s before waking again for the same track.",
+      "before": "Score 0.80 or more, 3 frames in a row, inside",
+      "id": "seal-tear",
+      "label": "seal tear",
+      "name": "Seal tear",
+      "pill": "Watching",
+      "shortAfter": "",
+      "shortBefore": "Seal tear, 0.80+, 3 frames in",
+      "woke": "Woke the Inspector 3 times today",
+      "zone": "Inspection window"
+    }
+  ],
+  "zones": [
+    {
+      "corners": [
+        760.0,
+        170.0,
+        1560.0,
+        910.0
+      ],
+      "cornersText": "760, 170 → 1560, 910",
+      "id": "inspection-window",
+      "name": "Inspection window",
+      "usedBy": [
+        "Seal tear watch"
+      ]
+    }
+  ]
+}

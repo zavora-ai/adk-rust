@@ -20,6 +20,10 @@
 //! What each surface may decide (§7.2) and the rules on every surface (§7.4) are enforced by
 //! the engine in [`rules`], not left to renderers.
 //!
+//! The live camera surface (spec 3.7 §8.2) is [`camera`]: a camera source's facts, the hub that
+//! drops every frame of a camera switched off, and the view model; its routes are served with
+//! `web` once the engine is built with [`SurfaceEngineBuilder::cameras`].
+//!
 //! ## Surfaces
 //!
 //! | Feature | Surface | Stability |
@@ -64,6 +68,7 @@
 
 mod agents;
 pub mod answers;
+pub mod camera;
 #[cfg(feature = "channels")]
 pub mod channels;
 mod control;

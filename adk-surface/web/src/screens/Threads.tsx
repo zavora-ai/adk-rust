@@ -62,6 +62,7 @@ export function Threads({
   removed = [],
   verbs,
   snooze,
+  cameraLinks,
 }: {
   client: HomeClient;
   agents: AgentRow[];
@@ -97,6 +98,8 @@ export function Threads({
   /** What Coming up may be snoozed to, where the server takes screen actions (spec 3.3 §2 item 7). */
   verbs?: VerbsResponse;
   snooze?: Snooze;
+  /** The camera an agent watches, by agent name: its thread links to the live camera surface (spec 3.7 §8.2). */
+  cameraLinks?: Record<string, { href: string; text: string }>;
 }) {
   // A removed agent's thread, read only, in place of the selected agent's.
   const [reading, setReading] = useState<{ agent: RemovedAgent; session: string }>();
@@ -218,6 +221,11 @@ export function Threads({
                   status?.mode && <p className="thread-sub">{status.mode.status}</p>
                 )}
               </div>
+              {cameraLinks?.[shownAgent.name] && (
+                <a className="thread-camera" href={cameraLinks[shownAgent.name].href}>
+                  {cameraLinks[shownAgent.name].text}
+                </a>
+              )}
             </header>
           )}
           {trouble && (

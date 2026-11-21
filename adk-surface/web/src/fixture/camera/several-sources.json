@@ -1,0 +1,852 @@
+{
+  "agent": {
+    "agent": {
+      "avatar": {
+        "color": "#0E7490",
+        "monogram": "I"
+      },
+      "displayName": "Inspector",
+      "name": "inspector"
+    },
+    "line": "Asleep until a defect · 2 cameras",
+    "sessionId": "s-line",
+    "tone": "muted"
+  },
+  "budget": [
+    {
+      "label": "Line 2 · frames today",
+      "percent": 20,
+      "tone": "ok",
+      "value": "61,240 of 300,000"
+    },
+    {
+      "label": "Line 3 · frames today",
+      "note": "Looking 2 a second · not asking sam-3.1",
+      "percent": 96,
+      "tone": "warn",
+      "value": "287,400 of 300,000"
+    },
+    {
+      "label": "Packing bench · frames today",
+      "percent": 20,
+      "tone": "ok",
+      "value": "9,800 of 50,000"
+    }
+  ],
+  "countShort": "4 · 3 on",
+  "countText": "4 sources · 3 on",
+  "decisions": [
+    {
+      "agent": {
+        "avatar": {
+          "color": "#0E7490",
+          "monogram": "I"
+        },
+        "displayName": "Inspector",
+        "name": "inspector"
+      },
+      "allowed": {
+        "openInHome": false,
+        "options": [
+          {
+            "answer": "allowOnce",
+            "label": "Confirm it's you and approve",
+            "needsExpanded": false,
+            "needsPresence": true
+          },
+          {
+            "answer": "deny",
+            "label": "Deny",
+            "needsExpanded": false,
+            "needsPresence": false
+          }
+        ]
+      },
+      "alsoShown": "Also on your phone",
+      "call": {
+        "args": {
+          "frame": "sha256:5b1bafa1becfcec35e2adab2564f631a9c83c7d9d0725d20016761a8ed9da993",
+          "line": 2
+        },
+        "text": "stop_line(frame: \"sha256:5b1bafa1becfcec35e2adab2564f631a9c83c7d9d0725d20016761a8ed9da993\", line: 2)",
+        "tool": "stop_line",
+        "truncated": false
+      },
+      "heading": "Stop line 2",
+      "id": "dec-line-2",
+      "media": {
+        "canChange": false,
+        "covered": [],
+        "coveredAll": false,
+        "fixedLine": "Images leave this computer only after faces and personal details are covered. Nothing on this card can uncover them.",
+        "images": [
+          {
+            "caption": "Seal tear of 14.3 mm on part T43.",
+            "coveredAll": false,
+            "coveredText": "nothing covered",
+            "digest": "sha256:5b1bafa1becfcec35e2adab2564f631a9c83c7d9d0725d20016761a8ed9da993",
+            "digestShort": "sha256:5b1baf…9da993",
+            "height": 1080,
+            "href": "/api/surface/decisions/dec-line-2/evidence/0",
+            "index": 0,
+            "mimeType": "image/png",
+            "regions": [],
+            "sizeText": "1920 × 1080 PNG",
+            "width": 1920
+          }
+        ],
+        "keptText": "Kept as evidence until 18 Dec",
+        "title": "The exact image that would leave"
+      },
+      "money": false,
+      "reversibility": "cantBeUndone",
+      "reversibilityText": "Can't be undone",
+      "risk": "high",
+      "riskText": "High risk",
+      "sessionId": "s-line",
+      "sinceText": "since 10:41",
+      "status": "waiting",
+      "statusText": "Waiting for you",
+      "timeline": [
+        {
+          "current": false,
+          "text": "Asked at 10:41"
+        },
+        {
+          "current": true,
+          "text": "Waiting for you"
+        }
+      ],
+      "version": 1,
+      "waitingSince": "2026-11-18T10:41:12Z"
+    }
+  ],
+  "footer": "Select a camera to watch it large. People are blurred before any frame is shown or kept.",
+  "note": "Each source has its own frame budget. Stop all pauses every one of them.",
+  "nothingWaiting": "Nothing is waiting for you.",
+  "selected": "line-2",
+  "selectedLine": "Line 2 camera · Live · 5 a second",
+  "shortNote": "Each camera has its own frame budget. People are blurred before any frame is shown or kept.",
+  "tiles": [
+    {
+      "canSwitch": true,
+      "caption": "watching for seal tears",
+      "id": "line-2",
+      "line": "5 a second · 20% of today's frames",
+      "name": "Line 2 camera",
+      "on": true,
+      "shortLine": "watching",
+      "stage": {
+        "badge": {
+          "text": "Live · 10:41:09",
+          "tone": "ok"
+        },
+        "frame": {
+          "at": "2026-11-18T10:41:09Z",
+          "atText": "10:41:09",
+          "digest": "sha256:5b1bafa1becfcec35e2adab2564f631a9c83c7d9d0725d20016761a8ed9da993",
+          "href": "/api/surface/cameras/line-2/frames/sha256%3A5b1bafa1becfcec35e2adab2564f631a9c83c7d9d0725d20016761a8ed9da993"
+        },
+        "height": 1080,
+        "look": "live",
+        "regions": [
+          {
+            "bbox": [
+              330.0,
+              300.0,
+              630.0,
+              530.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T45",
+            "tag": "part · T45",
+            "tagAt": "above",
+            "track": 45
+          },
+          {
+            "bbox": [
+              840.0,
+              400.0,
+              1140.0,
+              630.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T43",
+            "tag": "part · T43",
+            "tagAt": "above",
+            "track": 43
+          },
+          {
+            "bbox": [
+              1290.0,
+              250.0,
+              1590.0,
+              480.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T42",
+            "tag": "part · T42",
+            "tagAt": "above",
+            "track": 42
+          },
+          {
+            "bbox": [
+              1720.0,
+              470.0,
+              1920.0,
+              700.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T41",
+            "tag": "part · T41",
+            "tagAt": "in",
+            "track": 41
+          },
+          {
+            "finding": false,
+            "label": "seal",
+            "outline": [
+              [
+                1074.0,
+                515.0
+              ],
+              [
+                1073.0,
+                526.0
+              ],
+              [
+                1071.0,
+                537.0
+              ],
+              [
+                1068.0,
+                547.0
+              ],
+              [
+                1063.0,
+                557.0
+              ],
+              [
+                1057.0,
+                566.0
+              ],
+              [
+                1049.0,
+                574.0
+              ],
+              [
+                1041.0,
+                582.0
+              ],
+              [
+                1032.0,
+                588.0
+              ],
+              [
+                1022.0,
+                593.0
+              ],
+              [
+                1012.0,
+                596.0
+              ],
+              [
+                1001.0,
+                598.0
+              ],
+              [
+                990.0,
+                599.0
+              ],
+              [
+                979.0,
+                598.0
+              ],
+              [
+                968.0,
+                596.0
+              ],
+              [
+                958.0,
+                593.0
+              ],
+              [
+                948.0,
+                588.0
+              ],
+              [
+                939.0,
+                582.0
+              ],
+              [
+                931.0,
+                574.0
+              ],
+              [
+                923.0,
+                566.0
+              ],
+              [
+                917.0,
+                557.0
+              ],
+              [
+                912.0,
+                547.0
+              ],
+              [
+                909.0,
+                537.0
+              ],
+              [
+                907.0,
+                526.0
+              ],
+              [
+                906.0,
+                515.0
+              ],
+              [
+                907.0,
+                504.0
+              ],
+              [
+                909.0,
+                493.0
+              ],
+              [
+                912.0,
+                483.0
+              ],
+              [
+                917.0,
+                473.0
+              ],
+              [
+                923.0,
+                464.0
+              ],
+              [
+                931.0,
+                456.0
+              ],
+              [
+                939.0,
+                448.0
+              ],
+              [
+                948.0,
+                442.0
+              ],
+              [
+                958.0,
+                437.0
+              ],
+              [
+                968.0,
+                434.0
+              ],
+              [
+                979.0,
+                432.0
+              ],
+              [
+                990.0,
+                431.0
+              ],
+              [
+                1001.0,
+                432.0
+              ],
+              [
+                1012.0,
+                434.0
+              ],
+              [
+                1022.0,
+                437.0
+              ],
+              [
+                1032.0,
+                442.0
+              ],
+              [
+                1041.0,
+                448.0
+              ],
+              [
+                1049.0,
+                456.0
+              ],
+              [
+                1057.0,
+                464.0
+              ],
+              [
+                1063.0,
+                473.0
+              ],
+              [
+                1068.0,
+                483.0
+              ],
+              [
+                1071.0,
+                493.0
+              ],
+              [
+                1073.0,
+                504.0
+              ]
+            ],
+            "shortTag": "",
+            "tag": "",
+            "tagAt": "above",
+            "track": 43
+          },
+          {
+            "bbox": [
+              922.0,
+              490.0,
+              1024.0,
+              532.0
+            ],
+            "finding": true,
+            "label": "seal tear",
+            "measurement": {
+              "from": [
+                930.0,
+                498.0
+              ],
+              "text": "14.3 mm",
+              "to": [
+                1016.0,
+                512.0
+              ]
+            },
+            "outline": [
+              [
+                926.0,
+                494.0
+              ],
+              [
+                950.0,
+                502.0
+              ],
+              [
+                962.0,
+                494.0
+              ],
+              [
+                979.0,
+                505.0
+              ],
+              [
+                995.0,
+                498.0
+              ],
+              [
+                1010.0,
+                508.0
+              ],
+              [
+                1020.0,
+                508.0
+              ],
+              [
+                1018.0,
+                518.0
+              ],
+              [
+                1000.0,
+                532.0
+              ],
+              [
+                958.0,
+                532.0
+              ],
+              [
+                948.0,
+                512.0
+              ],
+              [
+                930.0,
+                504.0
+              ]
+            ],
+            "shortTag": "14.3 mm",
+            "tag": "seal tear · 0.91 · 5 frames · 14.3 mm",
+            "tagAt": "below",
+            "track": 43
+          },
+          {
+            "bbox": [
+              40.0,
+              660.0,
+              285.0,
+              905.0
+            ],
+            "finding": false,
+            "label": "fiducial",
+            "shortTag": "",
+            "tag": "fiducial",
+            "tagAt": "in"
+          }
+        ],
+        "trails": [
+          {
+            "points": [
+              [
+                434.0,
+                415.0
+              ],
+              [
+                388.0,
+                415.0
+              ],
+              [
+                342.0,
+                415.0
+              ],
+              [
+                296.0,
+                415.0
+              ]
+            ],
+            "track": 45
+          },
+          {
+            "points": [
+              [
+                944.0,
+                515.0
+              ],
+              [
+                898.0,
+                515.0
+              ],
+              [
+                852.0,
+                515.0
+              ],
+              [
+                806.0,
+                515.0
+              ]
+            ],
+            "track": 43
+          },
+          {
+            "points": [
+              [
+                1394.0,
+                365.0
+              ],
+              [
+                1348.0,
+                365.0
+              ],
+              [
+                1302.0,
+                365.0
+              ],
+              [
+                1256.0,
+                365.0
+              ]
+            ],
+            "track": 42
+          },
+          {
+            "points": [
+              [
+                1774.0,
+                585.0
+              ],
+              [
+                1728.0,
+                585.0
+              ],
+              [
+                1682.0,
+                585.0
+              ],
+              [
+                1636.0,
+                585.0
+              ]
+            ],
+            "track": 41
+          }
+        ],
+        "width": 1920,
+        "zones": [
+          {
+            "corners": [
+              760.0,
+              170.0,
+              1560.0,
+              910.0
+            ],
+            "cornersText": "760, 170 → 1560, 910",
+            "id": "inspection-window",
+            "name": "Inspection window",
+            "usedBy": [
+              "Seal tear watch"
+            ]
+          }
+        ]
+      },
+      "state": "live",
+      "stateText": "Live",
+      "tone": "ok"
+    },
+    {
+      "canSwitch": true,
+      "caption": "watching for seal tears",
+      "id": "line-3",
+      "line": "2 a second · 96% used",
+      "name": "Line 3 camera",
+      "on": true,
+      "shortLine": "2 a second",
+      "stage": {
+        "badge": {
+          "text": "Live · 2 a second",
+          "tone": "ok"
+        },
+        "frame": {
+          "at": "2026-11-18T10:41:11Z",
+          "atText": "10:41:11",
+          "digest": "sha256:aeabde37525b6d416f73c42fb07488dd51b6804a8886d64699217ded3f6eff2f",
+          "href": "/api/surface/cameras/line-3/frames/sha256%3Aaeabde37525b6d416f73c42fb07488dd51b6804a8886d64699217ded3f6eff2f"
+        },
+        "height": 1080,
+        "look": "live",
+        "regions": [
+          {
+            "bbox": [
+              330.0,
+              300.0,
+              630.0,
+              530.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T45",
+            "tag": "part · T45",
+            "tagAt": "above",
+            "track": 45
+          },
+          {
+            "bbox": [
+              840.0,
+              400.0,
+              1140.0,
+              630.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T43",
+            "tag": "part · T43",
+            "tagAt": "above",
+            "track": 43
+          },
+          {
+            "bbox": [
+              1290.0,
+              250.0,
+              1590.0,
+              480.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T42",
+            "tag": "part · T42",
+            "tagAt": "above",
+            "track": 42
+          },
+          {
+            "bbox": [
+              1720.0,
+              470.0,
+              1920.0,
+              700.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T41",
+            "tag": "part · T41",
+            "tagAt": "in",
+            "track": 41
+          }
+        ],
+        "trails": [
+          {
+            "points": [
+              [
+                434.0,
+                415.0
+              ],
+              [
+                388.0,
+                415.0
+              ],
+              [
+                342.0,
+                415.0
+              ],
+              [
+                296.0,
+                415.0
+              ]
+            ],
+            "track": 45
+          },
+          {
+            "points": [
+              [
+                944.0,
+                515.0
+              ],
+              [
+                898.0,
+                515.0
+              ],
+              [
+                852.0,
+                515.0
+              ],
+              [
+                806.0,
+                515.0
+              ]
+            ],
+            "track": 43
+          },
+          {
+            "points": [
+              [
+                1394.0,
+                365.0
+              ],
+              [
+                1348.0,
+                365.0
+              ],
+              [
+                1302.0,
+                365.0
+              ],
+              [
+                1256.0,
+                365.0
+              ]
+            ],
+            "track": 42
+          },
+          {
+            "points": [
+              [
+                1774.0,
+                585.0
+              ],
+              [
+                1728.0,
+                585.0
+              ],
+              [
+                1682.0,
+                585.0
+              ],
+              [
+                1636.0,
+                585.0
+              ]
+            ],
+            "track": 41
+          }
+        ],
+        "width": 1920,
+        "zones": []
+      },
+      "state": "savingFrames",
+      "stateText": "Saving frames",
+      "tone": "warn"
+    },
+    {
+      "canSwitch": true,
+      "caption": "shown only, nothing watched",
+      "id": "packing-bench",
+      "line": "1 a second · nothing watched",
+      "name": "Packing bench",
+      "on": true,
+      "shortLine": "shown only",
+      "stage": {
+        "badge": {
+          "text": "Live · 1 a second",
+          "tone": "ok"
+        },
+        "frame": {
+          "at": "2026-11-18T10:41:11Z",
+          "atText": "10:41:11",
+          "digest": "sha256:bc878ffe74159d0b7c7a8b01897601fb653e51b876b89e2ffe126a7e7c641dd6",
+          "href": "/api/surface/cameras/packing-bench/frames/sha256%3Abc878ffe74159d0b7c7a8b01897601fb653e51b876b89e2ffe126a7e7c641dd6"
+        },
+        "height": 1080,
+        "look": "live",
+        "regions": [
+          {
+            "bbox": [
+              200.0,
+              150.0,
+              720.0,
+              720.0
+            ],
+            "finding": false,
+            "label": "person",
+            "shortTag": "person · blurred",
+            "tag": "person · blurred",
+            "tagAt": "in"
+          }
+        ],
+        "trails": [],
+        "width": 1920,
+        "zones": []
+      },
+      "state": "live",
+      "stateText": "Live",
+      "tone": "ok"
+    },
+    {
+      "canSwitch": true,
+      "caption": "from the voice screen",
+      "id": "this-computer",
+      "line": "nothing captured",
+      "name": "This computer's camera",
+      "on": false,
+      "shortLine": "",
+      "stage": {
+        "cover": {
+          "off": true,
+          "retrying": false,
+          "text": "Nothing is captured or sent",
+          "title": ""
+        },
+        "height": 720,
+        "look": "dark",
+        "regions": [],
+        "trails": [],
+        "width": 1280,
+        "zones": []
+      },
+      "state": "off",
+      "stateText": "Off",
+      "tone": "muted"
+    }
+  ],
+  "title": "Cameras"
+}

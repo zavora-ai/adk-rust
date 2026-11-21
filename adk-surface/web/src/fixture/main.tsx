@@ -22,6 +22,8 @@ import { VisionHomeFixture, visionPhoneFixture } from "./vision";
 import type { VisionState } from "./vision";
 import { CORRECTING, ViewerHomeFixture, viewerPhoneFixture, viewerPlaceOf } from "./viewer";
 import type { ViewerState } from "./viewer";
+import { CameraActionsBoard, CameraHomeFixture, cameraPhoneFixture, cameraPlaceOf } from "./camera";
+import type { CameraBoardState } from "./camera";
 import "../styles/fonts.css";
 import "../styles/tokens.css";
 import "../styles/app.css";
@@ -86,6 +88,24 @@ const screens: Record<string, () => ReactNode> = {
   },
   viewerPhone: () => {
     const fixture = viewerPhoneFixture();
+    return <PhoneApp client={fixture.client} initial={fixture.initial} />;
+  },
+  // The live camera surface (spec 3.7 §8.2): `&camera=live|stepped-down|quota-exhausted|
+  // source-lost|switched-off|several-sources|zone-and-card`.
+  camera: () => {
+    const state = (params.get("camera") ?? "live") as CameraBoardState;
+    if (state === "zone-and-card") return <CameraActionsBoard />;
+    return (
+      <App
+        client={new CameraHomeFixture(state)}
+        seams={fixtureSeams()}
+        initialSection="threads"
+        initialCamera={cameraPlaceOf(state)}
+      />
+    );
+  },
+  cameraPhone: () => {
+    const fixture = cameraPhoneFixture((params.get("camera") ?? "live") as CameraBoardState);
     return <PhoneApp client={fixture.client} initial={fixture.initial} />;
   },
   visionPhone: () => {

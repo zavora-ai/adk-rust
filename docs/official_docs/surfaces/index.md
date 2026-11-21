@@ -344,6 +344,7 @@ generated from the Rust types. `bash scripts/check-surface-api.sh` fails when th
 - [The Terminal](terminal.md) — the `tui` feature: full screen, inline and JSON
 - [Approve with the Image](approve-with-image.md) — a held call's images on every surface: the exact image that would leave, the digest an answer names, changing it before it leaves
 - [The Annotated Viewer](annotated-viewer.md) — what an agent saw: each region's backend, frame and transform chain, two backends compared, a corrected region saved as an eval case
+- [The Live Camera Surface](live-camera.md) — watching a camera an agent watches: overlays, tracks, watches and zones, the frame governor, the source switch; switch off, edit a zone, stop the stream, raise a card from a frame
 - [Chat](chat.md) — the `channels` feature: the Telegram adapter over the kernel's channel contract
 - [The Phone](phone.md) — the `mobile` feature: wake-ups from your own kernel, device answers and "Confirm it's you"
 - [The Desktop Tray](desktop.md) — Experimental, a separate app: the home in a desktop window and the tray panel at `/ui/tray`

@@ -1,0 +1,189 @@
+{
+  "badge": {
+    "text": "Live · 10:43:18",
+    "tone": "ok"
+  },
+  "frame": {
+    "at": "2026-11-18T10:43:18Z",
+    "atText": "10:43:18",
+    "digest": "sha256:a5491fb500c9ebc0cd5897a6a52d53ef9f74212b9275c69ba6d33fd4eac368b5",
+    "href": "/api/surface/cameras/line-2/frames/sha256%3Aa5491fb500c9ebc0cd5897a6a52d53ef9f74212b9275c69ba6d33fd4eac368b5"
+  },
+  "height": 1080,
+  "look": "live",
+  "rate": "Looking 5 a second · overlays 0.1 s behind",
+  "regions": [
+    {
+      "bbox": [
+        330.0,
+        300.0,
+        630.0,
+        530.0
+      ],
+      "finding": false,
+      "label": "part",
+      "shortTag": "T49",
+      "tag": "part · T49",
+      "tagAt": "above",
+      "track": 49
+    },
+    {
+      "bbox": [
+        840.0,
+        400.0,
+        1140.0,
+        630.0
+      ],
+      "finding": false,
+      "label": "part",
+      "shortTag": "T48",
+      "tag": "part · T48",
+      "tagAt": "above",
+      "track": 48
+    },
+    {
+      "bbox": [
+        1290.0,
+        250.0,
+        1590.0,
+        480.0
+      ],
+      "finding": false,
+      "label": "part",
+      "shortTag": "T47",
+      "tag": "part · T47",
+      "tagAt": "above",
+      "track": 47
+    },
+    {
+      "bbox": [
+        1720.0,
+        470.0,
+        1920.0,
+        700.0
+      ],
+      "finding": false,
+      "label": "part",
+      "shortTag": "T46",
+      "tag": "part · T46",
+      "tagAt": "in",
+      "track": 46
+    },
+    {
+      "bbox": [
+        40.0,
+        660.0,
+        285.0,
+        905.0
+      ],
+      "finding": false,
+      "label": "fiducial",
+      "shortTag": "",
+      "tag": "fiducial",
+      "tagAt": "in"
+    }
+  ],
+  "trails": [
+    {
+      "points": [
+        [
+          434.0,
+          415.0
+        ],
+        [
+          388.0,
+          415.0
+        ],
+        [
+          342.0,
+          415.0
+        ],
+        [
+          296.0,
+          415.0
+        ]
+      ],
+      "track": 49
+    },
+    {
+      "points": [
+        [
+          944.0,
+          515.0
+        ],
+        [
+          898.0,
+          515.0
+        ],
+        [
+          852.0,
+          515.0
+        ],
+        [
+          806.0,
+          515.0
+        ]
+      ],
+      "track": 48
+    },
+    {
+      "points": [
+        [
+          1394.0,
+          365.0
+        ],
+        [
+          1348.0,
+          365.0
+        ],
+        [
+          1302.0,
+          365.0
+        ],
+        [
+          1256.0,
+          365.0
+        ]
+      ],
+      "track": 47
+    },
+    {
+      "points": [
+        [
+          1774.0,
+          585.0
+        ],
+        [
+          1728.0,
+          585.0
+        ],
+        [
+          1682.0,
+          585.0
+        ],
+        [
+          1636.0,
+          585.0
+        ]
+      ],
+      "track": 46
+    }
+  ],
+  "width": 1920,
+  "zones": [
+    {
+      "corners": [
+        760.0,
+        170.0,
+        1560.0,
+        910.0
+      ],
+      "cornersText": "760, 170 → 1560, 910",
+      "id": "inspection-window",
+      "name": "Inspection window",
+      "usedBy": [
+        "Seal tear watch"
+      ]
+    }
+  ]
+}
