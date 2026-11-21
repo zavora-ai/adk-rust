@@ -28,9 +28,9 @@ use adk_vision::team::{
     Verifier, VisionTeam,
 };
 use adk_vision::{
-    BBox, BackendDescriptor, CoordFrame, DecodedImage, DetectQuery, Detector, Digest,
-    EgressGate, InMemoryEgressRecorder, Locality, MediaStore, PersonRedactor, RawRegion,
-    SentImage, SourceImage, VisionConfig, VisionCx, VisionRuntime, VisionToolset,
+    BBox, BackendDescriptor, CoordFrame, DecodedImage, DetectQuery, Detector, Digest, EgressGate,
+    InMemoryEgressRecorder, Locality, MediaStore, PersonRedactor, RawRegion, SentImage,
+    SourceImage, VisionConfig, VisionCx, VisionRuntime, VisionToolset,
 };
 use governed::{APP, PlannerModel, RedPersonDetector, SESSION, USER, all_black, save_artifact};
 use serde_json::{Value, json};
@@ -280,15 +280,23 @@ fn a_perceiver_refuses_a_tool_with_a_remote_destination() {
         .tool(Arc::new(Undeclared))
         .build()
         .unwrap_err();
-    assert!(matches!(&error, TeamRoleError::RemoteTool { tool, .. } if tool == "notify"), "{error}");
+    assert!(
+        matches!(&error, TeamRoleError::RemoteTool { tool, .. } if tool == "notify"),
+        "{error}"
+    );
 }
 
 #[test]
 fn a_perceiver_refuses_a_remote_model_and_a_remote_backend() {
     let cloud = Recording::remote("claude-haiku-5-5", defect_answer());
-    let error =
-        Perceiver::builder("perceiver").runtime(perceiver_runtime()).model(cloud).build().unwrap_err();
-    assert!(matches!(&error, TeamRoleError::RemoteModel { model, .. } if model == "claude-haiku-5-5"));
+    let error = Perceiver::builder("perceiver")
+        .runtime(perceiver_runtime())
+        .model(cloud)
+        .build()
+        .unwrap_err();
+    assert!(
+        matches!(&error, TeamRoleError::RemoteModel { model, .. } if model == "claude-haiku-5-5")
+    );
 
     let store = MediaStore::new(Arc::new(InMemoryArtifactService::new()));
     let runtime = VisionRuntime::builder()
@@ -588,16 +596,15 @@ async fn a_disagreement_raises_one_card_with_both_opinions_and_the_frame() {
     assert_eq!(digests, vec![frame_digest.as_str(), crop_digest.as_str()]);
     let Evidence::Image(frame) = &card.evidence[0] else { panic!("image evidence") };
     assert!(frame.regions.is_some(), "the frame carries the claimed region");
-    let pending = approvals
-        .pending(&ApprovalScope::new(APP, USER, SESSION))
-        .await
-        .unwrap();
+    let pending = approvals.pending(&ApprovalScope::new(APP, USER, SESSION)).await.unwrap();
     assert_eq!(pending.len(), 1, "one held call waits in the approval store");
 
     // The person approves: the resumed run accepts the reasoner's verdict without asking the
     // reasoner again or raising another card.
-    let decided = RunConfig::builder().tool_approval(card.fingerprint(), ToolApproval::approve()).build();
-    let resumed = runner_on(team.team.clone(), decided, team.artifacts.clone(), sessions, approvals);
+    let decided =
+        RunConfig::builder().tool_approval(card.fingerprint(), ToolApproval::approve()).build();
+    let resumed =
+        runner_on(team.team.clone(), decided, team.artifacts.clone(), sessions, approvals);
     let events = governed::run_turn(&resumed.runner, &ask).await;
     assert!(held(&events).is_empty(), "no second card");
     let inspection = inspection(&events);
@@ -641,7 +648,8 @@ fn the_verifier_runs_on_another_provider_by_default() {
             .build()
             .unwrap(),
     );
-    let perceiver = Arc::new(Perceiver::builder("perceiver").runtime(perceiver_runtime()).build().unwrap());
+    let perceiver =
+        Arc::new(Perceiver::builder("perceiver").runtime(perceiver_runtime()).build().unwrap());
     let build = |allow: bool| {
         let builder = VisionTeam::builder("inspector")
             .perceiver(perceiver.clone())

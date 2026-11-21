@@ -298,7 +298,8 @@ impl MemberSpec {
     /// assert_eq!(policy.approval, RelationshipApprovalPolicy::Never);
     /// ```
     pub fn relationship_policy(&self) -> RelationshipPolicy {
-        let read_only_local = self.is_built_locally() && matches!(self.tools, MemberTools::ReadOnly);
+        let read_only_local =
+            self.is_built_locally() && matches!(self.tools, MemberTools::ReadOnly);
         RelationshipPolicy {
             input_schema: None,
             output_schema: self.output_schema.clone(),
@@ -808,9 +809,12 @@ fn build_local(
         MemberTools::Full => inputs.tools.to_vec(),
         MemberTools::Custom(tools) => tools.clone(),
         #[cfg(feature = "vision")]
-        MemberTools::LocalPerception(extra) => {
-            vision_roles::local_perception_tools(member, inputs.tools, extra, READ_ONLY_MEMBER_TOOLS)?
-        }
+        MemberTools::LocalPerception(extra) => vision_roles::local_perception_tools(
+            member,
+            inputs.tools,
+            extra,
+            READ_ONLY_MEMBER_TOOLS,
+        )?,
     };
     let model = model.unwrap_or_else(|| inputs.model.clone());
     let text = format!(
@@ -1392,7 +1396,6 @@ mod acp {
         }
     }
 }
-
 
 /// The perceiver, reasoner and verifier presets and their build checks (spec 3.7 §7.12).
 #[cfg(feature = "vision")]

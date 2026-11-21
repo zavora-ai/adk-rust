@@ -342,7 +342,11 @@ impl VerificationHold {
                     frame.width,
                     frame.height,
                 )
-                .with_caption(if index == 0 { "Before the action" } else { "After the action" });
+                .with_caption(if index == 0 {
+                    "Before the action"
+                } else {
+                    "After the action"
+                });
                 if index + 1 == self.frames.len()
                     && let Some(report) = self.reports.last()
                 {

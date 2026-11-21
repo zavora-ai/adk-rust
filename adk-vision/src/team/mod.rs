@@ -32,8 +32,8 @@ pub use coordinator::{
     VisionTeamBuilder,
 };
 pub use roles::{
-    LocalOnlyTool, Perceiver, PerceiverBuilder, ReasonRequest, Reasoned, Reasoner,
-    ReasonerBuilder, RegionCheck, Verified, Verifier, VerifierBuilder, VerifyRequest,
+    LocalOnlyTool, Perceiver, PerceiverBuilder, ReasonRequest, Reasoned, Reasoner, ReasonerBuilder,
+    RegionCheck, Verified, Verifier, VerifierBuilder, VerifyRequest,
 };
 
 use std::sync::Arc;
@@ -249,10 +249,8 @@ pub(crate) fn cx_for(ctx: &dyn InvocationContext) -> VisionCx {
         .with_media_scope(MediaScope::new(ctx.app_name(), ctx.user_id(), ctx.session_id()))
         .with_acting(acting.clone());
     if let Some(trail) = ctx.run_config().audit.clone() {
-        cx = cx.with_audit(
-            trail,
-            adk_core::audit_log::AuditActor::new(&acting, ctx.invocation_id()),
-        );
+        cx = cx
+            .with_audit(trail, adk_core::audit_log::AuditActor::new(&acting, ctx.invocation_id()));
     }
     cx
 }
@@ -345,18 +343,17 @@ pub(crate) fn parse_opinion(
     provider: &str,
 ) -> Result<Opinion> {
     let parse = |message: String| VisionError::Parse { backend: backend.to_string(), message };
-    let value = extract_json(text).ok_or_else(|| parse(format!("the answer holds no JSON: {text}")))?;
+    let value =
+        extract_json(text).ok_or_else(|| parse(format!("the answer holds no JSON: {text}")))?;
     let verdict = value
         .get("verdict")
         .and_then(Value::as_str)
         .ok_or_else(|| parse(format!("the answer names no verdict: {text}")))?;
     let normalized = normalize_verdict(verdict);
-    let verdict = verdicts
-        .iter()
-        .find(|allowed| normalize_verdict(allowed) == normalized)
-        .ok_or_else(|| {
-            parse(format!("the verdict `{verdict}` is not one of {}", verdicts.join(", ")))
-        })?;
+    let verdict =
+        verdicts.iter().find(|allowed| normalize_verdict(allowed) == normalized).ok_or_else(
+            || parse(format!("the verdict `{verdict}` is not one of {}", verdicts.join(", "))),
+        )?;
     let confidence = value.get("confidence").and_then(Value::as_f64).unwrap_or(0.5) as f32;
     let mut opinion = Opinion::new(verdict.clone(), confidence);
     opinion.label = value.get("label").and_then(Value::as_str).map(str::to_string);
@@ -406,9 +403,14 @@ mod tests {
     #[test]
     fn an_opinion_outside_the_verdicts_is_refused() {
         let verdicts = vec!["defect".to_string(), "no_defect".to_string()];
-        let opinion =
-            parse_opinion("m", r#"{"verdict": "No defect", "confidence": 0.9}"#, &verdicts, "r", "p")
-                .unwrap();
+        let opinion = parse_opinion(
+            "m",
+            r#"{"verdict": "No defect", "confidence": 0.9}"#,
+            &verdicts,
+            "r",
+            "p",
+        )
+        .unwrap();
         assert_eq!(opinion.verdict, "no_defect");
         assert!(parse_opinion("m", r#"{"verdict": "maybe"}"#, &verdicts, "r", "p").is_err());
     }

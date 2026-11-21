@@ -57,9 +57,7 @@ impl Tool for Upload {
 }
 
 fn model(name: &str, locality: DataLocality) -> Arc<dyn Llm> {
-    Arc::new(
-        ScriptedLlm::new(name, [ScriptedResponse::text("done")]).with_data_locality(locality),
-    )
+    Arc::new(ScriptedLlm::new(name, [ScriptedResponse::text("done")]).with_data_locality(locality))
 }
 
 fn build(members: Vec<MemberSpec>) -> adk_core::Result<HarnessAgent> {

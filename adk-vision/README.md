@@ -42,7 +42,7 @@ features — `fetch`, `cloud`, `nim`, `sam`, `guardrail` — as `adk_rust::visio
 
 | Feature | Contents |
 |---------|----------|
-| (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor`, `VisionToolset`, `PersonRedactor`, the `vision.*` audit records, watch conditions, calibration and measurement |
+| (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor`, `VisionToolset`, `PersonRedactor`, the `vision.*` audit records, watch conditions, calibration and measurement, the verifier loop (`VerifierLoop`) |
 | `fetch` | `ModelFetcher`: Hugging Face downloads by revision through `hf-hub` 0.5, SHA-256 checked before load, `HF_HUB_OFFLINE` honoured |
 | `conformance` | The conformance suite and its per-trait test macros |
 | `eval` | `VisionEvalAgent`: any runtime task answering `adk-eval` cases in the vision tools' response form, in process or over the `cargo adk eval` protocol (`serve_eval_protocol`) |
@@ -69,6 +69,7 @@ features — `fetch`, `cloud`, `nim`, `sam`, `guardrail` — as `adk_rust::visio
 | `gemini-video` | `GeminiVideoAnalyzer`: Gemini native video, uploading clips above 20 MB once through the File API, at an explicit frame rate and media resolution; implies `cloud` |
 | `memory` | `VisualMemory`: image embeddings as `adk-rag` chunks with the caption, artifact, digest, region, source, capture time and run; text and example-image search with day, kind and source filters; the collection's embedding space recorded and any other refused; captions in `adk-memory` and sources in its graph memory; `erase_source` with a `vision.memory.erased` record; the S16 week corpus |
 | `memory-lancedb` | The visual memory tests against `adk-rag`'s embedded LanceDB backend (needs `protoc`) |
+| `team` | `team`: the `Perceiver`, `Reasoner` and `Verifier` roles, each refusing at construction what it may not hold, and `VisionTeam`, which escalates a reasoner/verifier disagreement to a person on one card with both opinions and the frame; implies `guardrail` |
 
 ## Quick Start
 
