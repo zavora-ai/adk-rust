@@ -222,10 +222,18 @@ fn perceiver_runtime() -> Arc<VisionRuntime> {
 }
 
 fn gate(store: &MediaStore, recorder: Arc<InMemoryEgressRecorder>) -> Arc<EgressGate> {
+    gate_with(store, recorder, ALLOW_TOML)
+}
+
+fn gate_with(
+    store: &MediaStore,
+    recorder: Arc<InMemoryEgressRecorder>,
+    rules: &str,
+) -> Arc<EgressGate> {
     Arc::new(
         EgressGate::new(
             EgressPolicy::public_only(),
-            VisionConfig::from_toml_str(ALLOW_TOML).unwrap().egress,
+            VisionConfig::from_toml_str(rules).unwrap().egress,
             recorder,
         )
         .with_redactor(Arc::new(PersonRedactor::new(Arc::new(RedPersonDetector::new()))))
@@ -424,10 +432,14 @@ struct Team {
 }
 
 fn team(verifier_finds: Vec<(BBox, &'static str, f32)>) -> Team {
+    team_with(verifier_finds, ALLOW_TOML)
+}
+
+fn team_with(verifier_finds: Vec<(BBox, &'static str, f32)>, rules: &str) -> Team {
     let artifacts = Arc::new(InMemoryArtifactService::new());
     let store = MediaStore::new(artifacts.clone());
     let recorder = Arc::new(InMemoryEgressRecorder::new());
-    let gate = gate(&store, recorder.clone());
+    let gate = gate_with(&store, recorder.clone(), rules);
     let reasoner_model = Recording::remote("claude-haiku-5-5", defect_answer());
     let reasoner = Reasoner::builder("reasoner")
         .model(reasoner_model.clone())
@@ -612,6 +624,52 @@ async fn a_disagreement_raises_one_card_with_both_opinions_and_the_frame() {
     assert_eq!(inspection.findings[0].verdict, "defect");
     assert_eq!(inspection.findings[0].source, FindingSource::Person);
     assert_eq!(team.reasoner_model.requests().len(), 1, "the reasoner was asked once");
+}
+
+#[tokio::test]
+async fn a_crop_whose_rule_asks_is_held_with_the_exact_image_first() {
+    let (png, source) = frame();
+    let team = team_with(Vec::new(), "[egress]\ndefault = \"ask\"\nredact = [\"faces\"]\n");
+    save_artifact(&team.artifacts, FRAME, &png).await;
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: APP.into(),
+            user_id: USER.into(),
+            session_id: Some(SESSION.into()),
+            state: Default::default(),
+        })
+        .await
+        .unwrap();
+    let approvals = Arc::new(InMemoryApprovalStore::new());
+    let ask = json!({ "image": FRAME }).to_string();
+    let harness = runner_on(
+        team.team.clone(),
+        RunConfig::default(),
+        team.artifacts.clone(),
+        sessions.clone(),
+        approvals.clone(),
+    );
+    let events = governed::run_turn(&harness.runner, &ask).await;
+    let cards = held(&events);
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].tool_name, adk_vision::team::RELEASE_TOOL);
+    assert!(team.reasoner_model.requests().is_empty(), "nothing left before the decision");
+    assert!(team.recorder.released().is_empty());
+    let staged = cards[0].evidence[0].digest().to_string();
+    assert_ne!(staged, source.digest().to_string(), "the card shows the redacted crop");
+
+    // Approved: the reasoner is sent exactly the staged crop, and the disagreement follows.
+    let decided =
+        RunConfig::builder().tool_approval(cards[0].fingerprint(), ToolApproval::approve()).build();
+    let resumed =
+        runner_on(team.team.clone(), decided, team.artifacts.clone(), sessions, approvals);
+    let events = governed::run_turn(&resumed.runner, &ask).await;
+    let sent = images(&team.reasoner_model.requests()[0]);
+    assert_eq!(Digest::of(&sent[0]).to_string(), staged);
+    let cards = held(&events);
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].tool_name, DISAGREEMENT_TOOL);
 }
 
 #[tokio::test]
