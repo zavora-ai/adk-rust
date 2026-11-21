@@ -34,7 +34,7 @@ use crate::manifest::VisionTask;
 use crate::media::{MediaStore, SourceImage};
 use crate::sent::SentImage;
 use crate::traits::{
-    Describer, Detector, DocumentReader, Editor, Embedder, Segmenter, VideoAnalyzer,
+    Describer, Detector, DocumentReader, Editor, Embedder, EmbeddingSpace, Segmenter, VideoAnalyzer,
 };
 
 /// A registered backend: on-device, handed [`SentImage`]s, or remote, handed
@@ -336,6 +336,22 @@ impl VisionRuntime {
             },
             error: None,
         }
+    }
+
+    /// The embedding space a call with `options` embeds into: the space of its embedding
+    /// route's backend. A visual memory collection records the space it was built in and
+    /// refuses vectors of any other.
+    ///
+    /// # Errors
+    ///
+    /// [`VisionError::BackendNotFound`] when no embedder serves the call.
+    pub fn embedding_space(&self, options: &CallOptions) -> Result<EmbeddingSpace> {
+        let route = self.route_for(VisionTask::Embed, options, self.embedders.default_id())?;
+        let (_, backend) = self.embedders.get(&route.primary)?;
+        Ok(match backend {
+            Backend::Local(b) => b.space().clone(),
+            Backend::Remote(b) => b.space().clone(),
+        })
     }
 
     /// Every registered backend's id.

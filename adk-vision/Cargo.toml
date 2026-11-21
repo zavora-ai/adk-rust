@@ -17,7 +17,7 @@ exclude = ["tests/"]
 [package.metadata.docs.rs]
 # docs.rs has no CUDA or Metal toolchain, so the GPU features are left out; ort-sys skips
 # linking on docs.rs.
-features = ["fetch", "conformance", "eval", "guardrail", "onnx", "ocr", "ocr-vl", "cloud", "nim", "sam", "sam-codec", "mistralrs", "track", "gemini-video"]
+features = ["fetch", "conformance", "eval", "guardrail", "onnx", "ocr", "ocr-vl", "cloud", "nim", "sam", "sam-codec", "mistralrs", "track", "gemini-video", "memory"]
 
 # Spec 3.7 §7.1: media, geometry, manifests, the traits, `VisionRuntime`, the egress boundary
 # and the deterministic `Editor` always build; each runtime and provider is a feature, added
@@ -98,6 +98,13 @@ gemini-video = ["cloud", "adk-model/gemini"]
 # `ByteTracker`: ByteTrack through `trackforge` (MIT, pure Rust) for anonymous tracks with
 # stable identifiers across frames (§7.13).
 track = ["dep:trackforge"]
+# Visual memory (§7.15): image embeddings as adk-rag chunks in any vector store, one embedding
+# space per collection, text and example-image queries, captions with artifact references in
+# adk-memory, sources and labels in its graph memory, erasure by source; and the week corpus
+# of scenario S16.
+memory = ["dep:adk-rag", "dep:adk-memory", "adk-memory/graph-memory"]
+# The visual memory tests against adk-rag's embedded LanceDB backend (protoc needed).
+memory-lancedb = ["memory", "adk-rag/lancedb"]
 
 [dependencies]
 adk-core.workspace = true
@@ -120,6 +127,10 @@ tracing.workspace = true
 uuid.workspace = true
 
 adk-guardrail = { workspace = true, optional = true }
+# `memory`: graph memory and captions with artifact references.
+adk-memory = { workspace = true, optional = true }
+# `memory`: chunks, collections and every vector store backend.
+adk-rag = { workspace = true, optional = true }
 # `mistralrs`: Qwen3-VL and the other mistral.rs vision models in process.
 adk-mistralrs = { workspace = true, optional = true }
 # Provider prices for preflight estimates, and the clients `nim` and `sam` build on.
@@ -293,3 +304,15 @@ required-features = ["cloud", "sam", "gemini-video"]
 [[test]]
 name = "video_local_live_tests"
 required-features = ["mistralrs"]
+
+[[test]]
+name = "memory_tests"
+required-features = ["memory"]
+
+[[test]]
+name = "memory_lancedb_tests"
+required-features = ["memory-lancedb"]
+
+[[test]]
+name = "memory_live_tests"
+required-features = ["memory", "onnx"]
