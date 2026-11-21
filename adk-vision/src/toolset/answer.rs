@@ -17,6 +17,7 @@
 //! | `regionSet` | The answer as a [`RegionSet`](crate::RegionSet), in source pixels with each region's origin |
 //! | `page` | `vision_read` only: the blocks (kind, text, confidence, region) and the reading order |
 //! | `answer` | `vision_describe` only: the text and the structured value |
+//! | `measurements` | `vision_measure` only: each region's maximum length and area with their uncertainty, and the calibration they rest on |
 //! | `calls` | Each backend call: backend, locality, egress digests, units, cost, regions, duration, escalation |
 //! | `models` | Each manifest the regions name: revision and licence for a built-in one |
 //!
@@ -43,13 +44,15 @@ pub(crate) struct Answer {
     pub(crate) regions: Vec<Region>,
     pub(crate) page: Option<DocumentPage>,
     pub(crate) described: Option<Value>,
+    /// `vision_measure` only: each measurement with its calibration, in the viewer's form.
+    pub(crate) measurements: Vec<Value>,
     pub(crate) calls: Vec<CallRecord>,
 }
 
 impl Answer {
     /// A detection's or a segmentation's answer.
     pub(crate) fn regions(regions: Vec<Region>, calls: Vec<CallRecord>) -> Self {
-        Self { regions, page: None, described: None, calls }
+        Self { regions, page: None, described: None, measurements: Vec::new(), calls }
     }
 }
 
@@ -161,6 +164,9 @@ pub(crate) fn record(
     }
     if let Some(described) = &answer.described {
         record["answer"] = described.clone();
+    }
+    if !answer.measurements.is_empty() {
+        record["measurements"] = Value::Array(answer.measurements.clone());
     }
     record
 }

@@ -102,6 +102,7 @@ wake-payload>>>
 | Cron | `expression`, `scheduled_for` |
 | Approval decided | `requestId`, `fingerprint`, `runId`, `toolName`, `state`, `kind` |
 | Another process finished | `pid`, `state`, `target`, `queue` |
+| A visual event (`VisionWakeSource`) | `kind` (`vision`), `source`, `session`, `condition`, `event`, `label`, `score`, `track`, `frames`, `frame` (index, capture time, digest, size, artifact and version), the top `regions` and `moreRegions` ([visual wakes](../vision/wake.md)) |
 | A time, an expired wake set | `at`, `expiredAt` |
 
 | Property | What it means |
@@ -113,6 +114,16 @@ wake-payload>>>
 
 > **Note:** a run parked on its own held tool call is told nothing: the decision reaches it
 > as that call's answer.
+
+### Visual wake sources
+
+A camera, screen or browser stream evaluates its watch conditions on the device and hands the
+events that pass to a `VisionWakeSource`, one per stream, named after it (spec 3.7 §7.10). Its
+events are keyed `queue:<source>:<session>:<track>:<condition>:<event>`, so a process asleep on
+`Wake::Queue { source: "conveyor-1" }` wakes once per tracked object however many frames show
+it, and a `Trigger` on the same wake starts a `Triggered` process when none sleeps. The payload
+names the frame by digest and artifact, never by pixels, and stays within
+`WAKE_PAYLOAD_LIMIT`. See [Watch Conditions and Visual Wakes](../vision/wake.md).
 
 ## Background sub-agents
 
@@ -244,6 +255,7 @@ not forward `ApprovalService::route_unrouted` and `add_notifier`, is named in th
 | `postgres`, `redis` | off | The kernel's stores in the backend replicas share |
 | `mongodb`, `firestore`, `neo4j` | off | The kernel's stores on MongoDB, Firestore or Neo4j, with the same backend of `adk-session`'s stores ([backends](backends.md)) |
 | `webhooks` | on | Webhook wake sources over `WebhookIngress`; `WebhookSink`, the outbound webhook sink ([event bus](events.md)) |
+| `vision` | off | `VisionWakeSource` as an `adk-vision` `WatchSink`, and `VisualWake` from a `WatchEvent`; the source itself is always built ([visual wakes](../vision/wake.md)) |
 | `proc` | on | The content-free activity ledger and its stores; the live aggregates' OTel GenAI histograms |
 | `proc-baselines` | off | The daily baselines and observations ([`/proc`](proc.md)) |
 | `service` | on | `adk_kernel::service`: launchd, systemd and Windows service installation |

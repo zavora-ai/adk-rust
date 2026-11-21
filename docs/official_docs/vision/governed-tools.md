@@ -1,6 +1,6 @@
 # Governed Vision Tools
 
-`VisionToolset` gives an agent seven vision tools that run on the governed tool path. A
+`VisionToolset` gives an agent eight vision tools that run on the governed tool path. A
 call that stays on the device runs like any read. A call that would send an image off the
 machine is checked against the egress rules, held for a person with the exact image it
 would send when the rules ask, and released only as that redacted copy. Every backend
@@ -28,6 +28,7 @@ adk-vision = { version = "3.0.0", features = ["guardrail"] }
 | `vision_crop` | A new image of one region | `Idempotent` | `image`, `region`, `margin` |
 | `vision_redact` | A new image with regions filled solid black | `Idempotent` | `image`, `regions` |
 | `vision_annotate` | A new image with numbered boxes drawn | `Idempotent` | `image`, `boxes` |
+| `vision_measure` | Maximum length and area in millimetres from masks, under a fiducial's calibration ([measurement](measure.md)) | `ReadOnly` | `image`, `boxes` or `concepts`, `fiducial` or `calibration`, `region`, `backend` |
 
 - **Images.** An `image` argument is an artifact name in the session or a `sha256:`
   digest an earlier tool returned. The toolset keeps each image it reads in the runtime's

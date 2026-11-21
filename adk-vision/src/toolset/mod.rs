@@ -30,6 +30,7 @@
 //! | `vision_crop` | A new image of a region | `Idempotent` |
 //! | `vision_redact` | A new image with regions filled solid black | `Idempotent` |
 //! | `vision_annotate` | A new image with labelled boxes drawn | `Idempotent` |
+//! | `vision_measure` | Maximum length and area in millimetres, from masks under a fiducial's calibration | `ReadOnly` |
 
 mod answer;
 mod tools;

@@ -852,6 +852,7 @@ dependencies = [
  "adk-session",
  "adk-telemetry",
  "adk-tool",
+ "adk-vision",
  "async-trait",
  "awp-types",
  "axum",
