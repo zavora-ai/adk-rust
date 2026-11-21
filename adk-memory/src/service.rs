@@ -76,6 +76,35 @@ impl MemoryEntry {
         self.with_expires_at(expires_at)
     }
 
+    /// Adds a reference to the artifact at `uri` — an image, a frame, a document — as a
+    /// `Part::FileData` after the entry's text. The text stays what a search matches; the
+    /// reference comes back with the entry.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::Content;
+    /// use adk_memory::MemoryEntry;
+    /// use adk_memory::text::{ArtifactReference, extract_text};
+    ///
+    /// let entry = MemoryEntry::new(Content::new("model").with_text("torn seal, carton 117"), "inspector")
+    ///     .with_artifact("artifact://inspector/u1/s1/vision-ab12.png#0", "image/png");
+    /// assert_eq!(extract_text(&entry.content), "torn seal, carton 117");
+    /// assert_eq!(
+    ///     entry.artifact_references(),
+    ///     vec![ArtifactReference::new("artifact://inspector/u1/s1/vision-ab12.png#0", "image/png")]
+    /// );
+    /// ```
+    pub fn with_artifact(mut self, uri: impl Into<String>, mime_type: impl Into<String>) -> Self {
+        self.content.parts.push(crate::text::ArtifactReference::new(uri, mime_type).to_part());
+        self
+    }
+
+    /// The artifacts the entry refers to, by [`crate::text::artifact_references`].
+    pub fn artifact_references(&self) -> Vec<crate::text::ArtifactReference> {
+        crate::text::artifact_references(&self.content)
+    }
+
     /// Whether the entry has expired at `now`, by [`crate::expiry::is_expired`].
     pub fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
         crate::expiry::is_expired(self.expires_at, now)
