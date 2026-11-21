@@ -259,6 +259,10 @@ name = "stream_tests"
 required-features = ["stream"]
 
 [[test]]
+name = "stream_watch_tests"
+required-features = ["stream"]
+
+[[test]]
 name = "stream_property_tests"
 required-features = ["stream"]
 
