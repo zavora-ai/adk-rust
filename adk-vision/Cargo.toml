@@ -98,6 +98,10 @@ gemini-video = ["cloud", "adk-model/gemini"]
 # `ByteTracker`: ByteTrack through `trackforge` (MIT, pure Rust) for anonymous tracks with
 # stable identifiers across frames (§7.13).
 track = ["dep:trackforge"]
+# The perceiver, reasoner and verifier roles and `VisionTeam` (§7.12): each role an adk-core
+# `Agent`, the perceiver's model through adk-agent's `LlmAgent`, disagreements held on the
+# governed path with the frame as evidence.
+team = ["guardrail", "dep:adk-agent", "dep:futures"]
 
 [dependencies]
 adk-core.workspace = true
@@ -120,6 +124,8 @@ tracing.workspace = true
 uuid.workspace = true
 
 adk-guardrail = { workspace = true, optional = true }
+# `team`: a perceiver with a model runs as an `LlmAgent`.
+adk-agent = { workspace = true, optional = true }
 # `mistralrs`: Qwen3-VL and the other mistral.rs vision models in process.
 adk-mistralrs = { workspace = true, optional = true }
 # Provider prices for preflight estimates, and the clients `nim` and `sam` build on.
@@ -293,3 +299,11 @@ required-features = ["cloud", "sam", "gemini-video"]
 [[test]]
 name = "video_local_live_tests"
 required-features = ["mistralrs"]
+
+[[test]]
+name = "team_tests"
+required-features = ["team"]
+
+[[test]]
+name = "team_live_tests"
+required-features = ["team", "nim"]

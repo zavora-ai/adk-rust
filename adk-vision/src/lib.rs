@@ -41,6 +41,7 @@
 //! | `stream-fixtures` | `stream::fixtures`: the generated conveyor clip and an in-process RTSP test server |
 //! | `track` | `ByteTracker`: ByteTrack through `trackforge`, anonymous tracks with stable identifiers across frames |
 //! | `gemini-video` | `GeminiVideoAnalyzer`: Gemini native video, through the File API above 20 MB, at an explicit frame rate and media resolution (implies `cloud`) |
+//! | `team` | `team`: the perceiver, reasoner and verifier roles and `VisionTeam`, which escalates a disagreement to a person on one card (implies `guardrail`) |
 //!
 //! [`VisionToolset`] — `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`,
 //! `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure` — is always built: each tool runs on
@@ -136,6 +137,8 @@ mod runtime;
 #[cfg(feature = "sam")]
 pub mod sam;
 mod sent;
+#[cfg(feature = "team")]
+pub mod team;
 #[cfg(feature = "stream")]
 pub mod stream;
 mod toolset;
@@ -143,6 +146,7 @@ mod toolset;
 mod track;
 mod tracker;
 mod traits;
+mod verify;
 pub mod video;
 mod watch;
 
@@ -214,6 +218,11 @@ pub use toolset::{
 #[cfg(feature = "track")]
 pub use track::{ByteTrackConfig, ByteTracker};
 pub use tracker::GreedyIouTracker;
+pub use verify::{
+    ExpectedChange, LoopOutcome, Observation, Observer, RegionDiff, RegionExpectation,
+    VERIFICATION_TOOL, VerificationHold, VerificationReport, VerifiedAction, VerifierLoop,
+    check_change, diff_regions,
+};
 pub use traits::{
     Block, BlockKind, DescribeRequest, DescribeSpec, Describer, Description, DetectQuery, Detector,
     DocumentPage, DocumentReader, Editor, Embedder, EmbeddingSpace, ImageRegion, Metric,
