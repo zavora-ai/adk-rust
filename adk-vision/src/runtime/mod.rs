@@ -553,9 +553,12 @@ impl VisionRuntime {
     /// here, so nothing is sent and no egress is recorded.
     ///
     /// `sizes` are the sizes the backend will be sent, `prompt_chars` the length of any
-    /// prompt, and `max_output_tokens` the call's output cap.
+    /// prompt, and `max_output_tokens` the call's output cap. `unit` is what each image
+    /// counts as: [`UsageUnit::Images`], or [`UsageUnit::Frames`] for a stream's frames
+    /// ([`CallOptions::as_frames`], spec 3.7 X3).
     ///
     /// [`TokenEstimate`]: crate::TokenEstimate
+    #[allow(clippy::too_many_arguments)] // One call's metering inputs; a struct would only rename them.
     async fn preflight(
         &self,
         cx: &VisionCx,
@@ -564,14 +567,14 @@ impl VisionRuntime {
         sizes: &[(u32, u32)],
         prompt_chars: usize,
         max_output_tokens: Option<u32>,
+        unit: UsageUnit,
     ) -> Result<Preflight> {
         cx.check()?;
         let images = sizes.len() as u64;
-        let mut units = UsageVector::new().with(UsageUnit::Images, images);
+        let mut units = UsageVector::new().with(unit, images);
         if task == VisionTask::Read {
             units = units.with(UsageUnit::Pages, images);
         }
-        // X3: frame calls (phase B) count `UsageUnit::Frames`.
         let (vendor, model, cost, bound) = match &descriptor.price {
             // A remote backend with no published price (NVIDIA's hosted NIMs) is capped by
             // units, and its ledger entries name its host rather than `local`.
@@ -583,8 +586,8 @@ impl VisionRuntime {
                 (vendor.unwrap_or_else(|| "local".into()), descriptor.id.to_string(), Some(0), 0)
             }
             Some(price) => match price.unit() {
-                Some(unit) => {
-                    let amount = if unit == UsageUnit::Requests { 1 } else { images };
+                Some(priced) => {
+                    let amount = if priced == UsageUnit::Requests { 1 } else { images };
                     let cost = price.request_cost(amount);
                     (price.vendor().to_string(), price.model().to_string(), cost, cost.unwrap_or(0))
                 }

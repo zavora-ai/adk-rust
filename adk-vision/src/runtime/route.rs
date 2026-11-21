@@ -1,6 +1,6 @@
 //! Routes, escalation triggers, call options and call records.
 
-use adk_core::UsageVector;
+use adk_core::{UsageUnit, UsageVector};
 use serde::{Deserialize, Serialize};
 
 use crate::backend::{BackendId, Locality};
@@ -151,6 +151,10 @@ pub struct CallOptions {
     /// Only this region of each image, in source pixels: the backend is sent its crop, and
     /// answers come back in source pixels with the crop in their transform chain.
     pub region: Option<BBox>,
+    /// Meters each image as a frame of a stream ([`UsageUnit::Frames`]) instead of an image
+    /// ([`UsageUnit::Images`]), so a stream's frames count against frame caps and quotas
+    /// (spec 3.7 X3, §7.9). The stream pipeline sets it on every detector call.
+    pub frames: bool,
 }
 
 impl CallOptions {
@@ -187,6 +191,29 @@ impl CallOptions {
     pub fn with_region(mut self, region: BBox) -> Self {
         self.region = Some(region);
         self
+    }
+
+    /// Meters each image as a stream frame: units go to [`UsageUnit::Frames`], and a backend
+    /// priced per image is billed one unit per frame.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_core::UsageUnit;
+    /// use adk_vision::CallOptions;
+    ///
+    /// assert_eq!(CallOptions::new().image_unit(), UsageUnit::Images);
+    /// assert_eq!(CallOptions::new().as_frames().image_unit(), UsageUnit::Frames);
+    /// ```
+    pub fn as_frames(mut self) -> Self {
+        self.frames = true;
+        self
+    }
+
+    /// The unit each image of the call is metered in: [`UsageUnit::Frames`] for a stream's
+    /// frames ([`as_frames`](Self::as_frames)), [`UsageUnit::Images`] otherwise.
+    pub fn image_unit(&self) -> UsageUnit {
+        if self.frames { UsageUnit::Frames } else { UsageUnit::Images }
     }
 
     pub(crate) fn data_class(&self) -> DataClass {

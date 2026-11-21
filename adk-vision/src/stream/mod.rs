@@ -35,7 +35,8 @@
 //!   card, or a sample a person kept; [`FrameKeeper`] stores those for 30 days by default
 //!   (Q13), purges them after, and writes `vision.evidence.kept` and `.purged` records.
 //! - **Detection and tracking.** The detector runs through [`VisionRuntime`], so each frame
-//!   is metered like any other call and its regions come back in source pixels; the
+//!   is metered — in `UsageUnit::Frames`, at zero cost on the device — and its regions come
+//!   back in source pixels; the
 //!   [`Tracker`] gives them anonymous track identifiers that reset with the source session.
 //! - **Observations.** Each processed frame reaches an [`ObservationSink`]: watch
 //!   conditions, wakes and the live camera surface consume the stream there.
