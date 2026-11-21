@@ -66,15 +66,17 @@ Collection IDs are RFC 1035 labels. A collection name uses ASCII lowercase lette
 For callers holding the concrete `AgentRetrievalStore`, `hybrid_search` runs a semantic and a keyword query in one `dataObjects:batchSearch` call, both filtered by scope, and returns the reciprocal-rank-fusion ranked list:
 
 ```rust,no_run
-# use adk_rag::agent_retrieval::{AgentRetrievalConfig, AgentRetrievalStore};
-# use adk_rag::Scope;
-# async fn run(store: AgentRetrievalStore, embedding: Vec<f32>) -> adk_rag::Result<()> {
-let scope = Scope::single_tenant();
-let results = store
-    .hybrid_search("docs", &scope, &embedding, "quarterly revenue", 10, (0.6, 0.4))
-    .await?;
-# Ok(())
-# }
+use adk_rag::Scope;
+use adk_rag::agent_retrieval::AgentRetrievalStore;
+
+async fn search(store: &AgentRetrievalStore, embedding: &[f32]) -> adk_rag::Result<()> {
+    let scope = Scope::single_tenant();
+    let results = store
+        .hybrid_search("docs", &scope, embedding, "quarterly revenue", 10, (0.6, 0.4))
+        .await?;
+    println!("{} results", results.len());
+    Ok(())
+}
 ```
 
 ## Platform notes

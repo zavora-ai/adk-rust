@@ -165,6 +165,36 @@ pub struct DecisionFacts {
     /// the "Always allow" column, with **Add this agent** and **Don't add** (spec 3.3 §5.7,
     /// §7.2).
     pub adds_agent: bool,
+    /// The call sends, keeps or acts on images held as evidence (spec 3.7 §8.2): what a
+    /// surface may answer then depends on whether it can show them and whether anything is
+    /// left to send. `None` for a call without images.
+    pub image: Option<ImageGate>,
+}
+
+/// What the rules need to know about a decision with images (spec 3.7 §8.2).
+///
+/// | Situation | Answers |
+/// |---|---|
+/// | Nothing to send: an image is deleted, or every pixel is covered | Deny only, on every surface (board choices A13, A15) |
+/// | Voice | Deny only: it cannot show the image, so it cannot say yes to sending it (A18) |
+/// | Chat and the tray | Deny and "Open in home": a person cannot approve an image they cannot see (A17) |
+/// | The web home, the phone, a terminal | As for any decision, but never **Always allow**: the egress rules decide each host and data class, and a standing rule made from a card would not change them |
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::rules::ImageGate;
+///
+/// let gate = ImageGate { sendable: true, holds_again: true };
+/// assert!(gate.sendable);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageGate {
+    /// Something can be sent: every image is kept and not wholly covered.
+    pub sendable: bool,
+    /// The source holds the call again when its arguments change, so **Edit** can be offered:
+    /// a changed call has a changed image, which a person must see before it leaves (V-I5).
+    pub holds_again: bool,
 }
 
 /// One answer a surface may offer, with its label (spec 3.3 §8.2).
@@ -220,6 +250,7 @@ impl Allowed {
 ///     allows: ApprovalAction::ALL.to_vec(),
 ///     always_label: Some("Always allow for this person".into()),
 ///     adds_agent: false,
+///     image: None,
 /// };
 /// let chat = Caller::human("ana", SurfaceKind::Chat, Origin::Chat { channel: "Telegram".into() });
 /// let answers: Vec<Answer> = allowed_answers(&chat, &facts).options.iter().map(|o| o.answer).collect();
@@ -311,7 +342,36 @@ pub fn allowed_answers(caller: &Caller, facts: &DecisionFacts) -> Allowed {
             }
         }
     }
+    if let Some(gate) = facts.image {
+        image_answers(row, gate, &mut allowed);
+    }
     allowed
+}
+
+/// Narrows `allowed` for a decision with images (spec 3.7 §8.2): see [`ImageGate`].
+pub(crate) fn image_answers(row: Row, gate: ImageGate, allowed: &mut Allowed) {
+    allowed.options.retain(|option| option.answer != Answer::AlwaysAllow);
+    if !gate.sendable {
+        allowed.options.retain(|option| option.answer == Answer::Deny);
+        allowed.cancel_window_secs = None;
+        return;
+    }
+    if !gate.holds_again {
+        allowed.options.retain(|option| option.answer != Answer::Edit);
+    }
+    match row {
+        Row::Voice => {
+            allowed.options.retain(|option| option.answer == Answer::Deny);
+            allowed.cancel_window_secs = None;
+            allowed.note = Some(words::LOOK_AT_THE_IMAGE_ON_A_SCREEN.to_string());
+        }
+        Row::Chat | Row::Tray => {
+            allowed.options.retain(|option| option.answer == Answer::Deny);
+            allowed.open_in_home = true;
+            allowed.note = Some(words::SHOW_THE_IMAGE_IN_THE_HOME.to_string());
+        }
+        Row::Web | Row::Phone | Row::Terminal | Row::Agent => {}
+    }
 }
 
 /// The answers to a suggested agent (spec 3.3 §5.7, §7.2 "Add an agent, or let one do
@@ -416,6 +476,7 @@ impl RuleViolation {
 ///     allows: ApprovalAction::ALL.to_vec(),
 ///     always_label: None,
 ///     adds_agent: false,
+///     image: None,
 /// };
 /// let web = Caller::human("ana", SurfaceKind::Web, Origin::Pointer);
 /// assert_eq!(check(&web, &facts, Answer::AllowOnce, true), Err(RuleViolation::PresenceRequired));
@@ -521,6 +582,7 @@ mod tests {
             allows: ApprovalAction::ALL.to_vec(),
             always_label: Some(words::ALWAYS_ALLOW_FOR_THIS_PERSON.into()),
             adds_agent: false,
+            image: None,
         }
     }
 

@@ -873,6 +873,15 @@ impl AuditRecorder for EphemeralAuditLog {
     async fn record(&self, draft: AuditRecordDraft) -> Result<()> {
         self.log().await?.append(draft).await.map(drop)
     }
+
+    /// Signs a checkpoint over the records not yet signed; a log that has recorded
+    /// nothing is left unopened.
+    async fn seal(&self) -> Result<()> {
+        match self.log.get() {
+            Some(log) => log.seal().await,
+            None => Ok(()),
+        }
+    }
 }
 
 /// The refusal of a run whose audit trail is missing or does not block (spec 3.1 §9.2 I39).
@@ -1029,5 +1038,26 @@ mod tests {
         assert!(!open.inert("inv"));
         let served = IdentityGate::new(true);
         assert!(served.inert("never-seen"));
+    }
+
+    /// Sealing signs one checkpoint over the records not yet signed, and none twice.
+    #[tokio::test]
+    async fn sealing_the_ephemeral_log_signs_its_unsigned_records() {
+        use adk_core::audit_log::{AuditLogStore as _, AuditRecordKind};
+
+        let log = EphemeralAuditLog::new().unwrap();
+        let sizes = || async {
+            let checkpoints = log.store().checkpoints(EPHEMERAL_LOG_ID).await.unwrap();
+            checkpoints.into_iter().map(|checkpoint| checkpoint.size).collect::<Vec<_>>()
+        };
+        log.seal().await.unwrap();
+        assert_eq!(sizes().await, Vec::<u64>::new(), "an empty log has nothing to sign");
+        for action in ["search", "read"] {
+            log.record(AuditRecordDraft::new(AuditRecordKind::ToolCall, action)).await.unwrap();
+        }
+        assert_eq!(sizes().await, Vec::<u64>::new(), "no checkpoint is due yet");
+        log.seal().await.unwrap();
+        log.seal().await.unwrap();
+        assert_eq!(sizes().await, vec![2]);
     }
 }

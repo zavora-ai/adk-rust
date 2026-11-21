@@ -23,6 +23,7 @@
 //! | `pgvector`   | `PgVectorStore` via sqlx                  |
 //! | `agent-retrieval` | `AgentRetrievalStore` via Agent Retrieval (Vector Search 2.0) |
 //! | `vertex-rag` | Vertex AI RAG Engine client + retrieval tool |
+//! | `onnx`       | `OnnxEmbeddingProvider`: a sentence-transformer ONNX model run in process |
 //! | `full`       | `gemini`, `openai`, `qdrant`, `lancedb`, `pgvector` |
 //!
 //! ## Example

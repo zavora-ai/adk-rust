@@ -748,6 +748,14 @@ pre {
   color: var(--text-2);
 }
 
+.activity-viewer {
+  margin-left: 8px;
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 /* A decision sits on its own background (spec 3.3 §7.1). */
 .decision {
   position: relative;
@@ -1504,6 +1512,17 @@ pre {
 .mini-decision:hover {
   border-color: var(--accent-line);
   box-shadow: var(--shadow-decision);
+}
+
+.mini-decision-image {
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.mini-words {
+  display: grid;
+  gap: 4px;
 }
 
 .mini-heading {

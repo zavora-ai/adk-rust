@@ -619,6 +619,10 @@ Intercept agent behavior. See [Callbacks](../callbacks/callbacks.md) for every c
 
 ## Builder Reference
 
+Every `LlmAgentBuilder` method. Methods marked with a feature exist, or take effect, only with that
+`adk-agent` feature; `adk-rust`'s `standard` tier turns on `guardrails`, `enhanced-plugins` and
+`skills`.
+
 | Method | Description |
 |--------|-------------|
 | `new(name)` | Creates builder with agent name |
@@ -627,27 +631,46 @@ Intercept agent behavior. See [Callbacks](../callbacks/callbacks.md) for every c
 | `instruction(text)` | System prompt, with `{var}` templating |
 | `instruction_provider(provider)` | Computes the system prompt per request |
 | `global_instruction(text)` | Instruction sent before `instruction`, for this agent only |
+| `global_instruction_provider(provider)` | Computes the global instruction per request |
+| `with_skills(index)` | Injects the best-matching skill of a `SkillIndex` into each user message (`skills`; see [Agent Skills](../skills/agent-skills.md)) |
+| `with_skills_from_root(root)`, `with_auto_skills()` | Loads the skill index from `root`, or from `.` (`skills`) |
+| `with_skill_policy(SelectionPolicy)` | Skill selection (`skills`; default: the top skill scoring at least 1.0) |
+| `with_skill_budget(chars)` | Cuts an injected skill body at `chars` characters (`skills`; default: 2,000) |
 | `sub_agent(Arc<dyn Agent>)` | Adds a transfer target (see [Multi-Agent Systems](multi-agent.md)) |
+| `disallow_transfer_to_parent(bool)`, `disallow_transfer_to_peers(bool)` | Removes the parent, or the parent's other sub-agents, from the transfer targets; the runner refuses such a transfer (see [Transfer Restrictions](multi-agent.md#transfer-restrictions)) |
 | `tool(Arc<dyn Tool>)` | Adds a static tool |
 | `toolset(Arc<dyn Toolset>)` | Adds a dynamic toolset resolved per invocation |
 | `strict_toolsets(bool)` | Fails the turn when a toolset cannot resolve its tools (default: skip it) |
+| `input_schema(json)` | Records a JSON Schema for the agent's input; `LlmAgent` does not check messages against it |
 | `output_schema(json)` | JSON schema for structured output |
 | `output_type::<T>()` | Derives `output_schema` from a `schemars::JsonSchema` type |
 | `output_max_retries(n)` | Correction retries after a reply fails the schema (default: 3) |
 | `output_key(key)` | Saves response to state |
 | `include_contents(mode)` | History visibility |
+| `generate_content_config(GenerateContentConfig)` | Default generation settings for every request, merged with the request's own |
+| `temperature(f32)`, `top_p(f32)`, `top_k(i32)`, `max_output_tokens(i32)` | Set one field of the default `GenerateContentConfig` |
 | `max_iterations(n)` | Maximum LLM round-trips (default: 100) |
 | `history_processor(processor)` | Rewrites the agent's history before each model request; the turn continues from the result (see [History Processors](../callbacks/callbacks.md#history-processors)) |
+| `before_callback(callback)`, `after_callback(callback)` | Agent callbacks, around the agent's run (see [Agent Callbacks](../callbacks/callbacks.md#agent-callbacks)) |
+| `before_model_callback(callback)`, `after_model_callback(callback)` | Model callbacks, around each model request (see [Model Callbacks](../callbacks/callbacks.md#model-callbacks)) |
+| `before_tool_callback(callback)`, `after_tool_callback(callback)` | Tool callbacks, around each tool call (see [Tool Callbacks](../callbacks/callbacks.md#tool-callbacks)) |
+| `after_tool_callback_full(callback)` | V2 rich after-tool callback with tool, args, and response |
+| `on_tool_error(callback)` | Register fallback handler for tool failures |
 | `tool_timeout(Duration)` | Per-call tool timeout (default: 5 minutes) |
+| `tool_confirmation_policy(ToolConfirmationPolicy)` | Sets which calls are held for approval: `Never` (default), `Always`, or `PerTool(names)` (see [Tool Authorization](../security/tool-authorization.md#tool-confirmation-policy)) |
 | `require_tool_confirmation(name)` | Holds calls to the tool for approval (see [Tool Authorization](../security/tool-authorization.md)) |
+| `require_tool_confirmation_for_all()` | Holds every call for approval (`ToolConfirmationPolicy::Always`) |
 | `tool_execution_strategy(strategy)` | Tool dispatch mode: `Sequential`, `Parallel`, or `Auto` |
 | `parallelize_agent_delegations(bool)` | Overlap consecutive agent-delegation calls without parallelizing ordinary tools |
 | `default_retry_budget(RetryBudget)` | Retry failed read-only and idempotent tools up to N times with exponential backoff |
 | `tool_retry_budget(name, RetryBudget)` | Per-tool retry override |
 | `circuit_breaker_threshold(u32)` | Disable tool after N consecutive failures |
-| `on_tool_error(callback)` | Register fallback handler for tool failures |
 | `expose_tool_error_messages(bool)` | Send every tool and tool-callback error message to the model (default: component, category, and code, plus the message of a rejection) |
-| `after_tool_callback_full(callback)` | V2 rich after-tool callback with tool, args, and response |
+| `input_guardrails(GuardrailSet)` | Screens each user message before it is saved (`guardrails`; see [Guardrails](../security/guardrails.md#integration-with-agents)) |
+| `output_guardrails(GuardrailSet)` | Screens each model turn before the client or the session sees it (`guardrails`) |
+| `tool_guardrails(ToolGuardrailSet)` | Screens each tool call's arguments and result (`guardrails`; see [Tool Guardrails](../security/guardrails.md#tool-guardrails)) |
+| `enhanced_plugin(plugin)`, `enhanced_plugins(plugins)` | Plugins that inspect and change tool calls, tool results, model requests and responses (`enhanced-plugins`; see [Enhanced plugins](../core/plugins.md#enhanced-plugins)) |
+| `sandbox_config(SandboxConfig)` | Attaches a workspace configuration that a `SandboxRunner` provisions; it adds no tools itself (`sandbox`) |
 | `build()` | Creates the agent |
 
 ### Iteration Control

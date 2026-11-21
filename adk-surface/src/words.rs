@@ -1344,6 +1344,393 @@ pub fn answers_line(
     format!("{total} {noun}: {}", parts.join(", "))
 }
 
+// ---------------------------------------------------------------------------
+// Approve with the image (spec 3.7 §8.2; board choices S3, S4, S5, A4, A12, A13, A15, A20, A21)
+// ---------------------------------------------------------------------------
+
+/// A card's single image, waiting.
+pub const THE_EXACT_IMAGE_THAT_WOULD_LEAVE: &str = "The exact image that would leave";
+/// A card's single image, once it left.
+pub const THE_IMAGE_THAT_LEFT: &str = "The image that left";
+/// A card's single image, deleted before anything was sent.
+pub const THE_IMAGE_THAT_WOULD_HAVE_LEFT: &str = "The image that would have left";
+/// Every pixel of the image is covered.
+pub const ALL_OF_THE_IMAGE: &str = "100% of the image";
+/// An image no region covers.
+pub const NOTHING_COVERED: &str = "nothing covered";
+/// The lead of the notice on a card whose image is gone.
+pub const NOTHING_TO_SEND: &str = "Nothing to send.";
+/// The lead of the notice on a card whose image is covered in full.
+pub const EVERYTHING_IS_COVERED: &str = "Everything is covered.";
+/// An image deleted before its retention ran out.
+pub const IMAGE_DELETED: &str = "This image was deleted";
+/// Why, when the image went before its retention ran out.
+pub const IMAGE_DELETED_EARLY: &str =
+    "It was deleted before its time as evidence ran out, with what it was cut from.";
+/// The fixed line under every card that holds an image (board choice A21).
+pub const IMAGES_LEAVE_ONLY_COVERED: &str = "Images leave this computer only after faces and personal details are covered. Nothing on this card can uncover them.";
+/// Why voice cannot say yes to sending an image (board choice A18).
+pub const LOOK_AT_THE_IMAGE_ON_A_SCREEN: &str = "To decide, look at the image on a screen. Voice can't say yes to sending an image; \u{201c}Deny\u{201d} still works.";
+/// Why a surface that cannot show the image sends the person to the home (board choice A17).
+pub const SHOW_THE_IMAGE_IN_THE_HOME: &str =
+    "This screen can't show the image. Look at it in the home before you decide.";
+/// The old card's line once its image was changed and the call held again.
+pub const HELD_AGAIN_WITH_THE_NEW_IMAGE: &str = "held again with the new image";
+/// Open the image's source, for a viewer allowed to (board choice A9).
+pub const OPEN_THE_SOURCE_IMAGE: &str = "Open the source image";
+
+/// "The 3 images that would leave".
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::the_images_that_would_leave(3), "The 3 images that would leave");
+/// ```
+pub fn the_images_that_would_leave(count: usize) -> String {
+    format!("The {count} images that would leave")
+}
+
+/// "The 3 images that left".
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::the_images_that_left(2), "The 2 images that left");
+/// ```
+pub fn the_images_that_left(count: usize) -> String {
+    format!("The {count} images that left")
+}
+
+/// "The 3 images that would have left".
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(
+///     adk_surface::words::the_images_that_would_have_left(3),
+///     "The 3 images that would have left"
+/// );
+/// ```
+pub fn the_images_that_would_have_left(count: usize) -> String {
+    format!("The {count} images that would have left")
+}
+
+/// An image's size and format: "1012 × 638 PNG".
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::image_size(1012, 638, "image/png"), "1012 × 638 PNG");
+/// ```
+pub fn image_size(width: u32, height: u32, mime_type: &str) -> String {
+    let format = mime_type.strip_prefix("image/").unwrap_or(mime_type).to_ascii_uppercase();
+    format!("{width} × {height} {format}")
+}
+
+/// A class of covering, counted: "1 face", "3 personal text", "2 fields your schema marks
+/// personal", "1 box you covered" (board choices S3, A4).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::CoverClass;
+///
+/// assert_eq!(adk_surface::words::covered_class(CoverClass::Face, 1), "1 face");
+/// assert_eq!(
+///     adk_surface::words::covered_class(CoverClass::SchemaField, 2),
+///     "2 fields your schema marks personal"
+/// );
+/// ```
+pub fn covered_class(class: crate::CoverClass, count: u32) -> String {
+    let one = count == 1;
+    match class {
+        crate::CoverClass::Face => format!("{count} face{}", if one { "" } else { "s" }),
+        crate::CoverClass::PersonalText => format!("{count} personal text"),
+        crate::CoverClass::SchemaField => {
+            format!("{count} field{} your schema marks personal", if one { "" } else { "s" })
+        }
+        crate::CoverClass::Marked => {
+            format!("{count} box{} you covered", if one { "" } else { "es" })
+        }
+        crate::CoverClass::Other => format!("{count} other region{}", if one { "" } else { "s" }),
+    }
+}
+
+/// A region's tag over a large picture: "face · whole person" (spec 3.7 Q3, board choice A4),
+/// "personal text", "schema field", "your redaction", or the feature's own label.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::CoverClass;
+///
+/// assert_eq!(adk_surface::words::region_tag(CoverClass::Face, "faces"), "face · whole person");
+/// ```
+pub fn region_tag(class: crate::CoverClass, label: &str) -> String {
+    match class {
+        crate::CoverClass::Face => "face · whole person".to_string(),
+        crate::CoverClass::PersonalText => "personal text".to_string(),
+        crate::CoverClass::SchemaField => "schema field".to_string(),
+        crate::CoverClass::Marked => "your redaction".to_string(),
+        crate::CoverClass::Other => label.replace('_', " "),
+    }
+}
+
+/// A region's tag over a small picture: "face", "text", "schema".
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::CoverClass;
+///
+/// assert_eq!(adk_surface::words::region_short_tag(CoverClass::PersonalText, "personal_text"), "text");
+/// ```
+pub fn region_short_tag(class: crate::CoverClass, label: &str) -> String {
+    match class {
+        crate::CoverClass::Face => "face".to_string(),
+        crate::CoverClass::PersonalText => "text".to_string(),
+        crate::CoverClass::SchemaField => "schema".to_string(),
+        crate::CoverClass::Marked => "yours".to_string(),
+        crate::CoverClass::Other => label.replace('_', " "),
+    }
+}
+
+/// Which of several images a class was covered in: "in image 3", "in images 1 and 3".
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::in_images(&[3]), "in image 3");
+/// assert_eq!(adk_surface::words::in_images(&[1, 2, 3]), "in images 1, 2 and 3");
+/// ```
+pub fn in_images(which: &[usize]) -> String {
+    match which {
+        [one] => format!("in image {one}"),
+        [rest @ .., last] => {
+            let rest: Vec<String> = rest.iter().map(ToString::to_string).collect();
+            format!("in images {} and {last}", rest.join(", "))
+        }
+        [] => String::new(),
+    }
+}
+
+/// A data class as a person reads it: `document_crop` is "Document crop".
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::data_class("document_crop"), "Document crop");
+/// ```
+pub fn data_class(class: &str) -> String {
+    let spaced = class.replace(['_', '-'], " ");
+    let mut chars = spaced.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// Several images of a data class: "3 document crops".
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::data_class_many("document_crop", 3), "3 document crops");
+/// ```
+pub fn data_class_many(class: &str, count: usize) -> String {
+    format!("{count} {}s", class.replace(['_', '-'], " "))
+}
+
+/// What qualifies crops: "never the page".
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::data_class_note("document_crop").as_deref(), Some("never the page"));
+/// assert_eq!(adk_surface::words::data_class_note("photo"), None);
+/// ```
+pub fn data_class_note(class: &str) -> Option<String> {
+    class.ends_with("_crop").then(|| "never the page".to_string())
+}
+
+/// Micro-USD to the cent, or to a hundredth of a cent under a cent: "$0.0044", "$1.84".
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::money(4_400), "$0.0044");
+/// assert_eq!(adk_surface::words::money(1_840_000), "$1.84");
+/// ```
+pub fn money(micro_usd: u64) -> String {
+    if micro_usd >= 10_000 {
+        return dollars(micro_usd);
+    }
+    let hundredths = micro_usd.saturating_add(50) / 100;
+    format!("$0.{hundredths:04}")
+}
+
+/// The preflight's hold: "Up to $0.0044" (board choice A20).
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::up_to(4_400), "Up to $0.0044");
+/// ```
+pub fn up_to(micro_usd: u64) -> String {
+    format!("Up to {}", money(micro_usd))
+}
+
+/// The hold of a call with nothing left to send: "Up to $0.0012 if sent".
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::up_to_if_sent(1_200), "Up to $0.0012 if sent");
+/// ```
+pub fn up_to_if_sent(micro_usd: u64) -> String {
+    format!("Up to {} if sent", money(micro_usd))
+}
+
+/// "Kept as evidence until 18 Dec" (board choice S5).
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::kept_as_evidence_until("18 Dec"), "Kept as evidence until 18 Dec");
+/// ```
+pub fn kept_as_evidence_until(day: &str) -> String {
+    format!("Kept as evidence until {day}")
+}
+
+/// "As evidence until 18 Dec", under "Kept" on a decided card.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::as_evidence_until("18 Dec"), "As evidence until 18 Dec");
+/// ```
+pub fn as_evidence_until(day: &str) -> String {
+    format!("As evidence until {day}")
+}
+
+/// "This image was deleted on 18 Dec".
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::image_deleted_on("18 Dec"), "This image was deleted on 18 Dec");
+/// ```
+pub fn image_deleted_on(day: &str) -> String {
+    format!("This image was deleted on {day}")
+}
+
+/// "Image deleted 18 Dec", over a small picture.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::image_deleted_short("18 Dec"), "Image deleted 18 Dec");
+/// ```
+pub fn image_deleted_short(day: &str) -> String {
+    format!("Image deleted {day}")
+}
+
+/// "Image deleted on 18 Dec", a step of how a card got here.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::image_deleted_step("18 Dec"), "Image deleted on 18 Dec");
+/// ```
+pub fn image_deleted_step(day: &str) -> String {
+    format!("Image deleted on {day}")
+}
+
+/// Why a deleted image's facts remain (board choice A13).
+///
+/// # Example
+///
+/// ```rust
+/// assert!(adk_surface::words::evidence_kept_for(30).starts_with("Evidence is kept for 30 days."));
+/// ```
+pub fn evidence_kept_for(days: u32) -> String {
+    format!(
+        "Evidence is kept for {days} days. What it was, where it was going and what was covered stay on record."
+    )
+}
+
+/// The notice on a card whose image is gone (board choice A13).
+///
+/// # Example
+///
+/// ```rust
+/// assert!(adk_surface::words::nothing_to_send_purged("Document desk").ends_with("ask Document desk again if you still need the answer."));
+/// ```
+pub fn nothing_to_send_purged(agent: &str) -> String {
+    format!(
+        "The image this decision is about is gone, so it can't be allowed. Deny it, and ask {agent} again if you still need the answer."
+    )
+}
+
+/// The notice on a card whose image is covered in full (board choice A15).
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(
+///     adk_surface::words::everything_covered(Some("Gemini")),
+///     "Gemini would receive a black rectangle, so there is nothing to allow. Deny it; covering can't be undone here."
+/// );
+/// ```
+pub fn everything_covered(provider: Option<&str>) -> String {
+    format!(
+        "{} would receive a black rectangle, so there is nothing to allow. Deny it; covering can't be undone here.",
+        provider.unwrap_or("The receiver")
+    )
+}
+
+/// The line of a decision a person changed before it ran, its call held again: "You changed
+/// it at 10:15 · held again with the new image" (spec 3.7 V-I5).
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(
+///     adk_surface::words::held_again_at("10:15"),
+///     "You changed it at 10:15 · held again with the new image"
+/// );
+/// ```
+pub fn held_again_at(hh_mm: &str) -> String {
+    format!("You changed it at {hh_mm} · {HELD_AGAIN_WITH_THE_NEW_IMAGE}")
+}
+
+/// The run that waited on a card ended: "Waited 10 minutes; the run ended at 10:24"
+/// (board choice A12).
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::run_ended(10, "10:24"), "Waited 10 minutes; the run ended at 10:24");
+/// assert_eq!(adk_surface::words::run_ended(1, "10:15"), "Waited 1 minute; the run ended at 10:15");
+/// ```
+pub fn run_ended(minutes: i64, hh_mm: &str) -> String {
+    let unit = if minutes == 1 { "minute" } else { "minutes" };
+    format!("Waited {minutes} {unit}; the run ended at {hh_mm}")
+}
+
+/// The notice on a card whose run ended while it waited (board choice A12).
+///
+/// # Example
+///
+/// ```rust
+/// assert!(adk_surface::words::stopped_waiting("Document desk", "10:24").starts_with("Document desk stopped waiting at 10:24"));
+/// ```
+pub fn stopped_waiting(agent: &str, hh_mm: &str) -> String {
+    format!(
+        "{agent} stopped waiting at {hh_mm} and finished its run without this. Your answer is kept and used when {agent} picks this thread up again."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1445,6 +1832,17 @@ mod tests {
         STOPPING_NEEDS_THE_OPERATOR,
         APP_CALL_SENT,
         APP_SERVER_DIDNT_ANSWER,
+        THE_EXACT_IMAGE_THAT_WOULD_LEAVE,
+        THE_IMAGE_THAT_LEFT,
+        THE_IMAGE_THAT_WOULD_HAVE_LEFT,
+        NOTHING_TO_SEND,
+        EVERYTHING_IS_COVERED,
+        IMAGE_DELETED,
+        IMAGE_DELETED_EARLY,
+        IMAGES_LEAVE_ONLY_COVERED,
+        LOOK_AT_THE_IMAGE_ON_A_SCREEN,
+        SHOW_THE_IMAGE_IN_THE_HOME,
+        OPEN_THE_SOURCE_IMAGE,
     ];
 
     #[test]

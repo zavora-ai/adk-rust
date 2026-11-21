@@ -89,7 +89,10 @@ adk-rust ultracode --dir ./project --max-rounds 3 "implement a retry wrapper"
 | Flag | Meaning |
 |------|---------|
 | `--dir <path>` | Workspace directory (default `.`). |
-| `--max-rounds <n>` | Maximum review → revise rounds (default 2). |
+| `--max-rounds <n>` | Maximum review → revise rounds (default 2, at most 5). |
+
+`--architecture`, `--router`, `--max-model-calls` and `--receipt`, and the shared harness
+flags, are in [Ultracode](../harness/cli.md#ultracode).
 
 You'll see each reviewer's verdict, the synthesized decision per round, and the
 revise steps, ending in `finalize`.

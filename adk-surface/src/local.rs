@@ -6,11 +6,12 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+use adk_artifact::{ArtifactService, VersionsRequest};
 use adk_core::audit_log::AuditActor;
 use adk_core::{
-    ApprovalDecision, ApprovalRequest, ApprovalService, ApprovalState, Content, ErrorCategory,
-    Event, GovernanceControl, InboxQuery, NewRun, RequestContext, RunCheckpointRef, RunState,
-    SessionId, UserId,
+    ApprovalDecision, ApprovalRequest, ApprovalService, ApprovalState, Content, DurableRunStore,
+    ErrorCategory, Event, GovernanceControl, ImageEvidence, InboxQuery, NewRun, RequestContext,
+    RequestedCall, RequestedVia, RunCheckpointRef, RunState, SessionId, UserId,
 };
 use adk_harness::{
     ArgSpec, Harness, HarnessMode, RuleOwner, RulePredicate, RuleSuggestion, StandingDecision,
@@ -25,6 +26,7 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt;
 
 use crate::error::{Result, SurfaceError};
+use crate::evidence::{EvidenceBytes, EvidenceKept};
 use crate::origin::Caller;
 use crate::source::{
     AgentState, AlwaysAllowOffer, RuleCommit, Source, SpendToday, Steered, Steering,
@@ -33,6 +35,14 @@ use crate::words;
 
 /// How many inbox entries one page reads.
 const INBOX_PAGE: usize = 200;
+
+/// The action a call held again names as how the person asked for it.
+const HELD_AGAIN_ACTION: &str = "held-again";
+
+/// What the agent is told of a call whose image a person changed before it left.
+#[cfg(feature = "web")]
+const IMAGE_CHANGED_REASON: &str = "The person cut the image smaller or covered more of it \
+    before it left. The call is held again with the new image for their answer.";
 
 /// The engine's source for surfaces in the same process as the agents (spec 3.3 §6): the
 /// session store the feed numbers events from, the approval service decisions go through,
@@ -72,6 +82,9 @@ pub struct LocalSource {
     governance: Option<GovernanceControl>,
     daily_limit: Option<u64>,
     agents: Option<adk_kernel::agents::AgentsHandle>,
+    artifacts: Option<Arc<dyn ArtifactService>>,
+    runs: Option<Arc<dyn DurableRunStore>>,
+    eval_fixtures: Option<std::path::PathBuf>,
 }
 
 impl fmt::Debug for LocalSource {
@@ -98,6 +111,9 @@ pub struct LocalSourceBuilder {
     governance: Option<GovernanceControl>,
     daily_limit: Option<u64>,
     agents: Option<adk_kernel::agents::AgentsHandle>,
+    artifacts: Option<Arc<dyn ArtifactService>>,
+    runs: Option<Arc<dyn DurableRunStore>>,
+    eval_fixtures: Option<std::path::PathBuf>,
 }
 
 impl fmt::Debug for LocalSourceBuilder {
@@ -182,6 +198,65 @@ impl LocalSourceBuilder {
         self
     }
 
+    /// The artifact service a held call's evidence images live in (spec 3.7 §8.2): cards show
+    /// them, each checked against its digest, and a person may cut one smaller or cover more
+    /// of it before it leaves.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_artifact::InMemoryArtifactService;
+    /// use adk_session::InMemorySessionService;
+    ///
+    /// let source = adk_surface::LocalSource::builder("desk")
+    ///     .sessions(Arc::new(InMemorySessionService::new()))
+    ///     .artifacts(Arc::new(InMemoryArtifactService::new()))
+    ///     .build()
+    ///     .unwrap();
+    /// # let _ = source;
+    /// ```
+    #[must_use]
+    pub fn artifacts(mut self, artifacts: Arc<dyn ArtifactService>) -> Self {
+        self.artifacts = Some(artifacts);
+        self
+    }
+
+    /// The durable run store whose runs wait on decisions: a decision whose run ended while it
+    /// waits says its answer is used when the agent picks the thread up again (spec 3.7 §8.2,
+    /// board choice A12).
+    #[must_use]
+    pub fn runs(mut self, runs: Arc<dyn DurableRunStore>) -> Self {
+        self.runs = Some(runs);
+        self
+    }
+
+    /// The folder labelled examples are saved under (spec 3.7 §8.2, board choice V13): the
+    /// annotated viewer writes `adk-eval` cases to the `.test.json` files in it, and each
+    /// case's image beside its file, so `cargo adk eval` reads them. Without it, the viewer
+    /// shows answers and exports them but saves no examples.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_artifact::InMemoryArtifactService;
+    /// use adk_session::InMemorySessionService;
+    ///
+    /// let source = adk_surface::LocalSource::builder("desk")
+    ///     .sessions(Arc::new(InMemorySessionService::new()))
+    ///     .artifacts(Arc::new(InMemoryArtifactService::new()))
+    ///     .eval_fixtures(std::env::temp_dir().join("evals"))
+    ///     .build()
+    ///     .unwrap();
+    /// # let _ = source;
+    /// ```
+    #[must_use]
+    pub fn eval_fixtures(mut self, root: impl Into<std::path::PathBuf>) -> Self {
+        self.eval_fixtures = Some(root.into());
+        self
+    }
+
     /// The source.
     ///
     /// # Errors
@@ -217,6 +292,9 @@ impl LocalSourceBuilder {
             governance,
             daily_limit: self.daily_limit,
             agents: self.agents,
+            artifacts: self.artifacts,
+            runs: self.runs,
+            eval_fixtures: self.eval_fixtures,
         })
     }
 }
@@ -233,6 +311,16 @@ impl LocalSource {
             Some((kernel, _)) => Some(kernel.agents().clone()),
             None => self.agents.as_ref().and_then(adk_kernel::agents::AgentsHandle::get),
         }
+    }
+
+    /// The bytes of an evidence image, read at its exact version and checked against its
+    /// digest; `None` when it is no longer kept.
+    async fn evidence_bytes(&self, image: &ImageEvidence) -> Result<Option<Vec<u8>>> {
+        let artifacts = self
+            .artifacts
+            .as_ref()
+            .ok_or_else(|| SurfaceError::unsupported("showing a decision's images"))?;
+        crate::evidence::load_image(artifacts.as_ref(), image).await
     }
 
     fn approvals(&self) -> Result<&Arc<dyn ApprovalService>> {
@@ -643,6 +731,337 @@ impl Source for LocalSource {
 
     async fn resolved(&self, request: &ApprovalRequest) -> Result<()> {
         self.resume_decided(request, None).await
+    }
+
+    async fn evidence_kept(&self, request: &ApprovalRequest) -> Vec<EvidenceKept> {
+        let images = crate::evidence::images(request);
+        let Some(artifacts) = &self.artifacts else {
+            return vec![EvidenceKept::Unknown; images.len()];
+        };
+        let mut kept = Vec::with_capacity(images.len());
+        for image in images {
+            let at = &image.artifact;
+            let versions = artifacts
+                .versions(VersionsRequest {
+                    app_name: at.app_name.clone(),
+                    user_id: at.user_id.clone(),
+                    session_id: at.session_id.clone(),
+                    file_name: at.file_name.clone(),
+                })
+                .await;
+            kept.push(match versions {
+                Ok(found) if found.versions.contains(&at.version) => EvidenceKept::Kept,
+                Ok(_) => EvidenceKept::Deleted,
+                Err(error) if error.is_not_found() => EvidenceKept::Deleted,
+                Err(error) => {
+                    tracing::warn!(error = %error, decision.id = %request.id, "an evidence image's state could not be read");
+                    EvidenceKept::Unknown
+                }
+            });
+        }
+        kept
+    }
+
+    async fn vision_answers(&self, user: &str, session: &str) -> Result<Vec<serde_json::Value>> {
+        let Some(artifacts) = &self.artifacts else { return Ok(Vec::new()) };
+        let names = artifacts
+            .list(adk_artifact::ListRequest {
+                app_name: self.app.clone(),
+                user_id: user.to_string(),
+                session_id: session.to_string(),
+            })
+            .await?
+            .file_names;
+        let mut records = Vec::new();
+        for name in names.iter().filter(|name| {
+            name.starts_with(crate::viewer::VISION_ANSWER_PREFIX) && name.ends_with(".json")
+        }) {
+            let loaded = artifacts
+                .load(adk_artifact::LoadRequest {
+                    app_name: self.app.clone(),
+                    user_id: user.to_string(),
+                    session_id: session.to_string(),
+                    file_name: name.clone(),
+                    version: None,
+                })
+                .await?;
+            let data = match loaded.part {
+                adk_core::Part::InlineData { data, .. } => data,
+                adk_core::Part::Text { text } => text.into_bytes(),
+                _ => continue,
+            };
+            match serde_json::from_slice::<serde_json::Value>(&data) {
+                Ok(record) => records.push(record),
+                Err(error) => {
+                    tracing::warn!(error = %error, artifact.name = %name, "an answer record is not JSON; it is not shown");
+                }
+            }
+        }
+        records.sort_by(|a, b| {
+            let at = |record: &serde_json::Value| {
+                record.get("at").and_then(serde_json::Value::as_str).unwrap_or_default().to_string()
+            };
+            at(a).cmp(&at(b))
+        });
+        Ok(records)
+    }
+
+    fn keeps_vision_answers(&self) -> bool {
+        self.artifacts.is_some()
+    }
+
+    async fn vision_image(
+        &self,
+        user: &str,
+        session: &str,
+        digest: &str,
+    ) -> Result<Option<EvidenceBytes>> {
+        let artifacts = self
+            .artifacts
+            .as_ref()
+            .ok_or_else(|| SurfaceError::unsupported("showing a session's images"))?;
+        let Some(hex) = digest.strip_prefix("sha256:") else {
+            // An image the session holds by name, as a vision tool was called with it.
+            let loaded = artifacts
+                .load(adk_artifact::LoadRequest {
+                    app_name: self.app.clone(),
+                    user_id: user.to_string(),
+                    session_id: session.to_string(),
+                    file_name: digest.to_string(),
+                    version: None,
+                })
+                .await;
+            return match loaded {
+                Ok(loaded) => Ok(match loaded.part {
+                    adk_core::Part::InlineData { mime_type, data, .. }
+                        if mime_type.starts_with("image/") =>
+                    {
+                        Some(EvidenceBytes { mime_type, bytes: data })
+                    }
+                    _ => None,
+                }),
+                Err(error) if error.is_not_found() => Ok(None),
+                Err(error) => Err(error.into()),
+            };
+        };
+        if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Ok(None);
+        }
+        for (extension, mime) in [
+            ("png", "image/png"),
+            ("jpeg", "image/jpeg"),
+            ("webp", "image/webp"),
+            ("gif", "image/gif"),
+        ] {
+            let loaded = artifacts
+                .load(adk_artifact::LoadRequest {
+                    app_name: self.app.clone(),
+                    user_id: user.to_string(),
+                    session_id: session.to_string(),
+                    file_name: format!("vision-{hex}.{extension}"),
+                    version: None,
+                })
+                .await;
+            let part = match loaded {
+                Ok(loaded) => loaded.part,
+                Err(error) if error.is_not_found() => continue,
+                Err(error) => return Err(error.into()),
+            };
+            let adk_core::Part::InlineData { data, .. } = part else { continue };
+            if crate::evidence::digest_of(&data) != digest {
+                tracing::warn!(image.digest = %digest, "a session image does not match its digest; it is not shown");
+                return Err(SurfaceError::Invalid(
+                    "the stored image does not match its digest; it is not shown".into(),
+                ));
+            }
+            return Ok(Some(EvidenceBytes { mime_type: mime.to_string(), bytes: data }));
+        }
+        Ok(None)
+    }
+
+    async fn example_files(&self, _user: &str) -> Result<Option<Vec<String>>> {
+        let Some(root) = &self.eval_fixtures else { return Ok(None) };
+        let mut files = Vec::new();
+        let mut pending = vec![root.clone()];
+        while let Some(dir) = pending.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    // Fixture images live beside their files; four levels is plenty.
+                    if path.strip_prefix(root).map_or(0, |p| p.components().count()) < 4 {
+                        pending.push(path);
+                    }
+                } else if let Ok(relative) = path.strip_prefix(root) {
+                    let relative = relative.to_string_lossy().replace('\\', "/");
+                    if relative.ends_with(".test.json") {
+                        files.push(relative);
+                    }
+                }
+            }
+        }
+        files.sort();
+        Ok(Some(files))
+    }
+
+    async fn example_set(&self, _user: &str, file: &str) -> Result<Option<serde_json::Value>> {
+        let root = self
+            .eval_fixtures
+            .as_ref()
+            .ok_or_else(|| SurfaceError::unsupported("saving labelled examples"))?;
+        crate::viewer::check_file(file).map_err(SurfaceError::Invalid)?;
+        match std::fs::read(root.join(file)) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(|error| {
+                SurfaceError::Invalid(format!("{file} is not an eval set: {error}"))
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(SurfaceError::Invalid(format!("{file} could not be read: {error}"))),
+        }
+    }
+
+    async fn save_example(
+        &self,
+        _caller: &Caller,
+        file: &str,
+        set: serde_json::Value,
+        image_path: &str,
+        image: &EvidenceBytes,
+    ) -> Result<()> {
+        let root = self
+            .eval_fixtures
+            .as_ref()
+            .ok_or_else(|| SurfaceError::unsupported("saving labelled examples"))?;
+        crate::viewer::check_file(file).map_err(SurfaceError::Invalid)?;
+        let target = root.join(file);
+        let folder = target.parent().unwrap_or(root).to_path_buf();
+        let picture = folder.join(image_path);
+        let io = |what: &str, error: std::io::Error| {
+            SurfaceError::Invalid(format!("{what} could not be written: {error}"))
+        };
+        if let Some(parent) = picture.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| io("the fixtures folder", e))?;
+        }
+        if !picture.exists() {
+            std::fs::write(&picture, &image.bytes).map_err(|e| io(image_path, e))?;
+        }
+        let text = serde_json::to_vec_pretty(&set)
+            .map_err(|error| SurfaceError::Invalid(format!("the eval set: {error}")))?;
+        // Written beside and renamed, so a reader never sees half a file.
+        let partial = target.with_extension("json.partial");
+        std::fs::write(&partial, text).map_err(|e| io(file, e))?;
+        std::fs::rename(&partial, &target).map_err(|e| io(file, e))?;
+        Ok(())
+    }
+
+    async fn evidence_image(
+        &self,
+        request: &ApprovalRequest,
+        index: usize,
+    ) -> Result<Option<EvidenceBytes>> {
+        let image = *crate::evidence::images(request)
+            .get(index)
+            .ok_or_else(|| SurfaceError::not_found(format!("image {index} of this decision")))?;
+        let Some(bytes) = self.evidence_bytes(image).await? else { return Ok(None) };
+        Ok(Some(EvidenceBytes { mime_type: image.mime_type.clone(), bytes }))
+    }
+
+    fn holds_again(&self) -> bool {
+        self.approvals.is_some()
+            && self.artifacts.is_some()
+            && (self.kernel.is_some() || self.harness.is_some())
+    }
+
+    async fn hold_again(
+        &self,
+        caller: &Caller,
+        request: &ApprovalRequest,
+        version: u64,
+        args: serde_json::Value,
+        why: &str,
+    ) -> Result<()> {
+        if !self.holds_again() {
+            return Err(SurfaceError::unsupported("holding a call again"));
+        }
+        // Closed first, at the version the person saw, so the old call can never run as well.
+        let closed = ApprovalDecision::reject(caller.subject.clone(), why)
+            .with_groups(caller.groups.clone());
+        self.approvals()?.decide(&request.id, version, closed).await?;
+        let call = RequestedCall::new(
+            request.tool_name.clone(),
+            args,
+            caller.subject.clone(),
+            RequestedVia::form(format!("decision:{}", request.id), version, HELD_AGAIN_ACTION),
+        );
+        self.request_call(caller, &request.scope.session_id, "", call).await
+    }
+
+    #[cfg(feature = "web")]
+    async fn change_image(
+        &self,
+        caller: &Caller,
+        request: &ApprovalRequest,
+        version: u64,
+        change: &crate::evidence::ImageChange,
+    ) -> Result<crate::evidence::ImageChanged> {
+        let artifacts = self
+            .artifacts
+            .as_ref()
+            .ok_or_else(|| SurfaceError::unsupported("changing an image without its artifacts"))?;
+        let image =
+            *crate::evidence::images(request).get(change.image as usize).ok_or_else(|| {
+                SurfaceError::not_found(format!("image {} of this decision", change.image))
+            })?;
+        if image.mime_type != "image/png" {
+            return Err(SurfaceError::Invalid(format!(
+                "only a PNG image can be changed here; this one is {}",
+                image.mime_type
+            )));
+        }
+        let bytes = self
+            .evidence_bytes(image)
+            .await?
+            .ok_or_else(|| SurfaceError::Invalid("the image is no longer kept".into()))?;
+        let (changed, width, height) =
+            crate::evidence::changed_png(&bytes, change).map_err(SurfaceError::Invalid)?;
+        let to = crate::evidence::digest_of(&changed);
+        // Kept beside the original under the name the vision tools find an image by digest.
+        let hex = to.trim_start_matches("sha256:");
+        let at = &image.artifact;
+        artifacts
+            .save(adk_artifact::SaveRequest {
+                app_name: at.app_name.clone(),
+                user_id: at.user_id.clone(),
+                session_id: at.session_id.clone(),
+                file_name: format!("vision-{hex}.png"),
+                part: adk_core::Part::InlineData {
+                    mime_type: "image/png".into(),
+                    data: changed,
+                    uri: None,
+                    annotations: None,
+                },
+                version: None,
+            })
+            .await?;
+        let mut args = request.args_redacted.clone();
+        if let Some(map) = args.as_object_mut() {
+            // The new image is already cut to the crop the call asked for.
+            map.remove("region");
+            map.insert("image".into(), serde_json::Value::String(to.clone()));
+        }
+        self.hold_again(caller, request, version, args, IMAGE_CHANGED_REASON).await?;
+        Ok(crate::evidence::ImageChanged { from: image.digest.clone(), to, width, height })
+    }
+
+    async fn run_ended(&self, request: &ApprovalRequest) -> Option<DateTime<Utc>> {
+        let (runs, run_id) = (self.runs.as_ref()?, request.run_id.as_ref()?);
+        match runs.get(run_id).await {
+            Ok(Some(run)) if run.state.is_terminal() => Some(run.updated_at),
+            Ok(_) => None,
+            Err(error) => {
+                tracing::warn!(error = %error, decision.id = %request.id, "the run waiting on a decision could not be read");
+                None
+            }
+        }
     }
 
     async fn resolved_by(&self, caller: &Caller, request: &ApprovalRequest) -> Result<()> {

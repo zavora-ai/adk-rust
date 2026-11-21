@@ -265,6 +265,7 @@ pub struct TelegramAdapterBuilder {
     answers: Option<Arc<dyn AnswerLog>>,
     audit: Option<AuditTrail>,
     card_hints: Vec<Arc<dyn crate::hints::CardHints>>,
+    artifacts: Option<Arc<dyn adk_artifact::ArtifactService>>,
 }
 
 impl fmt::Debug for TelegramAdapterBuilder {
@@ -361,6 +362,17 @@ impl TelegramAdapterBuilder {
         self
     }
 
+    /// The artifact service a held call's images live in (spec 3.7 §8.2, board choice A17): a
+    /// card for a call with an image attaches the exact image that would leave, its digest
+    /// checked, and offers Allow once beside it. Without it — or when the image cannot be
+    /// read — the card names the digest, links to the home and offers Deny only. Needs
+    /// [`approvals`](Self::approvals).
+    #[must_use]
+    pub fn artifacts(mut self, artifacts: Arc<dyn adk_artifact::ArtifactService>) -> Self {
+        self.artifacts = Some(artifacts);
+        self
+    }
+
     /// The adapter.
     ///
     /// # Errors
@@ -378,6 +390,7 @@ impl TelegramAdapterBuilder {
                 answers: self.answers,
                 audit: self.audit,
                 card_hints: self.card_hints,
+                artifacts: self.artifacts,
             }),
         })
     }
@@ -431,6 +444,7 @@ struct Inner {
     answers: Option<Arc<dyn AnswerLog>>,
     audit: Option<AuditTrail>,
     card_hints: Vec<Arc<dyn crate::hints::CardHints>>,
+    artifacts: Option<Arc<dyn adk_artifact::ArtifactService>>,
 }
 
 impl fmt::Debug for TelegramAdapter {
@@ -454,6 +468,7 @@ impl TelegramAdapter {
             answers: None,
             audit: None,
             card_hints: Vec::new(),
+            artifacts: None,
         }
     }
 
@@ -874,6 +889,28 @@ impl ChannelSink for TelegramAdapter {
                 }
                 if hint.money == Some(true) && !card.adds_agent {
                     card.answers.clear();
+                }
+            }
+            // A call with an image: the exact image that would leave goes first, and Allow
+            // once only beside it (spec 3.7 §8.2, board choice A17).
+            let artifacts = self.inner.artifacts.as_deref();
+            if let Some(image) =
+                wire::chat_images(request, artifacts, &mut card, &mut heading).await
+            {
+                let sent =
+                    self.inner.api.send_photo(&chat_id(thread), &image, REQUEST_TIMEOUT).await;
+                if let Err(error) = sent {
+                    tracing::warn!(error = %error, "a card's image could not be sent; the card links to the home");
+                    card.answers.retain(|answer| *answer != ChannelAnswer::AllowOnce);
+                    let line = format!(
+                        "{} {}",
+                        crate::words::SHOW_THE_IMAGE_IN_THE_HOME,
+                        crate::evidence::short_digest(request.evidence[0].digest())
+                    );
+                    heading.detail = Some(match heading.detail.take() {
+                        Some(detail) => format!("{detail}\n{line}"),
+                        None => line,
+                    });
                 }
             }
         }

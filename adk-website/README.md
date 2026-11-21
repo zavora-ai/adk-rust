@@ -4,6 +4,10 @@ A prebuilt AWP 2.0 website for ADK-Rust (spec 3.5 Part C). It onboards its owner
 or migrates itself, passes its own launch gate, and then works towards the owner's goals with
 a team of eight agents inside the authority, budget and guardrails of its charter.
 
+[![Crates.io](https://img.shields.io/crates/v/adk-website.svg)](https://crates.io/crates/adk-website)
+[![Documentation](https://docs.rs/adk-website/badge.svg)](https://docs.rs/adk-website)
+[![License](https://img.shields.io/crates/l/adk-website.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
+
 > **Note:** `adk-website` is **Experimental** (see `STABILITY.md`). Its API may change without
 > notice while spec 3.5 lands.
 
@@ -113,6 +117,13 @@ async fn start() -> adk_core::Result<()> {
 ```
 
 ## The binary
+
+Install the `adk-website` binary from crates.io, or from a clone of the repository:
+
+```bash
+cargo install adk-website
+cargo install --path adk-website
+```
 
 | Command | Does |
 |---------|------|

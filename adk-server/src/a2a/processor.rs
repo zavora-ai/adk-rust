@@ -83,8 +83,12 @@ impl EventProcessor {
             return Ok(None);
         }
 
-        // Convert parts
-        let parts = adk_parts_to_a2a(&content.parts, &[])?;
+        // A streamed answer's final event repeats the text already sent, so its delta is
+        // empty; an empty text part would reach the peer as a blank update.
+        let parts: Vec<_> = adk_parts_to_a2a(&content.parts, &[])?
+            .into_iter()
+            .filter(|part| !matches!(part, crate::a2a::Part::Text { text, .. } if text.is_empty()))
+            .collect();
 
         if parts.is_empty() {
             return Ok(None);

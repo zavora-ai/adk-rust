@@ -626,8 +626,15 @@ step.
    bash scripts/changelog-assemble.sh --into <version>
    ```
 
+   The dated `## [<version>] - YYYY-MM-DD` heading exists from the start of the cycle,
+   because `check-release-consistency.sh` requires the newest release heading to match the
+   workspace version. Set its date to the release day.
+
 3. In the same pull request, set the README banner to `v<version> Released!` with
    the crates.io link for the new version, and mark the roadmap version `(current)`.
+   Update `SECURITY.md`'s supported versions and the release's milestone text in
+   `STABILITY.md`. For a major release, set `SEMVER_RELEASE_TYPE` in
+   `.github/workflows/semver.yml` back to `minor` in the first pull request after the tag.
    Run the normal quality gates plus:
 
    ```bash

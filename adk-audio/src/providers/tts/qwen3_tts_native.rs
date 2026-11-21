@@ -79,7 +79,7 @@ const LANGUAGE_MAP: &[(&str, &str)] = &[
     ("it", "italian"),
 ];
 
-/// Native Qwen3-TTS provider — Candle-based, CPU/Metal/CUDA.
+/// Native Qwen3-TTS provider — Candle-based, on Metal or the CPU.
 ///
 /// # Example
 ///

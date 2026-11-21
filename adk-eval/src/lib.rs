@@ -23,6 +23,9 @@
 //!   and reports each case's pass rate, score mean and variance, and flakiness ([`multi_run`])
 //! - **Metered judging**: [`Evaluator::set_run_config`] puts every eval run and judge call
 //!   under one budget, spend ledger and kill switch; a refusal stops the evaluation
+//! - **Vision**: eval cases show the agent image fixtures pinned by digest
+//!   ([`ImageFixture`]), and [`vision`] scores regions, masks, OCR text, document fields,
+//!   detections and click targets in source pixels against each turn's expectations
 //! - **Online evaluation**: [`online::OnlineEvaluator`] judges a seeded sample of finished
 //!   production runs on a background worker, under its own budget and the kill switch, and
 //!   records the verdicts in an [`online::OnlineEvalStore`] and as `gen_ai.evaluation.result`
@@ -66,6 +69,7 @@ pub mod llm_judge;
 pub mod report;
 pub mod schema;
 pub mod scoring;
+pub mod vision;
 
 #[cfg(feature = "personas")]
 pub mod personas;
@@ -113,8 +117,11 @@ pub use llm_judge::{
 };
 pub use multi_run::{CaseRunSummary, MultiRunConfig, MultiRunReport, PASS_RATE_METRIC, ScoreStats};
 pub use report::{EvaluationReport, EvaluationResult, Failure, TestCaseResult};
-pub use schema::{EvalCase, EvalSet, IntermediateData, SessionInput, TestFile, ToolUse, Turn};
+pub use schema::{
+    EvalCase, EvalSet, ImageFixture, IntermediateData, SessionInput, TestFile, ToolUse, Turn,
+};
 pub use scoring::{ResponseScorer, ToolTrajectoryScorer};
+pub use vision::{VisionAnswer, VisionCriteria, VisionExpected, VisionScores};
 
 pub use outcome::{
     CriterionGrade, DEFAULT_OUTCOME_ITERATIONS, MAX_OUTCOME_ITERATIONS, OutcomeGrade,

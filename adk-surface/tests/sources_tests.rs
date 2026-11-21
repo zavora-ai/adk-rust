@@ -47,6 +47,7 @@ fn decide(id: &str, version: u64) -> Command {
         edited_args: None,
         reason: None,
         expanded: true,
+        evidence: Vec::new(),
     }
 }
 
@@ -198,6 +199,7 @@ async fn a_local_terminal_edits_a_call_over_the_kernel_socket() {
         edited_args: Some(json!({ "path": "final.txt", "content": "INV-2" })),
         reason: None,
         expanded: true,
+        evidence: Vec::new(),
     };
     let outcome = remote.execute(&terminal, edit).await.unwrap();
     let CommandOutcome::Answered { card: answered } = outcome else {
@@ -467,6 +469,7 @@ async fn always_allow_from_a_surface_says_what_it_covers_and_is_on_record() {
                 edited_args: None,
                 reason: None,
                 expanded: true,
+                evidence: Vec::new(),
             },
         )
         .await

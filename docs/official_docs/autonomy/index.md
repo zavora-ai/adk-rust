@@ -51,6 +51,11 @@ from the notes in `notes/` and publishes it. Replace the notes, the instruction 
 | `adk-rust`, the CLI | `cargo install adk-cli --features audit-sql` (`audit-sql` adds `adk-rust audit export`) |
 | A model API key | Any provider `cargo adk` offers; this guide uses Anthropic |
 
+`adk-rust --version` prints the CLI's version, and `cargo adk templates` lists `autonomous`
+when the installed `cargo adk` has the template; reinstall both when either is older than
+3.0.0. A CLI that rejects `--version` is older than 3.0.0; before 3.0.0 is published, install
+both from a clone ([Before 3.0.0 is published](../quickstart.md#before-300-is-published)).
+
 ## 1. Scaffold the agent
 
 ```bash
@@ -140,7 +145,9 @@ The banner follows the kernel's log lines. The kernel's home is `.adk`: its cont
 `.adk/kernel.sock`, admits only your OS user — when the project's path is too long for a
 socket, the banner names one in your temporary directory instead — and every `adk-rust`
 control command reaches it with `--home .adk` from the project directory. `cargo run -- up`
-refuses to start when any kernel store would be kept in memory.
+refuses to start when any kernel store would be kept in memory. A launcher app's `up` and
+`serve` take `--port` (default 8080) and `--host`; `adk-rust up` takes `--bind HOST:PORT`
+instead ([Kernel commands](../kernel/cli.md#adk-rust-up)).
 
 The kernel prewarms its agent as it comes up: the MCP servers the agent's first run would start
 are started, and its model connection is opened, so the first message does not wait for them
@@ -220,7 +227,7 @@ approved publish_status once; process 0803e865-8337-40cf-bbb9-32a8d4cac6dc conti
 The decision resumes the parked process at once: `publish_status` runs exactly once, the check
 passes, and the grader checks `STATUS.md` against `rubric.md`. The goal ends once every
 criterion passes; a failed criterion sends the agent back to revise with the grader's feedback,
-for at most three grading rounds ([rubric-graded goals](../harness/plan-and-goals.md#rubric-graded-goals)). `adk-rust approvals --home .adk deny ID --reason "…"` refuses it
+and a revision that publishes again waits for another decision, for at most three grading rounds ([rubric-graded goals](../harness/plan-and-goals.md#rubric-graded-goals)). `adk-rust approvals --home .adk deny ID --reason "…"` refuses it
 instead, and the agent is told why.
 
 ```text
@@ -451,7 +458,8 @@ original: `adk-rust sessions fork ID --turns N` copies a session up to a turn, a
 after it. Both refuse while a turn runs on the session or a call waits for a decision, and both
 are recorded in the audit log ([Fork, Rewind, and Edit History](../sessions/history.md)).
 
-Verify the signed audit log:
+Verify the signed audit log. Here the kernel was stopped with Ctrl-C after one goal and its
+approval:
 
 ```bash
 adk-rust audit export --database-url sqlite://.adk/state.db --log-id ops-agent --out audit.jsonl
@@ -461,18 +469,25 @@ adk-rust audit verify audit.jsonl --key "$(cat .adk/audit.vkey)"
 ```text
 log:                  ops-agent
 origin:               adk-audit/ops-agent
-records:              244 (0 pruned)
-checkpoints verified: 4
-signed through:       204
-root:                 d96168f80119e79af0e235beaad0d9e5ac65d57b825677174e06010fc9594d79
-unsigned tail:        40
+records:              46 (0 pruned)
+checkpoints verified: 1
+signed through:       46
+root:                 e07522cc4d2630b9b2caf970fbeb14279f3b127a02e3c85987145c19ea58ae8a
+unsigned tail:        0
 result:               VALID
 ```
+
+The log is signed in checkpoints: every 256 records, on the first record 60 seconds after the
+last checkpoint, and when `up` stops after Ctrl-C or `SIGTERM`. Records after the last
+checkpoint are the `unsigned tail`. Until a checkpoint signs any record, `verify` reports them
+`unanchored` and the result `INVALID`, so a log read while a short-lived kernel still runs, or
+after `kill -9`, verifies once the next `up` stops cleanly
+([checkpoints](../security/audit-log.md#checkpoints-and-keys)).
 
 An unattended agent has no one reading its answers. [Online evaluation](../evaluation/online-evaluation.md)
 judges a seeded sample of its finished runs on a background worker — rubrics, safety,
 hallucination, tool-call efficiency and whole-session metrics — under a judge budget of its own
-and the same kill switch, and records failed runs where a dashboard or the self-improvement loop
+and the same kill switch, and records failed runs where a dashboard or your own tooling
 reads them. Install its plugin on the runner you register with `KernelBuilder::agent`.
 
 ## 9. Delegate in the background

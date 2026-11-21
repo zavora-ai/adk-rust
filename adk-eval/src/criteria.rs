@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::vision::VisionCriteria;
+
 /// Collection of evaluation criteria
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EvaluationCriteria {
@@ -52,6 +54,12 @@ pub struct EvaluationCriteria {
     /// Detects factual inaccuracies or made-up information
     #[serde(default)]
     pub hallucination_score: Option<f64>,
+
+    /// Vision scores — regions, masks, OCR text, fields, detections and click targets —
+    /// checked against each turn's [`expected_vision`](crate::Turn::expected_vision); see
+    /// [`vision`](crate::vision).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<VisionCriteria>,
 
     /// Criteria your own code scores; carried with the configuration for it.
     ///
@@ -110,6 +118,26 @@ impl EvaluationCriteria {
         self
     }
 
+    /// Add vision thresholds.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_eval::EvaluationCriteria;
+    /// use adk_eval::vision::VisionCriteria;
+    ///
+    /// let criteria = EvaluationCriteria::default().with_vision(VisionCriteria {
+    ///     region_iou: Some(0.75),
+    ///     ocr_char_accuracy: Some(0.98),
+    ///     ..Default::default()
+    /// });
+    /// assert!(criteria.has_criteria());
+    /// ```
+    pub fn with_vision(mut self, vision: VisionCriteria) -> Self {
+        self.vision = Some(vision);
+        self
+    }
+
     /// Whether any criterion [`Evaluator`](crate::Evaluator) scores has a threshold.
     ///
     /// [`custom`](Self::custom) criteria are not counted, since the evaluator does not score
@@ -140,6 +168,7 @@ impl EvaluationCriteria {
             || self.rubric_quality_score.is_some()
             || self.safety_score.is_some()
             || self.hallucination_score.is_some()
+            || self.vision.as_ref().is_some_and(VisionCriteria::has_thresholds)
     }
 }
 

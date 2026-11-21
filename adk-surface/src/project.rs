@@ -396,6 +396,7 @@ impl Projector {
                     .collect(),
                 always_label: None,
                 adds_agent: true,
+                image: None,
             };
         }
         // Edit replaces the call's arguments with what the surface sends back, so it is
@@ -428,6 +429,7 @@ impl Projector {
                 .collect(),
             always_label: always_label.filter(|_| !take_over && !hint.removes_always()),
             adds_agent: false,
+            image: None,
         }
     }
 
@@ -617,6 +619,8 @@ impl Projector {
             // Like the summary, never on a chat card (S-I5).
             detail: hint.detail.clone().filter(|_| !chat),
             elicitation,
+            media: None,
+            parked: None,
         };
         // Every line of the card fits: nothing a name or a hint carries can push the call and
         // its answers out of sight, or pass a long text off as the home's own words.
@@ -924,6 +928,13 @@ impl Projector {
                         } else {
                             words::FAILED.to_string()
                         };
+                        // A perception call's answer opens in the annotated viewer.
+                        let image = (ok
+                            && crate::viewer::answers_about_image(&function_response.name))
+                        .then(|| function_response.response.get("image").and_then(Value::as_str))
+                        .flatten()
+                        .filter(|digest| digest.starts_with("sha256:"))
+                        .map(str::to_string);
                         // A command or code that ran: what it wrote, and how it exited.
                         match command_run(&function_response.name, &function_response.response) {
                             Some(run) => {
@@ -944,6 +955,7 @@ impl Projector {
                                 call_id: id.clone(),
                                 ok,
                                 text,
+                                image,
                             }),
                         }
                     }

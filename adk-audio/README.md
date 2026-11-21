@@ -248,7 +248,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Qwen3-TTS
 
-Candle-based TTS for 10 languages with predefined speakers, on CPU, Metal, or CUDA. Needs the
+Candle-based TTS for 10 languages with predefined speakers. On macOS it runs on Metal when the
+build's `candle-core` has Metal support, and on the CPU otherwise; elsewhere on the CPU. Needs the
 `qwen3-tts` feature.
 
 ```rust,ignore

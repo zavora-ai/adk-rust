@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("ANTHROPIC_API_KEY")?,
         "claude-sonnet-5-5",
     ))?;
-    let gemini = GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?;
+    let gemini = GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.8-flash")?;
 
     let model = FallbackLlm::builder(Arc::new(claude))
         .fallback(Arc::new(gemini))
@@ -111,7 +111,7 @@ refusal on one provider to an answer on another shows two ledger entries:
 | Attempt | Outcome | Ledger key | Committed |
 |---------|---------|------------|-----------|
 | `gpt-6.1-sol` | Refusal, billed | `org=acme agent=urn:adk:agent:acme/researcher vendor=openai` | 1,000 micro-USD |
-| `gemini-3.7-flash` | 503, released | `vendor=gemini` | 0 |
+| `gemini-3.8-flash` | 503, released | `vendor=gemini` | 0 |
 | `claude-haiku-5-5` | Answer | `vendor=anthropic` | 2,000 micro-USD |
 
 Wrap the chain last: a wrapper around a `FallbackLlm` that does not forward

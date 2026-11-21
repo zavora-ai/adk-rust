@@ -69,6 +69,7 @@ fn case(id: &str, description: &str, prompt: &str, expected: &[&str]) -> EvalCas
                     .collect(),
                 intermediate_responses: Vec::new(),
             }),
+            expected_vision: None,
         }],
         session_input: Default::default(),
         tags: vec!["harness".to_string(), "spec-3.1".to_string()],

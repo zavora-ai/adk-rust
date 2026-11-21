@@ -102,19 +102,25 @@ pub struct MessageSendConfig {
     pub history_length: Option<u32>,
 }
 
-/// Parameters for tasks/get method
+/// Parameters for tasks/get method (A2A 0.3 `TaskQueryParams`).
+///
+/// The task is named by `id`, as the A2A 0.3 specification has it; `taskId`, the only
+/// name earlier adk-server releases read, is accepted too.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TasksGetParams {
-    #[serde(rename = "taskId")]
+    #[serde(rename = "id", alias = "taskId")]
     pub task_id: String,
     #[serde(skip_serializing_if = "Option::is_none", rename = "historyLength")]
     pub history_length: Option<u32>,
 }
 
-/// Parameters for tasks/cancel method
+/// Parameters for tasks/cancel method (A2A 0.3 `TaskIdParams`).
+///
+/// The task is named by `id`, as the A2A 0.3 specification has it; `taskId`, the only
+/// name earlier adk-server releases read, is accepted too.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TasksCancelParams {
-    #[serde(rename = "taskId")]
+    #[serde(rename = "id", alias = "taskId")]
     pub task_id: String,
 }
 

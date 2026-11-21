@@ -28,6 +28,24 @@
 //! | [`redirects`] | Redirects in each host's format | §7.8 |
 //! | `migrate` (feature `migrate`) | Sources, domain claim, sanitiser, feature mapping, freeze, parity, probes, archive | §7.8, §7.8.1, §7.18 |
 //!
+//! ## Features
+//!
+//! No feature is on by default; the default build carries the content model, the built-in
+//! generator, the launch gate, releases, the site log and `DirectoryHost`.
+//!
+//! | Feature | Enables |
+//! |---------|---------|
+//! | `migrate` | The `migrate` module: sources, domain claim, sanitiser, feature mapping, freeze, parity, probes and the encrypted legacy archive |
+//! | `verify` | `gate::PreviewVerification`: the launch gate runs `adk-awp`'s `awp verify` against the preview |
+//! | `host-s3` | `host::s3`: any S3-compatible store (SigV4) under `ObjectStoreHost`, and CloudFront invalidation |
+//! | `host-gcs` | `host::gcs`: Google Cloud Storage under `ObjectStoreHost` |
+//! | `host-azure` | `host::azure`: Azure Blob Storage and its `$web` static website |
+//! | `host-cloudflare` | `host::cloudflare`: R2 behind a pointer-following Worker, and cache purge; implies `host-s3` |
+//! | `host-netlify` | `host::netlify`: file-digest deploys, drafts for previews |
+//! | `host-github-pages` | `host::github_pages`: one commit per release pushed to a pages branch with `git` |
+//! | `host-rsync` | `host::rsync`: release directories over SSH, switched by a symlink |
+//! | `gen-zola`, `gen-hugo`, `gen-astro`, `gen-build-awesome` | `generator::external::ExternalGenerator` for Zola, Hugo, Astro and Build Awesome, run in `adk-sandbox` with no network |
+//!
 //! # Example
 //!
 //! Build a site, release it into a signed log and publish it to a directory:

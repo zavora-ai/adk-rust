@@ -25,6 +25,18 @@
 //! | [`ScriptedLlm`] | Test double that answers each call with the next scripted reply and records every request | always |
 //! | [`MockLlm`] | Test double that replays the same responses on every call | always |
 //!
+//! Transport and option features add to a provider:
+//!
+//! | Feature | Enables |
+//! |---------|---------|
+//! | `gemini-interactions` | `GeminiModel::use_interactions_api`, the Gemini Interactions API transport (Beta) |
+//! | `openai-ws` | The Responses API WebSocket transport (`WsTransport`) |
+//! | `openai-conversations` | The Conversations API client (`ConversationsClient`) |
+//! | `openai-responses-full` | `openai-ws` and `openai-conversations` |
+//! | `muse-responses` | `MuseApi::Responses` through the Open Responses engine; implies `muse` and `openai` |
+//! | `muse-realtime` | `MuseRealtimeAsrClient`, live transcription over Meta's realtime WebSocket; implies `muse` |
+//! | `all-providers` | `gemini`, `openai`, `anthropic`, `deepseek`, `ollama`, `groq`, `muse`, `openrouter`, `opencode`, `bedrock` and `azure-ai` |
+//!
 //! [`catalog`] holds the recommended model per provider and the lifecycle of known model IDs;
 //! [`pricing::PricingCatalog`] prices usage for every provider.
 //!

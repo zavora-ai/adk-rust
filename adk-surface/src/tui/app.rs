@@ -105,6 +105,9 @@ pub(crate) enum Effect {
     Unqueue(String),
     /// Read "While you were away" again now: Today was opened.
     Briefing,
+    /// Open this web address in the person's browser: `o` on a decision with images
+    /// (spec 3.7 §8.2).
+    Open(String),
     /// Run the slash command `name` an embedder added, with `args`; its output is the
     /// `serial`-th the terminal shows (spec 3.3 §5.2).
     RunCommand {
@@ -349,6 +352,8 @@ pub(crate) struct App {
     pub box_scroll: usize,
     pub model: Option<String>,
     pub place: Option<String>,
+    /// The web home's address, which a decision with images links to (spec 3.7 §8.2).
+    pub home: Option<String>,
     pub app_name: String,
     /// The last keystroke into the message box.
     last_typed: Option<Instant>,
@@ -439,6 +444,7 @@ impl App {
             box_scroll: 0,
             model: None,
             place: None,
+            home: None,
             app_name: app_name.to_string(),
             last_typed: None,
             last_key: None,
@@ -893,6 +899,17 @@ impl App {
                     self.decided_notice(&card, &decided.text);
                 }
             }
+            // The call was held again with the person's change: the old card goes, and the call
+            // with the new image arrives through the feed (spec 3.7 V-I5).
+            // The terminal changes no image: a preview never reaches it.
+            CommandOutcome::ImagePreview { .. } => {}
+            CommandOutcome::HeldAgain { card, .. } => {
+                self.cards.retain(|open| open.card.id != card.id);
+                self.refocus(now);
+                if let Some(decided) = card.decided.clone() {
+                    self.decided_notice(&card, &decided.text);
+                }
+            }
             CommandOutcome::AlreadyDecided { decided, card } => {
                 self.cards.retain(|open| open.card.id != card.id);
                 self.refocus(now);
@@ -1334,8 +1351,11 @@ impl App {
         // `c` is **Change it first** on a suggested agent's card (spec 3.3 §8.2).
         let changes_first =
             c == 'c' && self.cards.first().is_some_and(|open| open.card.adds_agent.is_some());
+        // `o` opens a decision's image in the home (spec 3.7 §8.2, board choice A16).
+        let opens_image =
+            c == 'o' && self.cards.first().is_some_and(|open| open.card.media.is_some());
         if key.kind == KeyEventKind::Press
-            && (matches!(c, 'y' | 'a' | 'e' | 'n' | '?') || changes_first)
+            && (matches!(c, 'y' | 'a' | 'e' | 'n' | '?') || changes_first || opens_image)
         {
             if self.keys_answer(now) {
                 if self.burst_guard {
@@ -1440,6 +1460,16 @@ impl App {
             open.details = !open.details;
             return Vec::new();
         }
+        if c == 'o' {
+            let path = crate::evidence::decision_path(&open.card.id);
+            return match &self.home {
+                Some(home) => vec![Effect::Open(format!("{home}{path}"))],
+                None => {
+                    self.notice(format!("Open {path} in the home to see the image."), Tone::Info);
+                    Vec::new()
+                }
+            };
+        }
         // **Change it first**: the form filled in with the suggestion; saving it adds the
         // agent by hand and ends the suggestion (spec 3.3 §5.7).
         if c == 'c' {
@@ -1497,6 +1527,7 @@ impl App {
             return Vec::new();
         }
         let (id, version) = (card.id.clone(), card.version);
+        let images = shown_images(card);
         let expanded = open.details || !cut_short;
         match answer {
             Answer::Edit => {
@@ -1519,6 +1550,7 @@ impl App {
                     edited_args: None,
                     reason: None,
                     expanded,
+                    evidence: images,
                 })]
             }
         }
@@ -1530,10 +1562,11 @@ impl App {
         // key text.
         match self.input.clone() {
             Input::EditArgs { id, version } => {
-                if !self.cards.iter().any(|open| open.card.id == id) {
+                let Some(open) = self.cards.iter().find(|open| open.card.id == id) else {
                     self.answered_elsewhere(&id);
                     return Vec::new();
-                }
+                };
+                let evidence = shown_images(&open.card);
                 let edited: Value = match serde_json::from_str(&self.composer.text) {
                     Ok(value) => value,
                     Err(error) => {
@@ -1552,6 +1585,7 @@ impl App {
                     edited_args: Some(edited),
                     reason: None,
                     expanded: true,
+                    evidence,
                 };
                 self.input = Input::Message;
                 self.composer.take();
@@ -1572,6 +1606,7 @@ impl App {
                     edited_args: None,
                     reason: (!reason.is_empty()).then_some(reason),
                     expanded,
+                    evidence: Vec::new(),
                 };
                 self.input = Input::Message;
                 vec![Effect::Execute(command)]
@@ -1830,4 +1865,13 @@ pub(crate) fn named_decisions(entry: &FeedEntry) -> impl Iterator<Item = &str> {
         ThreadItem::Decision { decision_id: Some(id), .. } => Some(id.as_str()),
         _ => None,
     })
+}
+
+/// The digests of the images a card shows, which an answer that lets its call run names
+/// (spec 3.7 §8.2).
+fn shown_images(card: &DecisionCard) -> Vec<String> {
+    card.media
+        .as_ref()
+        .map(|media| media.images.iter().map(|image| image.digest.clone()).collect())
+        .unwrap_or_default()
 }

@@ -96,6 +96,10 @@ impl AuditRecorder for EdgeMeter {
         }
         Ok(())
     }
+
+    async fn seal(&self) -> Result<()> {
+        self.inner.seal().await
+    }
 }
 
 /// Agent search at the edge as the `agents` KPI source (spec 3.5 §7.12): the counts

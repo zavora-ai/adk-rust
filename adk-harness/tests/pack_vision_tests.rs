@@ -8,6 +8,15 @@
 //! word — which report only what the pixels they are handed still show, so a covered word or
 //! face is not found again. The live run asks `claude-sonnet-5-5` through a recording proxy;
 //! its key comes from `ANTHROPIC_API_KEY` or the workspace `.env`.
+//!
+//! With feature `vision-local` the pack's default redactors — RF-DETR Nano and PP-OCRv6 —
+//! replace the doubles, and the bytes the provider receives are checked by the same real
+//! backends. Those runs need the weights:
+//!
+//! ```text
+//! HF_HUB_CACHE=/path/to/models cargo nextest run -p adk-harness --features vision-local \
+//!     --test integration pack_vision_tests::local --run-ignored only --no-capture
+//! ```
 
 #![cfg(feature = "vision")]
 
@@ -315,30 +324,7 @@ struct Desk {
 }
 
 async fn desk(model: Arc<dyn Llm>, provider: Arc<dyn Llm>, mode: HarnessMode) -> Desk {
-    let dir = tempfile::tempdir().unwrap();
     let layout = layout();
-    let artifacts = Arc::new(InMemoryArtifactService::new());
-    artifacts
-        .save(SaveRequest {
-            app_name: APP.into(),
-            user_id: USER.into(),
-            session_id: SESSION.into(),
-            file_name: CARD.into(),
-            part: Part::InlineData {
-                mime_type: "image/png".into(),
-                data: card_png(),
-                uri: None,
-                annotations: None,
-            },
-            version: None,
-        })
-        .await
-        .unwrap();
-    let proxy = Arc::new(RecordingProxy::default());
-    let describer = Arc::new(ClaudeDescriber::new(Arc::new(Recorded {
-        inner: provider,
-        proxy: proxy.clone(),
-    })));
     let on_device =
         |id: &str| BackendDescriptor::new(id, Locality::InProcess, CoordFrame::SentPixels);
     let people = Arc::new(LayoutPersonDetector {
@@ -347,20 +333,62 @@ async fn desk(model: Arc<dyn Llm>, provider: Arc<dyn Llm>, mode: HarnessMode) ->
     });
     let reader =
         Arc::new(LayoutReader { descriptor: on_device("pp-ocrv6"), layout: layout.clone() });
+    desk_with(model, provider, mode, RULES, &[(CARD, card_png())], move |pack| {
+        pack.redactor(Arc::new(PersonRedactor::new(people)))
+            .redactor(Arc::new(PersonalTextRedactor::new(reader).with_labelled_fields(["Name"])))
+    })
+    .await
+}
+
+/// A harness desk whose session holds `images` as artifacts, its vision pack under `rules`
+/// and finished by `pack`.
+async fn desk_with(
+    model: Arc<dyn Llm>,
+    provider: Arc<dyn Llm>,
+    mode: HarnessMode,
+    rules: &str,
+    images: &[(&str, Vec<u8>)],
+    pack: impl FnOnce(VisionPack) -> VisionPack,
+) -> Desk {
+    let dir = tempfile::tempdir().unwrap();
+    let artifacts = Arc::new(InMemoryArtifactService::new());
+    for (name, png) in images {
+        artifacts
+            .save(SaveRequest {
+                app_name: APP.into(),
+                user_id: USER.into(),
+                session_id: SESSION.into(),
+                file_name: (*name).into(),
+                part: Part::InlineData {
+                    mime_type: "image/png".into(),
+                    data: png.clone(),
+                    uri: None,
+                    annotations: None,
+                },
+                version: None,
+            })
+            .await
+            .unwrap();
+    }
+    let proxy = Arc::new(RecordingProxy::default());
+    let describer = Arc::new(ClaudeDescriber::new(Arc::new(Recorded {
+        inner: provider,
+        proxy: proxy.clone(),
+    })));
     let recorder = Arc::new(InMemoryEgressRecorder::new());
     let factory_describer = describer.clone();
-    let pack = VisionPack::new(MediaStore::new(artifacts.clone()), move |gate, store| {
-        VisionRuntime::builder()
-            .remote_describer(factory_describer)
-            .shared_egress_gate(gate)
-            .media_store(store)
-            .build()
-    })
-    .redactor(Arc::new(PersonRedactor::new(people)))
-    .redactor(Arc::new(PersonalTextRedactor::new(reader).with_labelled_fields(["Name"])))
-    .config(VisionConfig::from_toml_str(RULES).unwrap())
-    .recorder(recorder.clone())
-    .model_hosts(["api.anthropic.com"]);
+    let pack = pack(
+        VisionPack::new(MediaStore::new(artifacts.clone()), move |gate, store| {
+            VisionRuntime::builder()
+                .remote_describer(factory_describer)
+                .shared_egress_gate(gate)
+                .media_store(store)
+                .build()
+        })
+        .config(VisionConfig::from_toml_str(rules).unwrap())
+        .recorder(recorder.clone())
+        .model_hosts(["api.anthropic.com"]),
+    );
     let approver = Arc::new(Approver::default());
     let audit = InMemoryAuditRecorder::new();
     let agent = Arc::new(
@@ -398,7 +426,7 @@ async fn desk(model: Arc<dyn Llm>, provider: Arc<dyn Llm>, mode: HarnessMode) ->
         .open_session(&UserId::new(USER).unwrap(), Some(&SessionId::new(SESSION).unwrap()))
         .await
         .unwrap();
-    Desk { harness, approver, describer, proxy, recorder, audit, layout, _dir: dir }
+    Desk { harness, approver, describer, proxy, recorder, audit, layout: layout(), _dir: dir }
 }
 
 async fn send(desk: &Desk, text: &str) -> Vec<adk_core::Event> {
@@ -611,4 +639,332 @@ async fn live_an_identity_card_crop_reaches_claude_only_redacted() {
         "held call evidence: {} {}x{} {:?}",
         evidence.digest, evidence.width, evidence.height, evidence.caption
     );
+}
+
+/// Egress rules that release both classes to Claude without asking, so a run makes one
+/// release per call; faces and personal text are still redacted.
+const ALLOW_RULES: &str = r#"
+[egress]
+default = "ask"
+redact = ["faces", "personal_text"]
+
+[[egress.rule]]
+host = "api.anthropic.com"
+classes = ["document", "document_crop"]
+action = "allow"
+"#;
+
+/// A planner that calls `vision_describe` once per argument set, then answers.
+fn planner(calls: Vec<Value>) -> Arc<ScriptedLlm> {
+    let mut script: Vec<ScriptedResponse> = calls
+        .into_iter()
+        .map(|args| ScriptedResponse::function_call("vision_describe", args))
+        .collect();
+    script.push(ScriptedResponse::text("Done."));
+    Arc::new(ScriptedLlm::new("planner", script))
+}
+
+/// The egress refusals the run recorded.
+fn refusals(desk: &Desk) -> Vec<adk_vision::EgressRefusal> {
+    desk.recorder
+        .records()
+        .into_iter()
+        .filter_map(|record| match record {
+            adk_vision::EgressRecord::Refused(refusal) => Some(refusal),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Without a redactor for a class the rules require, the remote call is refused at the
+/// redact step and nothing reaches the provider (spec 3.7 Q1, Q3).
+#[cfg(not(feature = "vision-local"))]
+#[tokio::test]
+async fn a_pack_without_redactors_refuses_every_release() {
+    let provider = Arc::new(ScriptedLlm::new("claude-sonnet-5-5", Vec::<ScriptedResponse>::new()));
+    let desk = desk_with(
+        planner(vec![describe_args()]),
+        provider,
+        HarnessMode::Ask,
+        ALLOW_RULES,
+        &[(CARD, card_png())],
+        |pack| pack,
+    )
+    .await;
+
+    send(&desk, "What kind of document is id-card.png?").await;
+
+    assert!(desk.proxy.images.lock().unwrap().is_empty(), "nothing reached the provider");
+    assert!(desk.recorder.released().is_empty());
+    let refused = refusals(&desk);
+    assert!(!refused.is_empty(), "the refusal is recorded");
+    assert!(refused.iter().all(|r| r.step == "redact"), "{refused:?}");
+    assert!(refused[0].reason.contains("no redactor"), "{}", refused[0].reason);
+}
+
+/// The default redactors (feature `vision-local`): RF-DETR Nano for faces and PP-OCRv6 for
+/// personal text, loaded on first use; checked here by the same backends on the bytes the
+/// provider received.
+#[cfg(feature = "vision-local")]
+mod local {
+    use super::*;
+    use adk_vision::onnx::{OnnxOptions, RfDetr};
+    use adk_vision::{
+        DecodeLimits, DetectQuery, FetchConfig, InMemoryAcceptanceStore, ManifestSet, ModelFetcher,
+        PpOcrReader, PpOcrV6Size, RedactionClass, SourceImage,
+    };
+
+    /// The seeded personal strings of the card, and fragments of them.
+    const SEEDED: &[&str] =
+        &["Ana", "Wanjiru", "Diaz", "ana.diaz", "example.com", "555-201", "7788", "123-45", "6789"];
+
+    /// The score `PersonRedactor` covers from.
+    const PERSON_SCORE: f32 = 0.25;
+
+    /// A COCO 2017 validation photo, pinned by SHA-256.
+    struct Coco {
+        id: &'static str,
+        sha256: &'static str,
+    }
+
+    /// A skier, one person.
+    const SKIER: Coco = Coco {
+        id: "000000000785",
+        sha256: "83981537a7baeafbeb9c8cb67b3484dc26433f574b3685d021fa537e277e4726",
+    };
+
+    /// A baseball runner and a fielder, two people, one partly behind the other.
+    const BASEBALL: Coco = Coco {
+        id: "000000000872",
+        sha256: "c2aa138ee3a59b057a7ba6fc5a6a18e62af531aa7dab78a7bfd33c1cd7e55eb6",
+    };
+
+    fn fetcher() -> ModelFetcher {
+        ModelFetcher::new(FetchConfig::from_env(), Arc::new(InMemoryAcceptanceStore::new()))
+    }
+
+    /// The photo's pixels, cached under `ADK_VISION_COCO_DIR` (a temporary directory by
+    /// default) and checked against its digest.
+    async fn coco(photo: &Coco) -> DecodedImage {
+        let dir = std::env::var_os("ADK_VISION_COCO_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("adk-vision-coco"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{}.jpg", photo.id));
+        if !path.exists() {
+            let url = format!("http://images.cocodataset.org/val2017/{}.jpg", photo.id);
+            let bytes = reqwest::get(url).await.unwrap().bytes().await.unwrap();
+            std::fs::write(&path, &bytes).unwrap();
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(Digest::of(&bytes).to_string(), format!("sha256:{}", photo.sha256));
+        DecodedImage::decode(&bytes, &DecodeLimits::default()).unwrap().0
+    }
+
+    /// The card with `crop` of `photo` in the portrait's place, scaled nearest-neighbour.
+    fn card_with_photo(photo: &DecodedImage, crop: [u32; 4]) -> Vec<u8> {
+        let (card, _) = DecodedImage::decode(&card_png(), &DecodeLimits::default()).unwrap();
+        let (width, height) = card.size();
+        let [px0, py0, px1, py1] = layout().portrait.map(|v| v as u32);
+        let (px0, py0, px1, py1) = (px0 + 1, py0 + 1, px1 - 1, py1 - 1);
+        let mut rgba = card.rgba().to_vec();
+        for y in py0..py1 {
+            for x in px0..px1 {
+                let sx = crop[0] + (x - px0) * (crop[2] - crop[0]) / (px1 - px0);
+                let sy = crop[1] + (y - py0) * (crop[3] - crop[1]) / (py1 - py0);
+                let at = ((y * width + x) * 4) as usize;
+                rgba[at..at + 4].copy_from_slice(&photo.pixel(sx, sy));
+            }
+        }
+        DecodedImage::from_rgba(width, height, rgba).unwrap().encode_png().unwrap()
+    }
+
+    /// RF-DETR Nano and PP-OCRv6 tiny, small and medium, to check what left.
+    struct Checkers {
+        people: VisionRuntime,
+        readers: Vec<(PpOcrV6Size, VisionRuntime)>,
+    }
+
+    impl Checkers {
+        async fn load() -> Self {
+            let manifest = ManifestSet::builtin().unwrap().get("rf-detr-n").cloned().unwrap();
+            let model = fetcher().fetch(&manifest).await.unwrap();
+            let detector =
+                RfDetr::new(&model, &OnnxOptions::default()).unwrap().with_threshold(0.05);
+            let people = VisionRuntime::builder().detector(Arc::new(detector)).build().unwrap();
+            let mut readers = Vec::new();
+            for size in [PpOcrV6Size::Tiny, PpOcrV6Size::Small, PpOcrV6Size::Medium] {
+                let reader = PpOcrReader::fetch(&fetcher(), size).await.unwrap();
+                let runtime = VisionRuntime::builder().reader(Arc::new(reader)).build().unwrap();
+                readers.push((size, runtime));
+            }
+            Self { people, readers }
+        }
+
+        /// The person scores RF-DETR reports, best first.
+        async fn people(&self, png: &[u8]) -> Vec<f32> {
+            let image = SourceImage::decode(png, &DecodeLimits::default()).unwrap();
+            let query = DetectQuery::Classes(vec!["person".into()]);
+            let found = self.people.detect(&VisionCx::new(), &image, &query).await.unwrap();
+            let mut scores: Vec<f32> = found.value.iter().filter_map(|r| r.score).collect();
+            scores.sort_by(|a, b| b.total_cmp(a));
+            scores
+        }
+
+        /// The seeded strings each reader finds, with what it read.
+        async fn seeded(&self, png: &[u8]) -> Vec<(PpOcrV6Size, Vec<&'static str>, String)> {
+            let image = SourceImage::decode(png, &DecodeLimits::default()).unwrap();
+            let mut out = Vec::new();
+            for (size, reader) in &self.readers {
+                let page =
+                    reader.read(&VisionCx::new(), &image, &Default::default()).await.unwrap();
+                let text: String = page
+                    .value
+                    .blocks
+                    .iter()
+                    .map(|b| b.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                let found = SEEDED.iter().copied().filter(|s| text.contains(s)).collect();
+                out.push((*size, found, text));
+            }
+            out
+        }
+    }
+
+    /// The defaults load on first use: with the weights missing offline, the release is
+    /// refused at the redact step and nothing reaches the provider.
+    #[tokio::test]
+    async fn the_default_redactors_fail_closed_without_their_weights() {
+        let empty = tempfile::tempdir().unwrap();
+        let offline = ModelFetcher::new(
+            FetchConfig::from_lookup(|_| None).with_cache_dir(empty.path()).with_offline(true),
+            Arc::new(InMemoryAcceptanceStore::new()),
+        );
+        let provider =
+            Arc::new(ScriptedLlm::new("claude-sonnet-5-5", Vec::<ScriptedResponse>::new()));
+        let desk = desk_with(
+            planner(vec![describe_args()]),
+            provider,
+            HarnessMode::Ask,
+            ALLOW_RULES,
+            &[(CARD, card_png())],
+            move |pack| pack.model_fetcher(offline),
+        )
+        .await;
+
+        send(&desk, "What kind of document is id-card.png?").await;
+
+        assert!(desk.proxy.images.lock().unwrap().is_empty(), "nothing reached the provider");
+        assert!(desk.recorder.released().is_empty());
+        let refused = refusals(&desk);
+        assert!(!refused.is_empty(), "the refusal is recorded");
+        assert_eq!(refused[0].step, "redact");
+        assert!(refused[0].reason.contains("HF_HUB_OFFLINE"), "{}", refused[0].reason);
+    }
+
+    /// S3 with the real backends: the drawn identity card, the card with a real person's
+    /// photo in the portrait's place, and a photo of two people go to Claude through the
+    /// pack's default redactors. In the bytes the provider received RF-DETR finds no person
+    /// and PP-OCRv6 tiny, small and medium find none of the seeded personal strings; each
+    /// egress copy is an artifact and its audit record links both digests.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "needs the RF-DETR Nano and PP-OCRv6 weights and two COCO photos; see the module docs"]
+    async fn s3_the_default_redactors_leave_no_person_and_no_personal_string() {
+        let checkers = Checkers::load().await;
+        let photo_card = card_with_photo(&coco(&SKIER).await, [250, 30, 530, 400]);
+        let baseball = coco(&BASEBALL).await.encode_png().unwrap();
+        let images: Vec<(&str, Vec<u8>)> =
+            vec![(CARD, card_png()), ("id-card-photo.png", photo_card), ("baseball.png", baseball)];
+        let question = "What kind of image is this? Transcribe every word you can read.";
+        let calls = vec![
+            describe_args(),
+            json!({"image": "id-card-photo.png", "backend": "claude", "region": REGION, "question": question}),
+            json!({"image": "baseball.png", "backend": "claude", "question": question}),
+        ];
+        let provider = Arc::new(ScriptedLlm::new(
+            "claude-sonnet-5-5",
+            [
+                ScriptedResponse::text("An identity card."),
+                ScriptedResponse::text("An identity card."),
+                ScriptedResponse::text("A baseball field."),
+            ],
+        ));
+        let desk =
+            desk_with(planner(calls), provider, HarnessMode::Ask, ALLOW_RULES, &images, |pack| {
+                pack
+            })
+            .await;
+
+        let started = std::time::Instant::now();
+        send(&desk, "Describe the three images.").await;
+        let elapsed = started.elapsed();
+
+        let sent = desk.proxy.images.lock().unwrap().clone();
+        let receipts = desk.recorder.released();
+        assert_eq!(sent.len(), 3, "the provider received three images");
+        assert_eq!(receipts.len(), 3, "three releases");
+        let released: Vec<_> = desk
+            .audit
+            .records()
+            .into_iter()
+            .filter(|r| r.action == "vision.egress.released")
+            .collect();
+        assert_eq!(released.len(), 3);
+        println!("three releases through the default redactors in {elapsed:?}");
+        for (((name, source), bytes), receipt) in images.iter().zip(&sent).zip(&receipts) {
+            assert_eq!(receipt.source, Digest::of(source), "{name}");
+            assert_eq!(Digest::of(bytes), receipt.egress, "{name}: exactly the released bytes");
+            assert!(receipt.artifact.is_some(), "{name}: the egress copy is an artifact");
+            assert!(
+                released.iter().any(|r| r.ext["sourceDigest"] == json!(receipt.source)
+                    && r.ext["egressDigest"] == json!(receipt.egress)),
+                "{name}: the audit record links both digests"
+            );
+
+            let before = checkers.people(source).await;
+            let after = checkers.people(bytes).await;
+            let covered = |scores: &[f32]| -> Vec<f32> {
+                scores.iter().copied().filter(|s| *s >= PERSON_SCORE).collect()
+            };
+            let count = |class: RedactionClass| receipt.redactions.get(&class).copied();
+            println!(
+                "{name}: source {} egress {}; redactions faces {:?} personal_text {:?}; people \
+                 (score >= {PERSON_SCORE}) before {:?} after {:?}; best person score before \
+                 {:.3} after {:.3}",
+                receipt.source,
+                receipt.egress,
+                count(RedactionClass::faces()),
+                count(RedactionClass::personal_text()),
+                covered(&before),
+                covered(&after),
+                before.first().copied().unwrap_or(0.0),
+                after.first().copied().unwrap_or(0.0),
+            );
+            assert!(
+                covered(&after).is_empty(),
+                "{name}: RF-DETR finds a person in the egress copy"
+            );
+            if *name != CARD {
+                assert!(
+                    !covered(&before).is_empty(),
+                    "{name}: RF-DETR finds the person in the source"
+                );
+                assert!(count(RedactionClass::faces()) > Some(0), "{name}: the person was covered");
+            }
+
+            let source_seen = checkers.seeded(source).await;
+            let egress_seen = checkers.seeded(bytes).await;
+            for ((size, before, _), (_, after, read)) in source_seen.iter().zip(&egress_seen) {
+                println!(
+                    "{name}: PP-OCRv6 {size:?} seeded strings before {before:?} after {after:?}"
+                );
+                println!("    egress copy reads: {read}");
+                assert!(after.is_empty(), "{name}: {size:?} reads {after:?} in the egress copy");
+                if *name != "baseball.png" {
+                    assert_eq!(before.len(), SEEDED.len(), "{name}: {size:?} reads the source");
+                }
+            }
+        }
+    }
 }

@@ -90,6 +90,7 @@ async fn answer(
         edited_args: request.edited_args,
         reason: request.reason,
         expanded: request.expanded,
+        evidence: request.evidence,
     };
     match engine.execute(&caller, command).await {
         Ok(outcome) => Json::<CommandOutcome>(outcome).into_response(),
@@ -197,6 +198,14 @@ mod tests {
             (Method::POST, "/api/surface/decisions/apr_1/confirm", Some(DeviceScope::Decide)),
             (Method::POST, "/api/surface/decisions/apr_1/take-over", Some(DeviceScope::Decide)),
             (Method::POST, "/api/surface/stop", Some(DeviceScope::Stop)),
+            // The annotated viewer is read-only on a phone (spec 3.7 §8.2, board choice V15).
+            (
+                Method::GET,
+                "/api/surface/vision/s1/images/sha256%3Aab/view",
+                Some(DeviceScope::Read),
+            ),
+            (Method::GET, "/api/surface/vision/s1/images/sha256%3Aab", Some(DeviceScope::Read)),
+            (Method::POST, "/api/surface/vision/s1/examples", None),
             (Method::POST, "/api/surface/commands", None),
             (Method::POST, "/api/surface/phone/qr", None),
             (Method::GET, "/api/surface/phone/devices", None),

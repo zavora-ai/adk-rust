@@ -13,6 +13,7 @@
 //! | NVIDIA Nemotron VL, Nano Omni (`nim`) | [`Normalized1000`] | `[x_min, y_min, x_max, y_max]` on 0–1000, fixed by the prompt | `⌈w/32⌉ × ⌈h/32⌉` | none |
 //! | Gemma 4 on NVIDIA (`nim`) | [`Normalized1000`] | the same | about 260 | none |
 //! | Muse | [`Normalized1000`] | the same | `⌈w/32⌉ × ⌈h/32⌉` | none |
+//! | Qwen3-VL on this machine (`mistralrs`, or a loopback server) | [`Normalized1000`] | the same, the model's native frame | `⌈w/32⌉ × ⌈h/32⌉` | none |
 //!
 //! Claude answers in pixels of the image it processed after its own resize; the Claude
 //! adapter's limits keep every image inside Claude's tier, so Claude never resizes and its

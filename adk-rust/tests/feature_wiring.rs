@@ -16,6 +16,35 @@ fn core_reexports_are_wired() {
     assert_eq!(content.role, "user");
 }
 
+#[cfg(feature = "vision")]
+mod vision {
+    /// `vision` forwards the fetcher, the cloud describers, `sam-3.1` and the guardrail, so
+    /// their types exist under `adk_rust::vision`.
+    #[test]
+    fn vision_backends_are_reachable() {
+        let manifests = adk_rust::vision::ManifestSet::builtin().unwrap();
+        assert!(manifests.get("rf-detr-n").is_some());
+        let config = adk_rust::vision::SamConfig::new("key");
+        assert_eq!(config.host().unwrap(), "api.meta.ai");
+        fn nameable<T>() {}
+        nameable::<adk_rust::vision::LlmDescriber>();
+        nameable::<adk_rust::vision::ImagePrivacyGuardrail>();
+        nameable::<adk_rust::vision::ModelFetcher>();
+    }
+}
+
+#[cfg(feature = "vision-local")]
+mod vision_local {
+    /// `vision-local` adds the on-device backends.
+    #[test]
+    fn on_device_backends_are_reachable() {
+        fn nameable<T>() {}
+        nameable::<adk_rust::vision::onnx::RfDetr>();
+        nameable::<adk_rust::vision::PpOcrReader>();
+        nameable::<adk_rust::vision::PaddleOcrVlReader>();
+    }
+}
+
 #[cfg(feature = "code-tools")]
 mod code_tools {
     use adk_rust::Tool;

@@ -142,6 +142,7 @@ fn decide(request: &ApprovalRequest, answer: Answer) -> Command {
         edited_args: None,
         reason: None,
         expanded: false,
+        evidence: Vec::new(),
     }
 }
 
@@ -362,6 +363,7 @@ async fn a_truncated_call_is_approved_only_once_expanded() {
         edited_args: None,
         reason: None,
         expanded: true,
+        evidence: Vec::new(),
     };
     assert!(matches!(
         home.engine.execute(&web(), expanded).await.unwrap(),
@@ -704,6 +706,7 @@ async fn an_mcp_servers_form_is_drawn_in_the_homes_fields_and_its_answer_checked
         edited_args: Some(content),
         reason: None,
         expanded: false,
+        evidence: Vec::new(),
     };
     let error = home.engine.execute(&web(), answer(json!({ "account": "ab" }))).await.unwrap_err();
     assert!(error.to_string().contains("does not fit the form"), "{error}");

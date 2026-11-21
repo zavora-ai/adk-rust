@@ -326,6 +326,34 @@ connection over any SDK transport — an in-process `Channel`, a socket wrapped 
 sessions. The [`acp_full_protocol`](../../../examples/acp_full_protocol) example
 tests drive the real server this way.
 
+## Draft protocol v2
+
+> **Note:** ACP protocol v2 is a draft, and no shipping client speaks it yet. The
+> `unstable-protocol-v2` feature forwards the SDK's `unstable_protocol_v2`, which the SDK may
+> change in any 5.x minor release.
+
+```toml
+[dependencies]
+adk-acp = { version = "3.0.0", features = ["server", "unstable-protocol-v2"] }
+```
+
+With the feature, the server answers both versions through the SDK's agent protocol router
+(`Agent.protocol_router()`), over one session handler:
+
+| Client | What it gets |
+|--------|--------------|
+| A v1 client | The v1 server, unchanged |
+| A v2 client | `session/new`, `list`, `resume` (which replays the session from its start), `close`, `delete`, `set_config_option` and `prompt`; each turn ends with an `idle` state update that carries the stop reason and token usage |
+
+| Limit | Behaviour |
+|-------|-----------|
+| `tool_call/cancel`, `terminal/cancel` | Answered with error `-32602`: the server has nothing they can cancel |
+| MCP over ACP | v1 only: an `AcpConnection` with `tool_servers` connects over v1 |
+
+On the client side, `AcpConnection::connect` asks for v2 and falls back to v1; see
+[ACP client and host](client.md). [Testing and support matrix](testing.md) lists v2 with the
+other unstable surfaces.
+
 ## Persistence decisions
 
 `InMemorySessionService` is suitable for a local editor process and tests. Use

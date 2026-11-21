@@ -76,6 +76,16 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! ## Features
+//!
+//! No feature is on by default; function tools, agent tools and toolsets need none. MCP
+//! (`mcp`, `http-transport`, `mcp-server`, `mcp-sampling`, `mcp-apps`), memory tools
+//! (`memory-tools`, `graph-memory-tools`), code execution (`code`, `code-embedded-js`,
+//! `code-embedded-python`, `code-docker`), `slack`, `bigquery`, `spanner`, `example-store` and
+//! `vertex-agent-registry` each have a feature; the
+//! [README](https://github.com/zavora-ai/adk-rust/blob/main/adk-tool/README.md#features)
+//! says what each enables.
 
 #![deny(missing_docs)]
 

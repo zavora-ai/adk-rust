@@ -75,6 +75,7 @@ fn case(eval_id: &str, turns: usize) -> EvalCase {
                 user_content: ContentData::text("Weather in Nairobi?"),
                 final_response: Some(ContentData::model_response("Sunny.")),
                 intermediate_data: None,
+                expected_vision: None,
             })
             .collect(),
         session_input: Default::default(),

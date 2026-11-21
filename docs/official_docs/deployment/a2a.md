@@ -24,7 +24,7 @@ The v1 implementation provides:
 | Push notification authentication (Bearer + token) |
 | `INPUT_REQUIRED` multi-turn resume flow |
 | Input validation (parts, IDs, metadata size) |
-| `Content-Type: application/a2a+json` on responses |
+| `Content-Type: application/a2a+json` on successful HTTP+JSON responses; errors are `application/json` |
 | Task object as first SSE streaming event |
 | Context-scoped task lookup for multi-turn |
 | Version negotiation (`A2A-Version` header) |
@@ -33,18 +33,19 @@ The v1 implementation provides:
 `SubscribeToTask` returns a snapshot rather than a live stream; see
 [Operation coverage](#operation-coverage).
 
-## Two Server Surfaces
+## Server Surfaces
 
-`adk-server` serves A2A in two ways:
+| Mount it with | Serves | Agent cards |
+|---------------|--------|-------------|
+| `ServerBuilder::with_a2a(base_url)`, `create_app_with_a2a`, `A2aServer`, `Launcher::with_a2a_base_url` | A2A v1: JSON-RPC at `POST /a2a/v1`, HTTP+JSON under `/a2a/v1/rest`. A2A 0.3: `POST /a2a` and `POST /a2a/stream` (`message/send`, `message/stream`) | v1 at `/.well-known/agent-card.json`, listing all three endpoints in `supportedInterfaces`; 0.3 at `/.well-known/agent.json` |
+| `A2aV1Server::builder(runner_config, base_url).build()`, then `router()` on your own Axum router | A2A v1 at `/a2a/v1` and `/a2a/v1/rest` (paths configurable) | v1 at `/.well-known/agent-card.json` |
+| The handler pieces, assembled by hand as [below](#exposing-an-agent-via-a2a-v1) | A2A v1 at the paths you choose | The route you add |
 
-| Surface | Mount it with | Routes | Agent card |
-|---------|---------------|--------|------------|
-| v1.0.0 (`a2a::v1`, `a2a-v1` feature) | your own Axum router, as below | `POST /jsonrpc` (or the path you choose), REST bindings | the route you add; `protocolVersion: "1.0"` in `supportedInterfaces` |
-| Pre-v1 (A2A 0.3) | `ServerBuilder::with_a2a(base_url)`, `create_app_with_a2a`, `Launcher::with_a2a_base_url` | `POST /a2a`, `POST /a2a/stream` (`message/send`, `message/stream`) | served at `/.well-known/agent-card.json` and `/.well-known/agent.json` |
-
-The pre-v1 card advertises no `supportedInterfaces`, so `A2aV1Client` resolves it but has no
-endpoint to send requests to; use `A2aClient` or `RemoteA2aAgent` with a pre-v1 server. The
-`adk-rust` `server` feature enables `a2a-v1`.
+A2A v1 needs the `a2a-v1` feature, which `adk-rust`'s `server` feature turns on. Without it, the
+first row serves only A2A 0.3, with its card at both well-known paths. The 0.3 card advertises
+no `supportedInterfaces`, so `A2aV1Client` cannot use it; use `A2aClient` or `RemoteA2aAgent`
+with a 0.3 endpoint. [A2A Getting Started](../a2a/getting-started.md#testing-with-curl) shows
+requests to both versions and their responses.
 
 ## Agent Cards
 
@@ -233,7 +234,10 @@ All 11 A2A v1.0.0 operations are supported:
 }
 ```
 
-Response includes a Task object with status, history, and artifacts. The response uses `Content-Type: application/a2a+json`.
+Send it with `A2A-Version: 1.0`. The result is a `SendMessageResponse`, `{"task": {...}}`, with
+the task's status (`TASK_STATE_COMPLETED` once the agent answers), history, and artifacts. The
+JSON-RPC binding answers with `Content-Type: application/json`, and the HTTP+JSON binding with
+`application/a2a+json`.
 
 ### SendStreamingMessage
 
@@ -438,10 +442,12 @@ error: `A2aClient::send_streaming_message` yields an `Err`, and `RemoteA2aAgent`
 
 ## Error Handling
 
-The JSON-RPC endpoint answers HTTP `200` with the error's JSON-RPC code in the body; the REST
-routes answer with the HTTP status. Both carry a `google.rpc.ErrorInfo` detail with the error's
-`reason`. An unsupported `A2A-Version` is refused by the version middleware before either handler
-runs, with HTTP `400` and the REST error body, on the JSON-RPC route as well:
+The JSON-RPC endpoint answers HTTP `200` with the error's JSON-RPC code in the body, and a
+`google.rpc.ErrorInfo` with the error's `reason` in `error.data`; the REST routes answer with the
+HTTP status and the `ErrorInfo` in `error.details`. The version middleware refuses a request with
+an unsupported `A2A-Version`, or none (which means 0.3), before either handler runs, in the shape
+of the binding it reached: JSON-RPC error `-32009` with HTTP `200`, or HTTP `400` from a REST
+route. The reason is `VERSION_NOT_SUPPORTED` either way:
 
 | Error | JSON-RPC Code | HTTP Status |
 |-------|--------------|-------------|

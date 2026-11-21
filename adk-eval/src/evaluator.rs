@@ -288,6 +288,9 @@ impl Evaluator {
         let embedding = self.embedding_scorer.is_some();
         #[cfg(not(feature = "embedding"))]
         let embedding = false;
+        if let Some(vision) = &self.config.criteria.vision {
+            vision.validate().map_err(crate::error::EvalError::ConfigError)?;
+        }
         if !self.config.criteria.custom.is_empty() {
             tracing::warn!(
                 eval.custom_criteria = self.config.criteria.custom.len(),
@@ -532,6 +535,14 @@ impl Evaluator {
             )));
         }
         self.check_criteria()?;
+        if let Some(image) = eval_case.unloaded_images().first() {
+            return Err(crate::error::EvalError::ConfigError(format!(
+                "eval case '{}' shows image {}, which was not loaded and verified against its \
+                 digest; load the eval file with TestFile::load or EvalSet::load, or call \
+                 EvalCase::load_images",
+                eval_case.eval_id, image.path
+            )));
+        }
         self.check_allowed()?;
         match self.judge_scope(app_name_of(&eval_case.session_input)) {
             Some(scope) => scope.within(self.run_case(agent, eval_case)).await,
@@ -704,6 +715,10 @@ impl Evaluator {
 
         // Extract response and tool calls from events
         let (actual_response, actual_tool_calls) = self.extract_from_events(&events);
+        let actual_vision = turn
+            .expected_vision
+            .as_ref()
+            .and_then(|_| crate::vision::answer_from_events(&events, actual_response.as_deref()));
 
         // Get expected values
         let expected_response = turn.final_response.as_ref().map(|c| c.get_text());
@@ -716,6 +731,7 @@ impl Evaluator {
             expected_response,
             actual_tool_calls,
             expected_tool_calls,
+            actual_vision,
             scores: HashMap::new(),
         };
         Ok((turn_result, events))
@@ -1107,6 +1123,46 @@ impl Evaluator {
             }
         }
 
+        // Vision scores, for the parts the turn expects; a missing answer scores 0.
+        if let Some(criteria) = &self.config.criteria.vision
+            && let Some(expected) = &turn.expected_vision
+        {
+            let answer = result.actual_vision.clone().unwrap_or_default();
+            let vision = crate::vision::score(expected, &answer, criteria);
+            for (name, threshold) in criteria.thresholds() {
+                let (Some(threshold), Some(value)) = (threshold, vision.get(name)) else {
+                    continue;
+                };
+                scores.insert(name.to_string(), value);
+                if value < threshold {
+                    let mut details = format!("{name} {value:.3} is below {threshold:.3}");
+                    if let Some(error) = vision.max_box_error_px {
+                        details.push_str(&format!("; largest box edge error {error:.1} px"));
+                    }
+                    if result.actual_vision.is_none() {
+                        details.push_str(
+                            "; the turn has no vision tool response (vision_detect, \
+                             vision_segment, vision_read or vision_describe) to score",
+                        );
+                    }
+                    for note in &vision.notes {
+                        details.push_str("; ");
+                        details.push_str(note);
+                    }
+                    failures.push(
+                        Failure::new(
+                            name,
+                            serde_json::to_value(expected).unwrap_or_default(),
+                            serde_json::to_value(&answer).unwrap_or_default(),
+                            value,
+                            threshold,
+                        )
+                        .with_details(&details),
+                    );
+                }
+            }
+        }
+
         Ok((scores, failures))
     }
 
@@ -1407,6 +1463,7 @@ mod tests {
             user_content: ContentData::text(user),
             final_response: Some(ContentData::model_response(expected)),
             intermediate_data: None,
+            expected_vision: None,
         }
     }
 
@@ -1876,6 +1933,7 @@ mod tests {
                 tool_uses: vec![ToolUse::new("greet")],
                 ..Default::default()
             }),
+            expected_vision: None,
         };
 
         let result = TurnResult {
@@ -1884,6 +1942,7 @@ mod tests {
             expected_response: Some("Hi there!".to_string()),
             actual_tool_calls: vec![ToolUse::new("greet")],
             expected_tool_calls: vec![ToolUse::new("greet")],
+            actual_vision: None,
             scores: HashMap::new(),
         };
 

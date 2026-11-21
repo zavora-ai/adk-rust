@@ -254,6 +254,9 @@ export interface AgentsResponse {
   removed?: RemovedAgent[];
 }
 
+/** How a region of one answer stands against the other (board choice V11). */
+export type Agreement = "agree" | "differ" | "onlyHere";
+
 /** The answers a surface may give one decision (spec 3.3 §7.2). */
 export interface Allowed {
   /** A spoken "allow once" takes effect after this many seconds unless cancelled. */
@@ -268,6 +271,18 @@ export interface Allowed {
 
 /** An answer to a decision (spec 3.3 §8.2). */
 export type Answer = "allowOnce" | "alwaysAllow" | "edit" | "deny";
+
+/** One answer for the picture, as the "Answer from" picker lists it. */
+export interface AnswerChoice {
+  /** The call's identifier. */
+  id: string;
+  /** "PP-OCRv6 small". */
+  name: string;
+  /** "on this computer", "Meta, in the cloud". */
+  place: string;
+  /** The tool. */
+  tool: string;
+}
 
 /** One answer a surface may offer, with its label (spec 3.3 §8.2). */
 export interface AnswerOption {
@@ -290,6 +305,8 @@ export interface AnswerRequest {
   answer: Answer;
   /** The changed arguments of an `edit`. */
   editedArgs?: unknown;
+  /** The digests of the images the device showed, for a call with images (spec 3.7 §8.2). */
+  evidence?: string[];
   /** The device showed the call in full (§7.1). */
   expanded?: boolean;
   /** Why, for a `deny`; reported to the agent. */
@@ -319,6 +336,37 @@ export interface AnswerSummary {
   text: string;
   /** Every answer. */
   total: number;
+}
+
+/** One answer, in full. */
+export interface AnswerView {
+  /** When the answer holds nothing. */
+  empty?: EmptyView | null;
+  /** The call's identifier. */
+  id: string;
+  /** Labels with counts, in first-seen order. */
+  labels: LabelCount[];
+  /** Measurements. */
+  measurements?: MeasurementsView | null;
+  /** "PP-OCRv6 small". */
+  name: string;
+  /** "on this computer". */
+  place: string;
+  /** The regions, in the `RegionSet`'s order; a page's in reading order. */
+  regions: RegionView[];
+  /** The run and the call. */
+  run: RunView;
+  /**
+   * The region selected first: the escalated or lowest-scored one on a page, the measured
+   * one in a photo, the first otherwise.
+   */
+  selected?: number | null;
+  /** "11 regions", "1.1 s", "$0". */
+  stats: string[];
+  /** The tool. */
+  tool: string;
+  /** The video and its tracks, for a frame. */
+  video?: VideoView | null;
 }
 
 /**
@@ -587,6 +635,59 @@ export interface CardLine {
   value: string;
 }
 
+/**
+ * A held call's images on its card (spec 3.7 §8.2, X11): what would leave, after redaction,
+ * with what was covered, where it goes, what it costs, how long it is kept and why nothing
+ * can be sent when that is so.
+ */
+export interface CardMedia {
+  /**
+   * This surface may tighten the crop or add a redaction, which holds the call again with
+   * the new image (board choices A7, A8).
+   */
+  canChange: boolean;
+  /** What the cost counts: "851 image tokens". */
+  costDetail?: string | null;
+  /** "Up to $0.0044" while waiting; "$0.0024" once it ran. */
+  costText?: string | null;
+  /** What was covered before they leave, by class. */
+  covered: CoveredLine[];
+  /** Every pixel of every image is covered. */
+  coveredAll: boolean;
+  /** "100% of the image", when so. */
+  coveredAllText?: string | null;
+  /** What they were cut from: "Page 2 of claim-0412.pdf". */
+  cutFrom?: string | null;
+  /** How: "nothing resized". */
+  cutNote?: string | null;
+  /** The fixed line under the card (board choice A21). */
+  fixedLine: string;
+  /** Where they go. */
+  goesTo?: GoesTo | null;
+  /** The images, in the order of the call's evidence. */
+  images: EvidenceImage[];
+  /** "Kept as evidence until 18 Dec". */
+  keptText?: string | null;
+  /** Why nothing can be sent, when that is so. */
+  notice?: MediaNotice | null;
+  /**
+   * The digest of the image a changed image replaced, when this call was held again with
+   * a changed image.
+   */
+  replaces?: string | null;
+  /** Where an authorised viewer opens the source image (board choice A9). */
+  sourceHref?: string | null;
+  /**
+   * "The exact image that would leave", "The 3 images that would leave", "The image that
+   * left".
+   */
+  title: string;
+  /** What they are: "Document crop", "3 document crops". */
+  what?: string | null;
+  /** What qualifies `what`: "never the page". */
+  whatNote?: string | null;
+}
+
 /** Where a decision is in its life. */
 export type CardStatus = "waiting" | "decided";
 
@@ -701,11 +802,32 @@ export type Command = {
   decisionId: string;
   /** The changed arguments of an `edit`. */
   editedArgs?: unknown;
+  /**
+   * The digests of the images the surface showed, in the order of the card's media
+   * (spec 3.7 §8.2): an answer that lets a call with images run names the images it
+   * lets leave, and is refused when they are not the call's.
+   */
+  evidence?: string[];
   /** The surface showed the call in full (§7.1). */
   expanded?: boolean;
   /** Why, for a `deny`; reported to the agent. */
   reason?: string | null;
   type: "decide";
+  /** The card's `version`. */
+  version: number;
+} | {
+  /** The change. */
+  change: ImageChange;
+  /** The card's `id`. */
+  decisionId: string;
+  /** The digest of the image the person changed, as the card showed it. */
+  from: string;
+  /**
+   * Only make the new image and say its digest and size, holding nothing again: what
+   * the editor shows before **Use this image** (board choice A8).
+   */
+  preview?: boolean;
+  type: "changeImage";
   /** The card's `version`. */
   version: number;
 } | {
@@ -842,6 +964,16 @@ export type CommandOutcome = {
   card: DecisionCard;
   type: "changed";
 } | {
+  /** The image the change would make: its digest and size, and the one it replaces. */
+  changed: ImageChanged;
+  type: "imagePreview";
+} | {
+  /** The old decision. */
+  card: DecisionCard;
+  /** The image change, when an image changed. */
+  changed?: ImageChanged | null;
+  type: "heldAgain";
+} | {
   /** When it takes effect. */
   cancelUntil: string;
   /** The decision. */
@@ -969,6 +1101,44 @@ export interface CommandRun {
   truncated?: boolean;
 }
 
+/** A region's standing in a comparison. */
+export interface CompareMark {
+  /** How it stands. */
+  agreement: Agreement;
+  /** The region's index in its answer. */
+  index: number;
+  /** The tag over it: its reading where they differ, "only here". */
+  tag?: string | null;
+}
+
+/** One side of a comparison. */
+export interface ComparePane {
+  /** The answer. */
+  answer: AnswerView;
+  /** Each region's standing. */
+  marks: CompareMark[];
+  /** "PP-OCRv6" — the short name the differences use. */
+  shortName: string;
+}
+
+/** Two answers for one image, side by side (board choice V11). */
+export interface CompareView {
+  /** A. */
+  a: ComparePane;
+  /** Regions both found and read alike. */
+  agree: number;
+  /** B. */
+  b: ComparePane;
+  /** Regions both found and read differently. */
+  differ: number;
+  /** The differences, A's order first. */
+  differences: Difference[];
+  /** Regions only one found. */
+  onlyOne: number;
+  /** "Where both found a region, the boxes overlap closely (mean IoU 0.94)." */
+  overlapText: string;
+}
+
 /** A passkey the person set up on a computer for the web home. */
 export interface ComputerPasskey {
   /** When it was set up. */
@@ -1014,6 +1184,24 @@ export interface ConfirmRequest {
   credential: unknown;
   /** The changed arguments, when the page sends them again: they must be the bound ones. */
   editedArgs?: unknown;
+}
+
+/**
+ * What a region on an evidence image covers, by the class the egress gate redacted it as
+ * (spec 3.7 §7.8 step 3).
+ */
+export type CoverClass = "face" | "personalText" | "schemaField" | "marked" | "other";
+
+/** What was covered of one class, as a line of "Covered before it leaves". */
+export interface CoveredLine {
+  /** The class. */
+  class: CoverClass;
+  /** How many regions. */
+  count: number;
+  /** Which images, when the call sends several and not all of them: "in image 3". */
+  note?: string | null;
+  /** "1 face", "3 personal text", "2 fields your schema marks personal". */
+  text: string;
 }
 
 /**
@@ -1078,8 +1266,19 @@ export interface DecisionCard {
   heading: string;
   /** The inbox entry: what a command answers. Never shown. */
   id: string;
+  /**
+   * The images the call would send, keep or act on, after redaction, with what was
+   * covered, where they go and what they cost (spec 3.7 §8.2, X11). Never on a chat card,
+   * which carries the image itself or a link (S-I5).
+   */
+  media?: CardMedia | null;
   /** The call spends money. */
   money: boolean;
+  /**
+   * The run that waited on this decision ended while it still waits: the answer is kept
+   * and used when the agent picks the thread up again (spec 3.7 §8.2, board choice A12).
+   */
+  parked?: ParkedView | null;
   /** Whether it can be taken back. */
   reversibility: Reversibility;
   /** "Can't be unsent". */
@@ -1137,6 +1336,24 @@ export interface Delivery {
 
 /** A depth effect. */
 export type DepthEffect = "tilt" | "flip" | "layers" | "carousel" | "wall" | "stage";
+
+/** One difference between two answers. */
+export interface Difference {
+  /** What A answered: "PO-7781S · 0.58", or "—". */
+  a: string;
+  /** The region in A. */
+  aRegion?: number | null;
+  /** What B answered. */
+  b: string;
+  /** The region in B. */
+  bRegion?: number | null;
+  /** Its label. */
+  label: string;
+  /** The region's number: its reading order, or its place. */
+  number: number;
+  /** "handwriting · read differently", "text · only B found it". */
+  title: string;
+}
 
 /**
  * What assistive technology reads for a drawn node (A2UI 1.0 `AccessibilityAttributes`): its
@@ -1521,6 +1738,20 @@ export interface ElicitedOption {
   value: string;
 }
 
+/** An answer with nothing in it (board choice V12): an answer, not an error. */
+export interface EmptyView {
+  /** Asked, Sent, Cost, Run. */
+  facts: Fact[];
+  /** "The call failed." and its line. */
+  failed: FactPart[];
+  /** "Hidden by your filters." and its line. */
+  hidden: FactPart[];
+  /** The sentence, in parts. */
+  text: FactPart[];
+  /** "Nothing found". */
+  title: string;
+}
+
 /** What removing an agent ends, counted (spec 3.3 §5.7 "Pausing and removing"). */
 export interface EndedWork {
   /** Decisions waiting for you that end without an answer. */
@@ -1539,6 +1770,116 @@ export interface EndedWork {
   /** Pieces of work stopped. */
   work: number;
 }
+
+/**
+ * A value replaced by an escalation (board choice V6): what the local backend read, what
+ * the escalation reads now, and the released crop's digest.
+ */
+export interface EscalationView {
+  /** Who escalated: "Gemini". */
+  by: string;
+  /** The released crop's digest, short. */
+  cropDigest?: string | null;
+  /** What the first backend read: `PO-7781S`. */
+  readAs?: string | null;
+  /** Its score. */
+  readAsScore?: number | null;
+}
+
+/** One image a held call would send, as its card shows it. */
+export interface EvidenceImage {
+  /** The feature's one-line description of it. */
+  caption?: string | null;
+  /** Every pixel of it is covered. */
+  coveredAll: boolean;
+  /**
+   * What was covered of it, in one line: "1 field your schema marks personal", "nothing
+   * covered".
+   */
+  coveredText: string;
+  /** `sha256:<hex>` of the image's bytes, in full: the exact call and the terminal show it. */
+  digest: string;
+  /** The digest in short, `sha256:c52ca5…ce7550` (board choice S4). */
+  digestShort: string;
+  /** The field it shows: "PO number". */
+  field?: string | null;
+  /** Height in pixels. */
+  height: number;
+  /**
+   * Where the surface loads the image with the viewer's own authorisation; absent when it
+   * is deleted.
+   */
+  href?: string | null;
+  /** Its place in the call's evidence: what the image route takes. */
+  index: number;
+  /** `image/png`. */
+  mimeType: string;
+  /** It is no longer kept. */
+  purged?: PurgedView | null;
+  /** The regions over it, covered before it leaves. */
+  regions: EvidenceRegion[];
+  /** "1012 × 638 PNG". */
+  sizeText: string;
+  /** Why it is sent rather than read here: "Handwriting". */
+  why?: string | null;
+  /** Width in pixels. */
+  width: number;
+}
+
+/** A region drawn over an evidence image, in the image's own pixels. */
+export interface EvidenceRegion {
+  /** The class. */
+  class: CoverClass;
+  /** The tag on a small picture: "face". */
+  shortTag: string;
+  /** The region's tag on a large picture: "face · whole person". */
+  tag: string;
+  /** Left edge, pixels. */
+  x0: number;
+  /** Right edge, pixels, exclusive. */
+  x1: number;
+  /** Top edge, pixels. */
+  y0: number;
+  /** Bottom edge, pixels, exclusive. */
+  y1: number;
+}
+
+/** What an example holds (board choice V13). */
+export type ExampleScope = "region" | "page" | "nothing";
+
+/** Where a labelled example may be saved (board choice V13). */
+export interface ExamplesView {
+  /** The source saves examples. */
+  canSave: boolean;
+  /** The case name offered first, for the selected region. */
+  caseName: string;
+  /** The file picked first. */
+  file: string;
+  /** The eval fixture files there are, relative to the fixtures' root. */
+  files: string[];
+}
+
+/**
+ * A labelled line of a region's details: "Answered in · Model-input pixels, 960 × 960,
+ * letterboxed".
+ */
+export interface Fact {
+  /** "Answered in". */
+  label: string;
+  /** The value, in parts. */
+  parts: FactPart[];
+}
+
+/** One part of a fact's value. */
+export interface FactPart {
+  /** How they read. */
+  style: FactStyle;
+  /** The words. */
+  text: string;
+}
+
+/** How part of a fact reads. */
+export type FactStyle = "plain" | "mono" | "muted" | "strong";
 
 /** One event of a session's store, numbered by its position there (spec 3.3 §6). */
 export interface FeedEntry {
@@ -1614,6 +1955,16 @@ export interface GenuiCapabilities {
   protocols: ProtocolClaims[];
 }
 
+/** Where the images go, in words. */
+export interface GoesTo {
+  /** The hosts, joined: `api.anthropic.com`. */
+  host: string;
+  /** The model: `claude-sonnet-5-5`. */
+  model?: string | null;
+  /** Who receives them: "Claude". */
+  provider?: string | null;
+}
+
 /**
  * Something the home lets every agent on it do beyond its definition, because the host
  * gives each agent it runs the tools for it (spec 3.3 §5.7, S-I12, S-I13): shown under
@@ -1636,6 +1987,31 @@ export interface GrantedUse {
 }
 
 /**
+ * A change to an evidence image before it leaves (board choices A7, A8): the crop can only
+ * shrink and covering can only grow, so a change never shows more than the image it changes.
+ */
+export interface ImageChange {
+  /** Boxes `[x0, y0, x1, y1]` in the image's pixels to fill solid black. */
+  cover?: number[][];
+  /** The new edges `[x0, y0, x1, y1]` in the image's pixels, inside the image. */
+  crop?: number[] | null;
+  /** The image's place in the call's evidence. */
+  image: number;
+}
+
+/** What a change made: the image it replaces and the new one. */
+export interface ImageChanged {
+  /** The digest of the image the change replaces. */
+  from: string;
+  /** The new image's height. */
+  height: number;
+  /** The digest of the new image, held again for the person's decision. */
+  to: string;
+  /** The new image's width. */
+  width: number;
+}
+
+/**
  * An image of a person's message (spec 3.3 §5.1): PNG, JPEG, WebP or GIF, base64. A
  * command carries at most `MAX_IMAGES`, each at most
  * `MAX_IMAGE_BYTES` once decoded; the engine checks each image's
@@ -1651,14 +2027,89 @@ export interface ImageData {
 /** One of the three switches of "What it can see" (spec 3.3 §5.6). */
 export type InputSource = "mic" | "camera" | "screen";
 
+/** A label and how many regions carry it: a filter chip. */
+export interface LabelCount {
+  /** How many. */
+  count: number;
+  /** The label. */
+  label: string;
+}
+
 /** How large a label is. */
 export type LabelSize = "small" | "medium" | "large";
+
+/**
+ * `POST /api/surface/vision/{session}/examples`: save a labelled example (board choices V11,
+ * V12, V13).
+ */
+export interface LabelledExample {
+  /** The answer the example starts from. */
+  answer: string;
+  /** The case's name: `inv-2291-p1-po-number`. */
+  caseName: string;
+  /** The eval fixtures file, relative to the fixtures' root: `evals/vision/invoices.test.json`. */
+  file: string;
+  /** The region, corrected, kept or drawn; absent for an example with nothing in it. */
+  region?: RegionCorrection | null;
+  /** What the example holds. */
+  scope: ExampleScope;
+}
 
 /** A kind of light. */
 export type LightKind = "point" | "spot" | "directional";
 
 /** A line's arrowheads. */
 export type LineEnds = "none" | "end" | "both";
+
+/** A mask to draw: COCO run-length encoding, column-major, unset run first. */
+export interface MaskView {
+  /** Pixels set. */
+  area: number;
+  /** The runs. */
+  counts: number[];
+  /** Height of the mask's raster. */
+  height: number;
+  /** Width of the mask's raster. */
+  width: number;
+}
+
+/** A measurement tile (board choice V9). */
+export interface MeasureTile {
+  /** "Longest". */
+  label: string;
+  /** "± 0.3 mm". */
+  uncertainty: string;
+  /** "14.3 mm". */
+  value: string;
+}
+
+/** An answer's measurements (board choice V9). */
+export interface MeasurementsView {
+  /**
+   * "In the belt's plane, from the fiducial: 40.0 mm is 245 px, so 6.12 px per mm. Valid
+   * only in that plane."
+   */
+  calibration: string;
+  /** The longest length's ends, in source pixels. */
+  line?: number[][] | null;
+  /** The region measured. */
+  region: number;
+  /** The tiles. */
+  tiles: MeasureTile[];
+}
+
+/** A notice on the card about its images: why nothing can be sent. */
+export interface MediaNotice {
+  /** Why it says so. */
+  kind: MediaNoticeKind;
+  /** The rest. */
+  text: string;
+  /** The lead words, in bold: "Nothing to send." */
+  title: string;
+}
+
+/** Why a card's images cannot be sent. */
+export type MediaNoticeKind = "purged" | "allCovered";
 
 /** How much agents act on their own (spec 3.3 §8.1). */
 export type Mode = "justLook" | "suggest" | "askFirst" | "goAhead";
@@ -1711,6 +2162,16 @@ export interface OutputLine {
   /** It went to standard error. Absent when false. */
   stderr?: boolean;
   /** The line, as data. */
+  text: string;
+}
+
+/** A decision whose run stopped waiting for it (spec 3.7 §8.2, board choice A12). */
+export interface ParkedView {
+  /** When the run ended. */
+  at: string;
+  /** Local `HH:MM`. */
+  atText: string;
+  /** "Document desk stopped waiting at 10:24 and finished its run without this. …". */
   text: string;
 }
 
@@ -1774,6 +2235,9 @@ export interface PhoneInfo {
   rpId: string;
 }
 
+/** What kind of picture an answer is about, which decides its layers and words. */
+export type PictureKind = "photo" | "document" | "videoFrame";
+
 /** A pill on a briefing line (spec 3.3 §5.1 Today). */
 export type Pill = "done" | "failed" | "waitingForYou" | "youDecided" | "suggestion" | "question";
 
@@ -1785,6 +2249,18 @@ export interface ProtocolClaims {
   id: string;
   /** Its name: `A2UI`, `AG-UI`, `MCP Apps`. */
   name: string;
+}
+
+/** An evidence image that is no longer kept (board choice A13). */
+export interface PurgedView {
+  /** The day it went, "18 Dec", when its retention ran out. */
+  day?: string | null;
+  /** The shorter line a small picture shows: "Image deleted 18 Dec". */
+  short: string;
+  /** "Evidence is kept for 30 days. What it was, …". */
+  text: string;
+  /** "This image was deleted on 18 Dec". */
+  title: string;
 }
 
 /** The keys a browser gives with its push subscription. */
@@ -1873,6 +2349,75 @@ export interface RefusedDrawing {
   tool: string;
 }
 
+/** A region as a person corrected or drew it. */
+export interface RegionCorrection {
+  /** The box `[x0, y0, x1, y1]` in the image's pixels. */
+  box: number[];
+  /**
+   * The region it corrects, by its index in the answer; absent for a region the person
+   * drew.
+   */
+  index?: number | null;
+  /** The label. */
+  label: string;
+  /** The text, for a page's block. */
+  text?: string | null;
+}
+
+/** One region of an answer, as the viewer draws and lists it. */
+export interface RegionView {
+  /** It touches the picture's edge. */
+  atEdge: boolean;
+  /** Its pixels are blurred in the picture: a person. */
+  blurred: boolean;
+  /** The box as the details show it: `1250, 466 → 1532, 540`, in source pixels. */
+  boxText: string;
+  /** The transform chain as steps (board choice V4). */
+  chain: string[];
+  /** The list's quieter words: the text, "mask · 14.3 mm", "box · at the edge". */
+  detail: string;
+  /** A value an escalation replaced. */
+  escalation?: EscalationView | null;
+  /** The details, in order (board choices V4, V5, V6). */
+  facts: Fact[];
+  /** The details' heading: "5 · handwriting", "Seal tear", "T4 · forklift". */
+  heading: string;
+  /** Its place in the answer's `RegionSet`: what an example and the export name. */
+  index: number;
+  /** The label or block kind: "handwriting", "seal tear". */
+  label: string;
+  /** The mask, when the shape is one. */
+  mask?: MaskView | null;
+  /** Its measurement in one line: "14.3 mm". */
+  measurement?: string | null;
+  /** Its place in reading order, from 1, for a page. */
+  order?: number | null;
+  /** The polygon's points, when the shape is one. */
+  polygon?: number[][];
+  /** The score. */
+  score?: number | null;
+  /** The score as the list shows it: "0.58". */
+  scoreText: string;
+  /** The shape's kind. */
+  shape: ShapeKind;
+  /** The tag over the picture: "part · 0.96", "seal tear · 0.91 · 14.3 mm". */
+  tag: string;
+  /** The text it reads, for a page's block. */
+  text?: string | null;
+  /** The track, for a video frame. */
+  track?: number | null;
+  /** "T4". */
+  trackName?: string | null;
+  /** Left edge in source pixels. */
+  x0: number;
+  /** Right edge in source pixels, exclusive. */
+  x1: number;
+  /** Top edge in source pixels. */
+  y0: number;
+  /** Bottom edge in source pixels, exclusive. */
+  y1: number;
+}
+
 /**
  * An agent the person removed, whose threads stay readable (spec 3.3 §5.7, §13 decision 18;
  * owner, at the wave 3 gate: "Removed agents" at the roster's foot).
@@ -1904,6 +2449,31 @@ export type Risk = "low" | "medium" | "high";
 
 /** Why a run stopped short. */
 export type RunStop = "timeout" | "memoryExceeded" | "policyViolation" | "error";
+
+/** The run and the call that produced an answer. */
+export interface RunView {
+  /** The agent, by its name in the runtime. */
+  agent: string;
+  /** The tool and the call: "vision_read · c-31", in parts. */
+  call: FactPart[];
+  /** "Document desk · 10:31". */
+  text: string;
+}
+
+/** What saving an example did. */
+export interface SavedExample {
+  /** The case's name. */
+  caseName: string;
+  /** The file, relative to the fixtures' root. */
+  file: string;
+  /** The image file the case points at, relative to the eval file. */
+  image: string;
+  /**
+   * "Saved to evals/vision/invoices.test.json as inv-2291-p1-po-number. The run's answer
+   * stays as it was."
+   */
+  text: string;
+}
 
 /** A scene's axes. */
 export interface SceneAxes {
@@ -2156,6 +2726,9 @@ export interface SceneValues {
 /** What asked for a `DrawnSent` call (spec 3.3 §6.1 `genui`, `genui-apps`). */
 export type SentVia = "form" | "app";
 
+/** The kind of a region's shape. */
+export type ShapeKind = "point" | "box" | "polygon" | "mask" | "keypoints";
+
 /** Where an agent's commands run (spec 3.3 §5.7), as its harness reports it. */
 export type ShellPlace = {
   kind: "host";
@@ -2311,6 +2884,11 @@ export type ThreadItem = {
 } | {
   /** The call it answers. */
   callId?: string | null;
+  /**
+   * The image a vision tool answered about, by digest: the thread links the call to
+   * the annotated viewer (spec 3.7 §8.2, board choice V1).
+   */
+  image?: string | null;
   kind: "result";
   /** It succeeded. */
   ok: boolean;
@@ -2391,6 +2969,24 @@ export interface TimelineStep {
   text: string;
 }
 
+/** One track of a video (board choice V10). */
+export interface TrackView {
+  /** People are blurred. */
+  blurred: boolean;
+  /** "139", "1.2k": frames seen. */
+  framesText: string;
+  /** The track's identifier. */
+  id: number;
+  /** "forklift". */
+  label: string;
+  /** "T4". */
+  name: string;
+  /** When it is seen, in seconds. */
+  spans: number[][];
+  /** Where it was, oldest first. */
+  trail: number[][];
+}
+
 /** What an agent can use (spec 3.3 §5.7 "What it can use"). */
 export interface UsesDraft {
   /** The drivers mounted for its area that it may use. */
@@ -2416,6 +3012,70 @@ export interface Via {
   origin: Origin;
   /** The surface. */
   surface: SurfaceKind;
+}
+
+/** The video a frame comes from (board choice V10). */
+export interface VideoView {
+  /** Where the frame is, in seconds. */
+  atS: number;
+  /** "10:34.1". */
+  atText: string;
+  /** "frame 19,023 · sampled 5 a second". */
+  frameText: string;
+  /** How long the video is, in seconds. */
+  lengthS: number;
+  /** "20:00". */
+  lengthText: string;
+  /** "Tracks are anonymous …". */
+  note: string;
+  /** The tracks. */
+  tracks: TrackView[];
+}
+
+/** The picture. */
+export interface ViewerImage {
+  /** `sha256:<hex>` in full. */
+  digest: string;
+  /** `sha256:556b49…a22654` (board choice S4). */
+  digestShort: string;
+  /** Height in pixels. */
+  height: number;
+  /** Where the surface loads it with the viewer's own authorisation. */
+  href: string;
+  /** `image/png`. */
+  mimeType: string;
+  /** Width in pixels. */
+  width: number;
+}
+
+/** What the annotated viewer shows of one image in one session (spec 3.7 §8.2, X12). */
+export interface ViewerView {
+  /** The agent the back link returns to. */
+  agent: string;
+  /** Its display name: "Document desk". */
+  agentName: string;
+  /** The answer shown, when there is one. */
+  answer?: AnswerView | null;
+  /** Every answer for this image in the session, newest first. */
+  answers: AnswerChoice[];
+  /** A feature's line under the picture. */
+  caption?: string | null;
+  /** Two answers side by side, when asked. */
+  compare?: CompareView | null;
+  /** Saving labelled examples. */
+  examples: ExamplesView;
+  /** The picture. */
+  image: ViewerImage;
+  /** What kind of picture it is. */
+  kind: PictureKind;
+  /** "1654 × 2339 · INV-2291.pdf, page 1 at 200 dpi". */
+  meta: string;
+  /** The score a region needs to be shown at first. */
+  minScore: number;
+  /** The session. */
+  sessionId: string;
+  /** "INV-2291 · page 1". */
+  title: string;
 }
 
 /** A text frame the view sends up the voice socket (spec 3.3 §5.6). */

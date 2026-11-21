@@ -14,6 +14,8 @@ import type { Send, TakeOverSeam } from "./DecisionCard";
 import { Icon } from "./Icon";
 import { MessageImages, RunCard } from "./RunCard";
 import { canvasWindowPath } from "../screens/CanvasWindow";
+import { viewerLabels } from "../viewer/labels";
+import { viewerPath } from "../viewer/route";
 
 type Activity = Extract<ThreadItem, { kind: "activity" }>;
 type Result = Extract<ThreadItem, { kind: "result" }>;
@@ -271,7 +273,7 @@ export function Thread({
             return line.run ? (
               <RunCard key={line.key} tool={line.run.tool} what={line.text} ok={line.run.ok} run={line.run.run} shell={shell} />
             ) : (
-              <ActivityChip key={line.key} line={line} />
+              <ActivityChip key={line.key} line={line} session={session} />
             );
           case "refused":
             return <RefusedNotice key={line.key} refusal={line.refusal} />;
@@ -665,13 +667,20 @@ function WorkLog({ steps }: { steps: ActivityLine[] }) {
   );
 }
 
-function ActivityChip({ line }: { line: Extract<Line, { kind: "activity" }> }) {
+function ActivityChip({ line, session }: { line: Extract<Line, { kind: "activity" }>; session?: string }) {
   const failed = line.result && !line.result.ok;
+  const image = line.result?.image;
   return (
     <p className={`activity${failed ? " activity-failed" : ""}`}>
       {line.result && <Icon name={line.result.ok ? "check" : "cross"} />}
       <span>{visible(line.text)}</span>
       {line.result && <span className="activity-result"> · {visible(line.result.text)}</span>}
+      {image && session && (
+        // A perception call's answer opens in the annotated viewer (spec 3.7 §8.2, board choice V1).
+        <a className="activity-viewer" href={viewerPath({ session, image, answer: line.result?.callId ?? undefined })}>
+          {viewerLabels.openViewer}
+        </a>
+      )}
     </p>
   );
 }

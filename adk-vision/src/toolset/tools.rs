@@ -8,12 +8,14 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::Inner;
+use super::answer::Answer;
 use crate::backend::Locality;
 use crate::cx::VisionCx;
 use crate::edit::{EditOp, Overlay, Rgba};
 use crate::error::{Result, VisionError};
 use crate::geometry::{BBox, Region};
 use crate::manifest::VisionTask;
+use crate::measure::{Calibration, FiducialSpec, MEASUREMENT_VALIDITY};
 use crate::media::{MediaScope, SourceImage};
 use crate::runtime::{CallOptions, CallRecord};
 use crate::traits::{DescribeSpec, DetectQuery, ReadOptions, SegmentPrompt};
@@ -33,6 +35,7 @@ pub const VISION_TOOL_NAMES: &[&str] = &[
     "vision_crop",
     "vision_redact",
     "vision_annotate",
+    "vision_measure",
 ];
 
 /// Which vision tool a [`VisionTool`] is.
@@ -62,11 +65,13 @@ pub enum VisionToolKind {
     Redact,
     /// `vision_annotate`.
     Annotate,
+    /// `vision_measure`.
+    Measure,
 }
 
 impl VisionToolKind {
     /// Every tool, in [`VISION_TOOL_NAMES`] order.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Detect,
         Self::Segment,
         Self::Read,
@@ -74,6 +79,7 @@ impl VisionToolKind {
         Self::Crop,
         Self::Redact,
         Self::Annotate,
+        Self::Measure,
     ];
 
     /// The tool's name.
@@ -86,6 +92,7 @@ impl VisionToolKind {
             Self::Crop => "vision_crop",
             Self::Redact => "vision_redact",
             Self::Annotate => "vision_annotate",
+            Self::Measure => "vision_measure",
         }
     }
 
@@ -98,7 +105,7 @@ impl VisionToolKind {
     pub fn task(self) -> VisionTask {
         match self {
             Self::Detect => VisionTask::Detect,
-            Self::Segment => VisionTask::Segment,
+            Self::Segment | Self::Measure => VisionTask::Segment,
             Self::Read => VisionTask::Read,
             Self::Describe => VisionTask::Describe,
             Self::Crop | Self::Redact | Self::Annotate => VisionTask::Edit,
@@ -167,6 +174,9 @@ impl Tool for VisionTool {
                 "Makes a new image with regions filled solid black, which cannot be undone."
             }
             VisionToolKind::Annotate => "Makes a new image with labelled boxes drawn on it.",
+            VisionToolKind::Measure => {
+                "Measures objects in an image in millimetres: segments each one from concepts or boxes and reports its maximum length and area with their uncertainty, under a calibration from a fiducial of known size in the image or a given scale. Valid only for objects in the fiducial's plane."
+            }
         }
     }
 
@@ -242,6 +252,42 @@ impl Tool for VisionTool {
                 );
                 required.push("boxes");
             }
+            VisionToolKind::Measure => {
+                properties.insert(
+                    "concepts".into(),
+                    json!({ "type": "array", "items": { "type": "string" }, "description": "Noun phrases naming what to measure." }),
+                );
+                properties.insert(
+                    "boxes".into(),
+                    json!({ "type": "array", "items": bbox_schema("A box around one object to measure."), "description": "Boxes around the objects to measure, in the image's pixels; each is segmented to its mask." }),
+                );
+                properties.insert(
+                    "fiducial".into(),
+                    json!({
+                        "type": "object",
+                        "properties": {
+                            "box": bbox_schema("A box around the fiducial."),
+                            "widthMm": { "type": "number", "description": "The fiducial's width in millimetres." },
+                            "heightMm": { "type": "number", "description": "Its height in millimetres; the width when omitted (a square)." },
+                            "toleranceMm": { "type": "number", "description": "The printed size's tolerance in millimetres." },
+                        },
+                        "required": ["box", "widthMm"],
+                        "description": "Calibrate from a fiducial of known size lying in the measured plane.",
+                    }),
+                );
+                properties.insert(
+                    "calibration".into(),
+                    json!({
+                        "type": "object",
+                        "properties": {
+                            "pxPerMm": { "type": "number" },
+                            "uncertaintyPxPerMm": { "type": "number" },
+                        },
+                        "required": ["pxPerMm"],
+                        "description": "A scale an earlier vision_measure call returned for this camera, instead of a fiducial.",
+                    }),
+                );
+            }
         }
         if !self.kind.is_edit() {
             properties.insert("region".into(), bbox_schema(REGION_DOC));
@@ -289,7 +335,22 @@ impl Tool for VisionTool {
         for digest in approved {
             options = options.approving(digest);
         }
-        let result = self.run(&cx, &scope, &source, &args, &options).await?;
+        let (result, answer) = self.run(&cx, &scope, &source, &args, &options).await?;
+        if let (Some(answer), Some(artifacts)) = (answer, artifacts.as_ref()) {
+            let known = self.inner.known(&scope, &source.digest());
+            if let Some(known) = known {
+                let tool = self.kind.name();
+                let record =
+                    super::answer::record(ctx.as_ref(), tool, &known, image, &args, &answer);
+                super::answer::save(
+                    artifacts.as_ref(),
+                    ctx.invocation_id(),
+                    ctx.function_call_id(),
+                    &record,
+                )
+                .await;
+            }
+        }
         Ok(result)
     }
 }
@@ -302,7 +363,7 @@ impl VisionTool {
         source: &SourceImage,
         args: &Value,
         options: &CallOptions,
-    ) -> Result<Value> {
+    ) -> Result<(Value, Option<Answer>)> {
         let runtime = &self.inner.runtime;
         let image = source.digest();
         let (width, height) = source.size();
@@ -311,25 +372,27 @@ impl VisionTool {
                 let query = detect_query(args)?;
                 let out = runtime.detect_with(cx, source, &query, options).await?;
                 self.audit_calls(cx, &out.calls).await?;
-                Ok(json!({
+                let response = json!({
                     "image": image,
                     "width": width,
                     "height": height,
                     "regions": out.value.iter().map(region_json).collect::<Vec<_>>(),
                     "calls": calls_json(&out.calls),
-                }))
+                });
+                Ok((response, Some(Answer::regions(out.value, out.calls))))
             }
             VisionToolKind::Segment => {
                 let prompts = segment_prompts(args)?;
                 let out = runtime.segment_with(cx, source, &prompts, options).await?;
                 self.audit_calls(cx, &out.calls).await?;
-                Ok(json!({
+                let response = json!({
                     "image": image,
                     "width": width,
                     "height": height,
                     "regions": out.value.iter().map(region_json).collect::<Vec<_>>(),
                     "calls": calls_json(&out.calls),
-                }))
+                });
+                Ok((response, Some(Answer::regions(out.value, out.calls))))
             }
             VisionToolKind::Read => {
                 let read = ReadOptions {
@@ -357,12 +420,20 @@ impl VisionTool {
                         entry
                     })
                     .collect();
-                Ok(json!({
+                let response = json!({
                     "image": image,
                     "blocks": blocks,
                     "markdown": out.value.markdown,
                     "calls": calls_json(&out.calls),
-                }))
+                });
+                let answer = Answer {
+                    regions: Vec::new(),
+                    page: Some(out.value),
+                    described: None,
+                    measurements: Vec::new(),
+                    calls: out.calls,
+                };
+                Ok((response, Some(answer)))
             }
             VisionToolKind::Describe => {
                 let question = args
@@ -377,7 +448,7 @@ impl VisionTool {
                 let out = runtime.describe_with(cx, &[source], &spec, options).await?;
                 self.audit_calls(cx, &out.calls).await?;
                 let answer = &out.value;
-                Ok(json!({
+                let response = json!({
                     "image": image,
                     "text": answer.text,
                     "value": answer.value,
@@ -385,8 +456,18 @@ impl VisionTool {
                     "regions": answer.regions.iter().map(region_json).collect::<Vec<_>>(),
                     "escalatedFrom": answer.escalated_from.as_ref().map(|from| &from.backend),
                     "calls": calls_json(&out.calls),
-                }))
+                });
+                let described = json!({ "text": answer.text, "value": answer.value });
+                let answer = Answer {
+                    regions: out.value.regions,
+                    page: None,
+                    described: Some(described),
+                    measurements: Vec::new(),
+                    calls: out.calls,
+                };
+                Ok((response, Some(answer)))
             }
+            VisionToolKind::Measure => self.measure(cx, source, args, options).await,
             VisionToolKind::Crop | VisionToolKind::Redact | VisionToolKind::Annotate => {
                 let op = self.edit_op(args, (width, height))?;
                 let out = runtime.edit(cx, source, &op, options).await?;
@@ -398,13 +479,14 @@ impl VisionTool {
                 };
                 cx.audit(crate::audit::edit_draft(image, operation, edited.image.digest)).await?;
                 self.inner.remember(scope, edited.image.clone());
-                Ok(json!({
+                let response = json!({
                     "image": edited.image.digest,
                     "width": edited.image.width,
                     "height": edited.image.height,
                     "artifact": edited.image.artifact.file_name,
                     "from": image,
-                }))
+                });
+                Ok((response, None))
             }
         }
     }
@@ -452,13 +534,122 @@ impl VisionTool {
             VisionToolKind::Detect
             | VisionToolKind::Segment
             | VisionToolKind::Read
-            | VisionToolKind::Describe => {
+            | VisionToolKind::Describe
+            | VisionToolKind::Measure => {
                 return Err(VisionError::InvalidInput(format!(
                     "{} is not an edit",
                     self.kind.name()
                 )));
             }
         })
+    }
+
+    /// `vision_measure`: the calibration (a fiducial segmented from its box, or a given
+    /// scale), then each object segmented and measured in the calibrated plane.
+    async fn measure(
+        &self,
+        cx: &VisionCx,
+        source: &SourceImage,
+        args: &Value,
+        options: &CallOptions,
+    ) -> Result<(Value, Option<Answer>)> {
+        let runtime = &self.inner.runtime;
+        let image = source.digest();
+        let size = source.size();
+        let prompts = segment_prompts(args)?;
+        let mut calls = Vec::new();
+        let (calibration, fiducial) = match (args.get("fiducial"), args.get("calibration")) {
+            (Some(fiducial), _) => {
+                let (bbox, spec) = fiducial_arg(fiducial)?;
+                let prompt = [SegmentPrompt::Box { bbox }];
+                let out = runtime.segment_with(cx, source, &prompt, options).await?;
+                self.audit_calls(cx, &out.calls).await?;
+                calls.extend(out.calls);
+                let region = out
+                    .value
+                    .into_iter()
+                    .filter_map(|region| Some((region.shape.bbox()?.iou(&bbox), region)))
+                    .filter(|(iou, _)| *iou > 0.0)
+                    .max_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, region)| region)
+                    .ok_or_else(|| {
+                        VisionError::InvalidInput(
+                            "the segmenter found no fiducial in `fiducial.box`; give a box that \
+                             covers the whole fiducial"
+                                .into(),
+                        )
+                    })?;
+                let calibration =
+                    Calibration::from_fiducial(&region.shape, spec, size)?.with_image(image);
+                (calibration, Some(region))
+            }
+            (None, Some(scale)) => (calibration_arg(scale, size)?, None),
+            (None, None) => {
+                return Err(VisionError::InvalidInput(
+                    "name a `fiducial` (its box and size in millimetres) or a `calibration` \
+                     (pixels per millimetre) to measure in"
+                        .into(),
+                ));
+            }
+        };
+        let out = runtime.segment_with(cx, source, &prompts, options).await?;
+        self.audit_calls(cx, &out.calls).await?;
+        calls.extend(out.calls);
+
+        let (reference_mm, reference_px) = calibration.reference();
+        let mut wire_calibration = json!({
+            "pxPerMm": round_to(calibration.px_per_mm, 4),
+            "uncertaintyPxPerMm": round_to(calibration.uncertainty_px_per_mm, 4),
+            "referenceMm": round_to(reference_mm, 3),
+            "referencePx": round_to(reference_px, 1),
+            "plane": if fiducial.is_some() { "the fiducial's plane" } else { "the plane the scale was made in" },
+            "from": if fiducial.is_some() { "the fiducial" } else { "a given scale" },
+        });
+        if fiducial.is_some() {
+            wire_calibration["region"] = json!(out.value.len());
+        }
+        let mut measurements = Vec::with_capacity(out.value.len());
+        for (index, region) in out.value.iter().enumerate() {
+            let mut entry = region_json(region);
+            entry["region"] = json!(index);
+            match calibration.measure(&region.shape, size) {
+                Ok(m) => {
+                    entry["geometry"] = json!(m.geometry);
+                    entry["longestMm"] = json!(round_to(m.longest_mm, 2));
+                    entry["longestUncertaintyMm"] = json!(round_to(m.longest_uncertainty_mm, 2));
+                    entry["areaMm2"] = json!(round_to(m.area_mm2, 2));
+                    entry["areaUncertaintyMm2"] = json!(round_to(m.area_uncertainty_mm2, 2));
+                    entry["line"] = json!(m.line.map(|p| p.map(|c| round_to(c, 1))));
+                }
+                Err(error) => entry["error"] = json!(error.to_string()),
+            }
+            measurements.push(entry);
+        }
+        let response = json!({
+            "image": image,
+            "width": size.0,
+            "height": size.1,
+            "calibration": wire_calibration,
+            "measurements": measurements,
+            "validity": MEASUREMENT_VALIDITY,
+            "calls": calls_json(&calls),
+        });
+        // The answer record carries each measurement with its calibration, as the annotated
+        // viewer reads it, and the fiducial as the region after the measured ones.
+        let recorded = measurements
+            .into_iter()
+            .filter(|entry| entry.get("error").is_none())
+            .map(|mut entry| {
+                entry["tool"] = json!(self.kind.name());
+                entry["calibration"] = wire_calibration.clone();
+                entry
+            })
+            .collect();
+        let mut regions = out.value;
+        regions.extend(fiducial);
+        let mut answer = Answer::regions(regions, calls);
+        answer.measurements = recorded;
+        Ok((response, Some(answer)))
     }
 
     async fn audit_calls(&self, cx: &VisionCx, calls: &[CallRecord]) -> Result<()> {
@@ -526,6 +717,38 @@ fn segment_prompts(args: &Value) -> Result<Vec<SegmentPrompt>> {
         return Err(VisionError::InvalidInput("name `concepts` or `boxes` to segment".into()));
     }
     Ok(prompts)
+}
+
+/// The `fiducial` argument: its box and its size.
+fn fiducial_arg(value: &Value) -> Result<(BBox, FiducialSpec)> {
+    let bbox = value
+        .get("box")
+        .map(bbox_arg)
+        .transpose()?
+        .ok_or_else(|| VisionError::InvalidInput("`fiducial.box` is required".into()))?;
+    let width = value.get("widthMm").and_then(Value::as_f64).ok_or_else(|| {
+        VisionError::InvalidInput("`fiducial.widthMm` is required: the fiducial's width".into())
+    })?;
+    let height = value.get("heightMm").and_then(Value::as_f64).unwrap_or(width);
+    let tolerance = value.get("toleranceMm").and_then(Value::as_f64).unwrap_or(0.0);
+    let spec = FiducialSpec::rectangle(width, height).with_tolerance(tolerance);
+    spec.validate()?;
+    Ok((bbox, spec))
+}
+
+/// The `calibration` argument: a scale in pixels per millimetre.
+fn calibration_arg(value: &Value, size: (u32, u32)) -> Result<Calibration> {
+    let scale = value
+        .get("pxPerMm")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| VisionError::InvalidInput("`calibration.pxPerMm` is required".into()))?;
+    let uncertainty = value.get("uncertaintyPxPerMm").and_then(Value::as_f64).unwrap_or(0.0);
+    Calibration::from_scale(scale, uncertainty, size)
+}
+
+fn round_to(value: f64, decimals: i32) -> f64 {
+    let scale = 10f64.powi(decimals);
+    (value * scale).round() / scale
 }
 
 fn round1(value: f32) -> f64 {

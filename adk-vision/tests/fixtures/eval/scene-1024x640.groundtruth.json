@@ -1,0 +1,27 @@
+{
+  "image": "scene-1024x640.png",
+  "width": 1024,
+  "height": 640,
+  "frame": "source pixels, origin top-left, x right, y down, x1/y1 exclusive",
+  "note": "Drawn by scene.py; every object is generated.",
+  "objects": [
+    {
+      "label": "stop sign",
+      "bbox": [
+        121.4,
+        111.4,
+        398.6,
+        388.6
+      ]
+    },
+    {
+      "label": "clock",
+      "bbox": [
+        610,
+        100,
+        871,
+        361
+      ]
+    }
+  ]
+}

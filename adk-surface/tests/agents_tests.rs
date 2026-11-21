@@ -787,6 +787,7 @@ async fn a_suggestion_approved_in_the_home_is_added_as_the_home() {
                 edited_args: None,
                 reason: None,
                 expanded: true,
+                evidence: Vec::new(),
             },
         )
         .await

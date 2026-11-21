@@ -30,7 +30,9 @@
 //! | `vision_crop` | A new image of a region | `Idempotent` |
 //! | `vision_redact` | A new image with regions filled solid black | `Idempotent` |
 //! | `vision_annotate` | A new image with labelled boxes drawn | `Idempotent` |
+//! | `vision_measure` | Maximum length and area in millimetres, from masks under a fiducial's calibration | `ReadOnly` |
 
+mod answer;
 mod tools;
 
 use std::collections::{HashMap, HashSet};
@@ -45,6 +47,7 @@ use adk_core::{
 use async_trait::async_trait;
 use serde_json::Value;
 
+pub use answer::{ANSWER_ARTIFACT_PREFIX, answer_artifact_name};
 pub use tools::{VISION_TOOL_NAMES, VisionTool, VisionToolKind};
 
 use crate::backend::BackendDescriptor;
@@ -473,6 +476,11 @@ impl Inner {
         let (image, source) = self.store.put_image(scope, data, Provenance::Upload).await?;
         self.remember(scope, image);
         Ok(source)
+    }
+
+    /// The image this toolset stored under `digest` for `scope`.
+    fn known(&self, scope: &MediaScope, digest: &Digest) -> Option<ImageRef> {
+        lock(&self.images).get(&(scope.clone(), *digest)).cloned()
     }
 
     fn remember(&self, scope: &MediaScope, image: ImageRef) {

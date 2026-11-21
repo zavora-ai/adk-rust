@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 description = "Agent kernel for ADK-Rust: a resident supervisor with a process model, wake sources, an event bus and a control plane over durable runs"
 repository.workspace = true
+homepage.workspace = true
 documentation = "https://docs.rs/adk-kernel"
 keywords = ["adk", "agent", "kernel", "durable", "supervisor"]
 categories = ["asynchronous", "development-tools"]
@@ -67,6 +68,10 @@ conformance = ["tokio/rt"]
 # The charter store, the KPI tracker, autonomy records, signals and the site process kinds
 # over the AWP 2.0 types (spec 3.5 §7.1, §7.10, §7.11).
 charter = ["dep:awp-types"]
+# The bridge from `adk-vision`'s watch conditions to `VisionWakeSource` (spec 3.7 §7.10):
+# `VisualWake: From<&WatchEvent>` and the source as a `WatchSink`. The source itself needs no
+# feature, so a default build compiles no perception code.
+vision = ["dep:adk-vision"]
 
 [dependencies]
 adk-core.workspace = true
@@ -79,6 +84,7 @@ adk-telemetry = { workspace = true, optional = true }
 adk-tool = { workspace = true, optional = true }
 adk-sandbox = { workspace = true, optional = true }
 adk-managed = { workspace = true, optional = true }
+adk-vision = { workspace = true, optional = true }
 async-trait.workspace = true
 awp-types = { workspace = true, optional = true }
 # The control plane's router, served on the Unix socket and merged into `ServerBuilder`.

@@ -1,0 +1,56 @@
+{
+  "eval_set_id": "vision-generated-detect",
+  "name": "Drawn scene, COCO classes",
+  "description": "A stop sign and a wall clock drawn by scene.py at known boxes, for closed-set detectors trained on COCO (RF-DETR); the turn's text names the classes.",
+  "eval_cases": [
+    {
+      "eval_id": "scene_stop_sign_clock",
+      "description": "Detect the stop sign and the clock",
+      "conversation": [
+        {
+          "invocation_id": "t0",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "image": {
+                  "path": "scene-1024x640.png",
+                  "digest": "sha256:c0e126b352e65420f0072d06ee1f15b73d3fc90e930adcd44a525954999048a9"
+                }
+              },
+              {
+                "text": "stop sign, clock"
+              }
+            ]
+          },
+          "expected_vision": {
+            "regions": [
+              {
+                "label": "stop sign",
+                "box": [
+                  121.4,
+                  111.4,
+                  398.6,
+                  388.6
+                ]
+              },
+              {
+                "label": "clock",
+                "box": [
+                  610,
+                  100,
+                  871,
+                  361
+                ]
+              }
+            ],
+            "count": 2
+          }
+        }
+      ],
+      "tags": [
+        "detect"
+      ]
+    }
+  ]
+}

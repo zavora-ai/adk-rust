@@ -33,6 +33,7 @@ fn capital_turn(expected: Option<&str>) -> Turn {
         user_content: ContentData::text("What is the capital of France?"),
         final_response: expected.map(ContentData::model_response),
         intermediate_data: None,
+        expected_vision: None,
     }
 }
 

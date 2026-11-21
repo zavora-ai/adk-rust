@@ -309,7 +309,7 @@ fn load_client() -> Result<DeployClient> {
     }
     if config.token.is_none() {
         return Err(anyhow!(
-            "no deploy token configured for {}. Run `adk deploy login --endpoint ... --token ...`",
+            "no deploy token configured for {}. Run `adk-rust deploy login --endpoint ... --token ...`",
             config.endpoint
         ));
     }

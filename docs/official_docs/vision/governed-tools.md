@@ -1,6 +1,6 @@
 # Governed Vision Tools
 
-`VisionToolset` gives an agent seven vision tools that run on the governed tool path. A
+`VisionToolset` gives an agent eight vision tools that run on the governed tool path. A
 call that stays on the device runs like any read. A call that would send an image off the
 machine is checked against the egress rules, held for a person with the exact image it
 would send when the rules ask, and released only as that redacted copy. Every backend
@@ -28,6 +28,7 @@ adk-vision = { version = "3.0.0", features = ["guardrail"] }
 | `vision_crop` | A new image of one region | `Idempotent` | `image`, `region`, `margin` |
 | `vision_redact` | A new image with regions filled solid black | `Idempotent` | `image`, `regions` |
 | `vision_annotate` | A new image with numbered boxes drawn | `Idempotent` | `image`, `boxes` |
+| `vision_measure` | Maximum length and area in millimetres from masks, under a fiducial's calibration ([measurement](measure.md)) | `ReadOnly` | `image`, `boxes` or `concepts`, `fiducial` or `calibration`, `region`, `backend` |
 
 - **Images.** An `image` argument is an artifact name in the session or a `sha256:`
   digest an earlier tool returned. The toolset keeps each image it reads in the runtime's
@@ -138,6 +139,11 @@ The signed audit trail links the decision and the image: the call's `tool_call` 
 `approval` records carry `evidenceDigests`, and the `vision.egress.released` record names
 the source and egress digests.
 
+Every surface draws the held call with that image — the web home and the phone show it with
+its regions, the terminal as text with a link, chat attaches it or links to it — and an answer
+that lets the call run names the digest it saw: see
+[Approve with the Image](../surfaces/approve-with-image.md).
+
 ## Egress Rules
 
 The rules come from `.adk/vision.toml`; see [The Egress Gate](index.md#the-egress-gate).
@@ -234,12 +240,35 @@ fn harness(
 |-------|----------|
 | Classes | On the device `Read`; off it `External`, trusted read-only under an `allow` rule — so an `ask` call is held in Ask and Auto and denied in ReadOnly and Plan |
 | Rules | `.adk/vision.toml`, or `VisionPack::config`; faces and personal text are always redacted, and a workspace file's `allow` rules ask until the operator calls `trust_workspace_rules` |
+| Redactors | The operator's `VisionPack::redactor`s; with feature `vision-local`, a default for each required class none covers (below) |
 | Approvals | The egress policy joins the operator policy; the harness prompter or inbox sees the egress image on the held call |
 | Privacy guardrail | On every request to a remote harness model; no agent tool removes it ([Image Privacy](../security/image-privacy.md)) |
 | Text | `vision_read` and `vision_describe` deliver recognised text inside an `<untrusted-content source="vision">` block, screened as fetched text is |
 
+### Default Redactors
+
+With `adk-harness` feature `vision-local`, the pack installs a default redactor for each class
+the rules require that no `VisionPack::redactor` covers, so a pack needs no redactor wiring:
+
+```toml
+[dependencies]
+adk-harness = { version = "3.0.0", features = ["vision-local"] }
+```
+
+| Class | `vision-local` | Without it |
+|-------|----------------|------------|
+| `faces` | `PersonRedactor::rf_detr` — RF-DETR Nano | No redactor: every remote release is refused |
+| `personal_text` | `PersonalTextRedactor::pp_ocr` — PP-OCRv6 small, with `PERSONAL_FIELD_LABELS` | No redactor: every remote release is refused |
+
+The weights load on the first release through `VisionPack::model_fetcher`, or a fetcher built
+from `HF_HUB_CACHE`, `HF_HUB_OFFLINE` and `HF_TOKEN`, each file checked against the built-in
+manifest. When they cannot load, that release is refused and recorded at the redact step.
+Calls that stay on the device never load them. `vision-local` builds ONNX Runtime, downloaded
+at build time as `adk-vision`'s `onnx` feature does.
+
 ## Related
 
+- [The Annotated Viewer](../surfaces/annotated-viewer.md) — each call's answer record, drawn over its image on the web home
 - [Vision overview](index.md)
 - [Image Privacy](../security/image-privacy.md)
 - [Tool Authorization](../security/tool-authorization.md) - "Approving with Evidence"

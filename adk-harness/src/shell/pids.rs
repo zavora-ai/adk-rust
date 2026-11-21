@@ -42,7 +42,8 @@ pub struct ShellPidRecord {
 }
 
 /// Where the harness records the process of each running background shell (spec 3.1
-/// §7.29): `harness.db` in adk-cli ([`SqliteShellPidRegistry`]), memory by default.
+/// §7.29): `harness.db` in adk-cli (`SqliteShellPidRegistry`, feature `sqlite`), memory by
+/// default.
 ///
 /// # Example
 ///

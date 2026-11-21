@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 description = "Code execution substrate for ADK-Rust — typed executor abstraction, sandbox policy model, and built-in execution backends"
 repository = "https://github.com/zavora-ai/adk-rust"
+homepage.workspace = true
 documentation = "https://docs.rs/adk-code"
 keywords = ["ai", "agent", "adk", "code-execution", "sandbox"]
 categories = ["api-bindings", "asynchronous"]

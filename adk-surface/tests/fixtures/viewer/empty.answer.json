@@ -1,0 +1,66 @@
+{
+ "kind": "adkVisionAnswer",
+ "version": 1,
+ "tool": "vision_segment",
+ "callId": "c-2311",
+ "invocationId": "inv-line-2-c-2311",
+ "agent": "inspector",
+ "at": "2026-11-20T08:02:44Z",
+ "image": {
+  "digest": "sha256:45e055ba4f630e4bfa506f38fb8506265e6774f6b7767bbfd482ec0272440903",
+  "width": 1920,
+  "height": 1080,
+  "mimeType": "image/png",
+  "artifact": "vision-45e055ba4f630e4bfa506f38fb8506265e6774f6b7767bbfd482ec0272440903.png",
+  "name": "sha256:45e055ba4f630e4bfa506f38fb8506265e6774f6b7767bbfd482ec0272440903",
+  "provenance": {
+   "kind": "camera",
+   "source": "line-2"
+  }
+ },
+ "args": {
+  "image": "sha256:45e055ba4f630e4bfa506f38fb8506265e6774f6b7767bbfd482ec0272440903",
+  "concepts": [
+   "torn seal"
+  ],
+  "backend": "sam-3.1"
+ },
+ "regionSet": {
+  "image": "sha256:45e055ba4f630e4bfa506f38fb8506265e6774f6b7767bbfd482ec0272440903",
+  "width": 1920,
+  "height": 1080,
+  "regions": []
+ },
+ "calls": [
+  {
+   "task": "segment",
+   "backend": "sam-3.1",
+   "locality": {
+    "kind": "remote",
+    "hosts": [
+     "api.meta.ai"
+    ]
+   },
+   "images": [
+    "sha256:45e055ba4f630e4bfa506f38fb8506265e6774f6b7767bbfd482ec0272440903"
+   ],
+   "egress": [
+    "sha256:5d7cb967db5091fae435aec9e9852b5a61214b6e4ca6020540d425c63ef89ec7"
+   ],
+   "units": {
+    "requests": 1
+   },
+   "costMicroUsd": 2500,
+   "regions": 0,
+   "durationMs": 1800
+  }
+ ],
+ "models": {},
+ "display": {
+  "title": "Line 2 · 11:02:44",
+  "meta": "1920 × 1080 · line 2 camera · kept as evidence until 18 Dec",
+  "run": "Inspector · line 2 · 11:02:44",
+  "caption": "The line supervisor asked the Inspector to check this frame again with a cloud model.",
+  "covered": "nothing needed covering"
+ }
+}

@@ -109,6 +109,7 @@ async fn one_decision_makes_a_short_plain_while_you_were_away() {
                 edited_args: None,
                 reason: None,
                 expanded: true,
+                evidence: Vec::new(),
             },
         )
         .await

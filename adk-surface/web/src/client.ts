@@ -18,16 +18,21 @@ import type {
   DecisionCard,
   DecisionsResponse,
   FeedEntry,
+  LabelledExample,
   Origin,
   PhoneDevicesResponse,
   QueuedResponse,
+  SavedExample,
   StatusLine,
   SurfaceKind,
   TakeOverRequest,
   VoiceModels,
   VoiceTicket,
   VoiceTicketRequest,
+  ViewerView,
 } from "./generated/api";
+import type { ViewerClient } from "./viewer/Viewer";
+import type { ViewerPlace } from "./viewer/route";
 import type { AgentsSeam } from "./agents/client";
 import { httpAgents } from "./agents/client";
 import type { AppsSeam } from "./genui/apps";
@@ -126,6 +131,8 @@ export interface HomeClient {
   agents(): Promise<AgentRow[]>;
   decisions(): Promise<DecisionCard[]>;
   decision(id: string): Promise<DecisionCard>;
+  /** An image a decision holds, at the `href` its card names, read as the signed-in viewer (spec 3.7 §8.2). */
+  image?(href: string): Promise<Blob>;
   briefing(since?: string): Promise<Briefing>;
   command(command: Command, origin: Origin): Promise<CommandOutcome>;
   /** The session's feed from just after `after`, until `signal` aborts or the server closes. */
@@ -172,6 +179,8 @@ export interface HomeClient {
   answers?(since?: string): Promise<AnswerSummary | undefined>;
   /** Apps from MCP servers in a thread (spec 3.3 §6.1 `genui-apps`): opening them and relaying what they ask. */
   apps?(): AppsSeam;
+  /** The annotated viewer's routes (spec 3.7 §8.2, §8.3). */
+  viewerClient?(): ViewerClient;
 }
 
 async function problem(response: Response): Promise<ApiError> {
@@ -307,6 +316,40 @@ export class HttpClient implements HomeClient {
 
   decision(id: string) {
     return this.request<DecisionCard>(`/surface/decisions/${encodeURIComponent(id)}?surface=${this.surface}`);
+  }
+
+  async image(href: string) {
+    // Only the engine's own image routes on this server: a card or a viewer never names another address.
+    if (!href.startsWith(`${this.base}/surface/decisions/`) && !href.startsWith(`${this.base}/surface/vision/`)) {
+      throw new ApiError(400, labels.cantReach);
+    }
+    const response = await fetch(`${href}?surface=${this.surface}`, {
+      credentials: "same-origin",
+      headers: this.headers({ accept: "image/*" }),
+    });
+    if (!response.ok) throw await problem(response);
+    return response.blob();
+  }
+
+  viewerClient(): ViewerClient {
+    const segment = encodeURIComponent;
+    return {
+      viewer: (place: ViewerPlace) => {
+        const query = new URLSearchParams({ surface: this.surface });
+        if (place.answer) query.set("answer", place.answer);
+        if (place.compare) query.set("compare", place.compare);
+        return this.request<ViewerView>(
+          `/surface/vision/${segment(place.session)}/images/${segment(place.image)}/view?${query.toString()}`,
+        );
+      },
+      regions: (session: string, answer: string, other?: string) => {
+        const query = new URLSearchParams({ surface: this.surface });
+        if (other) query.set("with", other);
+        return this.request<unknown>(`/surface/vision/${segment(session)}/answers/${segment(answer)}/regions?${query.toString()}`);
+      },
+      saveExample: (session: string, example: LabelledExample) =>
+        this.post<SavedExample>(`/surface/vision/${segment(session)}/examples`, example),
+    };
   }
 
   briefing(since?: string) {

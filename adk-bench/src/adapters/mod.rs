@@ -9,6 +9,8 @@
 //!   protocol, translating between its format and ADK-Rust's Event/Content model.
 //! - **BFCL** (`bfcl` feature) — Loads Berkeley Function Calling Leaderboard
 //!   dataset entries and scores tool call accuracy.
+//! - **Vision** (`vision` feature) — Runs an `adk-vision` backend on a vision eval set
+//!   and reports the share of cases that meet `adk-eval`'s vision thresholds.
 //!
 //! # Example
 //!
@@ -31,6 +33,10 @@ pub mod tau2;
 /// BFCL adapter (feature-gated behind `bfcl`).
 #[cfg(feature = "bfcl")]
 pub mod bfcl;
+
+/// Vision adapter (feature-gated behind `vision`).
+#[cfg(feature = "vision")]
+pub mod vision;
 
 /// Trait for task quality benchmark adapters.
 ///

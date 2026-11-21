@@ -1,13 +1,13 @@
 # Dev Tools (`adk-devtools`)
 
-> **Note:** the [harness](../harness/index.md) builds on these tools and supersedes
-> `adk_agent::coding::CodingAgent` in 3.1; see
+> **Note:** the [harness](../harness/index.md) (spec 3.1, in 3.0.0) builds on these tools and
+> supersedes `adk_agent::coding::CodingAgent`, the 2.x API; see
 > [Migrating from `CodingAgent`](../migration/coding-agent-to-harness.md).
 
 `adk-devtools` is the inner-loop toolset a coding agent needs — read, edit,
 search, and run — with every operation **scoped to a workspace directory**. It's
 a standalone, publishable crate depending only on `adk-core`, so it composes with
-any `LlmAgent` (the [`CodingAgent`](harness.md) harness wires it for you).
+any `LlmAgent` (the [harness](../harness/index.md) wires it for you).
 
 ## The tools
 

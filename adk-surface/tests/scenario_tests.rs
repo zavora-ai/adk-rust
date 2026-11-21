@@ -272,6 +272,7 @@ async fn the_web_api_checks_the_session_owner() {
             edited_args: None,
             reason: None,
             expanded: true,
+            evidence: Vec::new(),
         },
     })
     .unwrap();

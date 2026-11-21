@@ -740,6 +740,26 @@
         ],
         "type": "object"
       },
+      "Agreement": {
+        "description": "How a region of one answer stands against the other (board choice V11).",
+        "oneOf": [
+          {
+            "const": "agree",
+            "description": "Both found it, with the same reading.",
+            "type": "string"
+          },
+          {
+            "const": "differ",
+            "description": "Both found it and read it differently.",
+            "type": "string"
+          },
+          {
+            "const": "onlyHere",
+            "description": "Only this answer found it.",
+            "type": "string"
+          }
+        ]
+      },
       "Allowed": {
         "description": "The answers a surface may give one decision (spec 3.3 §7.2).",
         "properties": {
@@ -802,6 +822,34 @@
           }
         ]
       },
+      "AnswerChoice": {
+        "description": "One answer for the picture, as the \"Answer from\" picker lists it.",
+        "properties": {
+          "id": {
+            "description": "The call's identifier.",
+            "type": "string"
+          },
+          "name": {
+            "description": "\"PP-OCRv6 small\".",
+            "type": "string"
+          },
+          "place": {
+            "description": "\"on this computer\", \"Meta, in the cloud\".",
+            "type": "string"
+          },
+          "tool": {
+            "description": "The tool.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "place",
+          "tool"
+        ],
+        "type": "object"
+      },
       "AnswerOption": {
         "description": "One answer a surface may offer, with its label (spec 3.3 §8.2).",
         "properties": {
@@ -839,6 +887,13 @@
           },
           "editedArgs": {
             "description": "The changed arguments of an `edit`."
+          },
+          "evidence": {
+            "description": "The digests of the images the device showed, for a call with images (spec 3.7 §8.2).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "expanded": {
             "default": false,
@@ -924,6 +979,105 @@
           "denied",
           "surfaces",
           "text"
+        ],
+        "type": "object"
+      },
+      "AnswerView": {
+        "description": "One answer, in full.",
+        "properties": {
+          "empty": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmptyView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the answer holds nothing."
+          },
+          "id": {
+            "description": "The call's identifier.",
+            "type": "string"
+          },
+          "labels": {
+            "description": "Labels with counts, in first-seen order.",
+            "items": {
+              "$ref": "#/components/schemas/LabelCount"
+            },
+            "type": "array"
+          },
+          "measurements": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeasurementsView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Measurements."
+          },
+          "name": {
+            "description": "\"PP-OCRv6 small\".",
+            "type": "string"
+          },
+          "place": {
+            "description": "\"on this computer\".",
+            "type": "string"
+          },
+          "regions": {
+            "description": "The regions, in the `RegionSet`'s order; a page's in reading order.",
+            "items": {
+              "$ref": "#/components/schemas/RegionView"
+            },
+            "type": "array"
+          },
+          "run": {
+            "$ref": "#/components/schemas/RunView",
+            "description": "The run and the call."
+          },
+          "selected": {
+            "description": "The region selected first: the escalated or lowest-scored one on a page, the measured\none in a photo, the first otherwise.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "stats": {
+            "description": "\"11 regions\", \"1.1 s\", \"$0\".",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tool": {
+            "description": "The tool.",
+            "type": "string"
+          },
+          "video": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VideoView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The video and its tracks, for a frame."
+          }
+        },
+        "required": [
+          "id",
+          "tool",
+          "name",
+          "place",
+          "regions",
+          "labels",
+          "stats",
+          "run"
         ],
         "type": "object"
       },
@@ -1630,6 +1784,142 @@
         ],
         "type": "object"
       },
+      "CardMedia": {
+        "description": "A held call's images on its card (spec 3.7 §8.2, X11): what would leave, after redaction,\nwith what was covered, where it goes, what it costs, how long it is kept and why nothing\ncan be sent when that is so.",
+        "properties": {
+          "canChange": {
+            "description": "This surface may tighten the crop or add a redaction, which holds the call again with\nthe new image (board choices A7, A8).",
+            "type": "boolean"
+          },
+          "costDetail": {
+            "description": "What the cost counts: \"851 image tokens\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "costText": {
+            "description": "\"Up to $0.0044\" while waiting; \"$0.0024\" once it ran.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "covered": {
+            "description": "What was covered before they leave, by class.",
+            "items": {
+              "$ref": "#/components/schemas/CoveredLine"
+            },
+            "type": "array"
+          },
+          "coveredAll": {
+            "description": "Every pixel of every image is covered.",
+            "type": "boolean"
+          },
+          "coveredAllText": {
+            "description": "\"100% of the image\", when so.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cutFrom": {
+            "description": "What they were cut from: \"Page 2 of claim-0412.pdf\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cutNote": {
+            "description": "How: \"nothing resized\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fixedLine": {
+            "description": "The fixed line under the card (board choice A21).",
+            "type": "string"
+          },
+          "goesTo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoesTo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where they go."
+          },
+          "images": {
+            "description": "The images, in the order of the call's evidence.",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceImage"
+            },
+            "type": "array"
+          },
+          "keptText": {
+            "description": "\"Kept as evidence until 18 Dec\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MediaNotice"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why nothing can be sent, when that is so."
+          },
+          "replaces": {
+            "description": "The digest of the image a changed image replaced, when this call was held again with\na changed image.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sourceHref": {
+            "description": "Where an authorised viewer opens the source image (board choice A9).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "description": "\"The exact image that would leave\", \"The 3 images that would leave\", \"The image that\nleft\".",
+            "type": "string"
+          },
+          "what": {
+            "description": "What they are: \"Document crop\", \"3 document crops\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "whatNote": {
+            "description": "What qualifies `what`: \"never the page\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "title",
+          "images",
+          "covered",
+          "coveredAll",
+          "canChange",
+          "fixedLine"
+        ],
+        "type": "object"
+      },
       "CardStatus": {
         "description": "Where a decision is in its life.",
         "oneOf": [
@@ -1971,6 +2261,13 @@
               "editedArgs": {
                 "description": "The changed arguments of an `edit`."
               },
+              "evidence": {
+                "description": "The digests of the images the surface showed, in the order of the card's media\n(spec 3.7 §8.2): an answer that lets a call with images run names the images it\nlets leave, and is refused when they are not the call's.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "expanded": {
                 "default": false,
                 "description": "The surface showed the call in full (§7.1).",
@@ -1999,6 +2296,46 @@
               "decisionId",
               "version",
               "answer"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Tightens the crop of one of a decision's images or covers more of it, then holds the\ncall again with the new image in its place (spec 3.7 §8.2, board choice A8): the crop\nonly shrinks and covering only grows. The decision at `version` closes; the call with\nthe new image waits for the person's answer.",
+            "properties": {
+              "change": {
+                "$ref": "#/components/schemas/ImageChange",
+                "description": "The change."
+              },
+              "decisionId": {
+                "description": "The card's `id`.",
+                "type": "string"
+              },
+              "from": {
+                "description": "The digest of the image the person changed, as the card showed it.",
+                "type": "string"
+              },
+              "preview": {
+                "default": false,
+                "description": "Only make the new image and say its digest and size, holding nothing again: what\nthe editor shows before **Use this image** (board choice A8).",
+                "type": "boolean"
+              },
+              "type": {
+                "const": "changeImage",
+                "type": "string"
+              },
+              "version": {
+                "description": "The card's `version`.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "type",
+              "decisionId",
+              "version",
+              "from",
+              "change"
             ],
             "type": "object"
           },
@@ -2472,6 +2809,53 @@
             "type": "object"
           },
           {
+            "description": "What a change to an image would make, held nowhere: the editor shows it before **Use\nthis image** (board choice A8).",
+            "properties": {
+              "changed": {
+                "$ref": "#/components/schemas/ImageChanged",
+                "description": "The image the change would make: its digest and size, and the one it replaces."
+              },
+              "type": {
+                "const": "imagePreview",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "changed"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The call was held again with what the person changed — its arguments, or one of its\nimages (spec 3.7 V-I5): `card` is the old decision, closed; the call waiting with the\nnew image follows in the feed.",
+            "properties": {
+              "card": {
+                "$ref": "#/components/schemas/DecisionCard",
+                "description": "The old decision."
+              },
+              "changed": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ImageChanged"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The image change, when an image changed."
+              },
+              "type": {
+                "const": "heldAgain",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "card"
+            ],
+            "type": "object"
+          },
+          {
             "description": "A spoken \"allow once\" takes effect at `cancel_until` unless cancelled (§7.2).",
             "properties": {
               "cancelUntil": {
@@ -2931,6 +3315,111 @@
         ],
         "type": "object"
       },
+      "CompareMark": {
+        "description": "A region's standing in a comparison.",
+        "properties": {
+          "agreement": {
+            "$ref": "#/components/schemas/Agreement",
+            "description": "How it stands."
+          },
+          "index": {
+            "description": "The region's index in its answer.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tag": {
+            "description": "The tag over it: its reading where they differ, \"only here\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "index",
+          "agreement"
+        ],
+        "type": "object"
+      },
+      "ComparePane": {
+        "description": "One side of a comparison.",
+        "properties": {
+          "answer": {
+            "$ref": "#/components/schemas/AnswerView",
+            "description": "The answer."
+          },
+          "marks": {
+            "description": "Each region's standing.",
+            "items": {
+              "$ref": "#/components/schemas/CompareMark"
+            },
+            "type": "array"
+          },
+          "shortName": {
+            "description": "\"PP-OCRv6\" — the short name the differences use.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer",
+          "shortName",
+          "marks"
+        ],
+        "type": "object"
+      },
+      "CompareView": {
+        "description": "Two answers for one image, side by side (board choice V11).",
+        "properties": {
+          "a": {
+            "$ref": "#/components/schemas/ComparePane",
+            "description": "A."
+          },
+          "agree": {
+            "description": "Regions both found and read alike.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "b": {
+            "$ref": "#/components/schemas/ComparePane",
+            "description": "B."
+          },
+          "differ": {
+            "description": "Regions both found and read differently.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "differences": {
+            "description": "The differences, A's order first.",
+            "items": {
+              "$ref": "#/components/schemas/Difference"
+            },
+            "type": "array"
+          },
+          "onlyOne": {
+            "description": "Regions only one found.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "overlapText": {
+            "description": "\"Where both found a region, the boxes overlap closely (mean IoU 0.94).\"",
+            "type": "string"
+          }
+        },
+        "required": [
+          "a",
+          "b",
+          "agree",
+          "differ",
+          "onlyOne",
+          "overlapText",
+          "differences"
+        ],
+        "type": "object"
+      },
       "ComputerPasskey": {
         "description": "A passkey the person set up on a computer for the web home.",
         "properties": {
@@ -3023,6 +3512,68 @@
         "required": [
           "challengeId",
           "credential"
+        ],
+        "type": "object"
+      },
+      "CoverClass": {
+        "description": "What a region on an evidence image covers, by the class the egress gate redacted it as\n(spec 3.7 §7.8 step 3).",
+        "oneOf": [
+          {
+            "const": "face",
+            "description": "A face: until a face detector is chosen, the whole person (spec 3.7 Q3).",
+            "type": "string"
+          },
+          {
+            "const": "personalText",
+            "description": "Personal text: names, emails, phone numbers and numbers like them.",
+            "type": "string"
+          },
+          {
+            "const": "schemaField",
+            "description": "A field the document schema marks personal.",
+            "type": "string"
+          },
+          {
+            "const": "marked",
+            "description": "A box the person covered.",
+            "type": "string"
+          },
+          {
+            "const": "other",
+            "description": "Another class a feature names.",
+            "type": "string"
+          }
+        ]
+      },
+      "CoveredLine": {
+        "description": "What was covered of one class, as a line of \"Covered before it leaves\".",
+        "properties": {
+          "class": {
+            "$ref": "#/components/schemas/CoverClass",
+            "description": "The class."
+          },
+          "count": {
+            "description": "How many regions.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "note": {
+            "description": "Which images, when the call sends several and not all of them: \"in image 3\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "\"1 face\", \"3 personal text\", \"2 fields your schema marks personal\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "class",
+          "count",
+          "text"
         ],
         "type": "object"
       },
@@ -3192,9 +3743,31 @@
             "description": "The inbox entry: what a command answers. Never shown.",
             "type": "string"
           },
+          "media": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CardMedia"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The images the call would send, keep or act on, after redaction, with what was\ncovered, where they go and what they cost (spec 3.7 §8.2, X11). Never on a chat card,\nwhich carries the image itself or a link (S-I5)."
+          },
           "money": {
             "description": "The call spends money.",
             "type": "boolean"
+          },
+          "parked": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ParkedView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The run that waited on this decision ended while it still waits: the answer is kept\nand used when the agent picks the thread up again (spec 3.7 §8.2, board choice A12)."
           },
           "reversibility": {
             "$ref": "#/components/schemas/Reversibility",
@@ -3373,6 +3946,59 @@
             "type": "string"
           }
         ]
+      },
+      "Difference": {
+        "description": "One difference between two answers.",
+        "properties": {
+          "a": {
+            "description": "What A answered: \"PO-7781S · 0.58\", or \"—\".",
+            "type": "string"
+          },
+          "aRegion": {
+            "description": "The region in A.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "b": {
+            "description": "What B answered.",
+            "type": "string"
+          },
+          "bRegion": {
+            "description": "The region in B.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "label": {
+            "description": "Its label.",
+            "type": "string"
+          },
+          "number": {
+            "description": "The region's number: its reading order, or its place.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "description": "\"handwriting · read differently\", \"text · only B found it\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "label",
+          "title",
+          "a",
+          "b"
+        ],
+        "type": "object"
       },
       "DrawnAccessibility": {
         "description": "What assistive technology reads for a drawn node (A2UI 1.0 `AccessibilityAttributes`): its\nlabel and description resolved and checked like any shown text, how its changes are\nannounced, and whether it is hidden from screen readers (never a field or a button).",
@@ -4344,6 +4970,51 @@
         ],
         "type": "object"
       },
+      "EmptyView": {
+        "description": "An answer with nothing in it (board choice V12): an answer, not an error.",
+        "properties": {
+          "facts": {
+            "description": "Asked, Sent, Cost, Run.",
+            "items": {
+              "$ref": "#/components/schemas/Fact"
+            },
+            "type": "array"
+          },
+          "failed": {
+            "description": "\"The call failed.\" and its line.",
+            "items": {
+              "$ref": "#/components/schemas/FactPart"
+            },
+            "type": "array"
+          },
+          "hidden": {
+            "description": "\"Hidden by your filters.\" and its line.",
+            "items": {
+              "$ref": "#/components/schemas/FactPart"
+            },
+            "type": "array"
+          },
+          "text": {
+            "description": "The sentence, in parts.",
+            "items": {
+              "$ref": "#/components/schemas/FactPart"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "\"Nothing found\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "text",
+          "facts",
+          "hidden",
+          "failed"
+        ],
+        "type": "object"
+      },
       "EndedWork": {
         "description": "What removing an agent ends, counted (spec 3.3 §5.7 \"Pausing and removing\").",
         "properties": {
@@ -4391,6 +5062,309 @@
           "text"
         ],
         "type": "object"
+      },
+      "EscalationView": {
+        "description": "A value replaced by an escalation (board choice V6): what the local backend read, what\nthe escalation reads now, and the released crop's digest.",
+        "properties": {
+          "by": {
+            "description": "Who escalated: \"Gemini\".",
+            "type": "string"
+          },
+          "cropDigest": {
+            "description": "The released crop's digest, short.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "readAs": {
+            "description": "What the first backend read: `PO-7781S`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "readAsScore": {
+            "description": "Its score.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "by"
+        ],
+        "type": "object"
+      },
+      "EvidenceImage": {
+        "description": "One image a held call would send, as its card shows it.",
+        "properties": {
+          "caption": {
+            "description": "The feature's one-line description of it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "coveredAll": {
+            "description": "Every pixel of it is covered.",
+            "type": "boolean"
+          },
+          "coveredText": {
+            "description": "What was covered of it, in one line: \"1 field your schema marks personal\", \"nothing\ncovered\".",
+            "type": "string"
+          },
+          "digest": {
+            "description": "`sha256:<hex>` of the image's bytes, in full: the exact call and the terminal show it.",
+            "type": "string"
+          },
+          "digestShort": {
+            "description": "The digest in short, `sha256:c52ca5…ce7550` (board choice S4).",
+            "type": "string"
+          },
+          "field": {
+            "description": "The field it shows: \"PO number\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "height": {
+            "description": "Height in pixels.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "href": {
+            "description": "Where the surface loads the image with the viewer's own authorisation; absent when it\nis deleted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "index": {
+            "description": "Its place in the call's evidence: what the image route takes.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mimeType": {
+            "description": "`image/png`.",
+            "type": "string"
+          },
+          "purged": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PurgedView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "It is no longer kept."
+          },
+          "regions": {
+            "description": "The regions over it, covered before it leaves.",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRegion"
+            },
+            "type": "array"
+          },
+          "sizeText": {
+            "description": "\"1012 × 638 PNG\".",
+            "type": "string"
+          },
+          "why": {
+            "description": "Why it is sent rather than read here: \"Handwriting\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "width": {
+            "description": "Width in pixels.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index",
+          "digest",
+          "digestShort",
+          "mimeType",
+          "width",
+          "height",
+          "sizeText",
+          "regions",
+          "coveredAll",
+          "coveredText"
+        ],
+        "type": "object"
+      },
+      "EvidenceRegion": {
+        "description": "A region drawn over an evidence image, in the image's own pixels.",
+        "properties": {
+          "class": {
+            "$ref": "#/components/schemas/CoverClass",
+            "description": "The class."
+          },
+          "shortTag": {
+            "description": "The tag on a small picture: \"face\".",
+            "type": "string"
+          },
+          "tag": {
+            "description": "The region's tag on a large picture: \"face · whole person\".",
+            "type": "string"
+          },
+          "x0": {
+            "description": "Left edge, pixels.",
+            "format": "double",
+            "type": "number"
+          },
+          "x1": {
+            "description": "Right edge, pixels, exclusive.",
+            "format": "double",
+            "type": "number"
+          },
+          "y0": {
+            "description": "Top edge, pixels.",
+            "format": "double",
+            "type": "number"
+          },
+          "y1": {
+            "description": "Bottom edge, pixels, exclusive.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "class",
+          "tag",
+          "shortTag",
+          "x0",
+          "y0",
+          "x1",
+          "y1"
+        ],
+        "type": "object"
+      },
+      "ExampleScope": {
+        "description": "What an example holds (board choice V13).",
+        "oneOf": [
+          {
+            "const": "region",
+            "description": "This region only.",
+            "type": "string"
+          },
+          {
+            "const": "page",
+            "description": "Every region on the page, with this correction.",
+            "type": "string"
+          },
+          {
+            "const": "nothing",
+            "description": "Nothing: the answer is that nothing is there.",
+            "type": "string"
+          }
+        ]
+      },
+      "ExamplesView": {
+        "description": "Where a labelled example may be saved (board choice V13).",
+        "properties": {
+          "canSave": {
+            "description": "The source saves examples.",
+            "type": "boolean"
+          },
+          "caseName": {
+            "description": "The case name offered first, for the selected region.",
+            "type": "string"
+          },
+          "file": {
+            "description": "The file picked first.",
+            "type": "string"
+          },
+          "files": {
+            "description": "The eval fixture files there are, relative to the fixtures' root.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "canSave",
+          "files",
+          "file",
+          "caseName"
+        ],
+        "type": "object"
+      },
+      "Fact": {
+        "description": "A labelled line of a region's details: \"Answered in · Model-input pixels, 960 × 960,\nletterboxed\".",
+        "properties": {
+          "label": {
+            "description": "\"Answered in\".",
+            "type": "string"
+          },
+          "parts": {
+            "description": "The value, in parts.",
+            "items": {
+              "$ref": "#/components/schemas/FactPart"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "label",
+          "parts"
+        ],
+        "type": "object"
+      },
+      "FactPart": {
+        "description": "One part of a fact's value.",
+        "properties": {
+          "style": {
+            "$ref": "#/components/schemas/FactStyle",
+            "description": "How they read."
+          },
+          "text": {
+            "description": "The words.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "style"
+        ],
+        "type": "object"
+      },
+      "FactStyle": {
+        "description": "How part of a fact reads.",
+        "oneOf": [
+          {
+            "const": "plain",
+            "description": "Plain words.",
+            "type": "string"
+          },
+          {
+            "const": "mono",
+            "description": "Data: an identifier, a box, a digest.",
+            "type": "string"
+          },
+          {
+            "const": "muted",
+            "description": "A quieter note after the value.",
+            "type": "string"
+          },
+          {
+            "const": "strong",
+            "description": "Bold, quoted words.",
+            "type": "string"
+          }
+        ]
       },
       "FeedEntry": {
         "description": "One event of a session's store, numbered by its position there (spec 3.3 §6).",
@@ -4642,6 +5616,33 @@
         ],
         "type": "object"
       },
+      "GoesTo": {
+        "description": "Where the images go, in words.",
+        "properties": {
+          "host": {
+            "description": "The hosts, joined: `api.anthropic.com`.",
+            "type": "string"
+          },
+          "model": {
+            "description": "The model: `claude-sonnet-5-5`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "description": "Who receives them: \"Claude\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "host"
+        ],
+        "type": "object"
+      },
       "GrantedUse": {
         "description": "Something the home lets every agent on it do beyond its definition, because the host\ngives each agent it runs the tools for it (spec 3.3 §5.7, S-I12, S-I13): shown under\n\"Here is what Finance can do\" as \"On this home it can also:\". Hosts register each with\n`SurfaceEngineBuilder::grant`.",
         "properties": {
@@ -4664,6 +5665,81 @@
         "required": [
           "id",
           "text"
+        ],
+        "type": "object"
+      },
+      "ImageChange": {
+        "description": "A change to an evidence image before it leaves (board choices A7, A8): the crop can only\nshrink and covering can only grow, so a change never shows more than the image it changes.",
+        "properties": {
+          "cover": {
+            "description": "Boxes `[x0, y0, x1, y1]` in the image's pixels to fill solid black.",
+            "items": {
+              "items": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 4,
+              "minItems": 4,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "crop": {
+            "description": "The new edges `[x0, y0, x1, y1]` in the image's pixels, inside the image.",
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "image": {
+            "description": "The image's place in the call's evidence.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "image"
+        ],
+        "type": "object"
+      },
+      "ImageChanged": {
+        "description": "What a change made: the image it replaces and the new one.",
+        "properties": {
+          "from": {
+            "description": "The digest of the image the change replaces.",
+            "type": "string"
+          },
+          "height": {
+            "description": "The new image's height.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "to": {
+            "description": "The digest of the new image, held again for the person's decision.",
+            "type": "string"
+          },
+          "width": {
+            "description": "The new image's width.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "width",
+          "height"
         ],
         "type": "object"
       },
@@ -4705,6 +5781,26 @@
           }
         ]
       },
+      "LabelCount": {
+        "description": "A label and how many regions carry it: a filter chip.",
+        "properties": {
+          "count": {
+            "description": "How many.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "label": {
+            "description": "The label.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "count"
+        ],
+        "type": "object"
+      },
       "LabelSize": {
         "description": "How large a label is.",
         "oneOf": [
@@ -4724,6 +5820,45 @@
             "type": "string"
           }
         ]
+      },
+      "LabelledExample": {
+        "description": "`POST /api/surface/vision/{session}/examples`: save a labelled example (board choices V11,\nV12, V13).",
+        "properties": {
+          "answer": {
+            "description": "The answer the example starts from.",
+            "type": "string"
+          },
+          "caseName": {
+            "description": "The case's name: `inv-2291-p1-po-number`.",
+            "type": "string"
+          },
+          "file": {
+            "description": "The eval fixtures file, relative to the fixtures' root: `evals/vision/invoices.test.json`.",
+            "type": "string"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RegionCorrection"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The region, corrected, kept or drawn; absent for an example with nothing in it."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ExampleScope",
+            "description": "What the example holds."
+          }
+        },
+        "required": [
+          "answer",
+          "file",
+          "caseName",
+          "scope"
+        ],
+        "type": "object"
       },
       "LightKind": {
         "description": "A kind of light.",
@@ -4761,6 +5896,152 @@
           {
             "const": "both",
             "description": "At both ends.",
+            "type": "string"
+          }
+        ]
+      },
+      "MaskView": {
+        "description": "A mask to draw: COCO run-length encoding, column-major, unset run first.",
+        "properties": {
+          "area": {
+            "description": "Pixels set.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "counts": {
+            "description": "The runs.",
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "height": {
+            "description": "Height of the mask's raster.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "width": {
+            "description": "Width of the mask's raster.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "width",
+          "height",
+          "counts",
+          "area"
+        ],
+        "type": "object"
+      },
+      "MeasureTile": {
+        "description": "A measurement tile (board choice V9).",
+        "properties": {
+          "label": {
+            "description": "\"Longest\".",
+            "type": "string"
+          },
+          "uncertainty": {
+            "description": "\"± 0.3 mm\".",
+            "type": "string"
+          },
+          "value": {
+            "description": "\"14.3 mm\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value",
+          "uncertainty"
+        ],
+        "type": "object"
+      },
+      "MeasurementsView": {
+        "description": "An answer's measurements (board choice V9).",
+        "properties": {
+          "calibration": {
+            "description": "\"In the belt's plane, from the fiducial: 40.0 mm is 245 px, so 6.12 px per mm. Valid\nonly in that plane.\"",
+            "type": "string"
+          },
+          "line": {
+            "description": "The longest length's ends, in source pixels.",
+            "items": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "region": {
+            "description": "The region measured.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tiles": {
+            "description": "The tiles.",
+            "items": {
+              "$ref": "#/components/schemas/MeasureTile"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "region",
+          "tiles",
+          "calibration"
+        ],
+        "type": "object"
+      },
+      "MediaNotice": {
+        "description": "A notice on the card about its images: why nothing can be sent.",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/MediaNoticeKind",
+            "description": "Why it says so."
+          },
+          "text": {
+            "description": "The rest.",
+            "type": "string"
+          },
+          "title": {
+            "description": "The lead words, in bold: \"Nothing to send.\"",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "title",
+          "text"
+        ],
+        "type": "object"
+      },
+      "MediaNoticeKind": {
+        "description": "Why a card's images cannot be sent.",
+        "oneOf": [
+          {
+            "const": "purged",
+            "description": "The image was deleted (board choice A13).",
+            "type": "string"
+          },
+          {
+            "const": "allCovered",
+            "description": "Every pixel is covered (board choice A15).",
             "type": "string"
           }
         ]
@@ -4971,6 +6252,30 @@
         ],
         "type": "object"
       },
+      "ParkedView": {
+        "description": "A decision whose run stopped waiting for it (spec 3.7 §8.2, board choice A12).",
+        "properties": {
+          "at": {
+            "description": "When the run ended.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "atText": {
+            "description": "Local `HH:MM`.",
+            "type": "string"
+          },
+          "text": {
+            "description": "\"Document desk stopped waiting at 10:24 and finished its run without this. …\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "atText",
+          "text"
+        ],
+        "type": "object"
+      },
       "PasskeyOptions": {
         "description": "`POST /surface/phone/passkey/options` answer: the options for\n`navigator.credentials.create`, as WebAuthn's JSON form gives them (spec 3.3 §8.2).",
         "properties": {
@@ -5085,6 +6390,26 @@
         ],
         "type": "object"
       },
+      "PictureKind": {
+        "description": "What kind of picture an answer is about, which decides its layers and words.",
+        "oneOf": [
+          {
+            "const": "photo",
+            "description": "A photo or a still: regions, masks and measurements.",
+            "type": "string"
+          },
+          {
+            "const": "document",
+            "description": "A document page: blocks by kind in reading order.",
+            "type": "string"
+          },
+          {
+            "const": "videoFrame",
+            "description": "A frame of a video: regions with tracks, trails and a timeline.",
+            "type": "string"
+          }
+        ]
+      },
       "Pill": {
         "description": "A pill on a briefing line (spec 3.3 §5.1 Today).",
         "oneOf": [
@@ -5143,6 +6468,36 @@
           "id",
           "name",
           "claims"
+        ],
+        "type": "object"
+      },
+      "PurgedView": {
+        "description": "An evidence image that is no longer kept (board choice A13).",
+        "properties": {
+          "day": {
+            "description": "The day it went, \"18 Dec\", when its retention ran out.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "short": {
+            "description": "The shorter line a small picture shows: \"Image deleted 18 Dec\".",
+            "type": "string"
+          },
+          "text": {
+            "description": "\"Evidence is kept for 30 days. What it was, …\".",
+            "type": "string"
+          },
+          "title": {
+            "description": "\"This image was deleted on 18 Dec\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "text",
+          "short"
         ],
         "type": "object"
       },
@@ -5335,6 +6690,228 @@
         ],
         "type": "object"
       },
+      "RegionCorrection": {
+        "description": "A region as a person corrected or drew it.",
+        "properties": {
+          "box": {
+            "description": "The box `[x0, y0, x1, y1]` in the image's pixels.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "index": {
+            "description": "The region it corrects, by its index in the answer; absent for a region the person\ndrew.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "label": {
+            "description": "The label.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The text, for a page's block.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "box"
+        ],
+        "type": "object"
+      },
+      "RegionView": {
+        "description": "One region of an answer, as the viewer draws and lists it.",
+        "properties": {
+          "atEdge": {
+            "description": "It touches the picture's edge.",
+            "type": "boolean"
+          },
+          "blurred": {
+            "description": "Its pixels are blurred in the picture: a person.",
+            "type": "boolean"
+          },
+          "boxText": {
+            "description": "The box as the details show it: `1250, 466 → 1532, 540`, in source pixels.",
+            "type": "string"
+          },
+          "chain": {
+            "description": "The transform chain as steps (board choice V4).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "detail": {
+            "description": "The list's quieter words: the text, \"mask · 14.3 mm\", \"box · at the edge\".",
+            "type": "string"
+          },
+          "escalation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EscalationView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A value an escalation replaced."
+          },
+          "facts": {
+            "description": "The details, in order (board choices V4, V5, V6).",
+            "items": {
+              "$ref": "#/components/schemas/Fact"
+            },
+            "type": "array"
+          },
+          "heading": {
+            "description": "The details' heading: \"5 · handwriting\", \"Seal tear\", \"T4 · forklift\".",
+            "type": "string"
+          },
+          "index": {
+            "description": "Its place in the answer's `RegionSet`: what an example and the export name.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "label": {
+            "description": "The label or block kind: \"handwriting\", \"seal tear\".",
+            "type": "string"
+          },
+          "mask": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MaskView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The mask, when the shape is one."
+          },
+          "measurement": {
+            "description": "Its measurement in one line: \"14.3 mm\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "order": {
+            "description": "Its place in reading order, from 1, for a page.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "polygon": {
+            "description": "The polygon's points, when the shape is one.",
+            "items": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "score": {
+            "description": "The score.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "scoreText": {
+            "description": "The score as the list shows it: \"0.58\".",
+            "type": "string"
+          },
+          "shape": {
+            "$ref": "#/components/schemas/ShapeKind",
+            "description": "The shape's kind."
+          },
+          "tag": {
+            "description": "The tag over the picture: \"part · 0.96\", \"seal tear · 0.91 · 14.3 mm\".",
+            "type": "string"
+          },
+          "text": {
+            "description": "The text it reads, for a page's block.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "track": {
+            "description": "The track, for a video frame.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "trackName": {
+            "description": "\"T4\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "x0": {
+            "description": "Left edge in source pixels.",
+            "format": "double",
+            "type": "number"
+          },
+          "x1": {
+            "description": "Right edge in source pixels, exclusive.",
+            "format": "double",
+            "type": "number"
+          },
+          "y0": {
+            "description": "Top edge in source pixels.",
+            "format": "double",
+            "type": "number"
+          },
+          "y1": {
+            "description": "Bottom edge in source pixels, exclusive.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "index",
+          "label",
+          "shape",
+          "detail",
+          "scoreText",
+          "x0",
+          "y0",
+          "x1",
+          "y1",
+          "boxText",
+          "tag",
+          "heading",
+          "facts",
+          "chain",
+          "atEdge",
+          "blurred"
+        ],
+        "type": "object"
+      },
       "RemovedAgent": {
         "description": "An agent the person removed, whose threads stay readable (spec 3.3 §5.7, §13 decision 18;\nowner, at the wave 3 gate: \"Removed agents\" at the roster's foot).",
         "properties": {
@@ -5454,6 +7031,60 @@
             "type": "string"
           }
         ]
+      },
+      "RunView": {
+        "description": "The run and the call that produced an answer.",
+        "properties": {
+          "agent": {
+            "description": "The agent, by its name in the runtime.",
+            "type": "string"
+          },
+          "call": {
+            "description": "The tool and the call: \"vision_read · c-31\", in parts.",
+            "items": {
+              "$ref": "#/components/schemas/FactPart"
+            },
+            "type": "array"
+          },
+          "text": {
+            "description": "\"Document desk · 10:31\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "agent",
+          "call"
+        ],
+        "type": "object"
+      },
+      "SavedExample": {
+        "description": "What saving an example did.",
+        "properties": {
+          "caseName": {
+            "description": "The case's name.",
+            "type": "string"
+          },
+          "file": {
+            "description": "The file, relative to the fixtures' root.",
+            "type": "string"
+          },
+          "image": {
+            "description": "The image file the case points at, relative to the eval file.",
+            "type": "string"
+          },
+          "text": {
+            "description": "\"Saved to evals/vision/invoices.test.json as inv-2291-p1-po-number. The run's answer\nstays as it was.\"",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "caseName",
+          "image",
+          "text"
+        ],
+        "type": "object"
       },
       "SceneAxes": {
         "description": "A scene's axes.",
@@ -6380,6 +8011,36 @@
           }
         ]
       },
+      "ShapeKind": {
+        "description": "The kind of a region's shape.",
+        "oneOf": [
+          {
+            "const": "point",
+            "description": "A point.",
+            "type": "string"
+          },
+          {
+            "const": "box",
+            "description": "A box.",
+            "type": "string"
+          },
+          {
+            "const": "polygon",
+            "description": "A polygon.",
+            "type": "string"
+          },
+          {
+            "const": "mask",
+            "description": "A mask.",
+            "type": "string"
+          },
+          {
+            "const": "keypoints",
+            "description": "Keypoints.",
+            "type": "string"
+          }
+        ]
+      },
       "ShellPlace": {
         "description": "Where an agent's commands run (spec 3.3 §5.7), as its harness reports it.",
         "oneOf": [
@@ -6857,6 +8518,13 @@
                   "null"
                 ]
               },
+              "image": {
+                "description": "The image a vision tool answered about, by digest: the thread links the call to\nthe annotated viewer (spec 3.7 §8.2, board choice V1).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "kind": {
                 "const": "result",
                 "type": "string"
@@ -7117,6 +8785,69 @@
         ],
         "type": "object"
       },
+      "TrackView": {
+        "description": "One track of a video (board choice V10).",
+        "properties": {
+          "blurred": {
+            "description": "People are blurred.",
+            "type": "boolean"
+          },
+          "framesText": {
+            "description": "\"139\", \"1.2k\": frames seen.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The track's identifier.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "label": {
+            "description": "\"forklift\".",
+            "type": "string"
+          },
+          "name": {
+            "description": "\"T4\".",
+            "type": "string"
+          },
+          "spans": {
+            "description": "When it is seen, in seconds.",
+            "items": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "trail": {
+            "description": "Where it was, oldest first.",
+            "items": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "label",
+          "framesText",
+          "spans",
+          "trail",
+          "blurred"
+        ],
+        "type": "object"
+      },
       "UsesDraft": {
         "description": "What an agent can use (spec 3.3 §5.7 \"What it can use\").",
         "properties": {
@@ -7185,6 +8916,187 @@
         "required": [
           "surface",
           "origin"
+        ],
+        "type": "object"
+      },
+      "VideoView": {
+        "description": "The video a frame comes from (board choice V10).",
+        "properties": {
+          "atS": {
+            "description": "Where the frame is, in seconds.",
+            "format": "double",
+            "type": "number"
+          },
+          "atText": {
+            "description": "\"10:34.1\".",
+            "type": "string"
+          },
+          "frameText": {
+            "description": "\"frame 19,023 · sampled 5 a second\".",
+            "type": "string"
+          },
+          "lengthS": {
+            "description": "How long the video is, in seconds.",
+            "format": "double",
+            "type": "number"
+          },
+          "lengthText": {
+            "description": "\"20:00\".",
+            "type": "string"
+          },
+          "note": {
+            "description": "\"Tracks are anonymous …\".",
+            "type": "string"
+          },
+          "tracks": {
+            "description": "The tracks.",
+            "items": {
+              "$ref": "#/components/schemas/TrackView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "atText",
+          "lengthText",
+          "frameText",
+          "atS",
+          "lengthS",
+          "tracks",
+          "note"
+        ],
+        "type": "object"
+      },
+      "ViewerImage": {
+        "description": "The picture.",
+        "properties": {
+          "digest": {
+            "description": "`sha256:<hex>` in full.",
+            "type": "string"
+          },
+          "digestShort": {
+            "description": "`sha256:556b49…a22654` (board choice S4).",
+            "type": "string"
+          },
+          "height": {
+            "description": "Height in pixels.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "href": {
+            "description": "Where the surface loads it with the viewer's own authorisation.",
+            "type": "string"
+          },
+          "mimeType": {
+            "description": "`image/png`.",
+            "type": "string"
+          },
+          "width": {
+            "description": "Width in pixels.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "digest",
+          "digestShort",
+          "width",
+          "height",
+          "mimeType",
+          "href"
+        ],
+        "type": "object"
+      },
+      "ViewerView": {
+        "description": "What the annotated viewer shows of one image in one session (spec 3.7 §8.2, X12).",
+        "properties": {
+          "agent": {
+            "description": "The agent the back link returns to.",
+            "type": "string"
+          },
+          "agentName": {
+            "description": "Its display name: \"Document desk\".",
+            "type": "string"
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnswerView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The answer shown, when there is one."
+          },
+          "answers": {
+            "description": "Every answer for this image in the session, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/AnswerChoice"
+            },
+            "type": "array"
+          },
+          "caption": {
+            "description": "A feature's line under the picture.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "compare": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompareView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Two answers side by side, when asked."
+          },
+          "examples": {
+            "$ref": "#/components/schemas/ExamplesView",
+            "description": "Saving labelled examples."
+          },
+          "image": {
+            "$ref": "#/components/schemas/ViewerImage",
+            "description": "The picture."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PictureKind",
+            "description": "What kind of picture it is."
+          },
+          "meta": {
+            "description": "\"1654 × 2339 · INV-2291.pdf, page 1 at 200 dpi\".",
+            "type": "string"
+          },
+          "minScore": {
+            "description": "The score a region needs to be shown at first.",
+            "format": "double",
+            "type": "number"
+          },
+          "sessionId": {
+            "description": "The session.",
+            "type": "string"
+          },
+          "title": {
+            "description": "\"INV-2291 · page 1\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "image",
+          "kind",
+          "title",
+          "meta",
+          "agent",
+          "agentName",
+          "answers",
+          "minScore",
+          "examples"
         ],
         "type": "object"
       },
@@ -8723,6 +10635,93 @@
         "summary": "Starts Confirm it's you for one answer, bound to the decision, its version and the edited arguments; feature mobile (spec 3.3 §8.2)"
       }
     },
+    "/api/surface/decisions/{id}/evidence/{index}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The image's place in the card's `media.images`",
+            "in": "path",
+            "name": "index",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The surface asking",
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": null
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The image"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "One image a decision holds as evidence (spec 3.7 §8.2): the exact bytes whose digest the card shows, for a viewer who may see the decision; never cached"
+      }
+    },
     "/api/surface/decisions/{id}/take-over": {
       "post": {
         "parameters": [
@@ -10093,6 +12092,344 @@
           }
         },
         "summary": "Stop all from a paired device (spec 3.3 §11 S-I10); every other caller sends a stopAll command"
+      }
+    },
+    "/api/surface/vision/{session}/answers/{answer}/regions": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "answer",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The surface asking",
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": null
+          },
+          {
+            "description": "A second answer, exported beside it",
+            "in": "query",
+            "name": "with",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": [
+                    "object",
+                    "array"
+                  ]
+                }
+              }
+            },
+            "description": "The RegionSet, or an array of two"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "One answer's RegionSet, as `adk-vision/schema/region-set.json` publishes it, to save as a file (board choice V14); with `with`, both answers' sets in an array"
+      }
+    },
+    "/api/surface/vision/{session}/examples": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabelledExample"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedExample"
+                }
+              }
+            },
+            "description": "Where it was saved"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Save a labelled example from an answer (board choices V11–V13): an adk-eval case pointing at the image by path and digest, the image beside its file; the run's answer is unchanged and the example recorded. Not from a paired phone"
+      }
+    },
+    "/api/surface/vision/{session}/images/{image}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "A `sha256:` digest, or the name of an image the session holds",
+            "in": "path",
+            "name": "image",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The surface asking",
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": null
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The image"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "One image of a session (spec 3.7 §8.3): the exact bytes whose digest the viewer shows, for the session's owner; never cached"
+      }
+    },
+    "/api/surface/vision/{session}/images/{image}/view": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "A `sha256:` digest, or the name of an image the session holds",
+            "in": "path",
+            "name": "image",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The surface asking",
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": null
+          },
+          {
+            "description": "The answer to show, by its call; the newest otherwise",
+            "in": "query",
+            "name": "answer",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "A second answer to show beside it",
+            "in": "query",
+            "name": "compare",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewerView"
+                }
+              }
+            },
+            "description": "The viewer"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "The annotated viewer of one image of a session (spec 3.7 §8.2, X12): every answer the vision tools gave for it, with each region's backend, frame and transform chain; for the session's owner"
       }
     },
     "/api/surface/voice": {

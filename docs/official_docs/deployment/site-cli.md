@@ -42,6 +42,7 @@ Your keys — run these yourself, in your own terminal, never inside an agent:
 | `--agency` | — | One harness for many sites: the site goes into `<dir>/<domain>`, `<dir>/agency.toml` lists it, and every listed site is served, each isolated (A-I22) |
 | `--edge`, `--kernel`, `--home` | `127.0.0.1:8080`, `127.0.0.1:7340`, `127.0.0.1:8090` | Listeners; the home takes loopback only |
 | `--owner` | your user name | The person the setup code pairs |
+| `--edge-url` | the site's origin | The agent edge's public origin, such as `https://agent.example.com`: the URL its A2A card, MCP server and event references name, and the experiments' beacon posts to |
 | `--no-open` | — | Do not open the browser |
 
 The project keeps no root key: the root key file stays with the owner, and `awp keys` signs

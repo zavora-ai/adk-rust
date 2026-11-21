@@ -105,6 +105,10 @@ impl AuditRecorder for PseudonymousRecorder {
         *delegation_chain = chain;
         self.inner.record(draft).await
     }
+
+    async fn seal(&self) -> Result<()> {
+        self.inner.seal().await
+    }
 }
 
 /// Records read per page while scanning a log.

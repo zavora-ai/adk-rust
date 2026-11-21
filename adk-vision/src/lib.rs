@@ -19,9 +19,10 @@
 //!
 //! | Feature | Contents |
 //! |---------|----------|
-//! | (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor` |
+//! | (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor`, watch conditions ([`WatchEvaluator`]), calibration and measurement ([`Calibration`]) |
 //! | `fetch` | `ModelFetcher`: Hugging Face downloads by revision, SHA-256 checked before load, `HF_HUB_OFFLINE` honoured |
 //! | `conformance` | `conformance`: the suite every backend runs, and its test macros |
+//! | `eval` | `eval`: any runtime task as an `adk-eval` agent, in process or behind `cargo adk eval --agent-cmd` |
 //! | `guardrail` | `ImagePrivacyGuardrail` on model calls, tool results and user input, and `PersonalTextRedactor` (OCR words matched by `adk-guardrail`'s PII patterns) |
 //! | `onnx` | `onnx`: RF-DETR, EfficientSAM, SAM 2.1 and SigLIP 2 on ONNX Runtime, the runtime downloaded at build time |
 //! | `onnx-dynamic` | The same backends against an onnxruntime library loaded from `ORT_DYLIB_PATH` |
@@ -32,15 +33,15 @@
 //! | `ocr` | `PpOcrReader`: PP-OCRv6 text lines and words through `oar-ocr` on ONNX Runtime |
 //! | `ocr-vl` | `PaddleOcrVlReader`: PaddleOCR-VL-1.6 with PP-DocLayoutV3 through `oar-ocr-vl` on Candle |
 //! | `ocr-vl-metal` | `ocr-vl` on Apple GPUs |
+//! | `mistralrs` | `mistralrs`: `LlmDescriber::mistralrs` loads a verified Qwen3-VL (or another mistral.rs vision model) in this process; regions in Qwen3-VL's own 0–1000 frame (implies `cloud`, `fetch`) |
+//! | `mistralrs-metal`, `mistralrs-cuda` | `mistralrs` on Apple GPUs or CUDA |
 //!
 //! [`VisionToolset`] — `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`,
-//! `vision_crop`, `vision_redact`, `vision_annotate` — is always built: each tool runs on
+//! `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure` — is always built: each tool runs on
 //! the governed path, a remote call is held with the exact egress image as approval
 //! evidence, and every call, release and edit writes its `vision.*` audit record
 //! ([`audit`]).
 //!
-//! The other backends — OCR and mistral.rs — are features added by the workstreams that
-//! bring them.
 //!
 //! # Example
 //!
@@ -101,13 +102,18 @@ mod digest;
 mod edit;
 mod egress;
 mod error;
+#[cfg(feature = "eval")]
+pub mod eval;
 #[cfg(feature = "fetch")]
 mod fetch;
 mod geometry;
 #[cfg(feature = "guardrail")]
 mod guardrail;
 mod manifest;
+mod measure;
 mod media;
+#[cfg(feature = "mistralrs")]
+pub mod mistralrs;
 #[cfg(feature = "nim")]
 mod nim_cv;
 #[cfg(feature = "ocr")]
@@ -126,6 +132,7 @@ mod sent;
 mod toolset;
 mod tracker;
 mod traits;
+mod watch;
 
 pub use backend::{BackendDescriptor, BackendId, InputLimits, Locality, Oversize, PriceRef};
 pub use budget::{ImageTokens, TokenEstimate};
@@ -150,12 +157,17 @@ pub use geometry::{
 };
 #[cfg(feature = "guardrail")]
 pub use guardrail::{
-    GateOutcome, ImagePrivacyGuardrail, MODEL_CONTEXT_CLASS, PersonalTextRedactor,
+    GateOutcome, ImagePrivacyGuardrail, MODEL_CONTEXT_CLASS, PERSONAL_FIELD_LABELS,
+    PersonalTextRedactor,
 };
 pub use manifest::{
     AcceptanceStore, FileAcceptanceStore, InMemoryAcceptanceStore, InputSpec, IoSpec,
     LicenceAcceptance, LicenceClass, LicenceGate, LicenceInfo, LicencePolicy, ManifestSet,
     ModelFile, ModelManifest, ModelSource, RuntimeSpec, VerifiedFile, VerifiedModel, VisionTask,
+};
+pub use measure::{
+    Calibration, CalibrationSource, FiducialSpec, MEASUREMENT_VALIDITY, MeasuredGeometry,
+    Measurement,
 };
 pub use media::{
     ArtifactLocator, DecodeLimits, DecodedImage, Frame, FrameMeta, FramePixels, FrameSourceId,
@@ -171,7 +183,7 @@ pub use nim_cv::{
 pub use ocr::{PpOcrReader, PpOcrV6Size};
 #[cfg(feature = "ocr-vl")]
 pub use ocr_vl::{PADDLEOCR_VL_MANIFEST, PP_DOCLAYOUT_MANIFEST, PaddleOcrVlReader, VlDevice};
-pub use redact::{PersonRedactor, REDACTION_MARGIN};
+pub use redact::{DEFAULT_PERSON_DETECTOR, PersonRedactor, REDACTION_MARGIN};
 pub use runtime::{
     CallOptions, CallRecord, Edited, Escalation, Route, Trigger, VisionOutput, VisionRuntime,
     VisionRuntimeBuilder,
@@ -180,8 +192,8 @@ pub use runtime::{
 pub use sam::{SamConfig, SamSegmenter};
 pub use sent::{SentImage, VisionInput};
 pub use toolset::{
-    EgressApproval, VISION_EGRESS_POLICY_REF, VISION_TOOL_NAMES, VisionTool, VisionToolKind,
-    VisionToolset, VisionToolsetBuilder,
+    ANSWER_ARTIFACT_PREFIX, EgressApproval, VISION_EGRESS_POLICY_REF, VISION_TOOL_NAMES,
+    VisionTool, VisionToolKind, VisionToolset, VisionToolsetBuilder, answer_artifact_name,
 };
 pub use tracker::GreedyIouTracker;
 pub use traits::{
@@ -189,4 +201,9 @@ pub use traits::{
     DocumentPage, DocumentReader, Editor, Embedder, EmbeddingSpace, ImageRegion, Metric,
     ReadOptions, Sampling, SegmentPrompt, Segmenter, TableCell, Tracker, VideoAnalysis,
     VideoAnalyzer, VideoEvent, VideoInput, VideoRequest, Word,
+};
+pub use watch::{
+    FrameRef, TrackedObservation, VISION_WATCH_FIRED, VISION_WATCH_REGISTERED, WatchCondition,
+    WatchEvaluator, WatchEvent, WatchEventKind, WatchSink, Zone, ZoneAnchor,
+    watch_registered_draft,
 };

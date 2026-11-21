@@ -1,0 +1,8 @@
+{
+  "vision": {
+    "box_tolerance_px": 8.0,
+    "region_iou": 0.75,
+    "detection_recall": 0.8,
+    "grounding_hit_rate": 1.0
+  }
+}

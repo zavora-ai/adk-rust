@@ -656,15 +656,16 @@ impl ServerBuilder {
     /// The base URL is used to construct the agent card's endpoint URLs.
     ///
     /// With the `a2a-v1` feature, the root agent is served over A2A v1
-    /// ([`A2aV1Server`](crate::a2a::v1::server::A2aV1Server)):
+    /// (`a2a::v1::server::A2aV1Server`):
     ///
     /// - the JSON-RPC binding at `/a2a/v1`;
     /// - the HTTP+JSON binding under `/a2a/v1/rest`;
     /// - the v1 card at `/.well-known/agent-card.json`.
     ///
     /// The A2A 0.3 endpoint stays at `/a2a` (and `/a2a/stream`), with its card at
-    /// `/.well-known/agent.json`. The v1 card also names it, as its top-level `url` and
-    /// last interface, so a 0.3 peer that reads `agent-card.json` still finds it.
+    /// `/.well-known/agent.json`. The v1 card also lists it, as its last interface with
+    /// `protocolVersion` `0.3`; a v1 card has no top-level `url`, so a 0.3 peer reads the
+    /// 0.3 card.
     ///
     /// Without `a2a-v1`, only A2A 0.3 is served, and its card is at both paths.
     pub fn with_a2a(mut self, base_url: impl Into<String>) -> Self {
@@ -1268,11 +1269,13 @@ impl ServerBuilder {
                 None => a2a_controller,
             };
             // Same split as `create_app_with_a2a`: discovery is public, RPC is authenticated.
+            // `route_layer`, as these routes are merged at the root: `layer` would also wrap
+            // the app's fallback and answer every unknown path with `401`.
             let a2a_rpc = Router::new()
                 .route("/a2a", post(controllers::a2a::handle_jsonrpc_for_caller))
                 .route("/a2a/stream", post(controllers::a2a::handle_jsonrpc_stream_for_caller))
                 .with_state(a2a_controller.clone())
-                .layer(auth_layer.clone());
+                .route_layer(auth_layer.clone());
 
             #[cfg(not(feature = "a2a-v1"))]
             let a2a_discovery = a2a_card_routes(a2a_controller, A2A_CARD_PATHS);
@@ -1299,7 +1302,7 @@ impl ServerBuilder {
                 (
                     a2a_card_routes(a2a_controller, &[A2A_LEGACY_CARD_PATH])
                         .merge(v1.card_router()),
-                    a2a_rpc.merge(v1.rpc_router().layer(auth_layer.clone())),
+                    a2a_rpc.merge(v1.rpc_router().route_layer(auth_layer.clone())),
                 )
             };
 

@@ -134,6 +134,40 @@ async fn a2a_streaming_requires_authentication() {
 }
 
 #[tokio::test]
+async fn an_unknown_path_is_not_found_rather_than_unauthorized() {
+    // The A2A routes carry the authentication; a path nothing serves is a 404 for everyone.
+    let app = create_app_with_a2a(authenticated_config(), Some("http://localhost:8080"));
+
+    for path in ["/", "/no-such-route", "/a2a/no-such-route"] {
+        let request = Request::builder().method("GET").uri(path).body(Body::empty()).unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "GET {path}");
+    }
+}
+
+#[cfg(feature = "a2a-v1")]
+#[tokio::test]
+async fn a2a_v1_requires_authentication() {
+    let app = create_app_with_a2a(authenticated_config(), Some("http://localhost:8080"));
+
+    for (method, path) in [("POST", "/a2a/v1"), ("GET", "/a2a/v1/rest/tasks")] {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("A2A-Version", "1.0")
+            .header("content-type", "application/json")
+            .body(rpc_body())
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{method} {path}");
+    }
+}
+
+#[tokio::test]
 async fn the_agent_card_stays_public() {
     // Discovery must not require a credential: peers fetch it before they have one.
     let app = create_app_with_a2a(authenticated_config(), Some("http://localhost:8080"));

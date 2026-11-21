@@ -800,6 +800,7 @@ async fn leg_11_an_app_that_builds_a_fake_card_in_code_can_never_approve_anythin
                 edited_args: None,
                 reason: None,
                 expanded: true,
+                evidence: Vec::new(),
             },
         )
         .await;
@@ -1036,6 +1037,7 @@ async fn a_live_model_shows_an_app_whose_call_waits_for_the_person() {
                 edited_args: None,
                 reason: None,
                 expanded: true,
+                evidence: Vec::new(),
             },
         )
         .await
@@ -1125,6 +1127,7 @@ async fn an_app_whose_showing_call_waited_for_the_person_opens_once_allowed() {
                 edited_args: None,
                 reason: None,
                 expanded: true,
+                evidence: Vec::new(),
             },
         )
         .await

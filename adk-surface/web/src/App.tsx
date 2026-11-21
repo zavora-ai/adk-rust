@@ -1,4 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { ImageLoaderContext, sameOriginLoader } from "./evidence/images";
+import type { ImageLoader } from "./evidence/images";
 import type { Command, DecisionCard, Origin } from "./generated/api";
 import type { HomeClient } from "./client";
 import { ApiError, problemText } from "./client";
@@ -31,7 +33,13 @@ import type { VerbsClient } from "./verbs/client";
 import type { WebsiteClient } from "./website/client";
 import { websiteLabels } from "./website/labels";
 import { Website } from "./website/Website";
+import type { Correction } from "./viewer/Viewer";
+import type { ViewerPlace } from "./viewer/route";
+import { viewerOf, viewerPath } from "./viewer/route";
 import type { WorkflowClient } from "./workflow/client";
+
+// The annotated viewer loads only when it opens: the home's main chunk stays within its budget.
+const Viewer = lazy(() => import("./viewer/Viewer").then((module) => ({ default: module.Viewer })));
 
 /** Where this tab keeps the session each agent's thread follows. */
 const FOLLOWED_KEY = "adk.home.followed";
@@ -50,20 +58,26 @@ export function App({
   seams = {},
   takeOver,
   initialSection,
+  initialAgent,
   website,
   verbs,
   workflow,
+  initialViewer,
 }: {
   client: HomeClient;
   seams?: Seams;
   takeOver?: TakeOverSeam;
   initialSection?: Section;
+  /** The agent whose thread opens first, by its name in the runtime; the first row's otherwise. */
+  initialAgent?: string;
   /** The website's views, where the server serves a website (spec 3.5 §8.2). */
   website?: WebsiteClient;
   /** Screen actions, where the server takes them (spec 3.3 §2 item 7). */
   verbs?: VerbsClient;
   /** The workflow observer's Runs tab, where the server serves it (spec 3.3 §12). */
   workflow?: WorkflowClient;
+  /** The annotated viewer open first, with a correction under way (fixtures). */
+  initialViewer?: { place: ViewerPlace; correction?: Correction };
 }) {
   const [section, setSection] = useState<Section>(() => initialSection ?? sectionOf(window.location.pathname));
   const [theme, setTheme] = useState<Theme>(storedTheme);
@@ -80,7 +94,7 @@ export function App({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
   const [problem, setProblem] = useState("");
-  const [selected, setSelected] = useState<string>();
+  const [selected, setSelected] = useState<string | undefined>(initialAgent);
   const [focusDecision, setFocusDecision] = useState<string>();
   // A decision of another session is shown in place of the person's conversation until they go
   // back; the conversation each thread follows (`followed`) never moves to it.
@@ -93,10 +107,16 @@ export function App({
   useEffect(() => applyTheme(theme), [theme]);
   // The agents screen the address names: New agent or one agent's settings (spec 3.3 §5.7).
   const [agentsPlace, setAgentsPlace] = useState(() => agentsPlaceOf(window.location));
+  // The annotated viewer of one image, opened from a thread, a card or a tool line (spec 3.7
+  // §8.2, board choice V1): a view in place of the section, under Threads.
+  const [viewing, setViewing] = useState<ViewerPlace | undefined>(
+    () => initialViewer?.place ?? viewerOf(window.location),
+  );
   useEffect(() => {
     const back = () => {
       setSection(sectionOf(window.location.pathname));
       setAgentsPlace(agentsPlaceOf(window.location));
+      setViewing(viewerOf(window.location));
     };
     window.addEventListener("popstate", back);
     return () => window.removeEventListener("popstate", back);
@@ -158,6 +178,7 @@ export function App({
   // The page never scrolls; the section does, under the header, and starts at its top.
   const content = useRef<HTMLDivElement>(null);
   const navigate = useCallback((next: Section) => {
+    setViewing(undefined);
     setSection(next);
     if (window.location.pathname !== pathOf(next)) window.history.pushState(null, "", pathOf(next));
     if (content.current) content.current.scrollTop = 0;
@@ -218,6 +239,44 @@ export function App({
     // Read on load, and again after a sign-in; never again once the link is opened.
   }, [client, signIns]);
 
+  const viewerClient = useMemo(() => client.viewerClient?.(), [client]);
+  const openViewer = useCallback((place: ViewerPlace) => {
+    const path = viewerPath(place);
+    if (`${window.location.pathname}${window.location.search}` !== path) window.history.pushState(null, "", path);
+    setSection("threads");
+    setViewing(place);
+    if (content.current) content.current.scrollTop = 0;
+  }, []);
+  // Every link to the viewer — a tool line's, a card's "Open the source image" — opens it in
+  // place, keeping the home's state; a modified click still opens a new tab.
+  useEffect(() => {
+    if (!viewerClient) return;
+    const onClick = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const link = (event.target as Element | null)?.closest?.("a[href]");
+      if (!(link instanceof HTMLAnchorElement) || link.target) return;
+      const url = new URL(link.href, window.location.href);
+      if (url.origin !== window.location.origin) return;
+      const place = viewerOf(url);
+      if (!place) return;
+      event.preventDefault();
+      openViewer(place);
+    };
+    document.addEventListener("click", onClick);
+    return () => document.removeEventListener("click", onClick);
+  }, [viewerClient, openViewer]);
+  const closeViewer = useCallback(
+    (agent: string, session: string) => {
+      if (agent) {
+        setSelected(agent);
+        setFocusDecision(undefined);
+        setVisiting(followed[agent] === session ? undefined : { agent, session });
+      }
+      navigate("threads");
+    },
+    [followed, navigate],
+  );
+
   async function act(command: Command, origin: Origin) {
     setProblem("");
     try {
@@ -254,8 +313,20 @@ export function App({
       voice && voiceOffered(voiceModels.value?.models.length ?? 0) ? { open: () => navigate("voice") } : undefined,
     [voice, voiceModels.value, navigate],
   );
+  // A decision's images load as the signed-in viewer (spec 3.7 §8.2).
+  const imageLoader = useMemo<ImageLoader>(
+    () => (client.image ? (href) => client.image!(href) : sameOriginLoader),
+    [client],
+  );
+
   // A drawing in its own window: the canvas alone, no header (spec 3.3 §5.1).
-  if (section === "canvas") return <CanvasWindow client={client} send={send} />;
+  if (section === "canvas") {
+    return (
+      <ImageLoaderContext.Provider value={imageLoader}>
+        <CanvasWindow client={client} send={send} />
+      </ImageLoaderContext.Provider>
+    );
+  }
   if (section === "voice" && voice) {
     // The conversation ended opens in Threads under the agent, in place of its own thread.
     const ended = (sessionId?: string) => {
@@ -349,7 +420,18 @@ export function App({
         />
       )}
       <div id="content" className="content" key={signIns} ref={content}>
-        {section === "threads" && (
+        {viewing && viewerClient && (
+          <Suspense fallback={<div className="vw-loading" aria-busy="true" />}>
+            <Viewer
+              client={viewerClient}
+              place={viewing}
+              onNavigate={openViewer}
+              onOpenThread={closeViewer}
+              initialCorrection={viewing === initialViewer?.place ? initialViewer.correction : undefined}
+            />
+          </Suspense>
+        )}
+        {!(viewing && viewerClient) && section === "threads" && (
           <Threads
             client={client}
             agents={rows}
@@ -482,7 +564,11 @@ export function App({
       </div>
     </div>
   );
-  return <VoiceEntryContext.Provider value={voiceEntry}>{home}</VoiceEntryContext.Provider>;
+  return (
+    <ImageLoaderContext.Provider value={imageLoader}>
+      <VoiceEntryContext.Provider value={voiceEntry}>{home}</VoiceEntryContext.Provider>
+    </ImageLoaderContext.Provider>
+  );
 }
 
 /** The client's voice routes, when it has them. */

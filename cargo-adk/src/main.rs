@@ -30,7 +30,9 @@ use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use cargo_adk::codegen::generate_project_with_registry;
+use cargo_adk::codegen::{
+    generate_pattern_readme, generate_project_with_registry, generate_readme,
+};
 use cargo_adk::composition::{DryRunFile, DryRunOutput, resolve_composition};
 use cargo_adk::registry::TemplateRegistry;
 
@@ -216,7 +218,9 @@ enum AdkCommand {
     /// stdin and writes one JSON response per line on stdout:
     /// request `{"case_id","turn","user_text","session_id"}`, response
     /// `{"text","tool_calls":[{"name","args"}]}` or `{"error"}`. Every turn of a case shares
-    /// a session_id. Logs go to stderr.
+    /// a session_id. Logs go to stderr. A turn that shows image fixtures adds
+    /// `"images":[{"path","digest","mime_type"}]`, verified before the run; a tool call may
+    /// add its `"response"`, which the vision criteria score.
     ///
     /// `--ledger <export.jsonl>` instead runs the ledger statistics over an exported activity
     /// ledger and exits non-zero on a meaningful deviation of its last day from the baseline.
@@ -1754,7 +1758,7 @@ fn get_builtin_templates() -> Vec<TemplateInfo> {
         },
         TemplateInfo {
             name: "api",
-            description: "REST API server with /chat and /health endpoints",
+            description: "REST API server exposing the agent over HTTP",
             default_provider: "gemini",
             features: vec!["minimal", "server"],
         },
@@ -2079,6 +2083,16 @@ fn create_project_composable(
 
     // Generate project files
     let mut files = generate_project_with_registry(&registry, &manifest, name);
+
+    // A pattern's README names the pattern, unless its template ships its own README.
+    if let Some(pattern) = registry.resolve_pattern(template) {
+        let generic = generate_readme(&manifest, name);
+        if let Some(readme) =
+            files.iter_mut().find(|f| f.path == "README.md" && f.content == generic)
+        {
+            readme.content = generate_pattern_readme(&manifest, name, pattern);
+        }
+    }
 
     // Optionally include a YAML agent definition
     if with_yaml {
@@ -2536,13 +2550,14 @@ async fn main() -> anyhow::Result<()> {{
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
     // Loopback by default. Set BIND_HOST=0.0.0.0 to expose this agent, and configure
-    // authentication before you do: the A2A JSON-RPC routes run agent and tool work — and
-    // incur its cost — on behalf of whoever calls them.
+    // authentication before you do: the run routes run agent and tool work — and incur its
+    // cost — on behalf of whoever calls them.
     let host = std::env::var("BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let addr = format!("{{host}}:{{port}}");
     println!("ADK agent server running on http://{{addr}}");
-    println!("  POST /chat          — send messages");
-    println!("  GET  /health        — health check");
+    println!("  GET  /api/health                              — health check");
+    println!("  POST /api/sessions                            — create a session (appName, userId)");
+    println!("  POST /api/run/{name}/<user_id>/<session_id>   — send a message, SSE response");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
@@ -2635,8 +2650,10 @@ async fn main() -> anyhow::Result<()> {{
         .build()?;
 
     println!("A2A agent server running on http://{{addr}}");
-    println!("  GET  /.well-known/agent-card.json — agent card");
-    println!("  POST /jsonrpc                     — JSON-RPC endpoint");
+    println!("  GET  /.well-known/agent-card.json — A2A v1 agent card");
+    println!("  GET  /.well-known/agent.json      — A2A 0.3 agent card");
+    println!("  POST /a2a/v1                      — A2A v1 JSON-RPC (header A2A-Version: 1.0)");
+    println!("  POST /a2a, POST /a2a/stream       — A2A 0.3 JSON-RPC");
 
     server.serve().await?;
     Ok(())
@@ -2934,6 +2951,31 @@ mod tests {
     }
 
     #[test]
+    fn server_banners_name_only_routes_the_server_serves() {
+        // `create_app` serves the REST API under `/api`; A2aServer adds the A2A v1 and 0.3 routes.
+        let (_, api_main, _) = generate_api("assistant", "anthropic");
+        for route in ["GET  /api/health", "POST /api/sessions", "POST /api/run/assistant/"] {
+            assert!(api_main.contains(route), "api banner misses `{route}`:\n{api_main}");
+        }
+        let (_, a2a_main, _) = generate_a2a("assistant", "anthropic", false);
+        for route in [
+            "GET  /.well-known/agent-card.json",
+            "GET  /.well-known/agent.json",
+            "POST /a2a/v1",
+            "POST /a2a, POST /a2a/stream",
+        ] {
+            assert!(a2a_main.contains(route), "a2a banner misses `{route}`:\n{a2a_main}");
+        }
+        for main_rs in [&api_main, &a2a_main] {
+            for absent in ["/chat", "GET  /health", "/jsonrpc"] {
+                assert!(!main_rs.contains(absent), "banner names `{absent}`, which 404s");
+            }
+        }
+        let api = get_builtin_templates().into_iter().find(|t| t.name == "api").unwrap();
+        assert!(!api.description.contains("/chat"), "{}", api.description);
+    }
+
+    #[test]
     fn create_project_with_output_dir() {
         let tmp = std::env::temp_dir().join("cargo-adk-test-output-dir");
         let _ = fs::remove_dir_all(&tmp);
@@ -3193,6 +3235,14 @@ mod tests {
                 prop_assert!(
                     project_path.join(".gitignore").exists(),
                     ".gitignore missing for name={name}"
+                );
+
+                // The README names the pattern, not only the `llm` template it builds on
+                let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
+                prop_assert!(
+                    readme.contains("- **Template**: `a2a-server` (")
+                        && readme.contains("built on the `llm` template"),
+                    "README does not name the a2a-server pattern for name={name}:\n{readme}"
                 );
 
                 // Cargo.toml must enable the server + sessions features

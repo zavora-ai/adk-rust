@@ -353,9 +353,25 @@ fn build_task_from_events(task_id: &str, context_id: &str, events: &[UpdateEvent
             UpdateEvent::TaskStatusUpdate(status) => {
                 task.status = status.status.clone();
             }
-            UpdateEvent::TaskArtifactUpdate(artifact) => {
-                if let Some(ref mut artifacts) = task.artifacts {
-                    artifacts.push(artifact.artifact.clone());
+            UpdateEvent::TaskArtifactUpdate(update) => {
+                let artifacts = task.artifacts.get_or_insert_with(Vec::new);
+                let appended_to = artifacts.iter_mut().find(|artifact| {
+                    update.append && artifact.artifact_id == update.artifact.artifact_id
+                });
+                let Some(artifact) = appended_to else {
+                    artifacts.push(update.artifact.clone());
+                    continue;
+                };
+                // `append` adds to the artifact the update names (A2A 0.3); streamed text
+                // arrives as fragments of one text, so a fragment joins the text before it.
+                for part in &update.artifact.parts {
+                    match (artifact.parts.last_mut(), part) {
+                        (
+                            Some(crate::a2a::Part::Text { text, metadata: None }),
+                            crate::a2a::Part::Text { text: fragment, metadata: None },
+                        ) => text.push_str(fragment),
+                        _ => artifact.parts.push(part.clone()),
+                    }
                 }
             }
         }

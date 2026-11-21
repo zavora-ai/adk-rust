@@ -40,9 +40,9 @@ use crate::egress::{DataClass, EgressGate, RedactionClass, Redactor, ReleaseRequ
 use crate::error::Result;
 use crate::geometry::{BBox, CoordFrame, RawRegion};
 use crate::media::{DecodeLimits, MediaScope, SourceImage};
-use crate::redact::{fit_on_device, to_image_boxes};
+use crate::redact::{OnDevice, fit_on_device, to_image_boxes};
 use crate::sent::SentImage;
-use crate::traits::{DocumentReader, ReadOptions};
+use crate::traits::{Block, DocumentReader, ReadOptions};
 
 /// The data class images bound for a remote model's context are released as.
 pub const MODEL_CONTEXT_CLASS: &str = "model_context";
@@ -404,14 +404,40 @@ impl ToolGuardrail for ImagePrivacyGuardrail {
     }
 }
 
+/// The field labels whose values identify a person on identity documents and forms:
+/// `PersonalTextRedactor::with_labelled_fields` takes them as the harness vision pack's
+/// default.
+///
+/// # Example
+///
+/// ```
+/// assert!(adk_vision::PERSONAL_FIELD_LABELS.contains(&"Date of birth"));
+/// ```
+pub const PERSONAL_FIELD_LABELS: &[&str] = &[
+    "Name",
+    "Full name",
+    "Surname",
+    "Given names",
+    "Date of birth",
+    "Place of birth",
+    "Address",
+    "Email",
+    "Phone",
+];
+
 /// Finds personal text: words an on-device [`DocumentReader`] reads that
 /// `adk_guardrail::PiiRedactor`'s patterns match, and the values of labelled fields.
 ///
 /// The reader's words are joined per block with single spaces, `PiiRedactor::find` returns
 /// byte ranges in that text (spec 3.7 X18), and every word a match touches is covered. A
 /// labelled field — a block whose words start with one of the labels, such as `Name` or
-/// `Date of birth`, with or without a colon — has every word after the label covered. A
-/// block with no words is covered whole when its text matches.
+/// `Date of birth`, with or without a colon — has every word after the label covered; when
+/// the reader returns the label as a block of its own, the nearest block to its right on
+/// the same line is the value and is covered whole. A block with no words is covered whole
+/// when its text matches.
+///
+/// `PersonalTextRedactor::pp_ocr` (feature `ocr`) is the default reader: PP-OCRv6 from the
+/// built-in manifest, loaded on first use.
 ///
 /// # Example
 ///
@@ -431,7 +457,7 @@ impl ToolGuardrail for ImagePrivacyGuardrail {
 /// assert_eq!(redactor.class(), RedactionClass::personal_text());
 /// ```
 pub struct PersonalTextRedactor {
-    reader: Arc<dyn DocumentReader>,
+    reader: OnDevice<dyn DocumentReader>,
     pii: PiiRedactor,
     labels: Vec<Vec<String>>,
 }
@@ -439,7 +465,7 @@ pub struct PersonalTextRedactor {
 impl std::fmt::Debug for PersonalTextRedactor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PersonalTextRedactor")
-            .field("reader", &self.reader.descriptor().id)
+            .field("reader", &self.reader.name())
             .field("labels", &self.labels)
             .finish_non_exhaustive()
     }
@@ -448,7 +474,63 @@ impl std::fmt::Debug for PersonalTextRedactor {
 impl PersonalTextRedactor {
     /// Covers the words `reader` reads that `PiiRedactor::new()`'s patterns match.
     pub fn new(reader: Arc<dyn DocumentReader>) -> Self {
-        Self { reader, pii: PiiRedactor::new(), labels: Vec::new() }
+        let name = reader.descriptor().id.to_string();
+        Self { reader: OnDevice::ready(name, reader), pii: PiiRedactor::new(), labels: Vec::new() }
+    }
+
+    /// Covers the words PP-OCRv6 of `size` reads that `PiiRedactor::new()`'s patterns match:
+    /// the built-in `pp-ocrv6-{size}-det` and `-rec` manifests, fetched through `fetcher`
+    /// and verified against their SHA-256 on the redactor's first use (feature `ocr`).
+    ///
+    /// Nothing loads here. When the weights cannot be had — `HF_HUB_OFFLINE` with an empty
+    /// cache, a digest mismatch — `find` fails, and the egress gate refuses the release.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use adk_vision::{
+    ///     FetchConfig, InMemoryAcceptanceStore, ModelFetcher, PERSONAL_FIELD_LABELS,
+    ///     PersonalTextRedactor, PpOcrV6Size, RedactionClass, Redactor,
+    /// };
+    ///
+    /// let fetcher =
+    ///     ModelFetcher::new(FetchConfig::from_env(), Arc::new(InMemoryAcceptanceStore::new()));
+    /// let redactor = PersonalTextRedactor::pp_ocr(fetcher, PpOcrV6Size::Small)
+    ///     .with_labelled_fields(PERSONAL_FIELD_LABELS.iter().copied());
+    /// assert_eq!(redactor.class(), RedactionClass::personal_text());
+    /// ```
+    #[cfg(feature = "ocr")]
+    pub fn pp_ocr(fetcher: crate::ModelFetcher, size: crate::PpOcrV6Size) -> Self {
+        use crate::error::VisionError;
+        use crate::redact::{Load, Loading};
+
+        let name = size.recognition_manifest().trim_end_matches("-rec").to_string();
+        let load: Load<dyn DocumentReader> = Box::new(move || {
+            let fetcher = fetcher.clone();
+            Box::pin(async move {
+                let manifests = crate::ManifestSet::builtin()?;
+                let lookup = |id: String| {
+                    manifests.get(&id).cloned().ok_or_else(|| VisionError::Manifest {
+                        id,
+                        reason: "not in the built-in manifest".into(),
+                    })
+                };
+                let det = fetcher.fetch(&lookup(size.detection_manifest())?).await?;
+                let rec = fetcher.fetch(&lookup(size.recognition_manifest())?).await?;
+                let reader = tokio::task::spawn_blocking(move || {
+                    crate::PpOcrReader::from_models(size, &det, &rec)
+                })
+                .await
+                .map_err(|e| VisionError::Backend {
+                    backend: "pp-ocrv6".into(),
+                    message: format!("the load task failed: {e}"),
+                })??;
+                tracing::info!(vision.backend = %reader.descriptor().id, "personal text redactor loaded");
+                Ok(Arc::new(reader) as Arc<dyn DocumentReader>)
+            }) as Loading<dyn DocumentReader>
+        });
+        Self { reader: OnDevice::lazy(name, load), pii: PiiRedactor::new(), labels: Vec::new() }
     }
 
     /// Matches with `pii`'s patterns instead.
@@ -500,6 +582,29 @@ impl PersonalTextRedactor {
         personal.dedup();
         personal
     }
+
+    /// Whether `words` are one of the labels and nothing else.
+    fn bare_label(&self, words: &[String]) -> bool {
+        let normalized: Vec<String> = words.iter().map(normalize_word).collect();
+        self.labels.contains(&normalized)
+    }
+}
+
+/// The block holding a bare label's value: the nearest block that starts right of the label
+/// and whose vertical centre lies within the label's line.
+fn value_beside(blocks: &[Block<RawRegion>], label: usize) -> Option<usize> {
+    let line = blocks[label].region.shape.bbox()?;
+    blocks
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != label)
+        .filter_map(|(index, block)| Some((index, block.region.shape.bbox()?)))
+        .filter(|(_, bbox)| {
+            let centre = (bbox.y0 + bbox.y1) / 2.0;
+            centre >= line.y0 && centre <= line.y1 && bbox.x0 >= line.x1 - line.height() / 2.0
+        })
+        .min_by(|(_, a), (_, b)| a.x0.total_cmp(&b.x0))
+        .map(|(index, _)| index)
 }
 
 /// A word lowercased, without the punctuation that ends a label.
@@ -514,23 +619,31 @@ impl Redactor for PersonalTextRedactor {
     }
 
     async fn find(&self, cx: &VisionCx, image: &SentImage) -> Result<Vec<BBox>> {
-        let descriptor = self.reader.descriptor();
+        let reader = self.reader.get().await?;
+        let descriptor = reader.descriptor();
         let fitted = fit_on_device(descriptor, image)?;
-        let page = self.reader.read(cx, &fitted, &ReadOptions::default()).await?;
+        let page = reader.read(cx, &fitted, &ReadOptions::default()).await?;
         let mut raw: Vec<RawRegion> = Vec::new();
-        for block in page.blocks {
-            if block.words.is_empty() {
-                let words: Vec<String> =
-                    block.text.split_whitespace().map(str::to_string).collect();
-                if !self.personal_words(&words).is_empty() {
-                    raw.push(block.region);
+        for (index, block) in page.blocks.iter().enumerate() {
+            let texts: Vec<String> = if block.words.is_empty() {
+                block.text.split_whitespace().map(str::to_string).collect()
+            } else {
+                block.words.iter().map(|w| w.text.clone()).collect()
+            };
+            if self.bare_label(&texts) {
+                if let Some(value) = value_beside(&page.blocks, index) {
+                    raw.push(page.blocks[value].region.clone());
                 }
                 continue;
             }
-            let texts: Vec<String> = block.words.iter().map(|w| w.text.clone()).collect();
-            for index in self.personal_words(&texts) {
-                raw.push(block.words[index].region.clone());
+            let personal = self.personal_words(&texts);
+            if block.words.is_empty() {
+                if !personal.is_empty() {
+                    raw.push(block.region.clone());
+                }
+                continue;
             }
+            raw.extend(personal.into_iter().map(|i| block.words[i].region.clone()));
         }
         to_image_boxes(descriptor, &fitted, image, raw)
     }

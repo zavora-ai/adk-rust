@@ -126,6 +126,11 @@ under "On this home it can also:" (§5.7).
 |---|---|
 | `GET /surface/decisions` | The caller's open decisions as cards; `?session=` for one session's |
 | `GET /surface/decisions/{id}` | One decision, waiting or decided |
+| `GET /surface/decisions/{id}/evidence/{index}` | One image a decision holds as evidence, served only when its bytes match the card's digest (spec 3.7 §8.2, [Approve with the Image](../docs/official_docs/surfaces/approve-with-image.md)) |
+| `GET /surface/vision/{session}/images/{image}/view` | The annotated viewer of one image: every answer the vision tools gave for it, each region's backend, frame and transform chain (spec 3.7 §8.2, [The Annotated Viewer](../docs/official_docs/surfaces/annotated-viewer.md)) |
+| `GET /surface/vision/{session}/images/{image}` | One image of the session, served only when its bytes match its digest |
+| `GET /surface/vision/{session}/answers/{answer}/regions` | One answer's `RegionSet` as a file; `?with=` exports two |
+| `POST /surface/vision/{session}/examples` | Saves a corrected region as an `adk-eval` case under `LocalSourceBuilder::eval_fixtures`; closed to paired devices |
 | `GET /surface/sessions/{session}/thread` | The session's entries |
 | `GET /surface/sessions/{session}/feed` | Server-sent events, resumable with `Last-Event-ID` |
 | `GET /surface/sessions/{session}/queued` | What the caller typed while a decision of the session was open or a turn ran, not yet sent |

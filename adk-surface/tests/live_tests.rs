@@ -71,6 +71,7 @@ async fn a_live_agent_waits_for_one_answer_and_runs_once() {
         edited_args: None,
         reason: None,
         expanded: true,
+        evidence: Vec::new(),
     };
     let chat = s.engine.execute(&telegram(), decide(Answer::AllowOnce)).await.unwrap();
     assert!(matches!(chat, CommandOutcome::Answered { .. }), "{chat:?}");

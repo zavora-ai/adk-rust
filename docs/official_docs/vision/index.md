@@ -8,9 +8,9 @@ that leaves the machine cropped, redacted and recorded first. It implements
 
 > **Note:** `adk-vision` is **Experimental**. This release holds the contracts, the runtime,
 > the egress boundary, the conformance suite, the [local ONNX backends](onnx.md), the
-> [document readers](document-readers.md) (`ocr`, `ocr-vl`, `nim`) and the [cloud backends](cloud.md) —
-> Gemini, Claude, Muse and NVIDIA NIM describers and Meta `sam-3.1`. mistral.rs backends arrive
-> as a feature in a later release.
+> [document readers](document-readers.md) (`ocr`, `ocr-vl`, `nim`), the [cloud backends](cloud.md) —
+> Gemini, Claude, Muse and NVIDIA NIM describers and Meta `sam-3.1` — and a
+> [local describer](local-describer.md) over mistral.rs (`mistralrs`, Qwen3-VL).
 
 ```toml
 [dependencies]
@@ -283,11 +283,18 @@ an approval card can show the exact image; see [Governed Vision Tools](governed-
 
 ## Related
 
+- [Getting started: a Document desk](getting-started.md)
+- [The `adk-rust vision` CLI](cli.md)
 - [Governed Vision Tools](governed-tools.md)
+- [Watch Conditions and Visual Wakes](wake.md): a stream wakes a sleeping agent once per tracked object
+- [Calibration and Measurement](measure.md): lengths and areas in millimetres in a fiducial's plane
+- [The Annotated Viewer](../surfaces/annotated-viewer.md): what an agent saw, on the web home
 - [Image Privacy](../security/image-privacy.md)
 - [Local ONNX backends](onnx.md)
 - [Cloud vision backends](cloud.md): `LlmDescriber`, NVIDIA NIM and Meta `sam-3.1`
+- [Local describer](local-describer.md): Qwen3-VL in this process over mistral.rs
 - [Document readers](document-readers.md)
+- [Vision evals](evals.md) and [benchmarks](benchmarks.md)
 - [Egress control](../security/egress.md)
 - [Tool authorization](../security/tool-authorization.md)
 - [Artifacts](../artifacts/artifacts.md)

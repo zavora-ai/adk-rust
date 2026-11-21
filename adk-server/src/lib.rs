@@ -46,6 +46,17 @@
 //! - `GET /.well-known/agent-card.json` (and `/.well-known/agent.json`) - Agent card
 //! - `POST /a2a` - JSON-RPC: `message/send`, `tasks/get`, `tasks/cancel`
 //! - `POST /a2a/stream` - JSON-RPC streaming: `message/stream`, `message/send`
+//!
+//! ## Features
+//!
+//! No feature is on by default; the REST and SSE runtime and the A2A endpoints above need none.
+//! A2A v1.0 (`a2a-v1`, `a2a-interceptors`), background runs and cron (`background`), wake-ups
+//! (`webhook-ingress`, `google-triggers`), the approval inbox (`approvals`), agents over MCP
+//! (`mcp`), `openai-webhooks`, `yaml-agent`, `agent-registry`, Agent Engine (`agent-engine`,
+//! `vertex-remote-engine`) and the AWP agent edge (`awp`, `awp-sqlite`, `awp-postgres`,
+//! `awp-redis`) each have a feature; the
+//! [README](https://github.com/zavora-ai/adk-rust/blob/main/adk-server/README.md#feature-flags)
+//! says what each enables.
 #![allow(clippy::result_large_err)]
 
 pub mod a2a;

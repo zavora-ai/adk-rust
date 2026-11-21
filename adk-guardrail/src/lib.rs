@@ -83,6 +83,13 @@
 //!
 //! `on_tools` limits a guardrail to the named tools, and a tool it does not name is not checked
 //! at all, so name every tool that takes a path.
+//!
+//! ## Feature flags
+//!
+//! | Feature | Default | Enables |
+//! |---------|---------|---------|
+//! | `schema` | yes | `SchemaValidator` through `jsonschema` |
+//! | `model-armor` | no | `ModelArmor`: Google Cloud Model Armor guardrails for input, output and tool results |
 
 pub mod citation;
 pub mod content;

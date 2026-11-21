@@ -1,0 +1,70 @@
+{
+  "path": "/v1/messages",
+  "request": {
+    "max_tokens": 400,
+    "messages": [
+      {
+        "content": [
+          {
+            "type": "image",
+            "source": {
+              "type": "base64",
+              "data": "{{image:base64:sha256:f072257437da5dc3df9a9c489508582f70d707d376a366338782d2cf3d1eca67:20918}}",
+              "media_type": "image/png"
+            }
+          },
+          {
+            "type": "text",
+            "text": "What kind of document is this?"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "model": "claude-sonnet-5-5",
+    "stream": false,
+    "cache_control": {
+      "type": "ephemeral"
+    }
+  },
+  "status": 200,
+  "contentType": "application/json",
+  "response": {
+    "model": "claude-sonnet-5-5",
+    "id": "msg_011ChCgdJ26RCAvwPZPihj8j",
+    "type": "message",
+    "role": "assistant",
+    "content": [
+      {
+        "type": "thinking",
+        "thinking": "",
+        "signature": "CAQSqQcKEAgUGAI4AUIIdGhpbmtpbmcSDEjNICk41kbiKoseZRoMykT4b3rh/k5UskQZIjCD3BsPt5JzOsiPYCcr8lIcOBUHwB1LhIkCKtF2azfuAjrfqdy+3odmpzpQVO0+Mi4qxgaVWq3u/mWWHlVgfdD03KcScCRbVJaCLvzkm321+PrB4jNNuR08k08T90gyW3wqy+fo92e98lnqe+0yCeAWQ08TNFE9NoqGf12hACDX5qJAwNYPIKsMRy2rsyAZs05wjlV3t4iTCVkFP8n7caSauazDKigPslg+MKYiq6Mb4EQ2CqJYyQaf108pQaz6AH645XjKE9bUOGntITef8gurQV9J1ONc8htnACaWR1QZHUIM7nFRHupkyqh5BRESmTT8ZSKcLxNDCZRK7gKKVcqRkFIttCkl6D7hnjQ0/nwk5r+bFrOT5/GT6GzELiSmT2ErywFMrqOOLDi11qk8t+LOF7NzLV/ci6KR8J/oNPKhVA6Aho5uJD1w03IKUiFrXUWnP7+6YmXKJqBA0RGN2c5NGvjd8eLY28hT/dPi8pDvZEPFv11DNHp0nqJN+AaxhrjBnSQPNdAjTCuOxIqb/XcVEm5S8XzQN70ev2s8XC/sw6QLe734UXx9joaB0khCl06VQksoa0XDbxkCLBP2ki1SuVTOWK+mX7vHXnPxr4uO7ZbjG2ADtjRBiZcVDWYKg040aGkBk0wqBQoUQOWVo4rAXB7XgFNn/GFp0YHuLCLYhnbRQThgT+RMz8a5W16/CMJUYf68vVBYPkTXXB6FfRtNG+cTANTaPa6hwHh4IZXspCZq//8I4Mzi6YqfKtdIAnvfNFwR/ApvK9rAzIvSAL+riSwZTmt8/j5P2emp3wbOzgAcBjk5HHKRh268jnJyoqp1m2v/Vt7Bi0bV4oXyild4FPXzQ/m5YskkrKAa+OmzG9fgQWdJfQwhPZuxYFfF4NWdqodypQbhitrBzmJrBiqDqXFbeNhzBHhn2gICwEaLjpNbLLQpwQU3ehB7tT5KUFWBjJyh/b/FXlinxBwhNEVUxpOC7r1OtKzIRa03dOsn4SX0fIf7cUX7VsWr6tj9AGHZ9f05QP3Ib12rAt1JgmlOkYpTTCat9egp4FNrlRtJNo5GppYLXUuTRzROGHkcwGCVdj9QQSUpSRvcbDHUNF7eA1C2DbLWJYg6uhQYuVzbbxh2qBtHPEujIrYovi/0pMI8IGkgstfOhxfpLdfeCA2PV/c7UExBWa+0GAE="
+      },
+      {
+        "type": "text",
+        "text": "This looks like a **specimen identification card**, a sample ID used for testing or demonstration rather than a real credential.\n\n- **Layout:** There is a portrait photo area on the left. On the right are fields for **Name**, **Email**, **ID** number, and **Expires** (2032), which is typical of an ID badge or membership card.\n- **Caption under the photo:** \"Generated portrait, not a real person\" suggests the photo is AI-generated or a placeholder.\n- **Footer text:** \"Specimen for testing. All personal data is invented.\" says it is a mock document, probably for software testing, a design mockup, or a demo of an ID-verification or onboarding flow.\n- **Redactions:** The black boxes cover the photo, name, email, and ID number. Since the data is fictional, they were probably added to keep the example generic.\n\nThe email field suggests a digital or"
+      }
+    ],
+    "container": null,
+    "stop_reason": "max_tokens",
+    "stop_sequence": null,
+    "stop_details": null,
+    "usage": {
+      "input_tokens": 283,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 0
+      },
+      "output_tokens": 400,
+      "output_tokens_details": {
+        "thinking_tokens": 123
+      },
+      "service_tier": "standard",
+      "inference_geo": "global",
+      "speed": "standard"
+    },
+    "diagnostics": null
+  }
+}

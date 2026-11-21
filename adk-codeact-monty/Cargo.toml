@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 description = "Python CodeRuntime for the ADK-Rust CodeActAgent, backed by the Pydantic Monty interpreter"
 repository = "https://github.com/zavora-ai/adk-rust"
+homepage.workspace = true
 documentation = "https://docs.rs/adk-codeact-monty"
 keywords = ["ai", "agent", "adk", "python", "codeact"]
 categories = ["api-bindings", "asynchronous"]

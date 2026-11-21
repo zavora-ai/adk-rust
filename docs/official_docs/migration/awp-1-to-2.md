@@ -6,8 +6,8 @@ you move it. This page maps each 1.x element to its 2.0 counterpart, converts a
 `business.toml`, and keeps the 1.x reference for the deployments that still serve it.
 
 > **Note:** for the Rust API changes to the 1.x types in 3.0.0 — access levels and schemas in
-> the manifest, `AwpConfigError::Serialize`, event delivery over HTTP — see
-> [Migrating 2.x → 3.0](2.x-to-3.0.md#adk-awp).
+> the manifest, `AwpConfigError::Serialize`, the deprecated HMAC helpers, event delivery over
+> HTTP — see [Migrating 2.x → 3.0](2.x-to-3.0.md#adk-awp).
 
 ## What changes
 

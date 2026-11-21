@@ -187,6 +187,157 @@ pub trait Source: Send + Sync {
         false
     }
 
+    /// Whether each image `request` holds as evidence is still kept, in the order of its
+    /// evidence (spec 3.7 §8.2). The default cannot tell, and the card shows each image.
+    async fn evidence_kept(&self, request: &ApprovalRequest) -> Vec<crate::evidence::EvidenceKept> {
+        vec![crate::evidence::EvidenceKept::Unknown; crate::evidence::images(request).len()]
+    }
+
+    /// The `index`th image `request` holds as evidence, read from where its locator says and
+    /// served only when its bytes hash to its digest; `None` when it is no longer kept. The
+    /// engine checks the caller may see the request first (spec 3.7 §7.8: surfaces load
+    /// evidence with the viewer's own authorisation).
+    ///
+    /// # Errors
+    ///
+    /// `surface.unsupported` when the source keeps no images, `surface.invalid` when the
+    /// stored bytes do not match the digest, or the source's error.
+    async fn evidence_image(
+        &self,
+        request: &ApprovalRequest,
+        index: usize,
+    ) -> Result<Option<crate::evidence::EvidenceBytes>> {
+        let _ = (request, index);
+        Err(SurfaceError::unsupported("showing a decision's images"))
+    }
+
+    /// Whether [`hold_again`](Self::hold_again) and [`change_image`](Self::change_image) work
+    /// here: an edited call with images, or a changed image, is held again for the person
+    /// rather than run (spec 3.7 V-I5). `false`, the default.
+    fn holds_again(&self) -> bool {
+        false
+    }
+
+    /// Holds `request`'s call again with `args`, as `caller` asked for it: the request at
+    /// `version` is closed with `why`, and the session's agent holds the call with its new
+    /// arguments, and the evidence they make, for the person's decision (spec 3.7 V-I5). A
+    /// call with images never runs on edited arguments nobody saw the images of.
+    ///
+    /// # Errors
+    ///
+    /// `surface.unsupported` by default; `approval.version_conflict` when the request changed.
+    async fn hold_again(
+        &self,
+        caller: &Caller,
+        request: &ApprovalRequest,
+        version: u64,
+        args: serde_json::Value,
+        why: &str,
+    ) -> Result<()> {
+        let _ = (caller, request, version, args, why);
+        Err(SurfaceError::unsupported("holding a call again"))
+    }
+
+    /// Makes the image `change` describes from `request`'s evidence — cut smaller, more of it
+    /// covered — keeps it beside the original, and holds the call again with it in place of
+    /// the original (board choice A8, spec 3.7 V-I5).
+    ///
+    /// # Errors
+    ///
+    /// `surface.unsupported` by default; `surface.invalid` when the image cannot be changed.
+    async fn change_image(
+        &self,
+        caller: &Caller,
+        request: &ApprovalRequest,
+        version: u64,
+        change: &crate::evidence::ImageChange,
+    ) -> Result<crate::evidence::ImageChanged> {
+        let _ = (caller, request, version, change);
+        Err(SurfaceError::unsupported("changing an image before it leaves"))
+    }
+
+    /// When the run that waited on `request` ended while the request is still open, so the
+    /// answer is used when the agent picks the thread up again (board choice A12). `None`, the
+    /// default, when a run still waits or the source cannot tell.
+    async fn run_ended(&self, request: &ApprovalRequest) -> Option<DateTime<Utc>> {
+        let _ = request;
+        None
+    }
+
+    /// Whether [`vision_answers`](Self::vision_answers) and
+    /// [`vision_image`](Self::vision_image) work here, so an image card's "Open the source
+    /// image" opens the annotated viewer (board choice A9). `false`, the default.
+    fn keeps_vision_answers(&self) -> bool {
+        false
+    }
+
+    /// The answer records the vision tools left in `session` of `user`, as JSON, oldest first
+    /// (spec 3.7 §8.2, the annotated viewer). The default keeps none.
+    ///
+    /// # Errors
+    ///
+    /// The source's error.
+    async fn vision_answers(&self, user: &str, session: &str) -> Result<Vec<serde_json::Value>> {
+        let _ = (user, session);
+        Ok(Vec::new())
+    }
+
+    /// The image `image` of `session` of `user` — a `sha256:` digest, or the name of an image
+    /// artifact the session holds — served only when its bytes hash to the digest a digest
+    /// names; `None` when the session holds no such image. The engine checks the caller owns
+    /// the session first (spec 3.7 §8.3: read routes authorised as the inbox is).
+    ///
+    /// # Errors
+    ///
+    /// `surface.unsupported` when the source keeps no images, `surface.invalid` when the
+    /// stored bytes do not match the digest, or the source's error.
+    async fn vision_image(
+        &self,
+        user: &str,
+        session: &str,
+        image: &str,
+    ) -> Result<Option<crate::evidence::EvidenceBytes>> {
+        let _ = (user, session, image);
+        Err(SurfaceError::unsupported("showing a session's images"))
+    }
+
+    /// The eval fixture files a labelled example may be saved to, relative to the fixtures'
+    /// root (board choice V13); `None`, the default, when the source saves no examples.
+    async fn example_files(&self, user: &str) -> Result<Option<Vec<String>>> {
+        let _ = user;
+        Ok(None)
+    }
+
+    /// Writes the eval set `set` to `file` under the fixtures' root and the image `image`
+    /// beside it at `image_path`, relative to the file, when it is not there already
+    /// (board choice V13). The run's own answer is untouched.
+    ///
+    /// # Errors
+    ///
+    /// `surface.unsupported` by default; `surface.invalid` when `file` leaves the root; the
+    /// source's error.
+    async fn save_example(
+        &self,
+        caller: &Caller,
+        file: &str,
+        set: serde_json::Value,
+        image_path: &str,
+        image: &crate::evidence::EvidenceBytes,
+    ) -> Result<()> {
+        let _ = (caller, file, set, image_path, image);
+        Err(SurfaceError::unsupported("saving labelled examples"))
+    }
+
+    /// The eval set at `file` under the fixtures' root, when there is one.
+    ///
+    /// # Errors
+    ///
+    /// `surface.unsupported` by default; the source's error.
+    async fn example_set(&self, user: &str, file: &str) -> Result<Option<serde_json::Value>> {
+        let _ = (user, file);
+        Err(SurfaceError::unsupported("saving labelled examples"))
+    }
+
     /// Whether `request`'s call moves money by the source's account (spec 3.3 §7.4 rule 4): a
     /// kernel answers for the tools its mounted drivers declare `financial` (spec 3.2 K-I9).
     /// The engine also counts the payment tools; `false`, the default, adds nothing to them.

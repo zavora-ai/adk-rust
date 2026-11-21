@@ -44,11 +44,14 @@ async fn main() -> anyhow::Result<()> {
     let tts = GeminiTts::from_env()?;
     let vad: Arc<dyn VadProcessor> = Arc::new(MockVad { threshold: 500 });
 
-    println!("✅ Gemini STT initialized (gemini-3-flash-preview)");
-    println!("✅ Gemini TTS initialized (gemini-3.1-flash-tts-preview)");
+    let stt_model = stt.billing().map(|billing| billing.model).unwrap_or_default();
+    let tts_model = tts.billing().map(|billing| billing.model).unwrap_or_default();
+    println!("✅ Gemini STT initialized ({stt_model})");
+    println!("✅ Gemini TTS initialized ({tts_model})");
 
-    // LlmAgent with Gemini
-    let model = Arc::new(adk_model::GeminiModel::new(&api_key, "gemini-2.5-flash")?);
+    // LlmAgent on the catalog's Gemini default
+    let agent_model = adk_model::catalog::GEMINI_DEFAULT;
+    let model = Arc::new(adk_model::GeminiModel::new(&api_key, agent_model)?);
     let agent: Arc<dyn adk_core::Agent> = Arc::new(
         adk_agent::LlmAgentBuilder::new("voice_assistant")
             .model(model)
@@ -59,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
             )
             .build()?,
     );
-    println!("✅ LlmAgent initialized (gemini-2.5-flash)");
+    println!("✅ LlmAgent initialized ({agent_model})");
 
     // Session service + runner
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());

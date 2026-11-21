@@ -7,11 +7,12 @@ license.workspace = true
 authors.workspace = true
 description = "Shared action node types for ADK-Rust graph workflows"
 repository = "https://github.com/zavora-ai/adk-rust"
+homepage.workspace = true
 documentation = "https://docs.rs/adk-action"
 readme = "README.md"
 exclude = ["tests/"]
 keywords = ["ai", "agents", "workflow", "action", "nodes"]
-categories = ["science", "asynchronous"]
+categories = ["development-tools", "asynchronous"]
 
 [dependencies]
 adk-core.workspace = true

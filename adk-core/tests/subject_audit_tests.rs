@@ -2,6 +2,7 @@
 //! redacting the bodies that name it, keeping every hash.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use adk_core::audit_log::{
     AuditActor, AuditAppend, AuditHash, AuditLogEntry, AuditLogStore, AuditRecordDraft,
@@ -59,6 +60,35 @@ async fn records_name_covered_subjects_by_pseudonym() {
     visitors_only.record(draft(visitor, vec![])).await.unwrap();
     let after = inner.records().pop().unwrap().actor.on_behalf_of.unwrap();
     assert_ne!(after.id, pseudonym, "an erased subject's old pseudonym is never reused");
+}
+
+/// A recorder that keeps nothing and counts how often it is sealed.
+#[derive(Default)]
+struct SealCounter(AtomicUsize);
+
+#[async_trait::async_trait]
+impl AuditRecorder for SealCounter {
+    fn digest(&self, _value: &serde_json::Value) -> String {
+        String::new()
+    }
+
+    async fn record(&self, _draft: AuditRecordDraft) -> adk_core::Result<()> {
+        Ok(())
+    }
+
+    async fn seal(&self) -> adk_core::Result<()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn sealing_reaches_the_recorder_it_wraps() {
+    let inner = Arc::new(SealCounter::default());
+    let recorder =
+        PseudonymousRecorder::new(inner.clone(), Arc::new(InMemorySubjectRegistry::new()));
+    recorder.seal().await.unwrap();
+    assert_eq!(inner.0.load(Ordering::SeqCst), 1);
 }
 
 /// Appends records naming `subjects`, with leaf hashes derived from their positions.

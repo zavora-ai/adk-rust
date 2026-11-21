@@ -66,6 +66,7 @@ wraps a model in this process or on a loopback address, such as `adk-mistralrs` 
 | `nvidia/nemotron-*` vision-language models | `Normalized1000::nemotron` | `[x_min, y_min, x_max, y_max]` on 0–1000, fixed by the prompt | none |
 | `google/gemma-4-*` | `Normalized1000::gemma4` | the same | none |
 | `muse-*` | `Normalized1000::muse` | the same | none |
+| `qwen3-vl-*` (on this machine) | `Normalized1000::qwen3_vl` | the same, Qwen3-VL's own frame; no response schema | none — see [Local Describer](local-describer.md) |
 
 - **Claude.** Claude answers in pixels of the image it processed, after resizing an image
   above its tier. The adapter's limit keeps every released image inside the tier, so Claude

@@ -16,6 +16,7 @@ templates cargo-adk adk-rust adk-tool adk-rag adk-core adk-agent adk-model adk-r
 
 kernel-scenarios examples/harness_kernel
 website-scenarios examples/website
+vision-scenarios examples/vision
 
 # The crates whose Windows-only code ci.yml's `windows` job tests or lints. Its workspace
 # build is repeated by the merge tier's Windows `nextest --workspace` for every other crate.

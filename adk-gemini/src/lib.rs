@@ -48,10 +48,11 @@
 //!
 //! | Feature | Enables |
 //! |---------|---------|
-//! | `studio` (default) | Marker only; the AI Studio backend is always compiled |
 //! | `vertex` | Vertex AI constructors such as `Gemini::with_google_cloud_adc` |
 //! | `interactions` | The Interactions API module and client methods |
 //! | `backtrace` | `snafu`'s `backtraces-impl-backtrace-crate` feature |
+//!
+//! No feature is on by default. The AI Studio backend is always compiled; it has no feature.
 
 /// Backend abstraction for Gemini API providers (AI Studio REST vs Vertex AI).
 pub mod backend;

@@ -52,6 +52,22 @@
 //! | `user:` | [`KEY_PREFIX_USER`] | Shared by every session of the user |
 //! | `app:` | [`KEY_PREFIX_APP`] | Shared by every session of the app |
 //! | `temp:` | [`KEY_PREFIX_TEMP`] | Not persisted |
+//!
+//! ## Feature flags
+//!
+//! No feature is on by default; [`InMemorySessionService`] needs none.
+//!
+//! | Feature | Enables |
+//! |---------|---------|
+//! | `sqlite` | `SqliteSessionService` |
+//! | `database` | Alias for `sqlite` |
+//! | `postgres` | `PostgresSessionService`, with TLS |
+//! | `redis` | `RedisSessionService` on a standalone server or Redis Cluster |
+//! | `mongodb` | `MongoSessionService` |
+//! | `neo4j` | `Neo4jSessionService` |
+//! | `firestore` | `FirestoreSessionService` |
+//! | `vertex-session` | `VertexAiSessionService` over the Vertex AI Session API |
+//! | `encrypted-session` | `EncryptedSession`: AES-256-GCM encryption at rest over any backend, with key rotation |
 #![allow(clippy::result_large_err)]
 #![deny(missing_docs)]
 

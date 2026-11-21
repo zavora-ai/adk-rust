@@ -1,7 +1,7 @@
 # The `adk-rust` feature surface
 
 `adk-rust` is both a re-export facade and a dependency menu. Every new capability
-arrives as a new top-level feature, so the menu has grown to **152 features**
+arrives as a new top-level feature, so the menu has grown to **154 features**
 across 44 crates. This records what the surface currently is, which parts of it
 are load-bearing, and the rule that keeps it from growing further.
 
@@ -24,9 +24,9 @@ everyone.
 
 | Bucket | Count | Disposition |
 |---|---:|---|
-| Features | 152 | What `--report` lists by axis. Unadvertised members of a bundle keep working and keep their feature key. |
+| Features | 154 | What `--report` lists by axis. Unadvertised members of a bundle keep working and keep their feature key. |
 | Deprecated no-ops | 0 | The 19 aliases were folded into their siblings in 3.0.0; see [below](#the-19-aliases-removed-in-300). |
-| **Total** | **152** | |
+| **Total** | **154** | |
 
 Nothing is removed in a minor release. `STABILITY.md` (Deprecation Policy)
 requires an `#[deprecated]` announcement and an N+2 minor grace period before a
@@ -59,6 +59,7 @@ achievable reduction is the advertised surface, not the feature count.
 | surface | 1 | `surface` | links `adk-surface`, the engine and web home every agent surface runs on (spec 3.3 §6.1), and with `cli` the launcher's web home; opt-in, in no tier. One feature per surface (`web`, `tui`, `channels`, `mobile`, …) stays on `adk-surface`, so the umbrella grows by this one key |
 | website | 1 | `website` | links `adk-website`, the AWP 2.0 website product, and `adk-site`, its pipeline (spec 3.5 §7.1, D-14); turns on the edge (`adk-server/awp`), AWP signing and the kernel, and with `cli` the `adk-rust site` and `awp` commands. In `full`. Hosts, generators and backends stay features of `adk-site` and `adk-kernel`, so the umbrella grows by this one key |
 | autonomy | 1 | `autonomy` | everything an agent needs to run unattended ([guide](official_docs/autonomy/index.md)): turns on `harness-kernel`, `server`, `sessions` and `auth`, and the member features `adk-server` `background`, `webhook-ingress` and `approvals`, `adk-core` `cron`, `adk-session` and `adk-harness` `sqlite`, and `adk-auth` `signed-audit`. Over `harness-kernel` it links the cron scheduler (`cron`, `chrono-tz`) and compiles in background runs, the approvals service and the harness's SQLite stores. In `enterprise` and `full`, so the umbrella grows by this one key |
+| vision | 2 | `vision` | `vision` links `adk-vision`, local-first perception (spec 3.7 §7.1), with the fetcher, the cloud describers, Meta `sam-3.1` and the image privacy guardrail, and turns on the harness's vision pack and with `cli` `adk-rust vision`; pure Rust, in `full`. `vision-local` links the native runtimes the on-device backends need — `ort` for RF-DETR, EfficientSAM, SAM 2.1 and SigLIP 2, `oar-ocr` for PP-OCRv6 and `oar-ocr-vl` on Candle for PaddleOCR-VL-1.6 — and is in no tier (§13 Q11). Backends and providers stay features of `adk-vision` |
 | gcp | 13 | `gemini-agent-platform` | all demoted; already bundled |
 | code | — | `code-tools` | 3 demoted |
 

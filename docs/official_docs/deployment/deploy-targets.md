@@ -18,7 +18,8 @@ cargo adk deploy --target container --status compose:support-desk
 cargo adk deploy --target container --destroy compose:support-desk
 ```
 
-`cargo adk deploy` without `--target` keeps pushing a bundle to the ADK platform control plane.
+`cargo adk deploy` without `--target` pushes a bundle to a deployment control plane instead; see
+[Control-plane deploys](#control-plane-deploys).
 
 ## Guarantees
 
@@ -381,6 +382,34 @@ Operator roles:
 |-----------|------|-------|
 | The managed identity | Key Vault Secrets User (RBAC vaults), or a `Get` secret access policy | The Key Vault |
 | The managed identity | AcrPull | The container registry |
+
+## Control-plane deploys
+
+`cargo adk deploy` without `--target` (`--target platform`) and the `adk-rust deploy` commands
+are clients of a deployment control plane: a server that accepts bundles built from
+`adk-deploy.toml` and keeps deployments, their history, metrics, rollbacks, promotions and
+secrets per environment, over the `/api/v1/` routes `adk_deploy::DeployClient` calls.
+ADK-Rust 3.0.0 ships the clients and no control-plane server, so these commands need one you
+run or one a provider gives you. A deploy target needs none.
+
+| Command | Does | Contacts the control plane |
+|---|---|---|
+| `adk-rust deploy init [--agent-name N] [--binary PATH]` | Writes a starter `adk-deploy.toml`; refuses to overwrite one | No |
+| `adk-rust deploy validate [--path F]` | Parses and validates the manifest | No |
+| `adk-rust deploy build [--path F]` | Builds the agent and its bundle; prints the bundle path and checksum | No |
+| `adk-rust deploy login --endpoint URL --token TOKEN` | Checks the token against the control plane, then saves the endpoint and workspace in the client config and the token in the OS credential store | Yes |
+| `adk-rust deploy logout` | Removes the stored token and workspace | No |
+| `adk-rust deploy push [--path F] [--env E] [--workspace W]` | Builds the bundle and creates a deployment in the environment (default `staging`) | Yes |
+| `adk-rust deploy status`, `history`, `metrics` `[--env E] [--agent A]` | The latest deployment, the deployment history, the latest metrics (default environment `production`) | Yes |
+| `adk-rust deploy rollback --deployment-id ID`, `promote --deployment-id ID` | Rolls back from a deployment; promotes a canary | Yes |
+| `adk-rust deploy secret set\|list\|delete --env E …` | Manages the environment's secrets | Yes |
+
+The client config lives at `adk-deploy/config.json` in the platform configuration directory
+(`~/Library/Application Support/adk-deploy/config.json` on macOS, `~/.config/adk-deploy/config.json`
+on Linux). Without one, the endpoint is `http://127.0.0.1:8090`, which is also the default
+`--home` listener of `adk-rust site` ([Site CLI](site-cli.md)); give one of them another
+address when both run on one machine. `cargo adk deploy` takes the endpoint as `--server`
+(default `http://127.0.0.1:8090`) and the token as `--token` or `ADK_DEPLOY_TOKEN`.
 
 ## Related
 

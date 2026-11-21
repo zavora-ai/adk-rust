@@ -766,6 +766,8 @@ pub async fn greet(args: GreetArgs) -> std::result::Result<Value, AdkError> {
         crate::autonomous_template::template(),
         // An AWP 2.0 website project (spec 3.5 §7.17, §8.2).
         crate::website_template::template(),
+        // A Document desk with the vision pack (spec 3.7 §8.3).
+        crate::vision_template::template(),
     ]
 }
 
@@ -1456,6 +1458,10 @@ fn builtin_capability_addons() -> Vec<CapabilityAddon> {
         .build()?;
 
     tracing::info!("starting A2A server on http://{}", addr);
+    tracing::info!("  GET  /.well-known/agent-card.json — A2A v1 agent card");
+    tracing::info!("  GET  /.well-known/agent.json      — A2A 0.3 agent card");
+    tracing::info!("  POST /a2a/v1                      — A2A v1 JSON-RPC (header A2A-Version: 1.0)");
+    tracing::info!("  POST /a2a, POST /a2a/stream       — A2A 0.3 JSON-RPC");
     server.serve().await?;"#,
                 agent_builder_calls: "",
                 env_vars: vec![

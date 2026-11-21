@@ -41,6 +41,7 @@ async fn custom_only() -> anyhow::Result<Verdict> {
             user_content: ContentData::text("Hi"),
             final_response: Some(ContentData::model_response("Hello there")),
             intermediate_data: None,
+            expected_vision: None,
         }],
         session_input: Default::default(),
         tags: vec![],

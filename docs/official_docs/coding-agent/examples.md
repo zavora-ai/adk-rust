@@ -1,7 +1,8 @@
 # Coding Agent Examples
 
-> **Note:** the [harness](../harness/index.md) supersedes `adk_agent::coding::CodingAgent` in 3.1;
-> see [Migrating from `CodingAgent`](../migration/coding-agent-to-harness.md).
+> **Note:** the [harness](../harness/index.md) (spec 3.1, in 3.0.0) supersedes
+> `adk_agent::coding::CodingAgent`, the 2.x API; see
+> [Migrating from `CodingAgent`](../migration/coding-agent-to-harness.md).
 
 Three runnable example crates in [adk-playground](https://github.com/zavora-ai/adk-playground),
 each a **real agent** (no mocks) that does the work and then **independently

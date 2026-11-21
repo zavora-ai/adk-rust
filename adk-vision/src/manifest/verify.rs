@@ -144,4 +144,41 @@ impl VerifiedModel {
     pub fn file(&self, path: &str) -> Option<&VerifiedFile> {
         self.files.iter().find(|(p, _)| p == path).map(|(_, f)| f)
     }
+
+    /// The directory the `required` files sit in, for a loader that reads a whole
+    /// directory, after checking that it will find no weights there the manifest does not
+    /// pin.
+    #[cfg(any(feature = "ocr-vl", feature = "mistralrs"))]
+    pub(crate) fn dir_of(&self, required: &[&str]) -> Result<PathBuf> {
+        let id = &self.manifest().id;
+        let invalid = |reason: String| VisionError::Manifest { id: id.clone(), reason };
+        let mut dir: Option<PathBuf> = None;
+        for path in required {
+            let file = self.file(path).ok_or_else(|| {
+                invalid(format!("the manifest pins no `{path}`, which the loader reads"))
+            })?;
+            let parent = file.path().parent().map(Path::to_path_buf).unwrap_or_default();
+            match &dir {
+                None => dir = Some(parent),
+                Some(d) if *d != parent => {
+                    return Err(invalid(format!("`{path}` is not beside the model's other files")));
+                }
+                Some(_) => {}
+            }
+        }
+        let dir = dir.ok_or_else(|| invalid("no file to load".into()))?;
+        // The loaders collect every `*.safetensors` in the directory; each must be pinned.
+        let entries =
+            std::fs::read_dir(&dir).map_err(|e| VisionError::io("could not read", &dir, e))?;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(".safetensors") && self.file(&name).is_none() {
+                return Err(invalid(format!(
+                    "`{name}` in {} is not in the manifest and would load unverified; remove it",
+                    dir.display()
+                )));
+            }
+        }
+        Ok(dir)
+    }
 }

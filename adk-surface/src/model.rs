@@ -375,6 +375,15 @@ pub struct DecisionCard {
     /// call's arguments (MCP elicitation; spec 3.3 §7.2). Never on a chat card (S-I5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elicitation: Option<ElicitationView>,
+    /// The images the call would send, keep or act on, after redaction, with what was
+    /// covered, where they go and what they cost (spec 3.7 §8.2, X11). Never on a chat card,
+    /// which carries the image itself or a link (S-I5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<crate::evidence::CardMedia>,
+    /// The run that waited on this decision ended while it still waits: the answer is kept
+    /// and used when the agent picks the thread up again (spec 3.7 §8.2, board choice A12).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parked: Option<ParkedView>,
 }
 
 /// What an MCP server asks the person while the agent's call waits (MCP elicitation), drawn
@@ -604,6 +613,31 @@ pub struct ShellView {
     pub text: String,
 }
 
+/// A decision whose run stopped waiting for it (spec 3.7 §8.2, board choice A12).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::ParkedView;
+///
+/// let parked = ParkedView {
+///     at: chrono::Utc::now(),
+///     at_text: "10:24".into(),
+///     text: adk_surface::words::stopped_waiting("Document desk", "10:24"),
+/// };
+/// assert!(parked.text.contains("picks this thread up again"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ParkedView {
+    /// When the run ended.
+    pub at: DateTime<Utc>,
+    /// Local `HH:MM`.
+    pub at_text: String,
+    /// "Document desk stopped waiting at 10:24 and finished its run without this. …".
+    pub text: String,
+}
+
 /// Who wrote a message in a thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -655,6 +689,10 @@ pub enum ThreadItem {
         ok: bool,
         /// "Done" or "Failed".
         text: String,
+        /// The image a vision tool answered about, by digest: the thread links the call to
+        /// the annotated viewer (spec 3.7 §8.2, board choice V1).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        image: Option<String>,
     },
     /// A command or code an agent ran, and what it wrote: the shell's `bash` or the sandbox's
     /// `sandbox_exec` (spec 3.3 §5.1). It stands for that call's [`Result`](Self::Result).

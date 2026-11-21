@@ -24,19 +24,26 @@ Local-first perception for Rust Agent Development Kit (ADK-Rust) agents.
 | Traits | `Detector`, `Segmenter`, `DocumentReader`, `Embedder`, `Describer`, `Tracker`, `VideoAnalyzer`, `Editor` | One contract per perception task, each with a conformance suite |
 | Runtime | `VisionRuntime` | Local-first routing, metering, cancellation, mapping to source pixels, crop escalation |
 | Egress | `EgressGate`, `ReleasedImage` | A remote backend only ever receives an image the gate cropped, redacted, approved and recorded |
-| Tools | `VisionToolset` | `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`, `vision_crop`, `vision_redact`, `vision_annotate` on the governed path; a remote call is held with the exact egress image and releases only that digest |
-| Privacy | `PersonRedactor`, `PersonalTextRedactor`, `ImagePrivacyGuardrail` | Faces and personal text filled solid black on the device; the same gate on model requests, tool results and user input |
+| Tools | `VisionToolset` | `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`, `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure` on the governed path; a remote call is held with the exact egress image and releases only that digest |
+| Watch | `WatchCondition`, `WatchEvaluator`, `WatchSink` | Conditions held on the device against tracked objects; one event per object, keyed for the kernel's `VisionWakeSource`, never carrying pixels |
+| Measurement | `Calibration`, `Measurement` | A fiducial of known size gives pixels per millimetre; maximum length and area from masks with their uncertainty, valid only in the fiducial's plane |
+| Privacy | `PersonRedactor`, `PersonalTextRedactor`, `ImagePrivacyGuardrail` | Faces and personal text filled solid black on the device — by default RF-DETR Nano (`onnx`) and PP-OCRv6 (`ocr`), loaded on first use; the same gate on model requests, tool results and user input |
 
 ```toml
 [dependencies]
 adk-vision = { version = "3.0.0", features = ["fetch"] }
 ```
 
+Through the umbrella crate, `adk-rust` feature `vision` (in `full`) brings the pure-Rust
+features — `fetch`, `cloud`, `nim`, `sam`, `guardrail` — as `adk_rust::vision`, and
+`vision-local` (in no tier) adds the on-device backends: `onnx`, `ocr` and `ocr-vl`.
+
 | Feature | Contents |
 |---------|----------|
-| (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor`, `VisionToolset`, `PersonRedactor`, the `vision.*` audit records |
+| (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor`, `VisionToolset`, `PersonRedactor`, the `vision.*` audit records, watch conditions, calibration and measurement |
 | `fetch` | `ModelFetcher`: Hugging Face downloads by revision through `hf-hub` 0.5, SHA-256 checked before load, `HF_HUB_OFFLINE` honoured |
 | `conformance` | The conformance suite and its per-trait test macros |
+| `eval` | `VisionEvalAgent`: any runtime task answering `adk-eval` cases in the vision tools' response form, in process or over the `cargo adk eval` protocol (`serve_eval_protocol`) |
 | `guardrail` | `ImagePrivacyGuardrail` (a `BeforeModelCallback`, an `adk-guardrail` `Guardrail` and `ToolGuardrail`) and `PersonalTextRedactor` over `PiiRedactor`'s byte ranges |
 | `onnx` | Local backends on ONNX Runtime: `RfDetr`, `EfficientSam`, `Sam2`, `SigLip2`; onnxruntime downloaded at build time |
 | `onnx-dynamic` | The same backends against an onnxruntime library loaded from `ORT_DYLIB_PATH` |
@@ -47,6 +54,8 @@ adk-vision = { version = "3.0.0", features = ["fetch"] }
 | `ocr` | `PpOcrReader`: PP-OCRv6 text lines and words through `oar-ocr` on ONNX Runtime |
 | `ocr-vl` | `PaddleOcrVlReader`: PaddleOCR-VL-1.6 with PP-DocLayoutV3 through `oar-ocr-vl` on Candle |
 | `ocr-vl-metal` | `ocr-vl` on Apple GPUs through Candle's Metal backend |
+| `mistralrs` | `LlmDescriber::mistralrs`: Qwen3-VL (`qwen3-vl-2b-instruct`, built in) or another mistral.rs vision model in this process, verified before load, regions in Qwen3-VL's own 0–1000 frame; implies `cloud`, `fetch` |
+| `mistralrs-metal`, `mistralrs-cuda` | `mistralrs` on Apple GPUs or CUDA |
 
 ## Quick Start
 
@@ -161,7 +170,9 @@ for `ReleasedImage`, so handing a remote backend an unreleased image does not co
 1. **Destination** — the adk-core `EgressPolicy` decides each host.
 2. **Minimise** — crop to the region the call needs, downscale to the backend's limit.
 3. **Redact** — every class in the policy (`faces`, `personal_text`, ...) is filled with
-   solid colour by its `Redactor`; a class with no redactor refuses the release.
+   solid colour by its `Redactor`; a class with no redactor, or a redactor whose default
+   weights cannot load (`PersonRedactor::rf_detr`, `PersonalTextRedactor::pp_ocr`), refuses
+   the release.
 4. **Decide** — the rule for the host and data class says `deny`, `ask` or `allow`; `ask`
    holds until a person approves that exact egress digest.
 5. **Record** — the receipt (source and egress digests, chain, redactions, decision) goes to
@@ -255,10 +266,18 @@ mod my_detector {
 
 ## Documentation
 
+- [Getting started: a Document desk](../docs/official_docs/vision/getting-started.md), from
+  `cargo adk new <name> --template vision`
+- [The `adk-rust vision` CLI](../docs/official_docs/vision/cli.md): manifests, licences, one
+  call through the egress gate, the egress log
+- [Scenarios S1–S8](../examples/vision): the Document desk on local backends and recorded
+  cloud responses
 - [Vision overview](../docs/official_docs/vision/index.md)
 - [Governed vision tools](../docs/official_docs/vision/governed-tools.md)
 - [Image privacy](../docs/official_docs/security/image-privacy.md)
 - [Cloud vision backends](../docs/official_docs/vision/cloud.md)
+- [Vision evals](../docs/official_docs/vision/evals.md)
+- [Vision benchmarks](../docs/official_docs/vision/benchmarks.md)
 - [Spec 3.7](../docs/design/spec-3.7-vision.md)
 
 ## License

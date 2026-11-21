@@ -88,6 +88,8 @@ pub(super) fn card(id: &str, tool: &str, args: Value) -> DecisionCard {
         adds_agent: None,
         detail: None,
         elicitation: None,
+        media: None,
+        parked: None,
     }
 }
 
@@ -144,6 +146,7 @@ fn a_decision_key_does_nothing_until_the_box_is_armed() {
             edited_args: None,
             reason: None,
             expanded: true,
+            evidence: Vec::new(),
         })]
     );
 }
@@ -501,7 +504,13 @@ proptest! {
             ThreadItem::Message { from: Speaker::Agent, author: name.clone(), text: message.clone(), images: Vec::new()  },
             ThreadItem::Message { from: Speaker::You, author: "You".into(), text: message.clone(), images: Vec::new()  },
             ThreadItem::Activity { tool: tool.clone(), text: message.clone(), call_id: Some("c1".into()) },
-            ThreadItem::Result { tool: tool.clone(), call_id: None, ok: false, text: "Failed".into() },
+            ThreadItem::Result {
+                tool: tool.clone(),
+                call_id: None,
+                ok: false,
+                text: "Failed".into(),
+                image: None,
+            },
             ThreadItem::Decision { decision_id: None, tool: tool.clone(), text: "Waiting for you".into() },
         ]);
         app.update(frame(FeedFrame::Entry { entry: entry.clone() }), shown);
@@ -2598,4 +2607,135 @@ fn a_removed_agent_s_thread_is_read_only() {
     );
     assert_eq!(app.composer.text, "one more invoice");
     assert!(notices(&app).contains("Bills was removed"), "{}", notices(&app));
+}
+
+/// A held `vision_describe` call with the identity card's egress image (spec 3.7 §8.2).
+fn image_card() -> DecisionCard {
+    use crate::evidence::{
+        CardMedia, CoverClass, CoveredLine, EvidenceImage, EvidenceRegion, GoesTo,
+    };
+    let digest = "sha256:6b644f480a4058281fbdb2f2e67821a69f702ea65f7c70552289a6add1f31c7c";
+    let region = |class, tag: &str, x0, y0, x1, y1| EvidenceRegion {
+        class,
+        tag: tag.into(),
+        short_tag: tag.into(),
+        x0,
+        y0,
+        x1,
+        y1,
+    };
+    let mut card = card(
+        "dec-7c41e0",
+        "vision_describe",
+        json!({ "image": "id-card.png", "backend": "claude", "question": "What kind of document is this?" }),
+    );
+    card.heading = "Send this image to Claude".into();
+    card.allowed.options = vec![
+        option(Answer::AllowOnce, "Allow once", false),
+        option(Answer::Edit, "Edit", false),
+        option(Answer::Deny, "Deny", false),
+    ];
+    card.media = Some(CardMedia {
+        title: "The exact image that would leave".into(),
+        images: vec![EvidenceImage {
+            index: 0,
+            digest: digest.into(),
+            digest_short: crate::short_digest(digest),
+            mime_type: "image/png".into(),
+            width: 600,
+            height: 380,
+            size_text: "600 × 380 PNG".into(),
+            href: Some("/api/surface/decisions/dec-7c41e0/evidence/0".into()),
+            regions: vec![
+                region(CoverClass::Face, "face · whole person", 6.0, 72.0, 190.0, 304.0),
+                region(CoverClass::PersonalText, "personal text", 264.0, 122.0, 483.0, 149.0),
+            ],
+            covered_all: false,
+            covered_text: "1 face, 1 personal text".into(),
+            caption: None,
+            field: None,
+            why: None,
+            purged: None,
+        }],
+        goes_to: Some(GoesTo {
+            provider: Some("Claude".into()),
+            model: Some("claude-sonnet-5-5".into()),
+            host: "api.anthropic.com".into(),
+        }),
+        what: Some("Document crop".into()),
+        what_note: None,
+        covered: vec![
+            CoveredLine { class: CoverClass::Face, count: 1, text: "1 face".into(), note: None },
+            CoveredLine {
+                class: CoverClass::PersonalText,
+                count: 1,
+                text: "1 personal text".into(),
+                note: None,
+            },
+        ],
+        covered_all: false,
+        covered_all_text: None,
+        cost_text: Some("Up to $0.0070".into()),
+        cost_detail: Some("308 image tokens".into()),
+        cut_from: Some("id-card.png".into()),
+        cut_note: Some("nothing resized".into()),
+        kept_text: Some("Kept as evidence until 18 Dec".into()),
+        source_href: None,
+        notice: None,
+        can_change: true,
+        replaces: None,
+        fixed_line: crate::words::IMAGES_LEAVE_ONLY_COVERED.into(),
+    });
+    card
+}
+
+/// The terminal shows a decision's image as text: the full digest, what was covered, each
+/// region in the image's pixels, where it goes, the cost and a link; `o` opens it, and Allow
+/// once names the digest (spec 3.7 §8.2, board choice A16).
+#[test]
+fn a_decision_with_an_image_shows_its_digest_regions_and_link() {
+    let shown = Instant::now();
+    let mut app = app_with(vec![image_card()], shown);
+    app.home = Some("http://127.0.0.1:8080".into());
+    let mut renderer = Renderer::new(Theme::new(Appearance::Light, true));
+    renderer.home = app.home.clone();
+    let mut terminal = Terminal::new(TestBackend::new(130, 60)).unwrap();
+    terminal
+        .draw(|frame| {
+            renderer.draw(frame, &app, shown + ARM_DELAY * 4);
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let screen: Vec<String> = (0..60)
+        .map(|y| (0..130).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
+        .collect();
+    let text = screen.join("\n");
+    for expected in [
+        "sha256:6b644f480a4058281fbdb2f2e67821a69f702ea65f7c70552289a6add1f31c7c",
+        "600 × 380 PNG · cut from id-card.png · nothing resized",
+        "Claude claude-sonnet-5-5 → api.anthropic.com · document crop",
+        "1 face · 1 personal text",
+        "2, in the image's pixels (x0,y0 → x1,y1)",
+        "face · whole person  covered  6,72 → 190,304",
+        "covered  6,72 → 190,304",
+        "up to $0.0070 · 308 image tokens",
+        "http://127.0.0.1:8080/ui/decisions/dec-7c41e0 (o opens it)",
+        "open image",
+    ] {
+        assert!(text.contains(expected), "{expected:?} is not on screen:\n{text}");
+    }
+
+    let armed = shown + ARM_DELAY * 4;
+    let opened = app.key(key(KeyCode::Char('o')), armed);
+    assert_eq!(opened, vec![Effect::Open("http://127.0.0.1:8080/ui/decisions/dec-7c41e0".into())]);
+    let allowed = app.key(key(KeyCode::Char('y')), armed);
+    let Some(Command::Decide { evidence, .. }) = decide_of(&allowed) else {
+        panic!("y allows once: {allowed:?}")
+    };
+    assert_eq!(
+        evidence,
+        &vec![
+            "sha256:6b644f480a4058281fbdb2f2e67821a69f702ea65f7c70552289a6add1f31c7c".to_string()
+        ]
+    );
 }

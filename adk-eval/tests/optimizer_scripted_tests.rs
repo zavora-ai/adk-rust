@@ -28,6 +28,7 @@ fn eval_set() -> EvalSet {
                 user_content: ContentData::text("What is the capital of France?"),
                 final_response: Some(ContentData::model_response("Paris")),
                 intermediate_data: None,
+                expected_vision: None,
             }],
             session_input: Default::default(),
             tags: vec![],

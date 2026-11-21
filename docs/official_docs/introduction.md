@@ -2,8 +2,8 @@
 
 Agent Development Kit (ADK) is a flexible and modular framework for developing and deploying AI agents. ADK-Rust is model-agnostic and deployment-agnostic: Gemini is the default provider, and OpenAI, Anthropic, DeepSeek, Groq, Ollama and others are a feature flag away. ADK was designed to make agent development feel more like software development, making it easier for developers to create, deploy, and orchestrate agentic architectures that range from simple tasks to complex workflows.
 
-> **Note:** ADK-Rust requires Rust 1.95.0 or higher. Upgrading from 2.x? See
-> [Migrating 2.x → 3.0](migration/2.x-to-3.0.md).
+> **Note:** ADK-Rust requires Rust 1.95.0 or higher. [What's new in 3.0](whats-new-3.0.md) lists
+> what the release adds; upgrading from 2.x, see [Migrating 2.x → 3.0](migration/2.x-to-3.0.md).
 
 ## What 3.0 adds: autonomous agents
 
@@ -281,11 +281,12 @@ adk-rust = "3.0.0"
 # guardrail, plugins, artifacts, skills, computer-use
 adk-rust = { version = "3.0.0", features = ["standard"] }
 
-# Enterprise — standard + realtime, browser, RAG, payments, AWP
+# Enterprise — standard + realtime, browser, RAG, payments, AWP, and autonomy: the harness,
+# its kernel, background runs, approvals and the signed audit log
 adk-rust = { version = "3.0.0", features = ["enterprise"] }
 
-# Full — enterprise + audio, code execution, sandbox, code tools, graph capabilities,
-# the harness and its kernel, and the AWP website
+# Full — enterprise + audio, code execution, sandbox, code tools, the functional, node-cache,
+# delta, time-travel and YAML graph capabilities, the AWP website, and vision
 adk-rust = { version = "3.0.0", features = ["full"] }
 
 # Equivalent explicit minimal selection
@@ -326,6 +327,9 @@ Available features:
 - `harness`: The governed harness agent (enterprise preset, through `autonomy`)
 - `harness-kernel`: The agent kernel, `adk_rust::kernel` (enterprise preset, through `autonomy`)
 - `website`: The AWP website product (full preset)
+- `graph-yaml`: Graph workflows defined in YAML (full preset)
+- `vision`: Local-first perception, `adk_rust::vision`: regions, model manifests, the egress gate, cloud describers and the image privacy guardrail (full preset)
+- `vision-local`: `vision` plus the on-device backends on ONNX Runtime and Candle (in no tier)
 - `surface`: Agent surfaces, `adk_rust::surface`: the engine and the web home (in no tier)
 
 `adk-rust/Cargo.toml` lists every feature.

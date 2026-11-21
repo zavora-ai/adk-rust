@@ -77,6 +77,8 @@
 7 adk-harness voice
 # The vision pack (spec 3.7 X15): per-call classes, egress rules, the privacy guardrail.
 7 adk-harness vision
+# The vision pack's default redactors (RF-DETR, PP-OCRv6); the real-weights S3 run is ignored.
+7 adk-harness vision-local
 # The harness's ACP standing permissions (spec 3.3 §10 A1): adk-acp's server enters only here.
 7 adk-harness acp-server
 # The crate docs' examples under the default tier: an `artifacts` example once compiled only
@@ -111,6 +113,9 @@
 7 adk-harness website,postgres,redis
 # Agent surfaces (spec 3.3 §6.1): `adk_rust::surface`, in no tier.
 1 adk-rust surface
+# Local-first perception (spec 3.7 §8.3): `vision` is in `full`; `vision-local`, in no tier,
+# adds the on-device backends.
+1 adk-rust vision-local
 
 # adk-server (shard 3), adk-kernel (2), adk-cli (5, 8 and 10) and adk-surface (9).
 # The background run store and its persistence are behind `background`; nothing compiled
@@ -150,6 +155,10 @@
 # The in-process ONNX embedder for long-term memory, off by default so the default build
 # needs no network (spec 3.1 §7.15.2).
 8 adk-cli memory-local
+# `adk-rust vision` (spec 3.7 §8.1): manifests, licences, the egress log and `vision run`;
+# with `vision-local` the on-device backends and the gate's redactors.
+8 adk-cli vision
+8 adk-cli vision-local
 # The `chat` end-to-end tests in a pseudo-terminal: held calls, Ctrl-C, sessions; with
 # `audit-sql`, "Hire a helper" (spec 3.3 §12 phase 4) checks the kernel's record with `audit verify`.
 10 adk-cli scripted-model,audit-sql solo
@@ -196,6 +205,8 @@
 # then the library alone with no default features, as a consumer builds it.
 2 adk-kernel charter doc
 2 adk-kernel charter no-default,lib
+# The bridge from adk-vision's watch conditions to VisionWakeSource (spec 3.7 §7.10).
+2 adk-kernel vision
 # The terminal surface (spec 3.3 §5.2): full screen, inline and JSON lines; with `web`, the
 # scripted scenario on a kernel-hosted harness drawn by `TerminalSurface::screen`.
 9 adk-surface tui doc
@@ -364,6 +375,9 @@
 1 adk-eval experiments doc
 # The tau2-bench and BFCL adapters: nothing in the workspace enables either feature.
 1 adk-bench tau2,bfcl
+# The vision benchmark harness, its adapter and example, and the recorded cloud rows (spec 3.7
+# §7.17), with the doctests; the weight-backed local rows run in the nightly vision-bench job.
+1 adk-bench vision,vision-cloud doc
 # `cargo adk bench` and its adk-bench dependency are off in cargo-adk's default build.
 1 cargo-adk bench
 # Agent Engine deployment client: golden DTO and mock contract tests.
@@ -438,12 +452,33 @@
 6 adk-vision fetch doc
 # The image privacy guardrail, the personal-text redactor and the governed scenarios (S1–S4, S7).
 6 adk-vision guardrail doc
+# The default redactors over RF-DETR and PP-OCRv6, failing closed without their weights.
+6 adk-vision onnx,ocr,guardrail doc
+# The Qwen3-VL describer over mistral.rs (§7.6) against a scripted in-process model, with its
+# conformance run; the weight-backed runs are ignored.
+6 adk-vision mistralrs,conformance doc
 # Document readers (spec 3.7 §7.6, §7.7): PP-OCRv6 through oar-ocr on ort, PaddleOCR-VL-1.6
 # on Candle, and NVIDIA NIM's CV endpoints against their recorded answers, each with its
 # conformance run; the weight-backed and live runs are ignored.
 6 adk-vision ocr,fetch,conformance doc
 6 adk-vision ocr-vl,fetch,conformance doc
 6 adk-vision nim,conformance doc
+# Vision evals (spec 3.7 §7.16): the eval agent scoring the committed eval sets through adk-eval
+# in process and over the cargo adk eval protocol, with the doctests.
+6 adk-vision eval doc
+# The local ONNX backends (spec 3.7 §7.6): RF-DETR, EfficientSAM, SAM 2.1 and SigLIP 2 on ort,
+# with the conformance suite; the weight-backed runs are ignored.
+6 adk-vision onnx,fetch,conformance doc
+# The same backends against an onnxruntime loaded from ORT_DYLIB_PATH at run time: linted only.
+6 adk-vision onnx-dynamic lib
+# The cloud describers (spec 3.7 §7.7) on recorded responses, and Meta sam-3.1's request
+# building, stream parser and mask placement on recorded streams.
+6 adk-vision cloud,conformance doc
+6 adk-vision sam doc
+# The conformance suite and its macros on their own.
+6 adk-vision conformance
+# `onnx-coreml`, `onnx-cuda` and `ocr-vl-metal` need GPU toolchains a runner does not have, and
+# stay out as adk-mistralrs's `cuda` and `metal` do.
 6 adk-site gen-astro
 # `awp verify` against the preview in the launch gate (spec 3.5 §7.8.1), without `migrate`.
 6 adk-site verify doc

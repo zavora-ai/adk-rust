@@ -7,6 +7,7 @@
 //! and follows ADK-Rust best practices.
 
 use crate::composition::{CompositionManifest, GeneratedFile};
+use crate::pattern::EnterprisePattern;
 use crate::provider::get_provider_config;
 use crate::registry::{OWN_MODEL_TEMPLATES, TemplateRegistry};
 
@@ -255,7 +256,7 @@ pub fn generate_main_rs_with_registry(
     // server), run the agent in the interactive console so `cargo run` does
     // something useful out of the box.
     const SELF_SERVING_TEMPLATES: &[&str] =
-        &["api", "agent-engine", "realtime", "harness", "autonomous"];
+        &["api", "agent-engine", "realtime", "harness", "autonomous", "vision"];
     let has_server_addon = manifest.addons.iter().any(|a| a == "server");
     let interactive =
         !has_server_addon && !SELF_SERVING_TEMPLATES.contains(&manifest.template_name.as_str());
@@ -438,8 +439,54 @@ pub fn generate_env_example(manifest: &CompositionManifest) -> String {
 pub fn generate_readme(manifest: &CompositionManifest, project_name: &str) -> String {
     let registry = TemplateRegistry::builtin();
     let template = registry.resolve_template(&manifest.template_name);
-
     let template_description = template.map(|t| t.description).unwrap_or("ADK-Rust agent project");
+    let template_line = format!("`{}` ({template_description})", manifest.template_name);
+    readme(manifest, project_name, template_description, &template_line)
+}
+
+/// Generate `README.md` for a project made from an enterprise pattern: the README names
+/// the pattern and the template it builds on, rather than the template alone.
+///
+/// # Example
+///
+/// ```
+/// use cargo_adk::codegen::generate_pattern_readme;
+/// use cargo_adk::composition::resolve_composition;
+/// use cargo_adk::registry::TemplateRegistry;
+///
+/// let registry = TemplateRegistry::builtin();
+/// let pattern = registry.resolve_pattern("a2a").unwrap();
+/// let manifest = resolve_composition(
+///     &registry,
+///     pattern.base_template,
+///     &pattern.included_addons,
+///     "anthropic",
+/// )
+/// .unwrap();
+/// let readme = generate_pattern_readme(&manifest, "peer", pattern);
+/// assert!(readme.contains("- **Template**: `a2a-server`"));
+/// ```
+pub fn generate_pattern_readme(
+    manifest: &CompositionManifest,
+    project_name: &str,
+    pattern: &EnterprisePattern,
+) -> String {
+    let template_line = format!(
+        "`{}` ({}), built on the `{}` template",
+        pattern.name, pattern.description, manifest.template_name
+    );
+    readme(manifest, project_name, pattern.description, &template_line)
+}
+
+/// The README of `project_name`, headed by `description`, with `template_line` as its
+/// template entry.
+fn readme(
+    manifest: &CompositionManifest,
+    project_name: &str,
+    description: &str,
+    template_line: &str,
+) -> String {
+    let registry = TemplateRegistry::builtin();
 
     let addons_section = if manifest.addons.is_empty() {
         String::new()
@@ -474,7 +521,7 @@ pub fn generate_readme(manifest: &CompositionManifest, project_name: &str) -> St
     format!(
         r#"# {project_name}
 
-{template_description}
+{description}
 
 ## Quick Start
 
@@ -492,7 +539,7 @@ cargo run
 
 ## Architecture
 
-- **Template**: `{template_name}` ({template_description})
+- **Template**: {template_line}
 - **Provider**: `{provider}`
 - **Features**: `[{features}]`
 {addons_section}{env_vars_section}
@@ -520,7 +567,6 @@ cargo fmt
 - [ADK-Rust Documentation](https://docs.rs/adk-rust)
 - [ADK-Rust GitHub](https://github.com/zavora-ai/adk-rust)
 "#,
-        template_name = manifest.template_name,
         provider = manifest.provider,
         features = features_list.join(", "),
     )
@@ -621,6 +667,35 @@ mod tests {
             main_rs.contains(r#"std::env::var("PORT").unwrap_or_else(|_| "8080".to_string())"#),
             "Server addon MUST use std::env::var(\"PORT\").unwrap_or_else(|_| \"8080\".to_string())"
         );
+    }
+
+    #[test]
+    fn server_scaffolds_log_the_routes_they_serve() {
+        let api = generate_main_rs(
+            &resolve_composition(&registry(), "api", &[], "anthropic").unwrap(),
+            "qs",
+        );
+        for route in ["GET  /api/health", "POST /api/sessions", "POST /api/run/qs/"] {
+            assert!(api.contains(route), "api banner misses `{route}`:\n{api}");
+        }
+        // `--template a2a` is the `a2a-server` pattern: `llm` with the `server` and `sessions` addons.
+        let a2a = generate_main_rs(
+            &resolve_composition(&registry(), "llm", &["server", "sessions"], "anthropic").unwrap(),
+            "peer",
+        );
+        for route in [
+            "GET  /.well-known/agent-card.json",
+            "GET  /.well-known/agent.json",
+            "POST /a2a/v1",
+            "POST /a2a, POST /a2a/stream",
+        ] {
+            assert!(a2a.contains(route), "a2a banner misses `{route}`:\n{a2a}");
+        }
+        for main_rs in [&api, &a2a] {
+            for absent in ["/chat", "GET  /health", "/jsonrpc"] {
+                assert!(!main_rs.contains(absent), "banner names `{absent}`, which 404s");
+            }
+        }
     }
 
     #[test]

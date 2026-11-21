@@ -107,8 +107,8 @@ VAD demo complete.
 
 The crown jewel — a fully conversational voice agent. You speak naturally, the agent listens, thinks, and responds with synthesized speech through your speaker. Uses real Gemini cloud providers for everything:
 
-- **GeminiStt** (`gemini-3-flash-preview`) — real cloud speech-to-text
-- **LlmAgent** (`gemini-2.5-flash`) — real conversational reasoning
+- **GeminiStt** (`gemini-3.8-flash`, its default) — real cloud speech-to-text
+- **LlmAgent** (`gemini-3.8-flash`, `adk_model::catalog::GEMINI_DEFAULT`) — real conversational reasoning
 - **GeminiTts** (`gemini-3.1-flash-tts-preview`) — real cloud text-to-speech at 24kHz
 
 ```bash
@@ -122,9 +122,9 @@ The agent runs for 60 seconds. Speak into your microphone and it will respond th
 ```
 === Voice Agent with Real Gemini STT/TTS ===
 
-✅ Gemini STT initialized (gemini-3-flash-preview)
+✅ Gemini STT initialized (gemini-3.8-flash)
 ✅ Gemini TTS initialized (gemini-3.1-flash-tts-preview)
-✅ LlmAgent initialized (gemini-2.5-flash)
+✅ LlmAgent initialized (gemini-3.8-flash)
 ✅ Runner initialized
 
 🎤 Input:  Built-in Microphone

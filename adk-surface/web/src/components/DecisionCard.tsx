@@ -1,6 +1,19 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent } from "react";
-import type { Answer, AnswerOption, Command, CommandOutcome, DecisionCard as Card, Origin } from "../generated/api";
+import type {
+  Answer,
+  AnswerOption,
+  Command,
+  CommandOutcome,
+  DecisionCard as Card,
+  EvidenceImage,
+  ImageChange,
+  ImageChanged,
+  Origin,
+} from "../generated/api";
+import { DecidedEvidence, EvidencePanel } from "../evidence/EvidencePanel";
+import { ImageEditor } from "../evidence/ImageEditor";
+import { evidenceLabels } from "../evidence/labels";
 import { problemText } from "../client";
 import { labels, words } from "../labels";
 import { enterNeverDecides, originOf } from "../origin";
@@ -56,6 +69,8 @@ export function DecisionCard({
   const [note, setNote] = useState("");
   // The answer was given on this card: its line takes the focus the answer buttons had.
   const [answeredHere, setAnsweredHere] = useState(false);
+  // The image a person is changing before it leaves, and how (spec 3.7 §8.2, board choice A8).
+  const [changing, setChanging] = useState<{ image: EvidenceImage; mode: "crop" | "cover" } | null>(null);
   // Opened at a decision already decided (a deep link): its line takes the focus. One decided
   // later, elsewhere, never does: the person may be typing (§5.1).
   const [decidedWhenOpened] = useState(given.status === "decided");
@@ -86,7 +101,25 @@ export function DecisionCard({
     } else if (outcome.type === "changed") {
       setCard(outcome.card);
       setNote(labels.changedSinceSeen);
+    } else if (outcome.type === "heldAgain") {
+      // The call waits again with the change; its new card follows in the feed (V-I5).
+      setCard(outcome.card);
+      setEditing(false);
+      setChanging(null);
+      setAnsweredHere(true);
+      if (outcome.changed) setNote(evidenceLabels.heldAgain(short(outcome.changed.to), short(outcome.changed.from)));
+      onSettled?.(outcome.card);
     }
+  }
+
+  // Each answer that lets a call with images run names the images this card showed (V-I5).
+  const shownImages = card.media?.images.map((image) => image.digest) ?? [];
+
+  async function changeImage(image: EvidenceImage, change: ImageChange, preview: boolean): Promise<CommandOutcome> {
+    return send(
+      { type: "changeImage", decisionId: card.id, version: card.version, from: image.digest, change, preview },
+      { kind: "pointer" },
+    );
   }
 
   async function answer(option: AnswerOption, origin: Origin, editedArgs?: unknown) {
@@ -102,6 +135,7 @@ export function DecisionCard({
           answer: option.answer,
           expanded: shownInFull,
           ...(editedArgs === undefined ? {} : { editedArgs }),
+          ...(shownImages.length > 0 ? { evidence: shownImages } : {}),
         },
         origin,
       );
@@ -185,13 +219,36 @@ export function DecisionCard({
       ))}
     </ol>
   );
+  const media = card.media ?? undefined;
   const details = (
     <p className="decision-details">
       <span>{card.riskText}</span>
-      <span>{card.reversibilityText}</span>
+      {(!media || !media.coveredAll) && <span>{card.reversibilityText}</span>}
       {card.alsoShown && <span>{visible(card.alsoShown)}</span>}
+      {!decided && media?.keptText && <span>{visible(media.keptText)}</span>}
     </p>
   );
+  // The images the call would send, with what was covered and where they go (spec 3.7 §8.2).
+  const evidence = media ? (
+    <EvidencePanel
+      media={media}
+      onChange={media.canChange && !decided ? (image, mode) => setChanging({ image, mode }) : undefined}
+    />
+  ) : null;
+  const parked = card.parked ? (
+    <p className="evidence-info" role="note">
+      <span aria-hidden="true">ⓘ</span> {visible(card.parked.text)}
+    </p>
+  ) : null;
+  const nothingToSend = media?.notice ? (
+    <p className="evidence-notice" role="note">
+      <span aria-hidden="true">⚠</span>
+      <span>
+        <strong>{visible(media.notice.title)}</strong> {visible(media.notice.text)}
+      </span>
+    </p>
+  ) : null;
+  const fixedLine = media ? <p className="evidence-fixed">{visible(media.fixedLine)}</p> : null;
   // A feature's line under the details: where the call comes from, with a link into the home
   // only to a path on this server (spec 3.3 §7.1).
   const href = card.detail?.href;
@@ -223,11 +280,17 @@ export function DecisionCard({
         <DecidedLine card={card} headingId={heading} focus={answeredHere || (focusOnMount && decidedWhenOpened)}>
           {who}
           {summary}
+          {media && <DecidedEvidence card={card} media={media} />}
           {call}
           {timeline}
           {details}
           {detail}
         </DecidedLine>
+        {note && (
+          <p className="decision-note" role="status">
+            {note}
+          </p>
+        )}
       </article>
     );
   }
@@ -248,8 +311,11 @@ export function DecisionCard({
       {details}
       {who}
       {summary}
+      {evidence}
       {call}
       {timeline}
+      {parked}
+      {nothingToSend}
       {card.allowed.note && <p className="decision-note">{visible(card.allowed.note)}</p>}
       {note && (
         <p className="decision-note" role="status">
@@ -258,6 +324,12 @@ export function DecisionCard({
       )}
       {(options.length > 0 || (isTakeOver && takeOver)) && !editing && (
         <div className="decision-actions">
+          {/* Nothing to send: Allow once stays in its place, off (board choices A13, A15). */}
+          {media?.notice && !options.some((option) => option.answer === "allowOnce") && (
+            <button type="button" className="button button-primary" disabled>
+              {words.ALLOW_ONCE}
+            </button>
+          )}
           {isTakeOver && takeOver && (
             <TakeOverButton
               heading={visible(card.heading)}
@@ -269,7 +341,7 @@ export function DecisionCard({
             <button
               key={option.answer}
               type="button"
-              className={buttonClass(option.answer)}
+              className={media?.notice && option.answer === "deny" ? "button button-secondary" : buttonClass(option.answer)}
               disabled={busy || (option.needsExpanded && !expanded)}
               onClick={click(option)}
               onKeyDown={enterNeverDecides}
@@ -307,8 +379,32 @@ export function DecisionCard({
         </p>
       )}
       {detail}
+      {fixedLine}
+      {changing && (
+        <ImageEditor
+          card={card}
+          image={changing.image}
+          mode={changing.mode}
+          onClose={() => setChanging(null)}
+          preview={async (change): Promise<ImageChanged> => {
+            const outcome = await changeImage(changing.image, change, true);
+            if (outcome.type === "imagePreview") return outcome.changed;
+            settle(outcome);
+            throw new Error(labels.changedSinceSeen);
+          }}
+          use={async (change) => {
+            settle(await changeImage(changing.image, change, false));
+          }}
+        />
+      )}
     </article>
   );
+}
+
+/** The short form of a digest, as the engine writes it. */
+function short(digest: string) {
+  const [scheme, hex = ""] = digest.split(":");
+  return hex.length > 14 ? `${scheme}:${hex.slice(0, 6)}…${hex.slice(-6)}` : digest;
 }
 
 function buttonClass(answer: Answer) {

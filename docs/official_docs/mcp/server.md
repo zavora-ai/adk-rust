@@ -169,7 +169,7 @@ also appropriate:
 
 ```toml
 [dependencies]
-rmcp = { version = "3.4", features = ["transport-io", "schemars"] }
+rmcp = { version = "3.9", features = ["transport-io", "schemars"] }
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 ```
@@ -206,7 +206,7 @@ impl OrderServer {
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for OrderServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
@@ -214,17 +214,24 @@ impl ServerHandler for OrderServer {
     }
 }
 
-let service = rmcp::ServiceExt::serve(
-    OrderServer { tool_router: OrderServer::tool_router() },
-    rmcp::transport::io::stdio(),
-).await?;
-service.waiting().await?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let service = rmcp::ServiceExt::serve(
+        OrderServer { tool_router: OrderServer::tool_router() },
+        rmcp::transport::io::stdio(),
+    )
+    .await?;
+    service.waiting().await?;
+    Ok(())
+}
 ```
 
 The deterministic `mcp_manager` fixture in
 [adk-playground](https://github.com/zavora-ai/adk-playground) uses this server shape. `ServerConfig` is the name
 rmcp 3.4 gives the initialize result; earlier releases call it `ServerInfo`,
-which rmcp 3.4 and later keep as a deprecated alias.
+which rmcp 3.4 and later keep as a deprecated alias. `#[tool_handler]` routes calls through
+`Self::tool_router()` unless `router` names another; `router = self.tool_router` uses the
+router the server built once.
 
 ### Publish honest capabilities
 
@@ -259,6 +266,6 @@ the server is an independently deployed service. Remote deployments also need
 authentication, request limits, session policy, observability, and an
 application-level health probe.
 
-See the official [`rmcp` documentation](https://docs.rs/rmcp/3.5.1/rmcp/) for
+See the official [`rmcp` documentation](https://docs.rs/rmcp/3.9/rmcp/) for
 server routers, resources, prompts, custom handlers, transports, authorization,
 and extension APIs.

@@ -54,7 +54,7 @@ In this guide, you'll create a **Customer Service System** where a coordinator r
 ## Portable TeamSpec
 
 Use `TeamSpec` when the same team must execute identically in generated
-projects, the CLI, Studio preview, and Enterprise deployments. The spec is
+projects, the CLI, and Enterprise deployments. The spec is
 serializable data; `compile` binds each declared name to any existing `Agent`
 implementation and returns an executable `CompiledTeam` root. It does not add a
 new atomic agent kind.

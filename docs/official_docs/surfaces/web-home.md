@@ -317,6 +317,8 @@ Every card is drawn from its inbox entry (spec 3.3 §7.1, §11 S-I1) and answers
 | Typing while a decision is open | Queued as the next message and shown as "Sent after this card is answered", never an answer (S-I4); the page reads the queue back from `GET /surface/sessions/{session}/queued`, so a reload or a switch of threads still shows it |
 | Typing while a turn runs | The page sends `send` as always, and the engine offers the message to the running turn, which takes it after its current tool step: the thread shows it there and it leaves the queue. A turn that ends first leaves it queued as the next message, once. See [Steering a running turn](index.md#steering-a-running-turn) |
 | High risk | Offered as **Confirm it's you and approve**; the server, not the page, says the person confirmed it is them |
+| A call with images | The exact image that would leave, with its regions, what was covered, where it goes and the cost, loaded as the viewer; **Allow once** names its digest, and **Tighten the crop** and **Add a redaction** hold the call again with a new image. See [Approve with the Image](approve-with-image.md) |
+| A vision tool's answer | The tool line links to the annotated viewer at `/ui/vision/<session>/<image>`: the regions it found over the image, filterable, with each region's backend, frame and transform chain; compare backends, correct a region and save it as an eval case, export the `RegionSet`. See [The Annotated Viewer](annotated-viewer.md) |
 
 | Take over (light) | Take over (dark) |
 |---|---|

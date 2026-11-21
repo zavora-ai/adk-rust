@@ -3,7 +3,7 @@
 Offline evaluation replays an eval set before a release. Online evaluation scores the runs real
 users start: `adk_eval::online::OnlineEvaluator` samples a fraction of finished production runs,
 judges each on a background worker with reference-free criteria, and records the verdicts where
-operators and a self-improvement loop read them. It is off until you build an evaluator and
+operators and their own tooling read them. It is off until you build an evaluator and
 install it, it never delays a run, and every judge call counts against its own budget and stops
 when a kill switch is frozen.
 
@@ -202,20 +202,23 @@ On the agent kernel, install the plugin on the runner you register with `KernelB
 on the harness, build the runner with `HarnessAgent::configure_runner(..).plugin_manager(..)` and
 wrap it with `Harness::with_runner`.
 
-## Feeding a Self-Improvement Loop
+## Feeding Your Own Improvement Loop
 
-The self-improving harness of spec 3.4 (`docs/design/spec-3.4-self-improving-harness.md` §7.3)
-mines its own operation into defect records and reproduces each as an evaluation case before it proposes a
-fix. Online evaluation is one of its sources:
+> **Note:** the self-improving harness of spec 3.4
+> (`docs/design/spec-3.4-self-improving-harness.md` §7.3) ships its protected-path set and
+> instruction-trust check in 3.0.0; its maintenance loop is not in 3.0.0. The steps below use the
+> 3.0.0 APIs that loop would build on.
 
-1. The miner reads `store.list(&OnlineEvalQuery::default().failed_only().since(last_tick))`.
+A loop that turns failed runs into evaluation cases reads the online store:
+
+1. A periodic job reads `store.list(&OnlineEvalQuery::default().failed_only().since(last_tick))`.
 2. Each failed record's criterion names the defect kind, and its `session_id` and
-   `invocation_id` are the evidence reference; the record holds no content, so the defect store
-   stays content-free.
-3. The reproducer turns the referenced session's events into an `EvalCase` with
+   `invocation_id` are the evidence reference; the record holds no content, so what the job
+   stores from it holds none either.
+3. The job turns the referenced session's events into an `EvalCase` with
    `TestGenerator::generate_from_events` and keeps it only when it fails on the current build.
 4. After an upgrade, `OnlineEvalSummary::from_records` over the records since the release shows
    whether the criterion's pass rate recovered.
 
-The evaluator, its criteria and its store sit outside the agent's write scope, as spec 3.4
-requires of every grader.
+Keep the evaluator, its criteria and its store outside the agent's write scope, so the agent
+cannot change how it is graded.

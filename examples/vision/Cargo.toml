@@ -1,0 +1,37 @@
+[package]
+name = "vision-scenarios"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "Spec 3.7 scenarios S1–S8 for adk-vision: the Document desk on local backends, cloud backends on recorded responses, egress, approvals, frames, weights and budgets"
+
+[workspace]
+
+[dependencies]
+adk-artifact = { path = "../../adk-artifact" }
+adk-core = { path = "../../adk-core" }
+# The vision pack: governed vision tools, egress rules and the privacy guardrail (spec 3.7 X15).
+adk-harness = { path = "../../adk-harness", features = ["vision"] }
+# ScriptedLlm plans the tool calls; the Anthropic and Gemini clients replay recorded answers.
+adk-model = { path = "../../adk-model", default-features = false, features = ["anthropic", "gemini", "muse"] }
+adk-runner = { path = "../../adk-runner" }
+adk-session = { path = "../../adk-session" }
+# PP-OCRv6 and RF-DETR run on the device, fetched by revision and SHA-256; the cloud
+# backends are the real clients against a local server.
+adk-vision = { path = "../../adk-vision", features = ["fetch", "conformance", "guardrail", "onnx", "ocr", "cloud", "nim", "sam"] }
+anyhow = "1.0"
+async-trait = "0.1"
+base64 = "0.22"
+futures = "0.3"
+jsonschema = { version = "0.47", default-features = false }
+reqwest = { version = "0.13", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3"
+tokio = { version = "1.40", features = ["full"] }
+wiremock = "0.6"
+
+# Pre- and post-processing around ONNX Runtime is slow unoptimised; dependencies build as
+# the workspace builds them.
+[profile.dev.package."*"]
+opt-level = 1
