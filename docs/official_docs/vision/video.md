@@ -167,7 +167,7 @@ ambiguous.
 |------|-----------|
 | Request | One `POST /v1/responses` per concept phrase, with the clip as `input_video`: a data URL up to 20 MB, else a `file_id` uploaded once through `/v1/files`; box and point prompts in one request, on frame 0 |
 | Answer | One line per frame with objects; each object a region with a `TrackId` stable across the frames of the analysis, objects of different concepts never sharing one |
-| Shape | A mask when a `SamMaskDecoder` is installed, otherwise the object's box, in pixels of the clip's frames |
+| Shape | A mask when `SamConfig::with_mask_decoder` (`[sam.masks]`) chooses a decoder or `with_mask_decoder` installs one, otherwise the object's box, in pixels of the clip's frames |
 | Propagation | `with_propagation(Propagation::Forward)` tracks from the earliest prompted frame onward only |
 | Price | $0.20 per 1,000 frames, at least 50 frames per request: a 30-frame clip costs $0.01, thirty seconds at 30 fps $0.18 |
 | Limits | 15,000 frames (about 10 minutes) and 16 objects per frame per request |
