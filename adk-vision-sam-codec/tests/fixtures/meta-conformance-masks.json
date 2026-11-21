@@ -1,0 +1,45 @@
+{
+ "source": "github.com/meta-models/meta-sam conformance/cases at 5f2e6e7f1da5b41dcd10bec971201e5910efc18a, SAM License",
+ "masks": [
+  {
+   "case": "captured-api-image-lossless",
+   "encoding": "lossless",
+   "width": 11,
+   "height": 11,
+   "payload": "~!!!!r!kCq#$.pF[_cZIw.?wO3R8-&NJofiCI$_J0aA.1VC*YyK_'z*(LEG8!+H9evY.82Z-4.@C[.9C@T86o$3E=-&8w3W=]xS.",
+   "raster": "0000110000000111111100011111111100111111111011111111111111111111110111111111101111111111011111111100011111111000001110000"
+  },
+  {
+   "case": "compact-api-confidence",
+   "encoding": "one_bit",
+   "width": 5,
+   "height": 5,
+   "payload": "!!!!!(QO(0lu8?",
+   "raster": "1001000110000001011110001"
+  },
+  {
+   "case": "compact-api-image-lossless",
+   "encoding": "lossless",
+   "width": 3,
+   "height": 2,
+   "payload": "~!!!!.!0^zlTde]:)]`W",
+   "raster": "001101"
+  },
+  {
+   "case": "source-done-only",
+   "encoding": "one_bit",
+   "width": 5,
+   "height": 4,
+   "payload": "!!!!!(o=)O621!",
+   "raster": "11100111001110011100"
+  },
+  {
+   "case": "synthetic-video-basic",
+   "encoding": "one_bit",
+   "width": 3,
+   "height": 2,
+   "payload": "!!!!!&[{Vkw",
+   "raster": "101010"
+  }
+ ]
+}

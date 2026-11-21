@@ -8,7 +8,7 @@
   price. `SamSegmenter` calls Meta `sam-3.1` per concept or object prompt, parses its
   streamed special-token answer into boxes and masks in source pixels, retries rate limits
   with `Retry-After`, and bills one image unit at 2,500 µUSD per request; masks decode
-  through a `SamMaskDecoder`, such as `NodeMaskDecoder` over a user-installed
+  through a `SamMaskDecoder`, such as `ExternalMaskDecoder` over a user-installed
   `@meta-sam/parser`.
 - **Per-request concept metering** (`adk-vision`): `BackendDescriptor::concepts_per_request`
   makes the runtime hold and record one request per concept for a backend such as

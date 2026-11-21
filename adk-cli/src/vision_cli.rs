@@ -8,6 +8,7 @@
 //! | `vision models verify [<id>…]` | `ModelFetcher::fetch` offline: every cached file's SHA-256 again, no socket |
 //! | `vision models accept <id>` | `LicenceAcceptance` in `.adk/vision/licences.json`, from a terminal only (V-I11) |
 //! | `vision run detect\|segment\|read\|describe <image>` | `VisionRuntime` with one backend, the `EgressGate` of `.adk/vision.toml` for a remote one |
+//! | `vision run … --backend sam-3.1 --mask-decoder boxes\|external\|licensed` | `SamConfig::with_mask_decoder`: `[sam.masks]` of `.adk/vision.toml` unless a flag chooses; `licensed` needs feature `vision-sam-codec` and `vision models accept sam-mask-codec` |
 //! | `vision egress log` | The project's `.adk/vision/egress.jsonl`, written by the gate before each release (V-I3) |
 //!
 //! Everything a project keeps is beside its `.adk/vision.toml`, in `.adk/vision/`.
@@ -22,10 +23,10 @@ use adk_vision::{
     AcceptanceStore, BBox, CallOptions, CallRecord, DataClass, DecodeLimits, DescribeSpec,
     DetectQuery, Digest, DocumentPage, EditOp, EgressGate, EgressRecord, EgressRecorder,
     FetchConfig, FileAcceptanceStore, LicenceAcceptance, LicenceClass, Locality, ManifestSet,
-    MediaScope, MediaStore, ModelFetcher, ModelManifest, ModelSource, Overlay, ReadOptions,
-    RedactionClass, Region, RegionSet, ReleaseRequest, Rgba, SegmentPrompt, Shape, SourceImage,
-    TransformChain, VisionConfig, VisionCx, VisionError, VisionRuntime, VisionRuntimeBuilder,
-    VisionTask, apply_edit,
+    MaskDecoderChoice, MediaScope, MediaStore, ModelFetcher, ModelManifest, ModelSource, Overlay,
+    ReadOptions, RedactionClass, Region, RegionSet, ReleaseRequest, Rgba, RuntimeSpec,
+    SegmentPrompt, Shape, SourceImage, TransformChain, VisionConfig, VisionCx, VisionError,
+    VisionRuntime, VisionRuntimeBuilder, VisionTask, apply_edit,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -246,6 +247,39 @@ pub struct RunArgs {
     pub base_url: Option<String>,
     #[command(flatten)]
     pub manifests: ManifestArgs,
+    #[command(flatten)]
+    pub masks: MaskDecoderArgs,
+}
+
+/// How `sam-3.1` masks are decoded; the flags override `[sam.masks]` of the rules file.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct MaskDecoderArgs {
+    /// `sam-3.1` masks: boxes (no decoder), external (a program you installed) or licensed
+    /// (the port of Meta's codec under the SAM License: feature `vision-sam-codec`, after
+    /// `adk-rust vision models accept sam-mask-codec`). Default: `[sam.masks]` of the rules
+    /// file, else boxes
+    #[arg(long, value_enum, value_name = "DECODER")]
+    pub mask_decoder: Option<MaskDecoderKind>,
+    /// The external decoder: reads mask JSON on standard input, writes base64 rasters
+    #[arg(long, value_name = "PROGRAM")]
+    pub mask_decoder_program: Option<PathBuf>,
+    /// An argument for the external decoder; repeat it for each
+    #[arg(long = "mask-decoder-arg", value_name = "ARG", allow_hyphen_values = true)]
+    pub mask_decoder_args: Vec<String>,
+    /// Seconds the external decoder may take for one answer (default 60)
+    #[arg(long, value_name = "SECS")]
+    pub mask_decoder_timeout: Option<u64>,
+}
+
+/// `--mask-decoder`.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaskDecoderKind {
+    /// Each object is its box
+    Boxes,
+    /// A program you installed decodes each answer's masks
+    External,
+    /// The port of Meta's codec, in this process (SAM License)
+    Licensed,
 }
 
 /// `adk-rust vision egress`.
@@ -395,6 +429,15 @@ async fn models(project: &Path, command: ModelsCommand) -> Result<()> {
             let fetcher = fetcher(project, None);
             for id in &ids {
                 let manifest = lookup(&set, id)?;
+                if matches!(manifest.runtime, RuntimeSpec::Native) {
+                    println!(
+                        "{id} is code compiled into the program, so there is nothing to fetch; \
+                         `adk-rust vision models accept {id}` records your acceptance of its \
+                         licence ({})",
+                        manifest.licence.id
+                    );
+                    continue;
+                }
                 let size: u64 = manifest.files.iter().map(|f| f.size).sum();
                 eprintln!("fetching {id} ({}, {})", megabytes(size), manifest.licence.id);
                 let verified = fetcher.fetch(manifest).await?;
@@ -593,6 +636,7 @@ fn key(names: &[&str]) -> Result<String> {
 /// Registers the one backend the call names.
 async fn register(
     builder: VisionRuntimeBuilder,
+    project: &Path,
     task: &RunTask,
     id: &str,
     set: &ManifestSet,
@@ -601,10 +645,10 @@ async fn register(
     let base_url = run_args(task).base_url.clone();
     match (task, id) {
         (RunTask::Detect { .. }, "sam-3.1") => {
-            Ok(builder.remote_detector(Arc::new(sam(base_url)?)))
+            Ok(builder.remote_detector(Arc::new(sam(project, run_args(task))?)))
         }
         (RunTask::Segment { .. }, "sam-3.1") => {
-            Ok(builder.remote_segmenter(Arc::new(sam(base_url)?)))
+            Ok(builder.remote_segmenter(Arc::new(sam(project, run_args(task))?)))
         }
         (RunTask::Read { .. }, "nim") => {
             let url =
@@ -625,11 +669,53 @@ async fn register(
     }
 }
 
-fn sam(base_url: Option<String>) -> Result<adk_vision::SamSegmenter> {
+/// The mask decoder a call uses: the flags when they choose, else `[sam.masks]`.
+fn mask_choice(args: &MaskDecoderArgs, file: MaskDecoderChoice) -> Result<MaskDecoderChoice> {
+    let external = |program: PathBuf, args_from_file: Vec<String>, timeout_from_file: u64| {
+        MaskDecoderChoice::External {
+            program,
+            args: if args.mask_decoder_args.is_empty() {
+                args_from_file
+            } else {
+                args.mask_decoder_args.clone()
+            },
+            timeout_secs: args.mask_decoder_timeout.unwrap_or(timeout_from_file),
+        }
+    };
+    let (file_program, file_args, file_timeout) = match &file {
+        MaskDecoderChoice::External { program, args, timeout_secs } => {
+            (Some(program.clone()), args.clone(), *timeout_secs)
+        }
+        _ => (None, Vec::new(), adk_vision::DEFAULT_MASK_DECODER_TIMEOUT_SECS),
+    };
+    let kind = match args.mask_decoder {
+        Some(kind) => kind,
+        None if args.mask_decoder_program.is_some() => MaskDecoderKind::External,
+        None if matches!(file, MaskDecoderChoice::External { .. }) => MaskDecoderKind::External,
+        None => return Ok(file),
+    };
+    Ok(match kind {
+        MaskDecoderKind::Boxes => MaskDecoderChoice::None,
+        MaskDecoderKind::Licensed => MaskDecoderChoice::Licensed,
+        MaskDecoderKind::External => {
+            let program = args.mask_decoder_program.clone().or(file_program).ok_or_else(|| {
+                anyhow!(
+                    "--mask-decoder external needs --mask-decoder-program, or `program` in the \
+                     `[sam.masks]` table of {RULES_FILE}"
+                )
+            })?;
+            external(program, file_args, file_timeout)
+        }
+    })
+}
+
+fn sam(project: &Path, run: &RunArgs) -> Result<adk_vision::SamSegmenter> {
     let mut config = adk_vision::SamConfig::from_env()?;
-    if let Some(url) = base_url {
-        config = config.with_base_url(url);
+    if let Some(url) = &run.base_url {
+        config = config.with_base_url(url.clone());
     }
+    let masks = mask_choice(&run.masks, rules(project, run.config.as_deref())?.sam.masks)?;
+    let config = config.with_mask_decoder(masks).with_licence_acceptances(acceptances(project));
     Ok(adk_vision::SamSegmenter::new(config)?)
 }
 
@@ -858,7 +944,8 @@ async fn run_task(project: &Path, task: RunTask) -> Result<()> {
             .approving(digest.parse::<Digest>().map_err(|e| anyhow!("--approve `{digest}`: {e}"))?);
     }
     // A remote call is released only through the gate; a local one never reaches it.
-    let mut builder = register(VisionRuntime::builder(), &task, &id, &set, &fetcher).await?;
+    let mut builder =
+        register(VisionRuntime::builder(), project, &task, &id, &set, &fetcher).await?;
     let gate = if remote {
         let gate = Arc::new(gate(project, args.config.as_deref(), &fetcher, &set).await?);
         builder = builder.shared_egress_gate(gate.clone());
@@ -1310,6 +1397,57 @@ mod tests {
     }
 
     #[test]
+    fn mask_decoder_flags_override_the_rules_file() {
+        let file = MaskDecoderChoice::External {
+            program: "/opt/sam/decode".into(),
+            args: vec!["--json".into()],
+            timeout_secs: 30,
+        };
+        let none = MaskDecoderArgs::default();
+        assert_eq!(mask_choice(&none, MaskDecoderChoice::None).unwrap(), MaskDecoderChoice::None);
+        assert_eq!(mask_choice(&none, file.clone()).unwrap(), file);
+        let boxes =
+            MaskDecoderArgs { mask_decoder: Some(MaskDecoderKind::Boxes), ..Default::default() };
+        assert_eq!(mask_choice(&boxes, file.clone()).unwrap(), MaskDecoderChoice::None);
+        let licensed =
+            MaskDecoderArgs { mask_decoder: Some(MaskDecoderKind::Licensed), ..Default::default() };
+        assert_eq!(mask_choice(&licensed, file.clone()).unwrap(), MaskDecoderChoice::Licensed);
+        // A timeout alone keeps the file's program and arguments.
+        let slower = MaskDecoderArgs { mask_decoder_timeout: Some(90), ..Default::default() };
+        assert_eq!(
+            mask_choice(&slower, file.clone()).unwrap(),
+            MaskDecoderChoice::External {
+                program: "/opt/sam/decode".into(),
+                args: vec!["--json".into()],
+                timeout_secs: 90,
+            }
+        );
+        // A program alone chooses an external decoder with its own arguments.
+        let program = MaskDecoderArgs {
+            mask_decoder_program: Some("sam-decode".into()),
+            mask_decoder_args: vec!["-q".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            mask_choice(&program, MaskDecoderChoice::None).unwrap(),
+            MaskDecoderChoice::external("sam-decode", ["-q"])
+        );
+        let external =
+            MaskDecoderArgs { mask_decoder: Some(MaskDecoderKind::External), ..Default::default() };
+        let err = mask_choice(&external, MaskDecoderChoice::None).unwrap_err().to_string();
+        assert!(err.contains("--mask-decoder-program"), "{err}");
+    }
+
+    #[test]
+    fn the_rules_file_chooses_the_mask_decoder() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".adk")).unwrap();
+        std::fs::write(dir.path().join(RULES_FILE), "[sam.masks]\ndecoder = \"licensed\"\n")
+            .unwrap();
+        assert_eq!(rules(dir.path(), None).unwrap().sam.masks, MaskDecoderChoice::Licensed);
+    }
+
+    #[test]
     fn each_task_defaults_to_its_on_device_backend() {
         let run = RunArgs {
             image: "page.png".into(),
@@ -1322,6 +1460,7 @@ mod tests {
             config: None,
             base_url: None,
             manifests: ManifestArgs::default(),
+            masks: MaskDecoderArgs::default(),
         };
         let read = RunTask::Read { run: run.clone(), markdown: false };
         assert_eq!(backend_id(&read), "pp-ocrv6-tiny");

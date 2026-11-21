@@ -50,7 +50,8 @@ features — `fetch`, `cloud`, `nim`, `sam`, `guardrail` — as `adk_rust::visio
 | `onnx-coreml`, `onnx-cuda` | The CoreML and CUDA execution providers for the `onnx` backends |
 | `cloud` | `LlmDescriber`: any `adk_core::Llm` that takes images as a `Describer`, with Gemini (`box_2d`, 0–1000), Claude (pixels of the image as sent) and prompt-fixed 0–1000 region adapters, and provider-formula preflight estimates |
 | `nim` | NVIDIA NIM: vision-language models (`NimConfig`, reasoning off, unpriced) and `NimDocumentReader` for NVIDIA's OCR, page-element, table and chart endpoints, remote, behind the egress gate; implies `cloud` |
-| `sam` | `SamSegmenter`: Meta `sam-3.1` request building, stream parser and mask placement, billed per request at $2.50 per 1,000 images |
+| `sam` | `SamSegmenter`: Meta `sam-3.1` request building, stream parser and mask placement, billed per request at $2.50 per 1,000 images; masks as boxes, or decoded by a program you installed (`ExternalMaskDecoder`) |
+| `sam-codec` | `LicensedMaskDecoder`: `sam-3.1` masks decoded in process by `adk-vision-sam-codec`, the port of Meta's codec under the SAM License, once a person accepts it (`adk-rust vision models accept sam-mask-codec`); in no `adk-rust` tier; implies `sam` |
 | `ocr` | `PpOcrReader`: PP-OCRv6 text lines and words through `oar-ocr` on ONNX Runtime |
 | `ocr-vl` | `PaddleOcrVlReader`: PaddleOCR-VL-1.6 with PP-DocLayoutV3 through `oar-ocr-vl` on Candle |
 | `ocr-vl-metal` | `ocr-vl` on Apple GPUs through Candle's Metal backend |

@@ -2,13 +2,16 @@
 //! scoring boxes in source pixels and, with Meta's parser installed, masks by IoU against
 //! the drawn shapes.
 //!
-//! `#[ignore]`d; needs `META_API_KEY`. `ADK_VISION_SAM_PARSER` names an installed
-//! `@meta-sam/parser` package directory to decode masks with `node`;
-//! `ADK_VISION_SAM_BASE` points the client at a recording proxy.
+//! `#[ignore]`d; needs `META_API_KEY`. `ADK_VISION_SAM_MASKS` chooses the mask decoder:
+//! `licensed` (feature `sam-codec`, the port of Meta's codec) or a directory holding Meta's
+//! `@meta-sam/parser` package, decoded by `node` through `ExternalMaskDecoder`; unset, every
+//! object is its box. `ADK_VISION_SAM_BASE` points the client at a recording proxy, and
+//! `ADK_VISION_SAM_DUMP` names a file the masks and their rasters are written to, so Meta's
+//! parser can decode the same payloads (`tests/fixtures/cloud/oracle/sam-oracle.mjs`).
 //!
 //! ```text
-//! META_API_KEY=... ADK_VISION_SAM_PARSER=.../node_modules/@meta-sam/parser \
-//!     cargo test -p adk-vision --features sam --test sam_live_tests -- --ignored --nocapture
+//! META_API_KEY=... ADK_VISION_SAM_MASKS=licensed \
+//!     cargo test -p adk-vision --features sam-codec --test sam_live_tests -- --ignored --nocapture
 //! ```
 
 use std::path::Path;
@@ -19,7 +22,7 @@ use adk_core::{
     BudgetTracker, InMemorySpendLedger, ModelCallScope, RunBudget, SpendKey, SpendLedger,
     SpendPeriod, UsageUnit,
 };
-use adk_vision::sam::NodeMaskDecoder;
+use adk_vision::sam::{ExternalMaskDecoder, SamMask, SamMaskDecoder};
 use adk_vision::{
     BBox, DecodeLimits, EgressAction, EgressConfig, EgressGate, InMemoryEgressRecorder, Mask,
     SamConfig, SamSegmenter, SegmentPrompt, Shape, SourceImage, VisionCx, VisionRuntime,
@@ -57,6 +60,51 @@ fn truth_masks() -> Vec<(&'static str, Mask)> {
     ]
 }
 
+/// The licensed decoder, with the acceptance a person running this test gives by running it.
+#[cfg(feature = "sam-codec")]
+fn licensed() -> Arc<dyn SamMaskDecoder> {
+    use adk_vision::{AcceptanceStore, InMemoryAcceptanceStore, LicenceAcceptance, ManifestSet};
+    let store = InMemoryAcceptanceStore::new();
+    let manifests = ManifestSet::builtin().unwrap();
+    let codec = manifests.get(adk_vision::SAM_MASK_CODEC_MANIFEST).unwrap();
+    store.record(LicenceAcceptance::of(codec, "live-test")).unwrap();
+    Arc::new(adk_vision::sam::LicensedMaskDecoder::new(&store).unwrap())
+}
+
+#[cfg(not(feature = "sam-codec"))]
+fn licensed() -> Arc<dyn SamMaskDecoder> {
+    panic!("ADK_VISION_SAM_MASKS=licensed needs --features sam-codec")
+}
+
+/// Decodes through the chosen decoder and, with `ADK_VISION_SAM_DUMP` set, appends each mask
+/// and the SHA-256 of its raster to that file as JSON lines.
+struct Dump(Arc<dyn SamMaskDecoder>);
+
+#[async_trait::async_trait]
+impl SamMaskDecoder for Dump {
+    async fn decode(&self, masks: &[SamMask]) -> adk_vision::Result<Vec<Vec<bool>>> {
+        use sha2::Digest as _;
+        use std::io::Write as _;
+        let rasters = self.0.decode(masks).await?;
+        if let Ok(path) = std::env::var("ADK_VISION_SAM_DUMP") {
+            let mut file =
+                std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
+            for (mask, raster) in masks.iter().zip(&rasters) {
+                let bytes: Vec<u8> = raster.iter().map(|b| u8::from(*b)).collect();
+                let line = serde_json::json!({
+                    "encoding": mask.encoding,
+                    "width": mask.width,
+                    "height": mask.height,
+                    "payload": format!("{}{}", mask.encoding.marker(), mask.payload),
+                    "sha256": hex::encode(sha2::Sha256::digest(&bytes)),
+                });
+                writeln!(file, "{line}").unwrap();
+            }
+        }
+        Ok(rasters)
+    }
+}
+
 fn iou(a: &Mask, b: &Mask) -> f32 {
     let (a, b) = (a.decode(), b.decode());
     let inter = a.iter().zip(&b).filter(|(x, y)| **x && **y).count();
@@ -74,10 +122,15 @@ async fn sam_segments_the_drawn_shapes_and_the_s5_widgets() {
         config = config.with_base_url(base);
         policy = EgressPolicy::allow_private_networks();
     }
+    let decoding = std::env::var("ADK_VISION_SAM_MASKS").ok().filter(|v| !v.is_empty());
+    let decoder: Option<Arc<dyn SamMaskDecoder>> = match decoding.as_deref() {
+        None => None,
+        Some("licensed") => Some(licensed()),
+        Some(package) => Some(Arc::new(ExternalMaskDecoder::meta_parser(package))),
+    };
     let mut sam = SamSegmenter::new(config).unwrap();
-    let decoding = std::env::var("ADK_VISION_SAM_PARSER").ok();
-    if let Some(package) = &decoding {
-        sam = sam.with_mask_decoder(Arc::new(NodeMaskDecoder::new(package)));
+    if let Some(decoder) = decoder {
+        sam = sam.with_mask_decoder(Arc::new(Dump(decoder)));
     }
     let gate = EgressGate::new(
         policy,
@@ -185,4 +238,65 @@ async fn sam_segments_the_drawn_shapes_and_the_s5_widgets() {
         budget.units().get(UsageUnit::Images),
         decoding.is_some()
     );
+}
+
+/// One live request, one mask decoded end to end: the blue circle, whose box alone would
+/// score an IoU of about pi/4 against it.
+#[tokio::test]
+#[ignore = "live: needs META_API_KEY and ADK_VISION_SAM_MASKS"]
+async fn sam_decodes_one_live_mask_end_to_end() {
+    let Some(key) = std::env::var("META_API_KEY").ok().filter(|k| !k.is_empty()) else { return };
+    let Some(decoding) = std::env::var("ADK_VISION_SAM_MASKS").ok().filter(|v| !v.is_empty())
+    else {
+        return;
+    };
+    let decoder: Arc<dyn SamMaskDecoder> = match decoding.as_str() {
+        "licensed" => licensed(),
+        package => Arc::new(ExternalMaskDecoder::meta_parser(package)),
+    };
+    let sam =
+        SamSegmenter::new(SamConfig::new(key)).unwrap().with_mask_decoder(Arc::new(Dump(decoder)));
+    let gate = EgressGate::new(
+        EgressPolicy::public_only(),
+        EgressConfig::default().with_default(EgressAction::Allow),
+        Arc::new(InMemoryEgressRecorder::new()),
+    );
+    let runtime =
+        VisionRuntime::builder().remote_segmenter(Arc::new(sam)).egress_gate(gate).build().unwrap();
+    let ledger = Arc::new(InMemorySpendLedger::default());
+    let cx = VisionCx::new()
+        .with_scope(ModelCallScope::new().with_spend_ledger(ledger.clone(), "live-one"));
+    let image = SourceImage::decode(
+        &std::fs::read(fixture("cloud/shapes-960x540.png")).unwrap(),
+        &DecodeLimits::default(),
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    let out = runtime
+        .segment(&cx, &image, &[SegmentPrompt::Concept { text: "blue circle".into() }])
+        .await
+        .unwrap();
+    let elapsed = started.elapsed();
+    let (_, truth) = truth_masks().into_iter().find(|(n, _)| *n == "blue circle").unwrap();
+    let region = out.value.first().expect("sam-3.1 found the blue circle");
+    let Shape::Mask(mask) = &region.shape else { panic!("no mask: the decoder did not run") };
+    let score = iou(mask, &truth);
+    let box_score = {
+        let b = mask.bbox().unwrap();
+        let mut bits = vec![false; 960 * 540];
+        for y in b.y0 as usize..b.y1 as usize {
+            for x in b.x0 as usize..b.x1 as usize {
+                bits[y * 960 + x] = true;
+            }
+        }
+        iou(&Mask::encode(960, 540, &bits), &truth)
+    };
+    let cost = ledger.spent(&SpendKey::org("live-one"), SpendPeriod::Day).await.unwrap();
+    println!(
+        "LIVE sam-3.1 blue circle via {decoding}: mask IoU {score:.4} (its box alone {box_score:.4}); \
+         {} region(s); {elapsed:?}; ledger {cost} µUSD",
+        out.value.len()
+    );
+    assert!(score > 0.95, "mask IoU {score}");
+    assert!(score > box_score);
 }

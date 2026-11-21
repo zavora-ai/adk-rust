@@ -13,6 +13,16 @@ pub enum SamMaskEncoding {
     OneBit,
 }
 
+impl SamMaskEncoding {
+    /// The character the payload starts with on the wire, before [`SamMask::payload`].
+    pub fn marker(self) -> char {
+        match self {
+            Self::Lossless => '~',
+            Self::OneBit => '!',
+        }
+    }
+}
+
 /// One mask token: a `height` × `width` raster stretched over the record's box, with its
 /// payload kept exactly as the API sent it. A small box's raster is the box at source
 /// resolution; a large box's is downscaled (a 1699×398 box came back as 1024×240).

@@ -12,7 +12,7 @@
 //! | Frame | Pixels of the image as sent ([`CoordFrame::SentPixels`]); the runtime maps them to source pixels |
 //! | Price | $2.50 per 1,000 images from the `adk-model` catalog: one image unit, 2,500 µUSD, per request; a five-concept query is five requests |
 //! | Rate limits | On 429 the client backs off exponentially with jitter, honouring `Retry-After`, then returns `RateLimited` with the hint |
-//! | Masks | Placed into a source-sized mask when a [`SamMaskDecoder`] is installed; otherwise each object is its box |
+//! | Masks | Each object is its box, unless [`SamConfig::with_mask_decoder`] chooses a decoder ([`MaskDecoderChoice`]): a user-installed program ([`ExternalMaskDecoder`]) or, with feature `sam-codec` and recorded acceptance of the SAM License, the port of Meta's codec (`LicensedMaskDecoder`); a decoded mask is placed into a source-sized mask |
 //!
 //! # Example
 //!
@@ -40,7 +40,10 @@ use base64::Engine as _;
 use futures::StreamExt;
 use serde_json::{Value, json};
 
-pub use decode::{NodeMaskDecoder, SamMaskDecoder};
+pub use crate::mask_decoder::MaskDecoderChoice;
+#[cfg(feature = "sam-codec")]
+pub use decode::LicensedMaskDecoder;
+pub use decode::{ExternalMaskDecoder, SamMaskDecoder};
 pub use parse::{SamMask, SamMaskEncoding, SamRecord, SamStreamParser};
 
 use crate::backend::{BackendDescriptor, Locality, PriceRef};
@@ -48,6 +51,7 @@ use crate::cx::VisionCx;
 use crate::egress::ReleasedImage;
 use crate::error::{Result, VisionError};
 use crate::geometry::{BBox, CoordFrame, Mask, RawRegion, Shape};
+use crate::manifest::AcceptanceStore;
 use crate::traits::{DetectQuery, Detector, SegmentPrompt, Segmenter};
 use parse::{SamEvent, SseBuffer, event};
 
@@ -79,6 +83,8 @@ pub struct SamConfig {
     include_confidence: bool,
     one_bit: bool,
     timeout: Duration,
+    masks: MaskDecoderChoice,
+    acceptances: Option<Arc<dyn AcceptanceStore>>,
 }
 
 impl std::fmt::Debug for SamConfig {
@@ -91,6 +97,8 @@ impl std::fmt::Debug for SamConfig {
             .field("include_confidence", &self.include_confidence)
             .field("one_bit", &self.one_bit)
             .field("timeout", &self.timeout)
+            .field("masks", &self.masks)
+            .field("acceptances", &self.acceptances.is_some())
             .finish()
     }
 }
@@ -106,6 +114,8 @@ impl SamConfig {
             include_confidence: false,
             one_bit: false,
             timeout: Duration::from_secs(300),
+            masks: MaskDecoderChoice::None,
+            acceptances: None,
         }
     }
 
@@ -159,6 +169,38 @@ impl SamConfig {
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
+    }
+
+    /// Chooses how masks are decoded; [`MaskDecoderChoice::None`], boxes only, by default.
+    /// [`SamSegmenter::new`] builds and checks the decoder.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_vision::{MaskDecoderChoice, SamConfig, SamSegmenter};
+    ///
+    /// // A program that is not installed is refused when the segmenter is built.
+    /// let config = SamConfig::new("meta-key")
+    ///     .with_mask_decoder(MaskDecoderChoice::external("no-such-sam-decoder", ["--json"]));
+    /// let refused = SamSegmenter::new(config).unwrap_err().to_string();
+    /// assert!(refused.contains("`no-such-sam-decoder` was not found on PATH"), "{refused}");
+    /// ```
+    pub fn with_mask_decoder(mut self, choice: MaskDecoderChoice) -> Self {
+        self.masks = choice;
+        self
+    }
+
+    /// Where [`MaskDecoderChoice::Licensed`] looks for a person's acceptance of the SAM
+    /// License, such as the project's `FileAcceptanceStore`. Without one, the licensed
+    /// decoder is refused.
+    pub fn with_licence_acceptances(mut self, store: Arc<dyn AcceptanceStore>) -> Self {
+        self.acceptances = Some(store);
+        self
+    }
+
+    /// The mask decoder this configuration chooses.
+    pub fn mask_decoder(&self) -> &MaskDecoderChoice {
+        &self.masks
     }
 
     /// The host requests go to.
@@ -231,15 +273,19 @@ impl std::fmt::Debug for SamSegmenter {
 }
 
 impl SamSegmenter {
-    /// A client for `config`.
+    /// A client for `config`, with the mask decoder it chooses.
     ///
     /// # Errors
     ///
-    /// [`VisionError::InvalidInput`] for a base URL with no host, or when the `adk-model`
-    /// catalog has no image price for the model; [`VisionError::Backend`] when the HTTP
-    /// client cannot be built.
+    /// [`VisionError::InvalidInput`] for a base URL with no host, an external mask decoder
+    /// that is not installed, or when the `adk-model` catalog has no image price for the
+    /// model; [`VisionError::LicenceAcceptanceRequired`] for the licensed decoder before a
+    /// person accepted the SAM License; [`VisionError::Unsupported`] for the licensed
+    /// decoder without feature `sam-codec`; [`VisionError::Backend`] when the HTTP client
+    /// cannot be built.
     pub fn new(config: SamConfig) -> Result<Self> {
         let host = config.host()?;
+        let decoder = decode::decoder_for(&config.masks, config.acceptances.as_deref())?;
         let rate = PricingCatalog::standard()
             .unit_price(Some(VENDOR), &config.model, UsageUnit::Images)
             .map(|p| p.rate)
@@ -264,7 +310,7 @@ impl SamSegmenter {
         let http = reqwest::Client::builder().timeout(config.timeout).build().map_err(|e| {
             VisionError::Backend { backend: config.model.clone(), message: e.to_string() }
         })?;
-        Ok(Self { config, http, descriptor, decoder: None })
+        Ok(Self { config, http, descriptor, decoder })
     }
 
     /// Names the hosts the egress policy checks instead of the base URL's, for a gateway
@@ -275,7 +321,8 @@ impl SamSegmenter {
         self
     }
 
-    /// Answers with masks, decoded by `decoder`.
+    /// Answers with masks, decoded by `decoder`, in place of the one the configuration
+    /// chose.
     pub fn with_mask_decoder(mut self, decoder: Arc<dyn SamMaskDecoder>) -> Self {
         self.decoder = Some(decoder);
         self

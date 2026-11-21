@@ -1,0 +1,133 @@
+{
+  "decoder": "@meta-sam/parser 0.1.0 decodeMaskToRaster",
+  "masks": [
+    {
+      "recording": "sam-3-1.s5-screen-rectangle.json",
+      "index": 0,
+      "width": 492,
+      "height": 72,
+      "set": 34295,
+      "sha256": "a2c3da9c37105096046baeeb5b40ee93b4400a7c7172a6e98106592cc27af751"
+    },
+    {
+      "recording": "sam-3-1.s5-screen-rectangle.json",
+      "index": 1,
+      "width": 224,
+      "height": 82,
+      "set": 17972,
+      "sha256": "4615308f41f4a1160fb349dfc7615a74b94c6af3dc13f7cd7ca992b841737545"
+    },
+    {
+      "recording": "sam-3-1.s5-screen-rectangle.json",
+      "index": 2,
+      "width": 122,
+      "height": 72,
+      "set": 8413,
+      "sha256": "26246f0939fafdf554c1b83a716dffd883b8eb80fd699e8bb0cc56c979ca2b37"
+    },
+    {
+      "recording": "sam-3-1.s5-screen-rectangle.json",
+      "index": 3,
+      "width": 901,
+      "height": 81,
+      "set": 71802,
+      "sha256": "56bf3c1653312eaffa8f9b5a39258c6d3cba287763b7491cdac9b5865eedbf19"
+    },
+    {
+      "recording": "sam-3-1.s5-screen-rectangle.json",
+      "index": 4,
+      "width": 901,
+      "height": 81,
+      "set": 71422,
+      "sha256": "c369f59db6aec5b091b390bfda82024425910738f3c4192bd5a2e5b0deb71836"
+    },
+    {
+      "recording": "sam-3-1.s5-screen-rectangle.json",
+      "index": 5,
+      "width": 601,
+      "height": 82,
+      "set": 47772,
+      "sha256": "8c8a0b91cae9bebfa9aff2ce95747c6df4e21f11b8f99772e0377bbe0889ef67"
+    },
+    {
+      "recording": "sam-3-1.s5-screen-rectangle.json",
+      "index": 6,
+      "width": 131,
+      "height": 94,
+      "set": 12037,
+      "sha256": "f6ec54e85915132f5e5d16a658b705af21504c04ff10c8bc22090e28fde5ea59"
+    },
+    {
+      "recording": "sam-3-1.s5-screen-rectangle.json",
+      "index": 7,
+      "width": 1024,
+      "height": 240,
+      "set": 245144,
+      "sha256": "736c6f2bd13d96dfc5182ca886141ca377ab817ea23aecafb64ff426b1f06a38"
+    },
+    {
+      "recording": "sam-3-1.s5-screen-rectangle.json",
+      "index": 8,
+      "width": 197,
+      "height": 70,
+      "set": 13667,
+      "sha256": "90e4d590781e6575409f8f6ea3354a7b155106e1fc1bb5b6e7d5d391c8d850ca"
+    },
+    {
+      "recording": "sam-3-1.s5-screen-rectangle.json",
+      "index": 9,
+      "width": 901,
+      "height": 82,
+      "set": 72065,
+      "sha256": "9e513907968224dc7246d317cb95ab686c9a79800fda606c3911fb060312b657"
+    },
+    {
+      "recording": "sam-3-1.s5-screen-rectangle.json",
+      "index": 10,
+      "width": 182,
+      "height": 82,
+      "set": 14520,
+      "sha256": "03bfdfaca8ddb7e51dafa0eece2cae182728de6c740c9c558f5399197c41ea97"
+    },
+    {
+      "recording": "sam-3-1.s5-screen-rectangle.json",
+      "index": 11,
+      "width": 901,
+      "height": 81,
+      "set": 71900,
+      "sha256": "4bc2d659b34628f9ebe9da2f45a324175b447ce9772da111256c5fea9c81fea0"
+    },
+    {
+      "recording": "sam-3-1.scene-stop-sign.json",
+      "index": 0,
+      "width": 276,
+      "height": 276,
+      "set": 63094,
+      "sha256": "448595b1087176846b29b9a4c6b73ae062e015abe2eb2dcdaa4e0bfa1d04b2a5"
+    },
+    {
+      "recording": "sam-3-1.shapes-blue-circle.json",
+      "index": 0,
+      "width": 180,
+      "height": 178,
+      "set": 25253,
+      "sha256": "0ad414adfaba8b56b3d071c56ba07b6d392d035e73aa7cce2ebe8abdabc80ff0"
+    },
+    {
+      "recording": "sam-3-1.shapes-green-triangle.json",
+      "index": 0,
+      "width": 159,
+      "height": 150,
+      "set": 12188,
+      "sha256": "730f0df92d2b2c5b464a44b7fbd47cc964120950795bf75b6e73c87fa33aa9e3"
+    },
+    {
+      "recording": "sam-3-1.shapes-red-rectangle.json",
+      "index": 0,
+      "width": 239,
+      "height": 159,
+      "set": 37852,
+      "sha256": "5754e9e651cba79dabc639c493bff2df55e80586cc32dc3534eac70d5e821f4d"
+    }
+  ]
+}

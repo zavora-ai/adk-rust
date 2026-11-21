@@ -161,24 +161,111 @@ let found = runtime
 
 ### Masks
 
-Each mask is a base85 payload around an arithmetic-coded body whose model only Meta's
-`@meta-sam/parser` defines, under the SAM License. `adk-vision` does not ship that codec.
-Without a decoder, each object is its box. With a `SamMaskDecoder`, each object is a mask
-in source pixels; `NodeMaskDecoder` runs the parser in a user-installed Node.js, the way
-the `ffmpeg` feature uses a user-installed `ffmpeg`:
+Each mask is base85 text around an arithmetic-coded body whose model only Meta's
+`@meta-sam/parser` defines, and Meta publishes that parser under the SAM License, not an
+open-source licence. ADK-Rust's Apache-2.0 crates therefore contain no SAM-licensed code, and
+masks come through one of three choices:
+
+| Choice | Each object is | What you need | Licence you take on |
+|--------|----------------|---------------|---------------------|
+| `boxes` (the default) | Its box in source pixels | Nothing | None |
+| `external` | Its mask, decoded by a program you installed, such as Meta's parser in Node.js | The program | The program's own; Meta's parser is under the SAM License |
+| `licensed` | Its mask, decoded in this process by `adk-vision-sam-codec`, a Rust port of Meta's codec | Feature `sam-codec` (CLI: `vision-sam-codec`) and a recorded acceptance | The SAM License |
+
+**Choosing `licensed`.** The SAM License lets anyone port and redistribute Meta's code, on
+its terms: the port must be distributed under the SAM License with a copy of it (clause
+1.b.i), and its use must not be for the purposes clause 1.b.v forbids (military, warfare,
+nuclear, espionage, weapons, or anything Trade Controls prohibit). So the port lives in its
+own crate, `adk-vision-sam-codec`, whose licence file is the SAM License and whose `NOTICE`
+names what was ported from where; `adk-vision` reaches it only through the opt-in
+`sam-codec` feature, which is in no `adk-rust` tier. A program you build with that feature
+contains SAM-licensed code, and distributing it binds you to the SAM License. The decoder
+refuses until a person accepts the licence from a terminal, the same way a use-restricted
+model is accepted:
+
+```text
+$ adk-rust vision models accept sam-mask-codec
+sam-mask-codec is under LicenseRef-SAM (use-restricted).
+Read the licence before you accept it: https://github.com/meta-models/meta-sam/blob/5f2e6e7f1da5b41dcd10bec971201e5910efc18a/LICENSE
+Type the model id to accept its licence as alice: sam-mask-codec
+```
+
+Until then, building the segmenter fails with `licence acceptance required`, naming the
+licence URL and that command. The acceptance is recorded in `.adk/vision/licences.json`.
+
+**Choosing `external`.** The program is started once per answer with its arguments. It reads
+a JSON array of `{"encoding", "width", "height", "payload"}` on standard input, where
+`encoding` is `lossless` or `one_bit` and `payload` is the mask text exactly as the API sent
+it, and writes a JSON array with one base64 string per mask: `height × width` bytes,
+row-major, nonzero for a set pixel. The segmenter checks that the program exists when it is
+built, stops it after `timeout_secs` (60 by default), and refuses an answer when the program
+exits non-zero (with its first line of standard error), writes something other than that
+array, or writes a raster of the wrong size. `ExternalMaskDecoder::meta_parser` runs Meta's
+parser in a user-installed Node.js, the way the video backends use a user-installed
+`ffmpeg`:
 
 ```rust,ignore
 use std::sync::Arc;
-use adk_vision::sam::NodeMaskDecoder;
+use adk_vision::sam::ExternalMaskDecoder;
 
 // After `npm install @meta-sam/parser`, which accepts its licence.
-let sam = SamSegmenter::new(SamConfig::from_env()?)?
-    .with_mask_decoder(Arc::new(NodeMaskDecoder::new("node_modules/@meta-sam/parser")));
+let sam = SamSegmenter::new(SamConfig::from_env()?)?.with_mask_decoder(Arc::new(
+    ExternalMaskDecoder::meta_parser("node_modules/@meta-sam/parser"),
+));
 ```
 
-A raster covers its box: small boxes come back at source resolution, large ones
-downscaled (a 1699 × 398 box arrived as 1024 × 240), and the segmenter stretches each
-raster over its box.
+**Configuring the choice.** In a program, `SamConfig::with_mask_decoder` takes a
+`MaskDecoderChoice`, and `SamSegmenter::new` builds and checks the decoder:
+
+```rust,ignore
+use std::sync::Arc;
+use adk_vision::{FileAcceptanceStore, MaskDecoderChoice, SamConfig, SamSegmenter};
+
+let licensed = SamConfig::from_env()?
+    .with_mask_decoder(MaskDecoderChoice::Licensed)
+    .with_licence_acceptances(Arc::new(FileAcceptanceStore::in_project(&project)));
+let sam = SamSegmenter::new(licensed)?; // LicenceAcceptanceRequired until accepted
+
+let external = SamConfig::from_env()?
+    .with_mask_decoder(MaskDecoderChoice::external("/opt/sam/bin/sam-mask-decode", ["--json"]));
+```
+
+In `.adk/vision.toml`, the `[sam.masks]` table chooses for `adk-rust vision` and anything else
+that reads the file:
+
+```toml
+[sam.masks]
+decoder = "external"          # "boxes" (default), "external" or "licensed"
+program = "/opt/sam/bin/sam-mask-decode"
+args = ["--json"]
+timeout_secs = 30
+```
+
+On the command line, `--mask-decoder boxes|external|licensed`, `--mask-decoder-program`,
+`--mask-decoder-arg` and `--mask-decoder-timeout` override the file for one call:
+
+```bash
+adk-rust vision run segment shapes.png --backend sam-3.1 --concept "blue circle" \
+  --mask-decoder licensed --annotate shapes.masks.png
+```
+
+**Placement.** A raster covers its box: small boxes come back at source resolution, large
+ones downscaled (a 1699 × 398 box arrived as 1024 × 240), and the segmenter stretches each
+raster over its box into a mask the size of the source image.
+
+**Accuracy.** The port decodes all 16 masks of the recorded streams to the same rasters,
+bit for bit, as Meta's parser 0.1.0 (their SHA-256 digests are the test oracle), and Meta's
+own conformance vectors to their published rasters. Against the drawn shapes of the
+960 × 540 test image, the recorded masks score:
+
+| Shape | Mask IoU | Its box alone |
+|-------|----------|---------------|
+| Red rectangle | 0.986 | 0.990 |
+| Blue circle | 0.992 | 0.792 |
+| Green triangle | 0.976 | 0.503 |
+
+A rectangle's box is already its shape; for the circle and the triangle, only a decoded mask
+describes the object.
 
 ## Live Results
 

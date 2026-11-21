@@ -138,6 +138,9 @@ pub struct VisionConfig {
     /// The `[egress]` table.
     #[serde(default)]
     pub egress: EgressConfig,
+    /// The `[sam]` table: which decoder turns `sam-3.1` masks into rasters.
+    #[serde(default)]
+    pub sam: crate::mask_decoder::SamSettings,
 }
 
 impl VisionConfig {

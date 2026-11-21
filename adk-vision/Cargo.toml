@@ -17,7 +17,7 @@ exclude = ["tests/"]
 [package.metadata.docs.rs]
 # docs.rs has no CUDA or Metal toolchain, so the GPU features are left out; ort-sys skips
 # linking on docs.rs.
-features = ["fetch", "conformance", "eval", "guardrail", "onnx", "ocr", "ocr-vl", "cloud", "nim", "sam", "mistralrs"]
+features = ["fetch", "conformance", "eval", "guardrail", "onnx", "ocr", "ocr-vl", "cloud", "nim", "sam", "sam-codec", "mistralrs"]
 
 # Spec 3.7 §7.1: media, geometry, manifests, the traits, `VisionRuntime`, the egress boundary
 # and the deterministic `Editor` always build; each runtime and provider is a feature, added
@@ -53,6 +53,10 @@ cloud = ["dep:adk-model", "dep:base64", "dep:futures"]
 nim = ["cloud", "adk-model/openai", "dep:reqwest", "dep:base64"]
 # The Meta `sam-3.1` client: request building, the stream parser and mask placement (§7.7).
 sam = ["dep:adk-model", "adk-model/muse", "dep:base64", "dep:futures", "dep:reqwest", "tokio/io-util", "tokio/process"]
+# `LicensedMaskDecoder`: `sam-3.1` masks decoded in process by `adk-vision-sam-codec`, the port
+# of Meta's codec, which is under the SAM License rather than Apache-2.0. In no adk-rust tier;
+# the decoder refuses until a person records acceptance of the licence.
+sam-codec = ["sam", "dep:adk-vision-sam-codec"]
 # PP-OCRv6 text lines and words through `oar-ocr` on ONNX Runtime (§7.6), the runtime
 # downloaded at build time over rustls as `onnx` does. Weights come through the manifest and
 # fetcher; `oar-ocr`'s own ModelScope `auto-download` stays off.
@@ -94,6 +98,8 @@ adk-guardrail = { workspace = true, optional = true }
 adk-mistralrs = { workspace = true, optional = true }
 # Provider prices for preflight estimates, and the clients `nim` and `sam` build on.
 adk-model = { workspace = true, optional = true }
+# `sam-codec`: the SAM-licensed port of Meta's mask codec, kept in its own crate.
+adk-vision-sam-codec = { workspace = true, optional = true }
 # Base64 images inside tool results (`guardrail`), data URLs and mask payloads (`cloud`, `sam`), and NIM data URIs (`nim`).
 base64 = { version = "0.22", optional = true }
 futures = { workspace = true, optional = true }
@@ -179,6 +185,10 @@ required-features = ["sam"]
 [[test]]
 name = "sam_live_tests"
 required-features = ["sam"]
+
+[[test]]
+name = "sam_codec_tests"
+required-features = ["sam-codec"]
 
 [[test]]
 name = "ocr_live_tests"
