@@ -638,6 +638,8 @@ pre {
   background: var(--raised);
   font-size: 15.5px;
   white-space: pre-wrap;
+  /* A digest or an address stays inside the bubble: a card from a camera names its frame in full. */
+  overflow-wrap: anywhere;
 }
 
 .activity {
