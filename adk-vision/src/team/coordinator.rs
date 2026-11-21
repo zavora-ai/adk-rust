@@ -267,7 +267,8 @@ impl VisionTeam {
                     stored
                 }
             };
-            let (args, evidence) = self.disagreement_card(&regions, region, bbox, &frame, &opinions);
+            let (args, evidence) =
+                self.disagreement_card(&regions, region, bbox, &frame, &opinions);
             let call_id = format!("{DISAGREEMENT_TOOL}-{}-{index}", &source.digest().hex()[..16]);
             match hold(ctx, DISAGREEMENT_TOOL, &call_id, args, evidence).await? {
                 ToolAuthorization::Execute { .. } => inspection.findings.push(Finding {
@@ -292,7 +293,9 @@ impl VisionTeam {
                         vision.frame = %source.digest(),
                         "reasoner and verifier disagree; held for a person"
                     );
-                    inspection.state.push((key, serde_json::to_value(&opinions).unwrap_or_default()));
+                    inspection
+                        .state
+                        .push((key, serde_json::to_value(&opinions).unwrap_or_default()));
                     inspection.held = Some(request);
                     break;
                 }
@@ -602,7 +605,8 @@ impl VisionTeamBuilder {
     /// [`TeamRoleError::SameProvider`] when the verifier runs on the reasoner's provider and
     /// [`allow_same_provider`](Self::allow_same_provider) was not called.
     pub fn build(self) -> std::result::Result<VisionTeam, TeamRoleError> {
-        let missing = |what: &str| TeamRoleError::Missing(format!("the team '{}' needs {what}", self.name));
+        let missing =
+            |what: &str| TeamRoleError::Missing(format!("the team '{}' needs {what}", self.name));
         let perceiver = self.perceiver.clone().ok_or_else(|| missing("a perceiver"))?;
         let reasoner = self.reasoner.clone().ok_or_else(|| missing("a reasoner"))?;
         let verifier = self.verifier.clone().ok_or_else(|| missing("a verifier"))?;

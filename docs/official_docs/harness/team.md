@@ -19,6 +19,7 @@ budget and the same policy as the coordinator's own tool calls.
 | `MemberKind::Acp(AcpAgentConfig)` (`team-acp`) | an ACP-compatible coding agent | each permission request it makes, through the governed path |
 | `MemberKind::Remote(RemoteA2aConfig)` (`team-a2a`) | `RemoteA2aAgent` | the remote agent |
 | `MemberKind::Agent(Arc<dyn Agent>)` | the agent you supply | the harness policy; its tools are `External` |
+| `MemberKind::Perceiver { instruction, model }` (`vision`) | an `LlmAgent` the harness builds on a model that runs on the device | the harness policy, under the session's mode; a call that would leave the device is refused |
 
 `MemberSpec` fields:
 
@@ -27,7 +28,7 @@ budget and the same policy as the coordinator's own tool calls.
 | `name` | — | The member's name; the coordinator calls it as a tool of that name |
 | `description` | — | When to use it, shown to the coordinator's model |
 | `kind` | — | What the member is |
-| `tools` | `MemberTools::ReadOnly` | `ReadOnly` (`read_file`, `glob`, `grep`, the todo tools), `Full` (every harness tool but `exit_plan_mode`), or `Custom(tools)` |
+| `tools` | `MemberTools::ReadOnly` | `ReadOnly` (`read_file`, `glob`, `grep`, the todo tools), `Full` (every harness tool but `exit_plan_mode`), `Custom(tools)`, or, with the vision pack, `LocalPerception(tools)`: the read tools, the pack's tools whose default backend is on the device, and `tools`, each refusing a call that would leave the device |
 | `skills` | `false` | Whether the member gets the skill tools |
 | `max_iterations` | `50` | Most model turns of one delegation |
 | `timeout` | 15 minutes | The delegation's timeout; never unlimited |
@@ -54,6 +55,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(harness.info().members, vec!["explore", "general", "reviewer"]);
     Ok(())
 }
+```
+
+## Vision roles
+
+With the vision pack (features `vision` and `team`), three presets make a perceiver, reasoner
+and verifier team (spec 3.7 §7.12, [Perceiver, Reasoner, Verifier Teams](../vision/teams.md)):
+
+| Preset | Kind and tools | Answer | The build refuses |
+|---|---|---|---|
+| `MemberSpec::perceiver(model)` | `MemberKind::Perceiver`, `MemberTools::LocalPerception` | Regions | A model whose requests leave the machine; `Full` or `Custom` tools; an extra tool that declares network use |
+| `MemberSpec::reasoner(model)` | Local, no tools | An opinion (`adk_agent::opinion_schema`) | — |
+| `MemberSpec::verifier(model)` | Local, `MemberTools::LocalPerception` | An opinion | An extra tool that declares network use |
+
+Every local member whose model is remote gets the vision pack's privacy guardrail and evidence
+callback, as the coordinator does, so a reasoner on a cloud model sees only images the egress
+gate released, and a member's held remote vision call carries its egress image. A perceiver
+without a model is adk-vision's `Perceiver`, bound as `MemberKind::Agent`.
+
+```rust,ignore
+let harness = HarnessAgent::builder("inspector")
+    .model(claude.clone())
+    .workspace(adk_devtools::Workspace::new("."))
+    .pack_vision(pack)
+    .member(MemberSpec::perceiver(qwen3_vl_local))
+    .member(MemberSpec::reasoner(claude_haiku))
+    .member(MemberSpec::verifier(nemotron))
+    .build()?;
 ```
 
 ## What every delegation edge carries

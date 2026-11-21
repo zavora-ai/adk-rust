@@ -137,10 +137,10 @@ mod runtime;
 #[cfg(feature = "sam")]
 pub mod sam;
 mod sent;
-#[cfg(feature = "team")]
-pub mod team;
 #[cfg(feature = "stream")]
 pub mod stream;
+#[cfg(feature = "team")]
+pub mod team;
 mod toolset;
 #[cfg(feature = "track")]
 mod track;
@@ -218,16 +218,16 @@ pub use toolset::{
 #[cfg(feature = "track")]
 pub use track::{ByteTrackConfig, ByteTracker};
 pub use tracker::GreedyIouTracker;
-pub use verify::{
-    ExpectedChange, LoopOutcome, Observation, Observer, RegionDiff, RegionExpectation,
-    VERIFICATION_TOOL, VerificationHold, VerificationReport, VerifiedAction, VerifierLoop,
-    check_change, diff_regions,
-};
 pub use traits::{
     Block, BlockKind, DescribeRequest, DescribeSpec, Describer, Description, DetectQuery, Detector,
     DocumentPage, DocumentReader, Editor, Embedder, EmbeddingSpace, ImageRegion, Metric,
     ReadOptions, Sampling, SegmentPrompt, Segmenter, TableCell, Tracker, VideoAnalysis,
     VideoAnalyzer, VideoEvent, VideoFrame, VideoInput, VideoPlan, VideoRequest, VideoUsage, Word,
+};
+pub use verify::{
+    ExpectedChange, LoopOutcome, Observation, Observer, RegionDiff, RegionExpectation,
+    VERIFICATION_TOOL, VerificationHold, VerificationReport, VerifiedAction, VerifierLoop,
+    check_change, diff_regions,
 };
 #[cfg(feature = "cloud")]
 pub use video::FramesAnalyzer;

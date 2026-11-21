@@ -5,14 +5,12 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use adk_artifact::InMemoryArtifactService;
-use adk_core::{
-    ApprovalScope, Evidence, GovernedCall, RunConfig, ToolAuthorization, ToolGate,
-};
+use adk_core::{ApprovalScope, Evidence, GovernedCall, RunConfig, ToolAuthorization, ToolGate};
 use adk_vision::{
     BBox, BackendId, CoordFrame, DecodedImage, Digest, ExpectedChange, LoopOutcome, MediaScope,
-    MediaStore, Observation, Observer, Provenance, RawRegion, RegionExpectation,
-    RegionNormalizer, RegionSet, TransformChain, VERIFICATION_TOOL, VerificationReport,
-    VerifiedAction, VerifierLoop, VisionCx, check_change,
+    MediaStore, Observation, Observer, Provenance, RawRegion, RegionExpectation, RegionNormalizer,
+    RegionSet, TransformChain, VERIFICATION_TOOL, VerificationReport, VerifiedAction, VerifierLoop,
+    VisionCx, check_change,
 };
 
 fn set(frame: &[u8], boxes: &[(BBox, &str)]) -> RegionSet {
@@ -124,8 +122,7 @@ async fn a_second_failure_holds_for_a_person_with_both_frames() {
                 .with_frame(frames[0].clone()),
             Observation::new(set(b"wrong", &[(SAVE_LEFT, "button"), (DIALOG, "dialog")]))
                 .with_frame(frames[1].clone()),
-            Observation::new(set(b"still", &[(SAVE_LEFT, "button")]))
-                .with_frame(frames[2].clone()),
+            Observation::new(set(b"still", &[(SAVE_LEFT, "button")])).with_frame(frames[2].clone()),
         ]),
     });
     let outcome =

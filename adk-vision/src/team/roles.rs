@@ -885,9 +885,9 @@ impl ReasonerBuilder {
                 model.name()
             )));
         }
-        let hosts =
-            if self.hosts.is_empty() { vec![model.name().to_string()] } else { self.hosts };
-        let locality = if remote { Locality::Remote { hosts: hosts.clone() } } else { Locality::InProcess };
+        let hosts = if self.hosts.is_empty() { vec![model.name().to_string()] } else { self.hosts };
+        let locality =
+            if remote { Locality::Remote { hosts: hosts.clone() } } else { Locality::InProcess };
         let destination = BackendDescriptor::new(model.name(), locality, CoordFrame::SentPixels);
         let provider = provider_of(model.name(), self.provider.as_deref());
         #[cfg(feature = "guardrail")]
@@ -936,11 +936,8 @@ impl Agent for Reasoner {
             .cloned()
             .and_then(|value| serde_json::from_value(value).ok())
             .ok_or_else(|| AdkError::agent("a reasoner request needs `regions`, a RegionSet"))?;
-        let measurements: Vec<Value> = request
-            .get("measurements")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let measurements: Vec<Value> =
+            request.get("measurements").and_then(Value::as_array).cloned().unwrap_or_default();
         let verdicts: Vec<String> = match request.get("verdicts").and_then(Value::as_array) {
             Some(items) => items.iter().filter_map(Value::as_str).map(str::to_string).collect(),
             None => vec!["yes".to_string(), "no".to_string()],
@@ -954,8 +951,9 @@ impl Agent for Reasoner {
                 .ok_or_else(|| AdkError::agent(format!("`{name}` is not an image digest")))?;
             // Only an image this reasoner's gate released may reach its model.
             if self.is_remote() && !self.gate.as_ref().is_some_and(|g| g.has_released(&digest)) {
-                return Err(VisionError::NotReleased { backend: self.destination.id.to_string() }
-                    .into());
+                return Err(
+                    VisionError::NotReleased { backend: self.destination.id.to_string() }.into()
+                );
             }
             let data = super::load_bytes(ctx.as_ref(), name).await?;
             parts.push(Part::InlineData {
@@ -1278,8 +1276,9 @@ impl Verifier {
             let (Some(gate), Some(destination)) = (&self.gate, &self.destination) else {
                 return Err(VisionError::NotReleased { backend: model.name().to_string() });
             };
-            let mut release = ReleaseRequest::new(request.source, destination, self.data_class.clone())
-                .with_crop(crop);
+            let mut release =
+                ReleaseRequest::new(request.source, destination, self.data_class.clone())
+                    .with_crop(crop);
             for digest in &request.approved {
                 release = release.approved(*digest);
             }
@@ -1320,9 +1319,13 @@ impl Verifier {
                 Some(Locality::Remote { hosts }) => hosts.clone(),
                 _ => vec![model.name().to_string()],
             };
-            crate::guardrail::ImagePrivacyGuardrail::for_model(Arc::clone(gate), model.as_ref(), hosts)
-                .gate_content(cx, &mut content)
-                .await;
+            crate::guardrail::ImagePrivacyGuardrail::for_model(
+                Arc::clone(gate),
+                model.as_ref(),
+                hosts,
+            )
+            .gate_content(cx, &mut content)
+            .await;
         }
         let mut llm_request = LlmRequest::new(model.name(), vec![content]);
         let mut config = self.config.clone();

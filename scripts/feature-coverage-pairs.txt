@@ -75,6 +75,8 @@
 1 adk-payments redis lib
 # The voice surface (spec 3.1 §7.17): the harness over adk-realtime's integrated runner.
 7 adk-harness voice
+# The vision team presets (spec 3.7 §7.12): a perceiver refused on a remote model or tool.
+7 adk-harness vision,team
 # The vision pack (spec 3.7 X15): per-call classes, egress rules, the privacy guardrail.
 7 adk-harness vision
 # The vision pack's default redactors (RF-DETR, PP-OCRv6); the real-weights S3 run is ignored.
@@ -471,6 +473,9 @@
 # Vision evals (spec 3.7 §7.16): the eval agent scoring the committed eval sets through adk-eval
 # in process and over the cargo adk eval protocol, with the doctests.
 6 adk-vision eval doc
+# Perceiver, reasoner and verifier teams (spec 3.7 §7.12, S15): construction refusals, the
+# redacted crops the reasoner receives and the one disagreement card; the live run is ignored.
+6 adk-vision team doc
 # The local ONNX backends (spec 3.7 §7.6): RF-DETR, EfficientSAM, SAM 2.1 and SigLIP 2 on ort,
 # with the conformance suite; the weight-backed runs are ignored.
 6 adk-vision onnx,fetch,conformance doc

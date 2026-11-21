@@ -273,7 +273,10 @@ async fn s15_live_team_on_an_ambiguous_defect() {
                 .iter()
                 .rev()
                 .find_map(|e| {
-                    e.llm_response.content.as_ref().and_then(|c| c.parts.iter().find_map(Part::text))
+                    e.llm_response
+                        .content
+                        .as_ref()
+                        .and_then(|c| c.parts.iter().find_map(Part::text))
                 })
                 .unwrap()
                 .to_string();
