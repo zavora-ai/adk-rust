@@ -964,6 +964,29 @@ async fn a_subject_no_frame_shows_names_no_event() {
         Some("the orange forklift is not seen in any of the 6 frames checked.")
     );
     assert_eq!(judge.asked.lock().unwrap().len(), 6);
+
+    // Seen, but never entering: each positive is refined and dismissed.
+    let judge = Arc::new(Judge::new(2..=3, 99));
+    let describer = LlmDescriber::local(judge.clone()).unwrap();
+    let pass = VisibilityPass::new().with_target("the orange forklift");
+    let (runtime, _) = local_runtime(FramesAnalyzer::local(&describer).with_visibility_pass(pass));
+    let out = runtime
+        .analyze_video(
+            &VisionCx::new(),
+            VideoSource::frames(&sampled, Sampling::at(0.2)),
+            &ask_when_it_enters(),
+        )
+        .await
+        .unwrap();
+    assert!(out.value.events.is_empty());
+    assert_eq!(
+        out.value.answer.as_deref(),
+        Some(
+            "the orange forklift is seen in 2 of the 6 frames checked, but the frames around \
+             them do not answer the question."
+        )
+    );
+    assert_eq!(out.value.usage.requests, 8, "six checks and two refines");
 }
 
 /// A Gemini analyzer against a local server that answers `generateContent` with the

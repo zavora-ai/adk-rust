@@ -16,8 +16,13 @@
 //! HF_HUB_CACHE=/path/to/models cargo test -p adk-vision --features mistralrs \
 //!     --test video_local_live_tests -- --ignored --nocapture --test-threads 1
 //! ```
+//!
+//! `ADK_VISION_CLIP` and `ADK_VISION_ENTRY_MS` run the same question over another clip of the
+//! scene, such as S13's twenty minutes with the entry at 12:45 (765,000 ms), made from the
+//! fixtures' sprites with the overlay of `generate.sh`, `-t 1200`, and the forklift's left
+//! edge at `if(lt(t,760),-400,-200+40*(t-760))`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -82,8 +87,9 @@ async fn qwen() -> LlmDescriber<SentImage> {
 /// Asks over the clip's frames sampled every `every_s` seconds; nothing leaves the machine
 /// and every frame is metered at zero cost. Returns the first event's start.
 async fn ask(analyzer: FramesAnalyzer, every_s: u64) -> Option<u64> {
-    let clip =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video/aisle-forklift-120s.mp4");
+    let clip = std::env::var("ADK_VISION_CLIP").map(PathBuf::from).unwrap_or_else(|_| {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video/aisle-forklift-120s.mp4")
+    });
     let frames = sample(&clip, every_s, 448);
     println!("{} frames, one every {every_s} s; {analyzer:?}", frames.len());
     let recorder = Arc::new(InMemoryEgressRecorder::new());
@@ -132,7 +138,8 @@ async fn qwen3_vl_finds_the_entry_after_a_visibility_pass() {
         .with_frames_per_call(env_or("ADK_VISION_FRAMES_PER_CALL", 8))
         .with_visibility_pass(pass);
     let start = ask(analyzer, env_or("ADK_VISION_EVERY_S", 5)).await.expect("an event");
-    assert!(start.abs_diff(45_000) <= 5_000, "{start} ms is not within 5 s of 0:45");
+    let entry = env_or("ADK_VISION_ENTRY_MS", 45_000u64);
+    assert!(start.abs_diff(entry) <= 5_000, "{start} ms is not within 5 s of {entry} ms");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -145,5 +152,6 @@ async fn qwen3_vl_answers_in_batches_over_every_frame() {
     let analyzer =
         FramesAnalyzer::local(&qwen).with_frames_per_call(env_or("ADK_VISION_FRAMES_PER_CALL", 8));
     let start = ask(analyzer, env_or("ADK_VISION_EVERY_S", 5)).await.expect("an event");
-    assert!(start.abs_diff(45_000) <= 5_000, "{start} ms is not within 5 s of 0:45");
+    let entry = env_or("ADK_VISION_ENTRY_MS", 45_000u64);
+    assert!(start.abs_diff(entry) <= 5_000, "{start} ms is not within 5 s of {entry} ms");
 }

@@ -37,7 +37,8 @@ use crate::traits::{
 ///    alarm and the checks resume after it.
 ///
 /// An event's time is still the presentation time of the frame the model names. When no
-/// frame shows the target, the answer says so and names no event.
+/// frame shows the target, or none of the frames around those that do answers the question,
+/// the answer says so and names no event.
 ///
 /// # Example
 ///
@@ -354,7 +355,7 @@ impl<I> FramesAnalyzer<I> {
         let checked: Vec<usize> = (0..shown.len()).step_by(stride).collect();
         // `seen[i]` is whether `checked[i]` showed the target, once asked.
         let mut seen: Vec<Option<bool>> = vec![None; checked.len()];
-        let mut next = 0;
+        let (mut next, mut dismissed) = (0, 0);
         while next < checked.len() {
             if seen[next].is_none() {
                 let end = (next + pass.frames_per_check).min(checked.len());
@@ -390,10 +391,17 @@ impl<I> FramesAnalyzer<I> {
                 analysis.events = events;
                 return Ok(());
             }
+            dismissed += 1;
             next += 1;
         }
-        analysis.answer =
-            Some(format!("{target} is not seen in any of the {} frames checked.", checked.len()));
+        analysis.answer = Some(match dismissed {
+            0 => format!("{target} is not seen in any of the {} frames checked.", checked.len()),
+            n => format!(
+                "{target} is seen in {n} of the {} frames checked, but the frames around them do \
+                 not answer the question.",
+                checked.len()
+            ),
+        });
         Ok(())
     }
 
