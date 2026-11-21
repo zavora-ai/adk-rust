@@ -8,7 +8,7 @@
 //!
 //! | Camera | Budget | Watches |
 //! |---|---|---|
-//! | Line 2 | 5 a second, 200,000 frames a day | A crack inside the inspection window, 3 frames in a row |
+//! | Line 2 | 5 a second, 500,000 frames a day | A crack inside the inspection window, 3 frames in a row |
 //! | Line 3 | 5 a second, `--line-3-quota` frames a day (2,000): the governor steps down at once | — |
 //! | This computer's camera | — | The voice screen's camera through `SurfaceCameraSource`, off |
 //!

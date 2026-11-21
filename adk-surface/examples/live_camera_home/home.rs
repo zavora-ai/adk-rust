@@ -46,6 +46,29 @@ pub fn clip() -> ConveyorClip {
     ConveyorClip::new(ConveyorSpec { defective: 50, ..ConveyorSpec::default() })
 }
 
+/// How many frames of the clip play in a loop: thirty seconds, about five cracked parts.
+const LOOP_FRAMES: u64 = 300;
+
+/// Frames `0..count` of `clip`, drawn on every core.
+fn drawn(clip: &ConveyorClip, count: u64) -> Vec<adk_vision::DecodedImage> {
+    let threads = std::thread::available_parallelism().map_or(4, std::num::NonZero::get) as u64;
+    let mut frames: Vec<(u64, adk_vision::DecodedImage)> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads)
+            .map(|worker| {
+                scope.spawn(move || {
+                    (worker..count)
+                        .step_by(threads as usize)
+                        .map(|index| (index, clip.render(index)))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        workers.into_iter().flat_map(|worker| worker.join().unwrap_or_default()).collect()
+    });
+    frames.sort_by_key(|(index, _)| *index);
+    frames.into_iter().map(|(_, frame)| frame).collect()
+}
+
 /// Admits every request as the owner, presence confirmed, as a loopback example's extractor may.
 struct Owner;
 
@@ -213,13 +236,15 @@ pub async fn serve(
     line_3_quota: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     adk_core::ensure_crypto_provider();
-    let clip = Arc::new(clip());
-    let render = Arc::clone(&clip);
+    let clip = clip();
     let spec = clip.truth().spec.clone();
+    // The clip's first thirty seconds, drawn once up front and played in a loop.
+    let frames = Arc::new(drawn(&clip, LOOP_FRAMES.min(clip.frame_count())));
+    let count = frames.len() as u64;
     let server = RtspTestServer::start_with(
         TestVideo::Mjpeg {
-            render: Arc::new(move |index| render.render(index)),
-            frames: clip.frame_count(),
+            render: Arc::new(move |index| frames[(index % count) as usize].clone()),
+            frames: count,
             fps: spec.fps,
             quality: 85,
         },
@@ -273,7 +298,7 @@ pub async fn serve(
     )
     .detector(Arc::clone(&detection.runtime), detection.query.clone())
     .tracker(|| Box::new(GreedyIouTracker::new(0.3, 3)))
-    .budget(FrameBudget::new(5.0).with_min_local_fps(1.0).with_local_quota(200_000))
+    .budget(FrameBudget::new(5.0).with_min_local_fps(1.0).with_local_quota(500_000))
     .zone(detection.zone)
     .watch(detection.watch);
     let line_3 = LiveCamera::stream(
