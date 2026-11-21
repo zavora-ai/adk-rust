@@ -227,9 +227,11 @@ per character, not per token. They go through `ModelCallScope::meter`, or
 | `MuseAsrClient::transcribe` | `audioMillis` reported | $0.18 per hour, whole seconds rounded down; the hold covers the WAV file's duration, or the 10-minute file limit when the header cannot be read | `muse` |
 | `TranscribeTool` | `audioMillis` sent | The provider's `AudioBilling` rate; none for the bundled cloud providers | The provider's |
 | `SpeakTool` | `characters` sent | The provider's `AudioBilling` rate; none for the bundled cloud providers | The provider's |
+| `VisionRuntime::analyze_video` with `SamVideoTracker` | `frames` of the clip, per concept request | $0.20 per 1,000 frames, at least 50 frames per request (`sam-3.1`) | `muse` |
 
 `adk_model::pricing::PricingCatalog::unit_cost_micro_usd` prices a `UsageVector` from the
-catalog's per-unit prices (`muse-image-1.0`, `muse-voice-transcribe-1.0`, `sam-3.1`). Units are
+catalog's per-unit prices (`muse-image-1.0`, `muse-voice-transcribe-1.0`, `sam-3.1` images and
+video frames). Units are
 never ledger amounts: the ledger stays in micro-USD, and a unit call is not a model call.
 
 A `UnitRate` prices one unit: `micro_usd` per `per` units, billed in whole multiples of its

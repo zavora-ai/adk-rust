@@ -3,8 +3,10 @@
 //!
 //! The gate runs six steps — destination, minimise, redact, decide, record, release — and
 //! redaction always precedes the decision: no configuration releases an image before it
-//! is redacted (V-I2). A `ReleasedImage` has no public constructor (V-I1).
+//! is redacted (V-I2). A `ReleasedImage` has no public constructor (V-I1), and neither has
+//! a [`ReleasedClip`], the video counterpart a remote video analyzer takes.
 
+mod clip;
 mod config;
 mod gate;
 
@@ -16,6 +18,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+pub use clip::{ClipReleaseRequest, ReleasedClip};
 pub use config::{EgressAction, EgressConfig, EgressRuleConfig, VisionConfig};
 pub use gate::{EgressGate, EgressPreview, ReleaseRequest, StagedEgress};
 

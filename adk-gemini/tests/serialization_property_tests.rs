@@ -67,14 +67,18 @@ fn arb_text_part() -> impl Strategy<Value = Part> {
 
 /// Generates an InlineData Part.
 fn arb_inline_data_part() -> impl Strategy<Value = Part> {
-    ("(image/png|image/jpeg|text/plain)", "[a-zA-Z0-9+/=]{4,40}")
-        .prop_map(|(mime_type, data)| Part::InlineData { inline_data: Blob::new(mime_type, data) })
+    ("(image/png|image/jpeg|text/plain)", "[a-zA-Z0-9+/=]{4,40}").prop_map(|(mime_type, data)| {
+        Part::InlineData { inline_data: Blob::new(mime_type, data), video_metadata: None }
+    })
 }
 
 /// Generates a FileData Part.
 fn arb_file_data_part() -> impl Strategy<Value = Part> {
     ("(application/pdf|image/png)", "gs://[a-z]{3,10}/[a-z]{3,10}").prop_map(
-        |(mime_type, file_uri)| Part::FileData { file_data: FileDataRef { mime_type, file_uri } },
+        |(mime_type, file_uri)| Part::FileData {
+            file_data: FileDataRef { mime_type, file_uri },
+            video_metadata: None,
+        },
     )
 }
 

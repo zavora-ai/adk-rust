@@ -65,7 +65,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
                     for (j, part) in parts.iter().enumerate() {
                         match part {
                             // Look for inline data with audio MIME type
-                            Part::InlineData { inline_data }
+                            Part::InlineData { inline_data, .. }
                                 if inline_data.mime_type.starts_with("audio/") => {
                                     info!(mime_type = inline_data.mime_type, "found audio data");
 

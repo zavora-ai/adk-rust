@@ -21,6 +21,8 @@ features = ["all-providers", "gemini-vertex", "gemini-interactions", "openai-res
 adk-core.workspace = true
 adk-telemetry.workspace = true
 adk-gemini = { workspace = true, optional = true }
+# `gemini`: the File API's upload takes a parsed MIME type.
+mime = { version = "0.3", optional = true }
 async-trait.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 futures.workspace = true
@@ -45,7 +47,7 @@ aws-smithy-types = { version = "1.4.7", optional = true }
 
 [features]
 default = ["gemini"]
-gemini = ["dep:adk-gemini", "dep:reqwest"]
+gemini = ["dep:adk-gemini", "dep:reqwest", "dep:mime"]
 gemini-vertex = ["gemini", "adk-gemini/vertex"]
 gemini-interactions = ["gemini", "adk-gemini/interactions"]
 openai = ["dep:async-openai", "dep:reqwest", "dep:http", "dep:tower", "tokio/rt"]

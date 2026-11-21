@@ -10,6 +10,7 @@
 
 mod calls;
 mod route;
+mod video;
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -20,6 +21,7 @@ use adk_core::{MeteredUsage, UsageCall, UsageHold, UsageUnit, UsageVector};
 
 pub use calls::Edited;
 pub use route::{CallOptions, CallRecord, Escalation, Route, Trigger, VisionOutput};
+pub use video::VideoSource;
 
 use crate::backend::{BackendDescriptor, BackendId, InputLimits, Locality, Oversize};
 use crate::cx::VisionCx;
@@ -31,7 +33,9 @@ use crate::geometry::{BBox, RegionNormalizer, Transform, TransformChain};
 use crate::manifest::VisionTask;
 use crate::media::{MediaStore, SourceImage};
 use crate::sent::SentImage;
-use crate::traits::{Describer, Detector, DocumentReader, Editor, Embedder, Segmenter};
+use crate::traits::{
+    Describer, Detector, DocumentReader, Editor, Embedder, Segmenter, VideoAnalyzer,
+};
 
 /// A registered backend: on-device, handed [`SentImage`]s, or remote, handed
 /// [`ReleasedImage`]s.
@@ -122,6 +126,7 @@ type Readers = Registry<dyn DocumentReader, dyn DocumentReader<ReleasedImage>>;
 type Embedders = Registry<dyn Embedder, dyn Embedder<ReleasedImage>>;
 type Describers = Registry<dyn Describer, dyn Describer<ReleasedImage>>;
 type Editors = Registry<dyn Editor, dyn Editor<ReleasedImage>>;
+type Videos = Registry<dyn VideoAnalyzer, dyn VideoAnalyzer<ReleasedImage>>;
 
 /// The image a backend is handed for one call.
 enum Prepared {
@@ -205,6 +210,7 @@ pub struct VisionRuntime {
     embedders: Embedders,
     describers: Describers,
     editors: Editors,
+    videos: Videos,
     routes: BTreeMap<VisionTask, Route>,
     gate: Option<Arc<EgressGate>>,
     store: Option<MediaStore>,
@@ -260,6 +266,13 @@ impl VisionRuntimeBuilder {
     register!(embedder, remote_embedder, embedders, VisionTask::Embed, Embedder);
     register!(describer, remote_describer, describers, VisionTask::Describe, Describer);
     register!(editor, remote_editor, editors, VisionTask::Edit, Editor);
+    register!(
+        video_analyzer,
+        remote_video_analyzer,
+        videos,
+        VisionTask::AnalyzeVideo,
+        VideoAnalyzer
+    );
 
     /// Sets a task's route.
     pub fn route(mut self, task: VisionTask, route: Route) -> Self {
@@ -316,6 +329,7 @@ impl VisionRuntime {
                 embedders: Registry::default(),
                 describers: Registry::default(),
                 editors: Registry::default(),
+                videos: Registry::default(),
                 routes: BTreeMap::new(),
                 gate: None,
                 store: None,
@@ -333,6 +347,7 @@ impl VisionRuntime {
         all.extend(self.embedders.entries.iter().map(|(d, _)| d.id.clone()));
         all.extend(self.describers.entries.iter().map(|(d, _)| d.id.clone()));
         all.extend(self.editors.entries.iter().map(|(d, _)| d.id.clone()));
+        all.extend(self.videos.entries.iter().map(|(d, _)| d.id.clone()));
         all
     }
 
@@ -345,7 +360,7 @@ impl VisionRuntime {
             VisionTask::Embed => self.embedders.get(id).ok().map(|(d, _)| d),
             VisionTask::Describe => self.describers.get(id).ok().map(|(d, _)| d),
             VisionTask::Edit => self.editors.get(id).ok().map(|(d, _)| d),
-            VisionTask::AnalyzeVideo => None,
+            VisionTask::AnalyzeVideo => self.videos.get(id).ok().map(|(d, _)| d),
         }
     }
 
@@ -365,7 +380,7 @@ impl VisionRuntime {
             VisionTask::Embed => self.embedders.default_id(),
             VisionTask::Describe => self.describers.default_id(),
             VisionTask::Edit => self.editors.default_id(),
-            VisionTask::AnalyzeVideo => None,
+            VisionTask::AnalyzeVideo => self.videos.default_id(),
         };
         self.route_for(task, options, default)
     }
@@ -394,7 +409,7 @@ impl VisionRuntime {
             VisionTask::Embed => self.embedders.contains(id),
             VisionTask::Describe => self.describers.contains(id),
             VisionTask::Edit => self.editors.contains(id),
-            VisionTask::AnalyzeVideo => false,
+            VisionTask::AnalyzeVideo => self.videos.contains(id),
         }
     }
 

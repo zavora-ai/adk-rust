@@ -39,7 +39,7 @@ adk-vision = { version = "3.0.0", features = ["fetch"] }
 | `Embedder` | Embeds images and texts into one `EmbeddingSpace` | Vectors |
 | `Describer` | Answers in text, a schema-shaped value, and regions when asked | `Description` |
 | `Tracker` | Associates detections across frames, pure CPU | Regions with anonymous `TrackId`s |
-| `VideoAnalyzer` | Tracks, captions or answers over sampled frames | `VideoAnalysis` |
+| `VideoAnalyzer` | Tracks or answers over a clip or sampled frames ([video](video.md)) | `VideoAnalysis` |
 | `Editor` | Crops, resizes, redacts, blurs, pixelates, annotates | A new image with `Provenance::Derived` |
 
 Each image-taking trait is generic over what its backend is handed. An on-device backend

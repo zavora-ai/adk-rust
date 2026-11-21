@@ -430,6 +430,16 @@ pub trait Tracker: Send {
 }
 
 /// How a video or stream is sampled, which every provider prices by.
+///
+/// # Example
+///
+/// ```
+/// use adk_vision::Sampling;
+///
+/// // Gemini's default: one frame a second at the clip's own resolution.
+/// let sampling = Sampling::at(1.0);
+/// assert_eq!(sampling.max_long_edge, None);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sampling {
@@ -438,6 +448,13 @@ pub struct Sampling {
     /// Longest side of each frame, in pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_long_edge: Option<u32>,
+}
+
+impl Sampling {
+    /// `fps` frames a second, at full resolution.
+    pub fn at(fps: f32) -> Self {
+        Self { fps, max_long_edge: None }
+    }
 }
 
 /// What to do with a video.
@@ -462,15 +479,63 @@ pub enum VideoRequest {
     },
 }
 
-/// Sampled frames, as the backend may see them. Video files are added in phase B together
-/// with their release through the egress gate.
-#[derive(Debug)]
+/// What a video backend is handed: sampled frames, a clip, or both, as the backend may see
+/// them — [`SentImage`]s and a [`SentClip`](crate::SentClip) on the device,
+/// [`ReleasedImage`](crate::ReleasedImage)s and a [`ReleasedClip`](crate::ReleasedClip)
+/// off it. Only the runtime constructs one.
 #[non_exhaustive]
-pub struct VideoInput<I = SentImage> {
+pub struct VideoInput<I: VisionInput = SentImage> {
     /// `(frame, image)` pairs, in order.
     pub frames: Vec<(FrameMeta, I)>,
-    /// How the frames were sampled.
+    /// The clip, for a backend that reads video itself.
+    pub clip: Option<I::Clip>,
+    /// How the frames were sampled, or how a backend that samples the clip itself should.
     pub sampling: Sampling,
+}
+
+impl<I: VisionInput> VideoInput<I> {
+    pub(crate) fn new(
+        frames: Vec<(FrameMeta, I)>,
+        clip: Option<I::Clip>,
+        sampling: Sampling,
+    ) -> Self {
+        Self { frames, clip, sampling }
+    }
+}
+
+impl<I: VisionInput + std::fmt::Debug> std::fmt::Debug for VideoInput<I> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VideoInput")
+            .field("frames", &self.frames)
+            .field("clip", &self.clip)
+            .field("sampling", &self.sampling)
+            .finish()
+    }
+}
+
+/// What a video call will send, known before anything is prepared or released: for a
+/// backend's frame count and cost estimate.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct VideoPlan {
+    /// The clip, when the call sends one.
+    pub clip: Option<crate::video::ClipInfo>,
+    /// The sizes of the sampled frames the call sends, in order.
+    pub frame_sizes: Vec<(u32, u32)>,
+    /// The time the call covers, in milliseconds.
+    pub duration_ms: u64,
+    /// The sampling.
+    pub sampling: Sampling,
+}
+
+impl VideoPlan {
+    /// Frames the call carries: the clip's frames, else the sampled frames.
+    pub fn frames(&self) -> u64 {
+        match &self.clip {
+            Some(clip) => clip.frames,
+            None => self.frame_sizes.len() as u64,
+        }
+    }
 }
 
 /// A time range a video analysis names.
@@ -485,25 +550,87 @@ pub struct VideoEvent {
     pub text: String,
 }
 
-/// What a video analysis found.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// The regions found on one frame of a video, each with the track it belongs to.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoFrame<R = Region> {
+    /// The frame's index in the clip, from 0, or the sampled frame's index in its stream.
+    pub index: u64,
+    /// Presentation time in milliseconds, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pts_ms: Option<u64>,
+    /// The regions, with their tracks.
+    pub regions: Vec<R>,
+}
+
+/// What one analysis used: frames, tokens and cost, so each path reports its own (S13).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
-pub struct VideoAnalysis {
+pub struct VideoUsage {
+    /// Frames analysed: billed frames for a per-frame price, sampled frames otherwise.
+    pub frames: u64,
+    /// Input tokens, for a token-billed or local model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    /// Output tokens, for a token-billed or local model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    /// Cost in micro-USD: zero on the device, `None` when the catalog does not price the
+    /// model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_micro_usd: Option<u64>,
+    /// Calls made to the model or service.
+    pub requests: u64,
+}
+
+/// What a video analysis found.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct VideoAnalysis<R = Region> {
     /// The answer to an `Ask`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer: Option<String>,
     /// Events or chunk captions.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default = "Vec::new", skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<VideoEvent>,
+    /// For a `Track`, the regions on each frame with an object, in frame order.
+    #[serde(default = "Vec::new", skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<VideoFrame<R>>,
+    /// Frames, tokens and cost.
+    #[serde(default)]
+    pub usage: VideoUsage,
+}
+
+impl<R> Default for VideoAnalysis<R> {
+    fn default() -> Self {
+        Self { answer: None, events: Vec::new(), frames: Vec::new(), usage: VideoUsage::default() }
+    }
 }
 
 /// Tracks, captions or answers questions over a video, at an explicit sampling rate and
 /// resolution.
+///
+/// A backend answers regions in its descriptor's frame as [`RawRegion`]s; the runtime maps
+/// them to source pixels of the clip or of each sampled frame.
 #[async_trait]
 pub trait VideoAnalyzer<I: VisionInput = SentImage>: Send + Sync {
     /// What the backend is.
     fn descriptor(&self) -> &BackendDescriptor;
+
+    /// The frames a call on `plan` analyses, which the runtime records as units and bills
+    /// a per-frame price by: by default every frame the call carries.
+    fn frames(&self, plan: &VideoPlan) -> u64 {
+        plan.frames()
+    }
+
+    /// The most a call on `plan` can cost in micro-USD, which the runtime holds against the
+    /// run's budget before anything is released (V-I6). Token-billed backends estimate it;
+    /// `None` holds no more than a per-unit price.
+    fn max_cost_micro_usd(&self, _plan: &VideoPlan, _request: &VideoRequest) -> Option<u64> {
+        None
+    }
 
     /// Analyses `video`.
     async fn analyze(
@@ -511,7 +638,7 @@ pub trait VideoAnalyzer<I: VisionInput = SentImage>: Send + Sync {
         cx: &VisionCx,
         video: &VideoInput<I>,
         request: &VideoRequest,
-    ) -> Result<VideoAnalysis>;
+    ) -> Result<VideoAnalysis<RawRegion>>;
 }
 
 /// Edits an image: crop, redact, annotate, resize, or a generative edit. The runtime stores

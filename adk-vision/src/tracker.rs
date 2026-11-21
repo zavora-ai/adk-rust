@@ -10,7 +10,7 @@ use crate::traits::Tracker;
 /// that restart on [`reset`](Tracker::reset).
 ///
 /// A hermetic reference for tests and the conformance suite; production tracking uses the
-/// `track` feature's ByteTrack backend (phase B).
+/// `track` feature's `ByteTracker`.
 ///
 /// # Example
 ///

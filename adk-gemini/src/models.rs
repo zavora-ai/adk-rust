@@ -59,12 +59,18 @@ pub enum Part {
         /// The blob data
         #[serde(rename = "inlineData")]
         inline_data: Blob,
+        /// How a video in the blob is clipped and sampled.
+        #[serde(rename = "videoMetadata", default, skip_serializing_if = "Option::is_none")]
+        video_metadata: Option<VideoMetadata>,
     },
     /// File data referenced by URI
     FileData {
         /// The file data reference.
         #[serde(rename = "fileData")]
         file_data: FileDataRef,
+        /// How a video in the file is clipped and sampled.
+        #[serde(rename = "videoMetadata", default, skip_serializing_if = "Option::is_none")]
+        video_metadata: Option<VideoMetadata>,
     },
     /// Function call from the model
     FunctionCall {
@@ -142,6 +148,50 @@ impl Blob {
     /// Create a new blob with mime type and data
     pub fn new(mime_type: impl Into<String>, data: impl Into<String>) -> Self {
         Self { mime_type: mime_type.into(), data: data.into() }
+    }
+}
+
+/// How Gemini clips and samples a video part: `videoMetadata` beside its `inlineData` or
+/// `fileData`.
+///
+/// Gemini samples video at 1 frame per second by default; `fps` sets another rate, and the
+/// offsets analyse only part of the clip.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_gemini::VideoMetadata;
+///
+/// let metadata = VideoMetadata::default().with_fps(0.5).with_offsets(Some(30.0), Some(90.0));
+/// let json = serde_json::to_value(&metadata).unwrap();
+/// assert_eq!(json, serde_json::json!({"fps": 0.5, "startOffset": "30s", "endOffset": "90s"}));
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoMetadata {
+    /// Frames per second to sample, in `(0.0, 24.0]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fps: Option<f64>,
+    /// Where to start, as a duration such as `"30s"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_offset: Option<String>,
+    /// Where to end, as a duration such as `"90s"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_offset: Option<String>,
+}
+
+impl VideoMetadata {
+    /// Samples `fps` frames per second.
+    pub fn with_fps(mut self, fps: f64) -> Self {
+        self.fps = Some(fps);
+        self
+    }
+
+    /// Analyses from `start` to `end` seconds into the clip.
+    pub fn with_offsets(mut self, start: Option<f64>, end: Option<f64>) -> Self {
+        self.start_offset = start.map(|s| format!("{s}s"));
+        self.end_offset = end.map(|s| format!("{s}s"));
+        self
     }
 }
 
@@ -268,7 +318,10 @@ impl Content {
     /// Create a new content with inline data (blob data)
     pub fn inline_data(mime_type: impl Into<String>, data: impl Into<String>) -> Self {
         Self {
-            parts: Some(vec![Part::InlineData { inline_data: Blob::new(mime_type, data) }]),
+            parts: Some(vec![Part::InlineData {
+                inline_data: Blob::new(mime_type, data),
+                video_metadata: None,
+            }]),
             role: None,
         }
     }
@@ -499,11 +552,36 @@ mod tests {
                 mime_type: "image/jpeg".to_string(),
                 file_uri: "https://example.com/img.jpg".to_string(),
             },
+            video_metadata: None,
         };
         let json = serde_json::to_string(&part).unwrap();
         assert!(json.contains("fileData"));
+        assert!(!json.contains("videoMetadata"));
         let deserialized: Part = serde_json::from_str(&json).unwrap();
         assert_eq!(part, deserialized);
+    }
+
+    #[test]
+    fn video_metadata_sits_beside_the_file_data() {
+        let part = Part::FileData {
+            file_data: FileDataRef {
+                mime_type: "video/mp4".to_string(),
+                file_uri: "https://generativelanguage.googleapis.com/v1beta/files/abc".to_string(),
+            },
+            video_metadata: Some(VideoMetadata::default().with_fps(1.0)),
+        };
+        let json = serde_json::to_value(&part).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "fileData": {
+                    "mimeType": "video/mp4",
+                    "fileUri": "https://generativelanguage.googleapis.com/v1beta/files/abc"
+                },
+                "videoMetadata": {"fps": 1.0}
+            })
+        );
+        assert_eq!(serde_json::from_value::<Part>(json).unwrap(), part);
     }
 
     #[test]

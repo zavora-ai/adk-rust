@@ -280,12 +280,12 @@ impl StagedEgress {
 /// Every refusal is recorded too. A frozen kill switch or a cancelled call refuses at the
 /// first step and again right before release.
 pub struct EgressGate {
-    policy: EgressPolicy,
-    config: EgressConfig,
+    pub(super) policy: EgressPolicy,
+    pub(super) config: EgressConfig,
     redactors: Vec<Arc<dyn Redactor>>,
-    recorder: Arc<dyn EgressRecorder>,
+    pub(super) recorder: Arc<dyn EgressRecorder>,
     store: Option<MediaStore>,
-    released: std::sync::Mutex<std::collections::HashSet<Digest>>,
+    pub(super) released: std::sync::Mutex<std::collections::HashSet<Digest>>,
 }
 
 impl std::fmt::Debug for EgressGate {
@@ -644,7 +644,7 @@ impl EgressGate {
     }
 }
 
-fn deny_reason(rule: Option<usize>, class: &DataClass) -> String {
+pub(super) fn deny_reason(rule: Option<usize>, class: &DataClass) -> String {
     match rule {
         Some(index) => format!("egress rule {index} denies `{class}`"),
         None => format!("the default egress action denies `{class}`"),
@@ -652,7 +652,7 @@ fn deny_reason(rule: Option<usize>, class: &DataClass) -> String {
 }
 
 /// `host` or `host:port`; HTTPS's port when none is given.
-fn split_host_port(host: &str) -> (&str, u16) {
+pub(super) fn split_host_port(host: &str) -> (&str, u16) {
     match host.rsplit_once(':') {
         Some((name, port)) if !name.contains(':') => {
             port.parse().map_or((host, 443), |port| (name, port))
@@ -661,7 +661,7 @@ fn split_host_port(host: &str) -> (&str, u16) {
     }
 }
 
-fn remote_hosts(backend: &BackendDescriptor) -> Result<Vec<String>> {
+pub(super) fn remote_hosts(backend: &BackendDescriptor) -> Result<Vec<String>> {
     match &backend.locality {
         Locality::Remote { hosts } if !hosts.is_empty() => Ok(hosts.clone()),
         Locality::Remote { .. } => Err(VisionError::InvalidInput(format!(

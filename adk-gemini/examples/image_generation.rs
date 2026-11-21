@@ -63,7 +63,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
                     adk_gemini::Part::Text { text, .. } => {
                         info!(response_number = j + 1, text = text, "text response received");
                     }
-                    adk_gemini::Part::InlineData { inline_data } => {
+                    adk_gemini::Part::InlineData { inline_data, .. } => {
                         info!(
                             response_number = j + 1,
                             mime_type = inline_data.mime_type,
@@ -168,7 +168,7 @@ fn save_generated_images(
                     adk_gemini::Part::Text { text, .. } => {
                         text_parts.push(text.clone());
                     }
-                    adk_gemini::Part::InlineData { inline_data } => {
+                    adk_gemini::Part::InlineData { inline_data, .. } => {
                         image_count += 1;
                         match BASE64.decode(&inline_data.data) {
                             Ok(image_bytes) => {

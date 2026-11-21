@@ -6,11 +6,18 @@ pub mod interactions_convert;
 /// Interactions API target allowlist (Beta).
 #[cfg(feature = "gemini-interactions")]
 pub mod interactions_target;
+/// Request options carried through the provider-neutral types: media resolution and video
+/// sampling.
+pub mod options;
 /// Streaming response handling for Gemini.
 pub mod streaming;
 
 pub use crate::retry::RetryConfig;
-pub use client::{GeminiModel, vertex_env_requested};
+pub use client::{GeminiFile, GeminiFileState, GeminiModel, vertex_env_requested};
+pub use options::{
+    GEMINI_EXTENSION_NAMESPACE, GeminiRequestOptions, MediaResolution, VideoMetadata,
+    video_part_annotations,
+};
 
 // Re-export the Interactions transport surface (Beta) so consumers can configure
 // the toggle through `adk_model::gemini::{...}` without reaching into submodules.

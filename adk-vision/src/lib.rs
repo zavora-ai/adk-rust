@@ -27,9 +27,9 @@
 //! | `onnx` | `onnx`: RF-DETR, EfficientSAM, SAM 2.1 and SigLIP 2 on ONNX Runtime, the runtime downloaded at build time |
 //! | `onnx-dynamic` | The same backends against an onnxruntime library loaded from `ORT_DYLIB_PATH` |
 //! | `onnx-coreml`, `onnx-cuda` | The CoreML and CUDA execution providers for the `onnx` backends |
-//! | `cloud` | `LlmDescriber` over any `adk_core::Llm` that takes images, with the Gemini, Claude and 0–1000 region adapters |
+//! | `cloud` | `LlmDescriber` over any `adk_core::Llm` that takes images, with the Gemini, Claude and 0–1000 region adapters; `FramesAnalyzer`, questions over sampled frames on the same models |
 //! | `nim` | NVIDIA NIM: vision-language models over the OpenAI-compatible client, and `NimDocumentReader` for NVIDIA's OCR, page, table and chart endpoints, remote (implies `cloud`) |
-//! | `sam` | The Meta `sam-3.1` client: `SamSegmenter`, its stream parser and mask placement |
+//! | `sam` | The Meta `sam-3.1` client: `SamSegmenter`, its stream parser and mask placement; `SamVideoTracker`, masks with stable object identifiers over a clip |
 //! | `sam-codec` | `LicensedMaskDecoder`: `sam-3.1` masks decoded in process by `adk-vision-sam-codec`, the port of Meta's codec under the SAM License, after a person records acceptance (implies `sam`) |
 //! | `ocr` | `PpOcrReader`: PP-OCRv6 text lines and words through `oar-ocr` on ONNX Runtime |
 //! | `ocr-vl` | `PaddleOcrVlReader`: PaddleOCR-VL-1.6 with PP-DocLayoutV3 through `oar-ocr-vl` on Candle |
@@ -39,6 +39,8 @@
 //! | `stream` | `stream`: `FrameSource`, the sampler, the frame governor, frame retention and the stream pipeline |
 //! | `rtsp`, `ffmpeg`, `screen`, `browser`, `surface-camera` | The frame sources: `RtspSource`, `FileSource` (and H.264/H.265 through a user-installed ffmpeg), `ScreenSource`, `BrowserSource`, `SurfaceCameraSource` |
 //! | `stream-fixtures` | `stream::fixtures`: the generated conveyor clip and an in-process RTSP test server |
+//! | `track` | `ByteTracker`: ByteTrack through `trackforge`, anonymous tracks with stable identifiers across frames |
+//! | `gemini-video` | `GeminiVideoAnalyzer`: Gemini native video, through the File API above 20 MB, at an explicit frame rate and media resolution (implies `cloud`) |
 //!
 //! [`VisionToolset`] — `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`,
 //! `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure` — is always built: each tool runs on
@@ -137,8 +139,11 @@ mod sent;
 #[cfg(feature = "stream")]
 pub mod stream;
 mod toolset;
+#[cfg(feature = "track")]
+mod track;
 mod tracker;
 mod traits;
+pub mod video;
 mod watch;
 
 pub use backend::{BackendDescriptor, BackendId, InputLimits, Locality, Oversize, PriceRef};
@@ -148,6 +153,7 @@ pub use cloud::{LlmDescriber, RegionAdapter};
 pub use cx::VisionCx;
 pub use digest::Digest;
 pub use edit::{DeterministicEditor, EditOp, Overlay, Rgba, apply_edit};
+pub use egress::{ClipReleaseRequest, ReleasedClip};
 pub use egress::{
     DataClass, EgressAction, EgressConfig, EgressDecision, EgressEvidence, EgressGate,
     EgressPreview, EgressReceipt, EgressRecord, EgressRecorder, EgressRefusal, EgressRuleConfig,
@@ -195,23 +201,30 @@ pub use ocr::{PpOcrReader, PpOcrV6Size};
 pub use ocr_vl::{PADDLEOCR_VL_MANIFEST, PP_DOCLAYOUT_MANIFEST, PaddleOcrVlReader, VlDevice};
 pub use redact::{DEFAULT_PERSON_DETECTOR, PersonRedactor, REDACTION_MARGIN};
 pub use runtime::{
-    CallOptions, CallRecord, Edited, Escalation, Route, Trigger, VisionOutput, VisionRuntime,
-    VisionRuntimeBuilder,
+    CallOptions, CallRecord, Edited, Escalation, Route, Trigger, VideoSource, VisionOutput,
+    VisionRuntime, VisionRuntimeBuilder,
 };
 #[cfg(feature = "sam")]
-pub use sam::{SamConfig, SamSegmenter};
+pub use sam::{SamConfig, SamSegmenter, SamVideoTracker};
 pub use sent::{SentImage, VisionInput};
 pub use toolset::{
     ANSWER_ARTIFACT_PREFIX, EgressApproval, VISION_EGRESS_POLICY_REF, VISION_TOOL_NAMES,
     VisionTool, VisionToolKind, VisionToolset, VisionToolsetBuilder, answer_artifact_name,
 };
+#[cfg(feature = "track")]
+pub use track::{ByteTrackConfig, ByteTracker};
 pub use tracker::GreedyIouTracker;
 pub use traits::{
     Block, BlockKind, DescribeRequest, DescribeSpec, Describer, Description, DetectQuery, Detector,
     DocumentPage, DocumentReader, Editor, Embedder, EmbeddingSpace, ImageRegion, Metric,
     ReadOptions, Sampling, SegmentPrompt, Segmenter, TableCell, Tracker, VideoAnalysis,
-    VideoAnalyzer, VideoEvent, VideoInput, VideoRequest, Word,
+    VideoAnalyzer, VideoEvent, VideoFrame, VideoInput, VideoPlan, VideoRequest, VideoUsage, Word,
 };
+#[cfg(feature = "cloud")]
+pub use video::FramesAnalyzer;
+pub use video::{ClipInfo, MAX_CLIP_BYTES, SentClip, SourceClip, VideoCodec};
+#[cfg(feature = "gemini-video")]
+pub use video::{GEMINI_INLINE_LIMIT, GeminiVideoAnalyzer, MediaResolution};
 pub use watch::{
     FrameRef, TrackedObservation, VISION_WATCH_FIRED, VISION_WATCH_REGISTERED, WatchCondition,
     WatchEvaluator, WatchEvent, WatchEventKind, WatchSink, Zone, ZoneAnchor,
