@@ -89,7 +89,7 @@ fn edits_are_deterministic() {
     let op = EditOp::Annotate {
         overlays: vec![
             Overlay::Box { bbox: BBox::new(4.0, 4.0, 30.0, 20.0), color: Rgba::RED, thickness: 2 },
-            Overlay::Mark { at: [40.0, 30.0], number: 12, color: Rgba::BLUE },
+            Overlay::Mark { at: [40.0, 30.0], number: 12, color: Rgba::BLUE, scale: 1.0 },
         ],
     };
     let a = apply_edit(&image, &identity(&image), &op).unwrap();
@@ -137,7 +137,12 @@ fn a_mark_draws_its_number() {
     let image = DecodedImage::filled(80, 80, [255, 255, 255, 255]);
     let mark = |number| {
         let op = EditOp::Annotate {
-            overlays: vec![Overlay::Mark { at: [40.0, 40.0], number, color: Rgba::BLUE }],
+            overlays: vec![Overlay::Mark {
+                at: [40.0, 40.0],
+                number,
+                color: Rgba::BLUE,
+                scale: 1.0,
+            }],
         };
         apply_edit(&image, &TransformChain::new(80, 80), &op).unwrap()
     };

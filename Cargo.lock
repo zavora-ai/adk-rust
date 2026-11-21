@@ -1575,6 +1575,7 @@ version = "3.0.0"
 dependencies = [
  "adk-agent",
  "adk-artifact",
+ "adk-computer-use",
  "adk-core",
  "adk-eval",
  "adk-guardrail",

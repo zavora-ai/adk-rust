@@ -135,6 +135,7 @@ mod redact;
 mod runtime;
 #[cfg(feature = "sam")]
 pub mod sam;
+pub mod screen;
 mod sent;
 #[cfg(feature = "stream")]
 pub mod stream;
