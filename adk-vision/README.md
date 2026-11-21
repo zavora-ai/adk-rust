@@ -64,6 +64,7 @@ features — `fetch`, `cloud`, `nim`, `sam`, `guardrail` — as `adk_rust::visio
 | `screen`, `browser`, `surface-camera` | `ScreenSource` (a `ComputerActuator` or computer-use-mcp observations), `BrowserSource` (`browser_screenshot`), `SurfaceCameraSource` (frames the web home pushes) |
 | `stream-fixtures` | The generated conveyor clip and an in-process RTSP test server |
 | `track` | `ByteTracker`: ByteTrack through `trackforge` 0.5, anonymous tracks that keep their identifiers through jitter and occlusion |
+| `computer-use` | `GroundedTarget::target_evidence`: a chosen set-of-marks candidate as `adk-computer-use` `TargetEvidence`, bounds in logical points at the screenshot's device pixel ratio |
 | `gemini-video` | `GeminiVideoAnalyzer`: Gemini native video, uploading clips above 20 MB once through the File API, at an explicit frame rate and media resolution; implies `cloud` |
 
 ## Quick Start
@@ -169,6 +170,15 @@ the runtime records every `Transform` between the source image and what the back
 `ScreenSpace` turns screenshot pixels into logical points for a click: a 3024×1964
 screenshot of a display at device pixel ratio 2 is 1512×982 points. `RegionSet` is the wire
 form, published as a JSON Schema in [`schema/region-set.json`](schema/region-set.json).
+
+`adk_vision::screen` grounds actions on a screenshot by set-of-marks: `MarkSet` numbers the
+candidates from `browser_elements`, local OCR words or a model's point, `vision_annotate`
+draws them at the device pixel ratio, and the chosen mark's `GroundedTarget` is a
+`browser_click` selector or a click point in logical points with the screenshot's digest.
+`FittedActuator` resizes screenshots to Claude's image limits for `computer_toolset_20260801`
+and scales clicks and `zoom` regions back; `ScreenPlan` is one approval for a previewed plan of
+up to N actions in one window, each action checked against its preview before it runs. See
+[Screen Grounding](../docs/official_docs/vision/screen.md).
 
 ## Remote Backends and the Egress Gate
 

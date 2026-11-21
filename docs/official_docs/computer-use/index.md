@@ -107,6 +107,37 @@ Approval and execution require that channel to contain exactly one preview match
 preview. Resume input can add state but cannot replace the checkpointed value: an attempted
 replacement creates a second entry and fails before reservation or mutation.
 
+## Target bounds
+
+`TargetEvidence.bounds` states its coordinate space and device pixel ratio, so a box from a
+screenshot of a high-density display is never read in the wrong units (spec 3.7 V-I14):
+
+| Field | Meaning |
+|-------|---------|
+| `Bounds.space` | `logical_points` (the space a desktop runtime acts in, and the reading of bounds that state none) or `screenshot_pixels` |
+| `Bounds.devicePixelRatio` | Screenshot pixels per logical point; 1 when unstated |
+| `TargetEvidence.devicePixelRatio` | The ratio of the screenshot `screenshotHash` names |
+
+`TargetEvidence::check_screen_binding` refuses evidence whose bounds come from a screenshot
+without the screenshot's ratio, with a different ratio, or with a non-finite or inverted box.
+`Bounds::to_points` and `Bounds::to_pixels` convert between the spaces:
+
+```rust
+use adk_computer_use::{Bounds, CoordinateSpace};
+
+fn main() {
+    // A Save button in a 3024×1964 screenshot of a 1512×982-point display.
+    let pixels = Bounds::pixels(1920.0, 1180.0, 180.0, 80.0, 2.0);
+    let points = pixels.to_points();
+    assert_eq!(points.space, CoordinateSpace::LogicalPoints);
+    assert_eq!((points.x, points.y, points.width, points.height), (960.0, 590.0, 90.0, 40.0));
+    assert!(points.contains(points.center()));
+}
+```
+
+`adk-vision` fills this evidence from a chosen set-of-marks candidate; see
+[Screen Grounding](../vision/screen.md#target-evidence).
+
 ## Reservation cleanup
 
 Once a reservation is accepted, every terminal path attempts to release it:

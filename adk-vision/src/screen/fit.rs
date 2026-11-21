@@ -453,6 +453,7 @@ mod tests {
         let standard = ScreenshotLimits::CLAUDE_STANDARD;
         assert_eq!(standard.fitted_size((1920, 1080)), (1456, 819));
         assert_eq!(standard.fitted_size((1075, 1520)), (924, 1307));
+        assert_eq!(standard.fitted_size((3024, 1964)), (1372, 891));
         // High tier: the same scan is taken unresized.
         assert_eq!(ScreenshotLimits::CLAUDE_HIGH.fitted_size((1075, 1520)), (1075, 1520));
     }

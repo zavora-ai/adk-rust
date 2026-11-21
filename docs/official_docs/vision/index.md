@@ -96,6 +96,9 @@ let screen = ScreenSpace::new("built-in", [0.0, 0.0], 2.0);
 assert_eq!(screen.to_points([2010.0, 1220.0]), [1005.0, 610.0]);
 ```
 
+[Screen Grounding](screen.md) builds on it: numbered marks on a screenshot's candidates, the
+chosen mark's click point in points, and screenshots fitted to a model's image limits.
+
 ### The Wire Form
 
 `RegionSet` — the image's digest and dimensions plus its regions — is published as a JSON
