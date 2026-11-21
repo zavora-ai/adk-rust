@@ -36,6 +36,9 @@
 //! | `ocr-vl-metal` | `ocr-vl` on Apple GPUs |
 //! | `mistralrs` | `mistralrs`: `LlmDescriber::mistralrs` loads a verified Qwen3-VL (or another mistral.rs vision model) in this process; regions in Qwen3-VL's own 0–1000 frame (implies `cloud`, `fetch`) |
 //! | `mistralrs-metal`, `mistralrs-cuda` | `mistralrs` on Apple GPUs or CUDA |
+//! | `stream` | `stream`: `FrameSource`, the sampler, the frame governor, frame retention and the stream pipeline |
+//! | `rtsp`, `ffmpeg`, `screen`, `browser`, `surface-camera` | The frame sources: `RtspSource`, `FileSource` (and H.264/H.265 through a user-installed ffmpeg), `ScreenSource`, `BrowserSource`, `SurfaceCameraSource` |
+//! | `stream-fixtures` | `stream::fixtures`: the generated conveyor clip and an in-process RTSP test server |
 //!
 //! [`VisionToolset`] — `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`,
 //! `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure` — is always built: each tool runs on
@@ -131,6 +134,8 @@ mod runtime;
 #[cfg(feature = "sam")]
 pub mod sam;
 mod sent;
+#[cfg(feature = "stream")]
+pub mod stream;
 mod toolset;
 mod tracker;
 mod traits;

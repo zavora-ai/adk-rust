@@ -72,6 +72,26 @@ mistralrs = ["cloud", "fetch", "dep:adk-mistralrs"]
 # `mistralrs` on Apple GPUs (Metal) or NVIDIA GPUs (CUDA toolkit required).
 mistralrs-metal = ["mistralrs", "adk-mistralrs/metal"]
 mistralrs-cuda = ["mistralrs", "adk-mistralrs/cuda"]
+# Frame ingestion (§7.13): `FrameSource`, the sampler, the frame governor, frame retention and
+# the stream pipeline (source, sampler, privacy, detector, tracker, observation sink).
+stream = ["dep:futures"]
+# `RtspSource`: cameras over RTSP through `retina` (MIT OR Apache-2.0). MJPEG decodes in
+# process; H.264 and H.265 need the `ffmpeg` feature too.
+rtsp = ["stream", "dep:retina", "dep:url"]
+# `FileSource` (MP4, MOV) and H.264/H.265 decoding through a user-installed `ffmpeg` binary,
+# spawned through `ffmpeg-sidecar` with its download feature off: nothing is vendored or
+# downloaded (spec 3.7 D-11, Q9).
+ffmpeg = ["stream", "dep:ffmpeg-sidecar"]
+# `ScreenSource`: screenshots from a `ComputerActuator` or computer-use-mcp observations at an
+# interval.
+screen = ["stream", "dep:base64"]
+# `BrowserSource`: the `browser_screenshot` tool at an interval.
+browser = ["stream", "dep:base64"]
+# `SurfaceCameraSource`: the frames the web home captures, pushed through a `CameraFeed`.
+surface-camera = ["stream"]
+# The generated conveyor clip and an in-process RTSP test server (MJPEG in process, H.264
+# from a user-installed ffmpeg), for tests and the phase B scenarios.
+stream-fixtures = ["stream", "dep:base64", "tokio/net", "tokio/io-util"]
 
 [dependencies]
 adk-core.workspace = true
@@ -100,7 +120,7 @@ adk-mistralrs = { workspace = true, optional = true }
 adk-model = { workspace = true, optional = true }
 # `sam-codec`: the SAM-licensed port of Meta's mask codec, kept in its own crate.
 adk-vision-sam-codec = { workspace = true, optional = true }
-# Base64 images inside tool results (`guardrail`), data URLs and mask payloads (`cloud`, `sam`), and NIM data URIs (`nim`).
+# Base64 images inside tool results (`guardrail`), data URLs and mask payloads (`cloud`, `sam`), NIM data URIs (`nim`), screenshots (`screen`, `browser`) and H.264 parameter sets in SDP (`stream-fixtures`).
 base64 = { version = "0.22", optional = true }
 futures = { workspace = true, optional = true }
 # `sam` streams; `nim`'s CV endpoints take JSON bodies with inline data URIs.
@@ -123,6 +143,13 @@ oar-ocr = { version = "0.11.0", optional = true, default-features = false }
 serde-saphyr = { workspace = true, optional = true }
 # `ocr-vl`: the release matching `oar-ocr`; no `auto-download`.
 oar-ocr-vl = { version = "0.11.0", optional = true, default-features = false }
+
+# `rtsp`: RTSP sessions and RTP depacketising for H.264, H.265 and MJPEG.
+retina = { version = "0.4.21", optional = true }
+# `rtsp`: the camera URL `retina` takes.
+url = { version = "2.5", optional = true }
+# `ffmpeg`: spawns the ffmpeg binary the user installed. `download_ffmpeg` stays off.
+ffmpeg-sidecar = { version = "2.7", optional = true, default-features = false }
 
 [dev-dependencies]
 # Path-only self dependency, so the crate's own tests run the conformance suite.
@@ -218,3 +245,27 @@ required-features = ["ocr"]
 [[test]]
 name = "mistralrs_tests"
 required-features = ["mistralrs", "conformance"]
+
+[[test]]
+name = "stream_tests"
+required-features = ["stream"]
+
+[[test]]
+name = "stream_property_tests"
+required-features = ["stream"]
+
+[[test]]
+name = "stream_rtsp_tests"
+required-features = ["rtsp", "stream-fixtures"]
+
+[[test]]
+name = "stream_file_tests"
+required-features = ["ffmpeg", "stream-fixtures"]
+
+[[test]]
+name = "stream_sources_tests"
+required-features = ["screen", "browser", "surface-camera"]
+
+[[test]]
+name = "stream_live_tests"
+required-features = ["rtsp", "onnx", "stream-fixtures"]

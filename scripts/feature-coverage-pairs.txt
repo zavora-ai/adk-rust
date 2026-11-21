@@ -485,6 +485,14 @@
 6 adk-vision sam-codec doc
 # The conformance suite and its macros on their own.
 6 adk-vision conformance
+# Frame streams (spec 3.7 §7.13): the sampler, the frame governor, retention and the pipeline
+# over scripted sources; RTSP against the in-process server and video files through ffmpeg
+# (the ffmpeg tests skip, saying so, on a runner without it); the screen, browser and web home
+# camera sources, each through the frame source conformance check. The RF-DETR run over RTSP
+# is ignored.
+6 adk-vision stream doc
+6 adk-vision rtsp,ffmpeg,stream-fixtures,conformance doc
+6 adk-vision screen,browser,surface-camera,conformance doc
 # `onnx-coreml`, `onnx-cuda` and `ocr-vl-metal` need GPU toolchains a runner does not have, and
 # stay out as adk-mistralrs's `cuda` and `metal` do.
 6 adk-site gen-astro

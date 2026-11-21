@@ -57,6 +57,11 @@ features — `fetch`, `cloud`, `nim`, `sam`, `guardrail` — as `adk_rust::visio
 | `ocr-vl-metal` | `ocr-vl` on Apple GPUs through Candle's Metal backend |
 | `mistralrs` | `LlmDescriber::mistralrs`: Qwen3-VL (`qwen3-vl-2b-instruct`, built in) or another mistral.rs vision model in this process, verified before load, regions in Qwen3-VL's own 0–1000 frame; implies `cloud`, `fetch` |
 | `mistralrs-metal`, `mistralrs-cuda` | `mistralrs` on Apple GPUs or CUDA |
+| `stream` | `FrameSource`, `Sampler`, the `FrameGovernor`, `FrameKeeper` retention and `StreamPipeline` (source, sampler, governor, privacy hook, detector, tracker, observation sink) |
+| `rtsp` | `RtspSource`: RTSP cameras through `retina`; MJPEG decoded in process, H.264 and H.265 with `ffmpeg` |
+| `ffmpeg` | `FileSource` (MP4, MOV) and H.264/H.265 decoding through a user-installed `ffmpeg`; nothing vendored or downloaded |
+| `screen`, `browser`, `surface-camera` | `ScreenSource` (a `ComputerActuator` or computer-use-mcp observations), `BrowserSource` (`browser_screenshot`), `SurfaceCameraSource` (frames the web home pushes) |
+| `stream-fixtures` | The generated conveyor clip and an in-process RTSP test server |
 
 ## Quick Start
 
@@ -265,6 +270,16 @@ mod my_detector {
 }
 ```
 
+## Streams
+
+`StreamPipeline` reads a camera, a file, a screen, a browser page or the web home's camera,
+holds it to a `FrameBudget` (lower the rate, stop escalating, pause, resume next period),
+redacts every frame through a required `PrivacyHook` before any other stage, detects and
+tracks on the device, and hands each frame to an `ObservationSink`. Frames stay in memory
+unless a wake, a card or a person keeps them through `FrameKeeper`, which stores only
+redacted frames, for 30 days by default. See
+[Streams](../docs/official_docs/vision/streams.md).
+
 ## Documentation
 
 - [Getting started: a Document desk](../docs/official_docs/vision/getting-started.md), from
@@ -279,6 +294,8 @@ mod my_detector {
 - [Cloud vision backends](../docs/official_docs/vision/cloud.md)
 - [Vision evals](../docs/official_docs/vision/evals.md)
 - [Vision benchmarks](../docs/official_docs/vision/benchmarks.md)
+- [Streams](../docs/official_docs/vision/streams.md): sources, sampling, the frame governor,
+  the privacy step, retention and the stream pipeline
 - [Spec 3.7](../docs/design/spec-3.7-vision.md)
 
 ## License
