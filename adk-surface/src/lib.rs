@@ -64,6 +64,7 @@
 
 mod agents;
 pub mod answers;
+pub mod camera;
 #[cfg(feature = "channels")]
 pub mod channels;
 mod control;
