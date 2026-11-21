@@ -96,7 +96,8 @@ impl Llm for Inspector {
         _stream: bool,
     ) -> adk_core::Result<LlmResponseStream> {
         self.requests.lock().unwrap().push(request.clone());
-        let found = request.contents.last().and_then(|content| {
+        // The harness may add content after the tool's answer, so look through the turn.
+        let found = request.contents.iter().rev().find_map(|content| {
             content.parts.iter().find_map(|part| match part {
                 Part::FunctionResponse { function_response, .. }
                     if function_response.name == "vision_detect" =>

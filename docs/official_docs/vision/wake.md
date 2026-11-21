@@ -189,7 +189,7 @@ instructions ([What a woken turn is told](../kernel/index.md#what-a-woken-turn-i
 
 | Bound | How |
 |-------|-----|
-| 4096 bytes | Texts are cut to 64 characters (the digest to 80) with control characters replaced, boxes rounded to a tenth of a pixel, and the regions kept are the longest prefix that fits; `moreRegions` counts the rest |
+| 4096 bytes | Texts are cut to 64 characters (the digest to 80, the frame's file name to 128, so a media-store name such as `vision-<64 hex>.png` stays whole) with control characters replaced, boxes rounded to a tenth of a pixel, and the regions kept are the longest prefix that fits; `moreRegions` counts the rest |
 | No pixels | Masks travel as their boxes; the frame is named by digest and artifact (V-I15) |
 | Once | The kernel keeps one `kernel.wake` run per key, so a redelivered event, or one track re-published on every frame, wakes once |
 
