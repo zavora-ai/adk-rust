@@ -199,11 +199,12 @@ impl ScreenshotScale {
         ScreenPoint::new(map(point.x, fx, self.source[0]), map(point.y, fy, self.source[1]))
     }
 
-    /// Maps a source pixel to the whole sent pixel that covers it.
+    /// Maps a source pixel to the whole sent pixel that covers its centre.
     pub fn point_to_sent(&self, point: ScreenPoint) -> ScreenPoint {
         let (fx, fy) = self.factors();
-        let map =
-            |v: i64, f: f64, max: u32| ((v as f64 / f).floor() as i64).clamp(0, i64::from(max) - 1);
+        let map = |v: i64, f: f64, max: u32| {
+            (((v as f64 + 0.5) / f).floor() as i64).clamp(0, i64::from(max) - 1)
+        };
         ScreenPoint::new(map(point.x, fx, self.sent[0]), map(point.y, fy, self.sent[1]))
     }
 
