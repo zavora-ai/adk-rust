@@ -214,9 +214,15 @@ website = ["dep:adk-website", "dep:adk-site", "harness-kernel", "awp", "adk-awp/
 
 # Local-first perception (spec 3.7 §8.3, Q11): `adk_rust::vision` (adk-vision) with the model
 # fetcher, the cloud describers (Gemini, Claude, Muse, NVIDIA NIM), Meta `sam-3.1`'s client and
-# the image privacy guardrail; with `harness`, the vision pack (`pack_vision`); with `cli`,
-# `adk-rust vision`. Pure Rust, no native runtime: in `full`.
-vision = ["dep:adk-vision", "adk-vision/fetch", "adk-vision/cloud", "adk-vision/nim", "adk-vision/sam", "adk-vision/guardrail", "adk-harness?/vision", "adk-cli?/vision"]
+# the image privacy guardrail; streams (spec 3.7 §7.13): the pipeline, watches and the frame
+# sources — RTSP cameras (`retina`), files and H.264 through a user-installed ffmpeg
+# (`ffmpeg-sidecar` spawns it, nothing is linked or downloaded), screens, browsers and the web
+# home's camera — ByteTrack tracking (`trackforge`) and Gemini native video. With `harness`,
+# the vision pack (`pack_vision`, `vision_watch`); with `harness-kernel`, `VisionWakeSource` as
+# a watch sink; with `computer-use`, computer-use observations as a frame source; with `cli`,
+# `adk-rust vision`. Every one is pure Rust with no native runtime: in `full`. The test
+# fixtures (`stream-fixtures`) stay on adk-vision.
+vision = ["dep:adk-vision", "adk-vision/fetch", "adk-vision/cloud", "adk-vision/nim", "adk-vision/sam", "adk-vision/guardrail", "adk-vision/stream", "adk-vision/track", "adk-vision/gemini-video", "adk-vision/rtsp", "adk-vision/ffmpeg", "adk-vision/screen", "adk-vision/browser", "adk-vision/surface-camera", "adk-harness?/vision", "adk-kernel?/vision", "adk-computer-use?/vision", "adk-cli?/vision"]
 # The on-device backends (spec 3.7 §7.6, Q11): RF-DETR, EfficientSAM, SAM 2.1 and SigLIP 2 on
 # ONNX Runtime (downloaded at build time), PP-OCRv6, and PaddleOCR-VL-1.6 on Candle. Native
 # runtimes and a heavy build: in no tier.
