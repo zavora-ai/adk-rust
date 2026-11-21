@@ -86,6 +86,7 @@ mod symlink_protection_tests;
 mod take_over_tests;
 mod team_tests;
 mod todo_tests;
+mod vision_wake_tests;
 mod voice_kernel_tests;
 mod voice_pack_tests;
 mod web_property_tests;
