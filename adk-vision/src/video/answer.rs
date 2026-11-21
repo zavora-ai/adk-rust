@@ -131,6 +131,7 @@ pub(crate) fn ask_schema(event_time: &str) -> Value {
 }
 
 /// Reads `m:ss`, `m:ss.s`, `h:mm:ss` or a number of seconds as milliseconds.
+#[cfg(feature = "gemini-video")]
 pub(crate) fn parse_time(value: &Value) -> Option<u64> {
     let seconds = match value {
         Value::Number(n) => n.as_f64()?,
@@ -146,7 +147,7 @@ pub(crate) fn parse_time(value: &Value) -> Option<u64> {
     (seconds.is_finite() && seconds >= 0.0).then(|| (seconds * 1_000.0).round() as u64)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gemini-video"))]
 mod tests {
     use super::*;
 
