@@ -45,6 +45,7 @@ async fn a_live_agent_waits_for_one_answer_and_runs_once() {
                 text: "Create the file invoice.txt containing exactly INV-1, using write_file. \
                        Then reply with one short sentence."
                     .into(),
+                images: Vec::new(),
             },
         )
         .await

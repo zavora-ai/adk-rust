@@ -17,7 +17,7 @@
   max-width: 560px;
   padding: 16px 18px 18px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--card);
   color: var(--text);
 }
@@ -27,23 +27,23 @@
   align-items: center;
   gap: 8px;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .drawn-title,
 .drawn-heading {
   margin: 0;
-  font-size: 17px;
-  font-weight: 700;
+  font-size: var(--fs-lg);
+  font-weight: 600;
   line-height: 1.3;
 }
 
 .drawn-h1 {
-  font-size: 22px;
+  font-size: var(--fs-2xl);
 }
 
 .drawn-h2 {
-  font-size: 19px;
+  font-size: var(--fs-xl);
 }
 
 .drawn-body,
@@ -74,12 +74,12 @@
 .drawn-inner-card {
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
 }
 
 .drawn-text {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--fs-md);
   line-height: 1.5;
   white-space: pre-wrap;
 }
@@ -87,19 +87,19 @@
 .drawn-caption,
 .drawn-label {
   color: var(--text-2);
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .drawn-pair {
   display: grid;
   grid-template-columns: minmax(96px, 34%) 1fr;
   gap: 12px;
-  font-size: 15px;
+  font-size: var(--fs-md);
 }
 
 .drawn-mono {
   font-family: var(--mono);
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .drawn-field {
@@ -115,7 +115,7 @@
 .drawn-field-label {
   padding: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 600;
 }
 
@@ -128,7 +128,7 @@
   background: var(--card);
   color: var(--text);
   font: inherit;
-  font-size: 15px;
+  font-size: var(--fs-md);
 }
 
 textarea.drawn-input {
@@ -156,14 +156,14 @@ textarea.drawn-input {
 
 .drawn-error {
   color: var(--failed);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .drawn-check {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 15px;
+  font-size: var(--fs-md);
 }
 
 .drawn-check input {
@@ -201,7 +201,7 @@ textarea.drawn-input {
 
 .drawn-status-inline {
   color: var(--text-2);
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .drawn-foot {
@@ -213,24 +213,24 @@ textarea.drawn-input {
 .drawn-note {
   margin: 0;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .drawn-note code {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--fs-xs);
 }
 
 .drawn-problem {
   margin: 0;
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .drawn-status {
   margin: 0;
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--fs-md);
   font-weight: 600;
 }
 
@@ -244,14 +244,14 @@ textarea.drawn-input {
 .drawn-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 15px;
+  font-size: var(--fs-md);
 }
 
 .drawn-table th {
   padding: 0 12px 8px 0;
   border-bottom: 1px solid var(--border);
   color: var(--text-2);
-  font-size: 14px;
+  font-size: var(--fs-md);
   font-weight: 500;
   text-align: left;
 }
@@ -274,7 +274,7 @@ textarea.drawn-input {
   background: none;
   color: var(--accent);
   font: inherit;
-  font-size: 15px;
+  font-size: var(--fs-md);
   font-weight: 600;
   text-decoration: underline;
   cursor: pointer;
@@ -305,20 +305,20 @@ textarea.drawn-input {
 .drawn-changed {
   margin: 0;
   color: var(--text-2);
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .drawn-earlier {
   max-width: 560px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: var(--card);
 }
 
 .drawn-earlier > summary {
   padding: 10px 14px;
   color: var(--text-2);
-  font-size: 14px;
+  font-size: var(--fs-md);
   cursor: pointer;
 }
 
@@ -334,10 +334,10 @@ textarea.drawn-input {
   margin: 0;
   padding: 10px 14px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: var(--card);
   color: var(--text-2);
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .drawn-notice .icon {
@@ -356,14 +356,14 @@ textarea.drawn-input {
 .genui-claims {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .genui-claims th {
   padding: 6px 8px 6px 0;
   border-bottom: 1px solid var(--border);
   color: var(--label);
-  font-size: 12.5px;
+  font-size: var(--fs-xs);
   font-weight: 500;
   text-align: left;
 }
@@ -376,10 +376,10 @@ textarea.drawn-input {
 .genui-status {
   display: inline-block;
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--pill-neutral-bg);
   color: var(--pill-neutral);
-  font-size: 12.5px;
+  font-size: var(--fs-xs);
   font-weight: 600;
 }
 
@@ -402,7 +402,7 @@ textarea.drawn-input {
 .genui-catalog {
   padding: 12px 14px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
 }
 
 .genui-components {
@@ -416,17 +416,17 @@ textarea.drawn-input {
 
 .genui-components li {
   padding: 1px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--raised);
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--fs-xs);
 }
 
 .genui-refused {
   margin: 0;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   list-style: none;
 }
 
@@ -436,7 +436,7 @@ textarea.drawn-input {
   gap: 12px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
-  font-size: 13.5px;
+  font-size: var(--fs-sm);
 }
 
 .genui-refused li:last-child {
@@ -493,11 +493,11 @@ textarea.drawn-input {
   width: 20px;
   height: 20px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: var(--raised);
   color: var(--text);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .app-frame {
@@ -523,7 +523,7 @@ textarea.drawn-input {
   border-radius: 8px;
   background: var(--raised);
   color: var(--text-2);
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .app-spinner {
@@ -550,7 +550,7 @@ textarea.drawn-input {
 .app-blocked,
 .app-elsewhere p {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .app-elsewhere {
@@ -573,7 +573,7 @@ textarea.drawn-input {
   max-width: 560px;
   padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: var(--card);
   color: var(--text);
 }
@@ -583,12 +583,12 @@ textarea.drawn-input {
 }
 
 .app-ask-text {
-  font-size: 15px;
+  font-size: var(--fs-md);
 }
 
 .app-ask-url {
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   overflow-wrap: anywhere;
 }
 
@@ -601,7 +601,7 @@ textarea.drawn-input {
 .app-ask-actions .button {
   min-height: 36px;
   padding: 0 14px;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 /* An app's ask is not a decision: its press is ink, never the decision's rust. */
@@ -612,7 +612,7 @@ textarea.drawn-input {
 
 .app-ask-note {
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 @media (max-width: 600px) {
@@ -658,7 +658,7 @@ textarea.drawn-input {
 }
 
 .drawn-chart-axis {
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .drawn-chart-line {
@@ -680,7 +680,7 @@ textarea.drawn-input {
   padding: 0;
   list-style: none;
   color: var(--text-2);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .drawn-chart-legend li {
@@ -715,7 +715,7 @@ textarea.drawn-input {
 
 .drawn-scene-summary {
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .drawn-scene-legend {
@@ -726,7 +726,7 @@ textarea.drawn-input {
   padding: 0;
   list-style: none;
   color: var(--text-2);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .drawn-scene-legend li {
@@ -744,7 +744,7 @@ textarea.drawn-input {
 .drawn-scene-note {
   margin: 0;
   color: var(--label);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .drawn-scene-text {
@@ -763,7 +763,7 @@ textarea.drawn-input {
   display: grid;
   grid-template-columns: minmax(96px, 40%) 1fr;
   gap: 12px;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .drawn-scene-object dt {
@@ -779,7 +779,7 @@ textarea.drawn-input {
 .drawn-depth-title {
   margin: 0 0 4px;
   color: var(--label);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: 500;
 }
 
@@ -833,7 +833,7 @@ textarea.drawn-input {
   left: 0;
   top: 0;
   padding: 1px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   white-space: nowrap;
   font-family: var(--font);
   visibility: hidden;
@@ -849,17 +849,17 @@ textarea.drawn-input {
 }
 
 .drawn-scene-label-medium {
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .drawn-scene-label-large {
-  font-size: 15px;
+  font-size: var(--fs-md);
   font-weight: 600;
 }
 
 .drawn-scene-axis {
   color: var(--chart-axis);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: 500;
 }
 
@@ -879,7 +879,7 @@ textarea.drawn-input {
   border-radius: var(--radius);
   background: var(--card);
   box-shadow: var(--shadow);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   visibility: hidden;
 }
 
@@ -894,7 +894,7 @@ textarea.drawn-input {
 .drawn-depth-turn {
   padding: 3px 10px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--card);
   color: var(--text-2);
   font: 500 12px/1.4 var(--font);
@@ -1025,7 +1025,7 @@ textarea.drawn-input {
   align-items: center;
   gap: 10px;
   color: var(--label);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .drawn-depth-wall {

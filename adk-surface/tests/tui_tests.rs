@@ -86,9 +86,9 @@ async fn the_terminal_waits_on_a_held_call_draws_it_and_answers_it() {
     ] {
         assert!(shown.contains(expected), "{expected:?} missing:\n{shown}");
     }
-    // The §9 dark background, #0A1628, in 24-bit colour.
-    let navy = b"48;2;10;22;40m";
-    assert!(bytes.windows(navy.len()).any(|window| window == navy));
+    // The §9 dark background, #0E0F11, in 24-bit colour.
+    let dark = b"48;2;14;15;17m";
+    assert!(bytes.windows(dark.len()).any(|window| window == dark));
 
     // The answer `y` sends: allow once, at the version on screen.
     let card = s.engine.decisions(&terminal()).await.unwrap().remove(0);

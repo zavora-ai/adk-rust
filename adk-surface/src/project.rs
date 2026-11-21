@@ -19,9 +19,10 @@ use serde_json::Value;
 use crate::answers::AnswerRecord;
 use crate::hints::CardHint;
 use crate::model::{
-    AgentRef, AgentRow, AgentStatus, Avatar, BriefingLine, CallView, CardStatus, Decided,
-    DecidedAnswer, DecisionCard, FeedEntry, Mode, ModeView, Pill, QuietView, Reversibility,
-    Speaker, SpendView, ThreadItem, TimelineStep,
+    AgentRef, AgentRow, AgentStatus, Avatar, BriefingLine, CallView, CardStatus, CommandRun,
+    Decided, DecidedAnswer, DecisionCard, ElicitationView, ElicitedField, ElicitedKind,
+    ElicitedOption, FeedEntry, Mode, ModeView, OutputLine, Pill, QuietView, Reversibility, RunStop,
+    ShellView, Speaker, SpendView, ThreadItem, TimelineStep,
 };
 use crate::origin::{Caller, SurfaceKind};
 use crate::rules::{self, Answer, DecisionFacts};
@@ -30,6 +31,211 @@ use crate::words::{self, SaidWhat};
 
 /// How long a call's text may be before it is shown truncated (spec 3.3 §7.1).
 pub const CALL_TEXT_LIMIT: usize = 2_000;
+
+/// The most lines of a run's output a thread shows: its last ones (spec 3.3 §5.1).
+pub const RUN_LINES: usize = 40;
+
+/// The most characters of one output line a thread shows.
+const RUN_LINE_CHARS: usize = 400;
+
+/// The longest agent name a decision card shows, in characters.
+pub const CARD_NAME_LIMIT: usize = 64;
+/// The longest heading a decision card shows, in characters.
+pub const CARD_HEADING_LIMIT: usize = 160;
+/// The longest summary, step, detail or "also shown" line a decision card shows.
+pub const CARD_LINE_LIMIT: usize = 280;
+
+/// The most fields of an MCP elicitation form a card draws; a longer form is refused there.
+const ELICITED_FIELDS_LIMIT: usize = 24;
+/// The most options of an elicitation field a card draws.
+const ELICITED_OPTIONS_LIMIT: usize = 50;
+
+/// The server of a decision a harness parked for an MCP elicitation
+/// (`mcp:{server}/elicitation`).
+pub(crate) fn elicitation_server(tool: &str) -> Option<&str> {
+    tool.strip_prefix("mcp:")?.strip_suffix("/elicitation")
+}
+
+/// What an MCP server asks in `request`, for the home to draw in its own controls: a form
+/// when every field is one the home draws (text, email, web address, date, number, yes or no,
+/// a choice), the page of a URL elicitation, `None` otherwise (the card then offers Deny).
+pub(crate) fn elicitation_of(request: &ApprovalRequest) -> Option<ElicitationView> {
+    let server = capped(elicitation_server(&request.tool_name)?, CARD_NAME_LIMIT);
+    let shown = &request.args_redacted;
+    let message = capped(shown.get("message").and_then(Value::as_str)?, CARD_LINE_LIMIT);
+    if let Some(url) = shown.get("url").and_then(Value::as_str) {
+        let (host, warning) = address_parts(url)?;
+        return Some(ElicitationView::Url {
+            server,
+            message,
+            url: url.to_string(),
+            host,
+            warning: warning.map(str::to_string),
+        });
+    }
+    let schema = shown.get("schema")?;
+    let properties = schema.get("properties")?.as_object()?;
+    if properties.len() > ELICITED_FIELDS_LIMIT {
+        return None;
+    }
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|names| names.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let fields = properties
+        .iter()
+        .map(|(name, property)| elicited_field(name, property, required.contains(&name.as_str())))
+        .collect::<Option<Vec<_>>>()?;
+    Some(ElicitationView::Form { server, message, fields })
+}
+
+/// One field of an elicitation schema, or `None` for a kind the home does not draw.
+fn elicited_field(name: &str, property: &Value, required: bool) -> Option<ElicitedField> {
+    let text = |key: &str| property.get(key).and_then(Value::as_str);
+    let mut options = Vec::new();
+    if let Some(values) = property.get("enum").and_then(Value::as_array) {
+        let names = property.get("enumNames").and_then(Value::as_array);
+        for (index, value) in values.iter().enumerate() {
+            let value = value.as_str()?;
+            let label = names.and_then(|names| names.get(index)).and_then(Value::as_str);
+            options.push((value, label.unwrap_or(value)));
+        }
+    } else if let Some(choices) =
+        property.get("oneOf").or_else(|| property.get("anyOf")).and_then(Value::as_array)
+    {
+        for choice in choices {
+            let value = choice.get("const").and_then(Value::as_str)?;
+            let label = choice.get("title").and_then(Value::as_str).unwrap_or(value);
+            options.push((value, label));
+        }
+    }
+    if options.len() > ELICITED_OPTIONS_LIMIT {
+        return None;
+    }
+    let kind = if options.is_empty() {
+        match text("type")? {
+            "string" => match text("format") {
+                Some("email") => ElicitedKind::Email,
+                Some("uri") => ElicitedKind::Url,
+                Some("date") => ElicitedKind::Date,
+                Some("date-time") => ElicitedKind::DateTime,
+                _ => ElicitedKind::Text,
+            },
+            "number" => ElicitedKind::Number,
+            "integer" => ElicitedKind::Integer,
+            "boolean" => ElicitedKind::Boolean,
+            _ => return None,
+        }
+    } else {
+        ElicitedKind::Choice
+    };
+    let default = property.get("default").filter(|value| !value.is_object() && !value.is_array());
+    Some(ElicitedField {
+        name: name.to_string(),
+        label: capped(text("title").unwrap_or(name), CARD_NAME_LIMIT),
+        description: text("description").map(|description| capped(description, CARD_LINE_LIMIT)),
+        kind,
+        required,
+        default: default.cloned(),
+        options: options
+            .into_iter()
+            .map(|(value, label)| ElicitedOption {
+                value: value.to_string(),
+                label: capped(label, CARD_NAME_LIMIT),
+            })
+            .collect(),
+        minimum: property.get("minimum").and_then(Value::as_f64),
+        maximum: property.get("maximum").and_then(Value::as_f64),
+        min_length: property.get("minLength").and_then(Value::as_u64),
+        max_length: property.get("maxLength").and_then(Value::as_u64),
+    })
+}
+
+/// Checks the person's answer to an elicitation form against the fields the card drew: an
+/// object of those fields only, every required one present, each of its kind, a choice one of
+/// its options, numbers and lengths within bounds. The harness checks it again against the
+/// server's schema before the server sees it.
+pub(crate) fn check_answer(fields: &[ElicitedField], content: &Value) -> Result<(), String> {
+    let answer = content.as_object().ok_or("the answer is an object of the form's fields")?;
+    if let Some(unknown) = answer.keys().find(|key| !fields.iter().any(|f| &f.name == *key)) {
+        return Err(format!("{unknown} is not a field of the form"));
+    }
+    for field in fields {
+        let Some(value) = answer.get(&field.name) else {
+            if field.required {
+                return Err(format!("{} is required", field.label));
+            }
+            continue;
+        };
+        let fits = match field.kind {
+            ElicitedKind::Number => value.is_number(),
+            ElicitedKind::Integer => value.is_i64() || value.is_u64(),
+            ElicitedKind::Boolean => value.is_boolean(),
+            ElicitedKind::Choice => value
+                .as_str()
+                .is_some_and(|picked| field.options.iter().any(|option| option.value == picked)),
+            _ => value.is_string(),
+        };
+        if !fits {
+            return Err(format!("{} does not take {value}", field.label));
+        }
+        if let Some(number) = value.as_f64()
+            && (field.minimum.is_some_and(|min| number < min)
+                || field.maximum.is_some_and(|max| number > max))
+        {
+            return Err(format!("{} is out of its range", field.label));
+        }
+        if let Some(text) = value.as_str() {
+            let length = text.chars().count() as u64;
+            if field.min_length.is_some_and(|min| length < min)
+                || field.max_length.is_some_and(|max| length > max)
+            {
+                return Err(format!("{} is too short or too long", field.label));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The host of `url`, lowercased, and why to look twice at it: look-alike characters
+/// (punycode or non-ASCII), a name hidden before an `@`, or no encryption.
+fn address_parts(url: &str) -> Option<(String, Option<&'static str>)> {
+    let (scheme, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let (userinfo, host_port) = match authority.rsplit_once('@') {
+        Some((userinfo, host_port)) => (Some(userinfo), host_port),
+        None => (None, authority),
+    };
+    let host = match host_port.strip_prefix('[') {
+        Some(bracketed) => bracketed.split(']').next()?,
+        None => host_port.split(':').next()?,
+    }
+    .to_lowercase();
+    if host.is_empty() {
+        return None;
+    }
+    let warning = if !host.is_ascii() || host.split('.').any(|label| label.starts_with("xn--")) {
+        Some(words::LOOK_ALIKE_ADDRESS)
+    } else if userinfo.is_some() {
+        Some(words::HIDDEN_HOST_ADDRESS)
+    } else if scheme.eq_ignore_ascii_case("http") {
+        Some(words::UNENCRYPTED_ADDRESS)
+    } else {
+        None
+    };
+    Some((host, warning))
+}
+
+/// `text` cut to `limit` characters, with an ellipsis when cut.
+fn capped(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let mut cut: String = text.chars().take(limit.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
+}
 
 /// Somewhere a decision is also shown, for "Also on your phone and in Telegram"
 /// (spec 3.3 §7.1).
@@ -199,6 +405,7 @@ impl Projector {
         // over is answered with the secret the person types, or refused (§8.2, §10 H2).
         let own_args = shows_own_arguments(request);
         let take_over = request.tool_name == TAKE_OVER_TOOL;
+        let answers_a_form = matches!(elicitation_of(request), Some(ElicitationView::Form { .. }));
         let risk = if (self.rates_high)(request) {
             request.risk.max(adk_core::ApprovalRisk::High)
         } else {
@@ -214,7 +421,9 @@ impl Projector {
                 .copied()
                 .filter(|action| match action {
                     ApprovalAction::Reject => true,
-                    ApprovalAction::Edit => own_args && !take_over,
+                    // An elicitation form is answered with the person's own values, drawn
+                    // in the home's fields and checked against the server's schema.
+                    ApprovalAction::Edit => (own_args || answers_a_form) && !take_over,
                     ApprovalAction::Approve | ApprovalAction::Respond => !take_over,
                 })
                 .collect(),
@@ -306,7 +515,13 @@ impl Projector {
             let heading = hint.chat_heading.clone().unwrap_or_else(|| chat_heading(request));
             (heading, None, call)
         } else {
-            let heading = hint.heading.clone().unwrap_or_else(|| (self.heading)(request));
+            // What an MCP server asks reads as its question ("MCP server billing asks: …"),
+            // the summary the harness wrote, not as the tool name it was parked under.
+            let asked = elicitation_server(&request.tool_name)
+                .map(|_| request.summary.trim())
+                .filter(|summary| !summary.is_empty())
+                .map(str::to_string);
+            let heading = hint.heading.clone().or(asked).unwrap_or_else(|| (self.heading)(request));
             (heading, self.kernel_summary(request, now), call_view(request))
         };
         let decided = self.decided(request, caller, answer);
@@ -323,6 +538,15 @@ impl Projector {
                     Answer::AllowOnce if !option.needs_presence => option.label = yes.to_string(),
                     Answer::Deny => option.label = no.to_string(),
                     Answer::AllowOnce | Answer::AlwaysAllow | Answer::Edit => {}
+                }
+            }
+        }
+        // What an MCP server asks is drawn in the home's own fields; Edit sends the answer.
+        let elicitation = if chat { None } else { elicitation_of(request) };
+        if matches!(elicitation, Some(ElicitationView::Form { .. })) {
+            for option in &mut allowed.options {
+                if option.answer == Answer::Edit {
+                    option.label = words::ANSWER.to_string();
                 }
             }
         }
@@ -364,7 +588,7 @@ impl Projector {
             Some(_) => (CardStatus::Decided, words::DECIDED),
             None => (CardStatus::Waiting, words::WAITING_FOR_YOU),
         };
-        DecisionCard {
+        let mut card = DecisionCard {
             id: request.id.clone(),
             version: request.version,
             session_id: request.scope.session_id.clone(),
@@ -394,9 +618,23 @@ impl Projector {
             adds_agent,
             // Like the summary, never on a chat card (S-I5).
             detail: hint.detail.clone().filter(|_| !chat),
+            elicitation,
             media: None,
             parked: None,
+        };
+        // Every line of the card fits: nothing a name or a hint carries can push the call and
+        // its answers out of sight, or pass a long text off as the home's own words.
+        card.agent.display_name = capped(&card.agent.display_name, CARD_NAME_LIMIT);
+        card.heading = capped(&card.heading, CARD_HEADING_LIMIT);
+        card.summary = card.summary.map(|summary| capped(&summary, CARD_LINE_LIMIT));
+        for step in &mut card.timeline {
+            step.text = capped(&step.text, CARD_LINE_LIMIT);
         }
+        card.also_shown = card.also_shown.map(|also| capped(&also, CARD_LINE_LIMIT));
+        if let Some(detail) = &mut card.detail {
+            detail.text = capped(&detail.text, CARD_LINE_LIMIT);
+        }
+        card
     }
 
     /// What a decision the kernel itself asks means for the person, beyond its heading: who
@@ -608,14 +846,27 @@ impl Projector {
         let requested = crate::genui::requested_via(event);
         if let Some(content) = &event.llm_response.content {
             let mut text = String::new();
+            // The images a person sent with the message (spec 3.3 §5.1).
+            let mut images = Vec::new();
             for part in &content.parts {
                 match part {
                     Part::Text { text: chunk } if !event.llm_response.partial => {
                         text.push_str(chunk);
                     }
+                    Part::InlineData { mime_type, data, .. } if from_person => {
+                        images.extend(crate::images::shown(mime_type, data));
+                    }
                     // The person's own call: its DrawnSent item shows it, not the agent's work.
                     Part::FunctionCall { id, .. }
                         if requested.is_some() && crate::genui::is_requested(id.as_ref()) => {}
+                    // Replies an agent suggests: shown under its message, never as its work.
+                    Part::FunctionCall { name, args, id, .. }
+                        if name == crate::suggest::SUGGEST_REPLIES_TOOL =>
+                    {
+                        if let Ok(replies) = crate::suggest::replies_of(args) {
+                            items.push(ThreadItem::Suggestions { replies, call_id: id.clone() });
+                        }
+                    }
                     Part::FunctionCall { name, args, id, .. } => {
                         items.push(ThreadItem::Activity {
                             tool: name.clone(),
@@ -626,6 +877,9 @@ impl Projector {
                     // A held call's placeholder answer: its Decision item shows it.
                     Part::FunctionResponse { function_response, .. }
                         if adk_core::is_confirmation_pending(&function_response.response) => {}
+                    // The suggestions' own answer says nothing to the person.
+                    Part::FunctionResponse { function_response, .. }
+                        if function_response.name == crate::suggest::SUGGEST_REPLIES_TOOL => {}
                     // A call a person asked for that the agent's rules refused before holding it.
                     Part::FunctionResponse { function_response, id: Some(id), .. }
                         if requested.is_some() && crate::genui::is_requested(Some(id)) =>
@@ -681,13 +935,29 @@ impl Projector {
                         .flatten()
                         .filter(|digest| digest.starts_with("sha256:"))
                         .map(str::to_string);
-                        items.push(ThreadItem::Result {
-                            tool: function_response.name.clone(),
-                            call_id: id.clone(),
-                            ok,
-                            text,
-                            image,
-                        });
+                        // A command or code that ran: what it wrote, and how it exited.
+                        match command_run(&function_response.name, &function_response.response) {
+                            Some(run) => {
+                                let ok = ok
+                                    && run.exit_code.is_none_or(|code| code == 0)
+                                    && run.stopped.is_none();
+                                let text = if ok { words::DONE } else { words::FAILED };
+                                items.push(ThreadItem::Run {
+                                    tool: function_response.name.clone(),
+                                    call_id: id.clone(),
+                                    ok,
+                                    text: text.to_string(),
+                                    run,
+                                });
+                            }
+                            None => items.push(ThreadItem::Result {
+                                tool: function_response.name.clone(),
+                                call_id: id.clone(),
+                                ok,
+                                text,
+                                image,
+                            }),
+                        }
                     }
                     _ => {}
                 }
@@ -696,7 +966,9 @@ impl Projector {
             // The event that holds a call carries the runtime's own notice, not the agent's
             // words: its Decision item says it plainly (§8). A requested call's line is for
             // the model; its DrawnSent item says it to the person.
-            if !text.is_empty() && event.actions.tool_confirmation.is_none() && requested.is_none()
+            if (!text.is_empty() || !images.is_empty())
+                && event.actions.tool_confirmation.is_none()
+                && requested.is_none()
             {
                 let message = if from_person {
                     ThreadItem::Message {
@@ -705,12 +977,14 @@ impl Projector {
                         // An app's suggestion the person sent reads as its words and label.
                         text: crate::genui::suggested_message(text)
                             .unwrap_or_else(|| text.to_string()),
+                        images,
                     }
                 } else {
                     ThreadItem::Message {
                         from: Speaker::Agent,
                         author: self.agent(&event.author).display_name,
                         text: text.to_string(),
+                        images: Vec::new(),
                     }
                 };
                 items.insert(0, message);
@@ -781,6 +1055,10 @@ impl Projector {
             mode: None,
             added: false,
             can_change: false,
+            shell: state
+                .shell
+                .clone()
+                .map(|place| ShellView { text: words::commands_run(&place), place }),
         }
     }
 
@@ -1295,9 +1573,66 @@ fn avatar(display_name: &str) -> Avatar {
     Avatar { monogram, color: COLORS[index].to_string() }
 }
 
+/// The run a tool's result describes, for a shell's `bash` (`command`, `exit_code`, `stdout`,
+/// `stderr`, `truncated`) and the sandbox's `sandbox_exec` (`status`, `stdout`, `stderr`,
+/// `exit_code`, `duration_ms`); `None` for any other result (spec 3.3 §5.1). The call's own
+/// command comes from the result where the tool repeats it.
+fn command_run(tool: &str, response: &serde_json::Value) -> Option<CommandRun> {
+    let object = response.as_object()?;
+    let has_output = object.contains_key("stdout") || object.contains_key("stderr");
+    let shell = object.contains_key("command") && object.contains_key("exit_code");
+    let sandbox = tool == "sandbox_exec" && (has_output || object.contains_key("status"));
+    if !(sandbox || shell && has_output) {
+        return None;
+    }
+    let string = |key: &str| object.get(key).and_then(serde_json::Value::as_str).unwrap_or("");
+    let stopped = match string("status") {
+        "timeout" => Some(RunStop::Timeout),
+        "memory_exceeded" => Some(RunStop::MemoryExceeded),
+        "policy_violation" => Some(RunStop::PolicyViolation),
+        "error" => Some(RunStop::Error),
+        _ => None,
+    };
+    let line = |text: &str, stderr: bool| OutputLine {
+        text: if text.chars().count() > RUN_LINE_CHARS {
+            format!("{}…", text.chars().take(RUN_LINE_CHARS).collect::<String>())
+        } else {
+            text.to_string()
+        },
+        stderr,
+    };
+    let mut all: Vec<OutputLine> = string("stdout").lines().map(|text| line(text, false)).collect();
+    all.extend(string("stderr").lines().map(|text| line(text, true)));
+    let lines = u32::try_from(all.len()).unwrap_or(u32::MAX);
+    let output = all.split_off(all.len().saturating_sub(RUN_LINES));
+    let command = Some(string("command")).filter(|command| !command.is_empty());
+    Some(CommandRun {
+        command: command.map(|command| command.chars().take(CALL_TEXT_LIMIT).collect()),
+        language: object.get("language").and_then(serde_json::Value::as_str).map(str::to_string),
+        exit_code: object
+            .get("exit_code")
+            .and_then(serde_json::Value::as_i64)
+            .and_then(|code| i32::try_from(code).ok()),
+        duration_ms: object.get("duration_ms").and_then(serde_json::Value::as_u64),
+        output,
+        lines,
+        truncated: object.get("truncated").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        stopped,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_line_is_cut_with_an_ellipsis_and_a_short_one_kept() {
+        assert_eq!(capped("Finance", CARD_NAME_LIMIT), "Finance");
+        let long = "x".repeat(CARD_NAME_LIMIT + 50);
+        let cut = capped(&long, CARD_NAME_LIMIT);
+        assert_eq!(cut.chars().count(), CARD_NAME_LIMIT);
+        assert!(cut.ends_with('…'));
+    }
     use adk_core::{ApprovalPolicy, ApprovalScope, ToolConfirmationRequest};
     use chrono::{Duration, NaiveTime};
     use serde_json::json;
@@ -1525,6 +1860,7 @@ mod tests {
             wake_at,
             suspended,
             subagent: None,
+            shell: None,
         };
         let seven = Some(Utc.with_ymd_and_hms(2026, 10, 24, 7, 0, 0).unwrap());
         let words = |row: AgentRow| (row.agent.display_name, row.status_text);

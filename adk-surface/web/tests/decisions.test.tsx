@@ -270,4 +270,69 @@ describe("a decision card", () => {
     await userEvent.click(screen.getByRole("button", { name: "Confirm it's you and approve" }));
     expect((await screen.findByRole("alert")).textContent).toContain("confirm it's you first");
   });
+
+  it("answers what an MCP server asks in the home's own fields, and never sends a field left empty", async () => {
+    const card: Card = {
+      ...invoiceCard(),
+      id: "apr_elicit",
+      heading: "MCP server billing asks: Which account?",
+      call: { tool: "mcp:billing/elicitation", args: { message: "Which account?" }, text: "mcp:billing/elicitation(…)", truncated: false },
+      allowed: {
+        options: [
+          { answer: "edit", label: "Answer", needsPresence: false, needsExpanded: false },
+          { answer: "deny", label: "Deny", needsPresence: false, needsExpanded: false },
+        ],
+        openInHome: false,
+      },
+      elicitation: {
+        mode: "form",
+        server: "billing",
+        message: "Which account?",
+        fields: [
+          { name: "account", label: "Account", kind: "text", required: true },
+          { name: "env", label: "Where", kind: "choice", required: true, options: [{ value: "prod", label: "Production" }] },
+          { name: "seats", label: "Seats", kind: "integer", required: false },
+          { name: "notify", label: "Tell the team", kind: "boolean", required: false, default: true },
+        ],
+      },
+    };
+    const send = vi.fn(
+      async (_command: Command, _origin: Origin): Promise<CommandOutcome> => ({ type: "answered", card: { ...card, status: "decided" } }),
+    );
+    render(<DecisionCard card={card} send={send} />);
+    await userEvent.click(screen.getByRole("button", { name: "Answer" }));
+    expect(screen.queryByRole("textbox", { name: /edit the call/i })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Answer" }));
+    expect(screen.getByRole("alert").textContent).toBe("Fill in Account first.");
+    expect(send).not.toHaveBeenCalled();
+
+    await userEvent.type(screen.getByLabelText("Account"), "acme");
+    await userEvent.selectOptions(screen.getByLabelText("Where"), "prod");
+    await userEvent.click(screen.getByRole("button", { name: "Answer" }));
+    expect(send.mock.calls[0][0]).toMatchObject({
+      type: "decide",
+      answer: "edit",
+      editedArgs: { account: "acme", env: "prod", notify: true },
+    });
+  });
+
+  it("shows an address an MCP server asks to open whole, as text, with why to look twice", () => {
+    const card: Card = {
+      ...invoiceCard(),
+      id: "apr_url",
+      elicitation: {
+        mode: "url",
+        server: "billing",
+        message: "Connect your billing account",
+        url: "https://xn--pple-43d.com/login",
+        host: "xn--pple-43d.com",
+        warning: "This address uses look-alike characters. Check the host letter by letter before you open it.",
+      },
+    };
+    render(<DecisionCard card={card} send={vi.fn()} />);
+    expect(screen.getByText("https://xn--pple-43d.com/login").tagName).toBe("CODE");
+    expect(screen.getByText("xn--pple-43d.com").tagName).toBe("STRONG");
+    expect(screen.getByRole("note").textContent).toContain("look-alike");
+    expect(screen.queryByRole("link", { name: /xn--/ })).toBeNull();
+  });
 });

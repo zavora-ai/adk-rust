@@ -1,4 +1,5 @@
 import type { DrawnChart } from "../generated/api";
+import { SHOW_THE_DATA } from "../generated/words";
 import { visible } from "../safe";
 
 /**
@@ -19,7 +20,51 @@ export function ChartView({ chart }: { chart: DrawnChart }) {
         <Axes chart={chart} summary={summary} />
       )}
       {chart.kind !== "sparkline" && legend(chart)}
+      <ChartTable chart={chart} />
     </figure>
+  );
+}
+
+/** The numbers a chart draws, as a table a keyboard and a screen reader can walk. */
+export function ChartTable({ chart }: { chart: DrawnChart }) {
+  const series = chart.series ?? [];
+  if (series.length === 0) return null;
+  const label = (x: number, index: number): string => {
+    if (chart.x.type === "category") return chart.x.labels[index] ?? String(x);
+    if (chart.x.type === "time") return new Date(x).toISOString().replace("T", " ").replace(/:00\.000Z$/, "Z");
+    return String(x);
+  };
+  const rows = (series[0].y ?? []).map((_, index) => {
+    const x = Number(series[0].x?.[index] ?? index);
+    return { key: index, label: label(x, index), values: series.map((one) => one.y?.[index]) };
+  });
+  return (
+    <details className="drawn-chart-data">
+      <summary>{SHOW_THE_DATA}</summary>
+      <table>
+        <caption className="visually-hidden">{visible(chart.summary)}</caption>
+        <thead>
+          <tr>
+            <th scope="col">{visible(chart.xLabel ?? "")}</th>
+            {series.map((one) => (
+              <th scope="col" key={one.name}>
+                {visible(one.name)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key}>
+              <th scope="row">{visible(row.label)}</th>
+              {row.values.map((value, index) => (
+                <td key={index}>{value === undefined || value === null ? "" : String(value)}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </details>
   );
 }
 

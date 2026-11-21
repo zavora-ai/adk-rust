@@ -53,8 +53,8 @@
   margin: 0;
   font-size: 34px;
   line-height: 1.1;
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-weight: 650;
+  letter-spacing: var(--tracking-display);
   position: relative;
 }
 
@@ -70,11 +70,11 @@
   height: 26px;
   padding: 0 7px;
   margin-left: 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--accent);
   color: var(--on-button);
   font-size: 15px;
-  font-weight: 700;
+  font-weight: 600;
   vertical-align: super;
 }
 
@@ -91,7 +91,7 @@
   background: var(--stop);
   color: var(--on-stop);
   font: inherit;
-  font-weight: 700;
+  font-weight: 600;
   padding: 12px 18px;
 }
 
@@ -139,7 +139,7 @@
 
 .phone-card-heading {
   font-size: 19px;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .phone-card-line,
@@ -170,7 +170,7 @@
   background: none;
   padding: 0;
   font: inherit;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--accent);
 }
 
@@ -259,7 +259,7 @@
 
 .phone-timeline li.current {
   color: var(--accent);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .phone-timeline li.current::before {
@@ -327,7 +327,7 @@
   border: 0;
   background: var(--button);
   color: var(--on-button);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .phone-button-secondary {
@@ -371,7 +371,7 @@
 
 .phone-label,
 .phone-section {
-  font-weight: 700;
+  font-weight: 600;
   margin: 0;
 }
 
@@ -430,5 +430,5 @@
 
 .phone-tab-active {
   color: var(--accent);
-  font-weight: 700;
+  font-weight: 600;
 }

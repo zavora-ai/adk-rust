@@ -32,6 +32,8 @@ pub(crate) struct Submission {
     pub(crate) values_digest: String,
     /// The agent that drew the form, by its name in the runtime.
     pub(crate) drawn_by: String,
+    /// The digest of the drawing the person pressed Send on.
+    pub(crate) digest: String,
 }
 
 /// The envelope of every drawing a render tool provably made in `events`, oldest first,
@@ -156,7 +158,13 @@ pub(crate) fn submission(
         let _ = write!(hex, "{byte:02x}");
         hex
     });
-    Ok(Submission { tool: action.tool.clone(), args: Value::Object(args), values_digest, drawn_by })
+    Ok(Submission {
+        tool: action.tool.clone(),
+        args: Value::Object(args),
+        values_digest,
+        drawn_by,
+        digest: latest.digest(),
+    })
 }
 
 /// Every field in `node`, by path, with its label.

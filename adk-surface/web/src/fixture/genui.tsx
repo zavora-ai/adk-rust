@@ -388,10 +388,14 @@ export function capabilities(): GenuiCapabilities {
         id: "a2ui",
         name: "A2UI",
         claims: [
-          claim("version_0_9_1", "Version 0.9.1", "supported", "runtime"),
-          claim("version_1_0", "Version 1.0", "candidate", "runtime"),
+          claim("version_1_0", "Version 1.0", "supported", "runtime"),
+          claim("version_0_9_1", "Version 0.9.1", "legacy", "runtime"),
           claim("trusted_catalog", "Trusted component catalog", "supported", "security"),
           claim("no_approval_controls", "No approval controls in drawn UI", "supported", "security"),
+          {
+            ...claim("display_only_extension", "Display-only extension", "supported", "security"),
+            note: "Every A2UI 1.0 surface claims the adkrust_display_only 1.0 extension",
+          },
         ],
       },
       {
@@ -730,6 +734,19 @@ export function appAnswer(request: AppRequest): AppAnswer {
       return {
         result: {},
         prompt: { kind: "link", text: "Open example.com?", url: String(params.url), openLabel: "Open", dismissLabel: "Cancel" },
+      };
+    case "ui/download-file":
+      return {
+        result: {},
+        prompt: {
+          kind: "download",
+          text: "The Weather app wants to save forecast.csv (14 bytes)",
+          name: "forecast.csv",
+          mimeType: "text/csv",
+          textContent: "day,rain\nmon,4",
+          saveLabel: "Save",
+          dismissLabel: "Cancel",
+        },
       };
     default:
       return { error: { code: -32601, message: `${request.method} is not supported here` } };

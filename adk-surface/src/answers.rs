@@ -52,6 +52,13 @@ pub trait AnswerLog: Send + Sync {
     /// The answer that decided `approval_id`, when it was given through a surface.
     async fn find(&self, approval_id: &str) -> Result<Option<AnswerRecord>>;
 
+    /// The answers given through a surface since `at`, oldest first: what "How you answered"
+    /// counts (spec 3.3 §5.1). The default lists none.
+    async fn since(&self, at: DateTime<Utc>) -> Result<Vec<AnswerRecord>> {
+        let _ = at;
+        Ok(Vec::new())
+    }
+
     /// The answer that decided `request`, when it was given through a surface: what the
     /// engine reads for a decided card. A log may use the request's times to read less; the
     /// default calls [`find`](Self::find).
@@ -96,6 +103,19 @@ impl AnswerLog for InMemoryAnswerLog {
 
     async fn find(&self, approval_id: &str) -> Result<Option<AnswerRecord>> {
         Ok(self.records.lock().unwrap_or_else(|e| e.into_inner()).get(approval_id).cloned())
+    }
+
+    async fn since(&self, at: DateTime<Utc>) -> Result<Vec<AnswerRecord>> {
+        let mut found: Vec<AnswerRecord> = self
+            .records
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .filter(|record| record.at >= at)
+            .cloned()
+            .collect();
+        found.sort_by_key(|record| record.at);
+        Ok(found)
     }
 }
 
@@ -154,6 +174,36 @@ impl AuditAnswerLog {
         }
         Ok(None)
     }
+
+    /// Every `surface.decide` record that decided something since `at`, oldest first.
+    async fn scan_since(&self, at: DateTime<Utc>) -> Result<Vec<AnswerRecord>> {
+        let mut found = Vec::new();
+        for log in self.store.logs().await? {
+            let mut end = self.store.size(&log).await?;
+            'log: while end > 0 {
+                let start = end.saturating_sub(AUDIT_PAGE);
+                let entries = self.store.read(&log, start..end).await?;
+                for entry in entries.iter().rev() {
+                    let Some(text) = &entry.record else { continue };
+                    let Ok(record) = serde_json::from_str::<AuditRecord>(text) else { continue };
+                    if record.ts < at - CLOCK_SLACK {
+                        break 'log;
+                    }
+                    if record.ts < at {
+                        continue;
+                    }
+                    let id =
+                        record.ext.get("approvalId").and_then(|v| v.as_str()).map(str::to_string);
+                    if let Some(answer) = id.and_then(|id| answer_of(&record, &id)) {
+                        found.push(answer);
+                    }
+                }
+                end = start;
+            }
+        }
+        found.sort_by_key(|record| record.at);
+        Ok(found)
+    }
 }
 
 /// How many entries one read of the audit log takes.
@@ -178,6 +228,10 @@ impl AnswerLog for AuditAnswerLog {
 
     async fn find(&self, approval_id: &str) -> Result<Option<AnswerRecord>> {
         self.scan(approval_id, None).await
+    }
+
+    async fn since(&self, at: DateTime<Utc>) -> Result<Vec<AnswerRecord>> {
+        self.scan_since(at).await
     }
 
     async fn find_for(&self, request: &ApprovalRequest) -> Result<Option<AnswerRecord>> {
@@ -311,6 +365,96 @@ impl AnswerLog for RecordAnswerLog {
             }
         }
     }
+
+    async fn since(&self, at: DateTime<Utc>) -> Result<Vec<AnswerRecord>> {
+        let mut found: HashMap<String, AnswerRecord> = HashMap::new();
+        if let Ok(lines) = self.client.record(Some(RECORD_LINES)).await {
+            for line in lines.iter().filter(|line| line.at >= at) {
+                if let Some(answer) = line.target.as_deref().and_then(|id| answer_of_line(line, id))
+                {
+                    found.insert(answer.approval_id.clone(), answer);
+                }
+            }
+        }
+        for answer in self.given_here.since(at).await? {
+            found.insert(answer.approval_id.clone(), answer);
+        }
+        let mut found: Vec<AnswerRecord> = found.into_values().collect();
+        found.sort_by_key(|record| record.at);
+        Ok(found)
+    }
+}
+
+/// How a person answered since a time (spec 3.3 §5.1 "How you answered"): how many of each
+/// answer, and on which surfaces. `GET /surface/answers`.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct AnswerSummary {
+    /// Counted from.
+    pub since: DateTime<Utc>,
+    /// Every answer.
+    pub total: u32,
+    /// "Allow once".
+    pub allowed_once: u32,
+    /// "Always allow".
+    pub always_allowed: u32,
+    /// Edited, then allowed.
+    pub edited: u32,
+    /// "Deny".
+    pub denied: u32,
+    /// How many were given on each surface, most first.
+    pub surfaces: Vec<SurfaceCount>,
+    /// "12 answers: 9 allowed once, 2 always allowed, 1 denied".
+    pub text: String,
+}
+
+/// How many answers were given on one surface.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct SurfaceCount {
+    /// The surface.
+    pub surface: SurfaceKind,
+    /// How many.
+    pub count: u32,
+}
+
+impl AnswerSummary {
+    /// The summary of `records`, the answers since `since`.
+    pub fn of(since: DateTime<Utc>, records: &[AnswerRecord]) -> Self {
+        let count = |answer: Answer| {
+            u32::try_from(records.iter().filter(|record| record.answer == answer).count())
+                .unwrap_or(u32::MAX)
+        };
+        let mut surfaces: Vec<SurfaceCount> = Vec::new();
+        for record in records {
+            match surfaces.iter_mut().find(|entry| entry.surface == record.via.surface) {
+                Some(entry) => entry.count += 1,
+                None => surfaces.push(SurfaceCount { surface: record.via.surface, count: 1 }),
+            }
+        }
+        surfaces.sort_by_key(|entry| std::cmp::Reverse(entry.count));
+        let (allowed_once, always_allowed, edited, denied) = (
+            count(Answer::AllowOnce),
+            count(Answer::AlwaysAllow),
+            count(Answer::Edit),
+            count(Answer::Deny),
+        );
+        let total = u32::try_from(records.len()).unwrap_or(u32::MAX);
+        Self {
+            since,
+            total,
+            allowed_once,
+            always_allowed,
+            edited,
+            denied,
+            surfaces,
+            text: crate::words::answers_line(total, allowed_once, always_allowed, edited, denied),
+        }
+    }
 }
 
 /// The answer a record line of `surface.decide` holds for `approval_id`, when it decided it.
@@ -398,6 +542,39 @@ mod tests {
         assert_eq!(found.by, SubjectRef::human("ana"));
         assert_eq!(found.answer, Answer::AllowOnce);
         assert!(log.find("apr_2").await.unwrap().is_none(), "a refused answer decided nothing");
+    }
+
+    /// "How you answered" reads every answer the audit log holds since a time: a refused or
+    /// repeated answer is none, and nothing before the time is counted (spec 3.3 §5.1).
+    #[tokio::test]
+    async fn the_audit_log_lists_the_answers_since_a_time() {
+        let store = Arc::new(InMemoryAuditLogStore::new());
+        let pointer = json!({ "kind": "pointer" });
+        store
+            .append(AuditAppend {
+                log_id: "replica-1".into(),
+                entries: vec![
+                    entry(0, "apr_1", "decided", pointer.clone()),
+                    entry(1, "apr_1", "already_decided", pointer.clone()),
+                    entry(2, "apr_2", "refused", pointer.clone()),
+                    entry(3, "apr_3", "decided", pointer),
+                ],
+                nodes: vec![],
+            })
+            .await
+            .unwrap();
+        let log = AuditAnswerLog::new(store);
+        let since = log.since(Utc::now() - chrono::Duration::hours(1)).await.unwrap();
+        assert_eq!(
+            since.iter().map(|answer| answer.approval_id.as_str()).collect::<Vec<_>>(),
+            ["apr_1", "apr_3"]
+        );
+        assert!(log.since(Utc::now() + chrono::Duration::hours(1)).await.unwrap().is_empty());
+        let memory = InMemoryAnswerLog::new();
+        for answer in &since {
+            memory.record(answer).await.unwrap();
+        }
+        assert_eq!(memory.since(Utc::now() - chrono::Duration::hours(1)).await.unwrap().len(), 2);
     }
 
     /// A kernel's record line of an answer given in Telegram says where it was given; a line

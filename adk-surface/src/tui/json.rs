@@ -109,8 +109,12 @@ impl Settler {
         for item in &entry.items {
             match item {
                 ThreadItem::Message { from: Speaker::Agent, .. } => self.reply = true,
-                ThreadItem::Activity { .. } | ThreadItem::Result { .. } => self.reply = false,
-                ThreadItem::Message { from: Speaker::You, .. } | ThreadItem::Decision { .. } => {}
+                ThreadItem::Activity { .. }
+                | ThreadItem::Result { .. }
+                | ThreadItem::Run { .. } => self.reply = false,
+                ThreadItem::Message { from: Speaker::You, .. }
+                | ThreadItem::Decision { .. }
+                | ThreadItem::Suggestions { .. } => {}
                 // A drawing is a tool's result, never the agent's reply (spec 3.3 §7.4 rule 5).
                 ThreadItem::Drawn { .. }
                 | ThreadItem::DrawnRefused { .. }
@@ -403,7 +407,7 @@ pub(crate) async fn run<W: Write + Send>(
         return end_line(&mut out, &end, &session);
     }
     if let Some(text) = message {
-        let command = Command::Send { session_id: session.clone(), text };
+        let command = Command::Send { session_id: session.clone(), text, images: Vec::new() };
         match engine.execute(caller, command).await {
             Ok(outcome) => {
                 line(&mut out, &json!({ "type": "command", "outcome": outcome }))?;
@@ -511,6 +515,7 @@ mod tests {
             mode: None,
             added,
             can_change: added,
+            shell: None,
         }
     }
 

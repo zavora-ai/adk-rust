@@ -1,4 +1,4 @@
-//! This home's claims (spec 3.3 §6.1 `genui`): A2UI v0.9.1 on the `forms` 1.0 catalog, with
+//! This home's claims (spec 3.3 §6.1 `genui`): A2UI 1.0 (and v0.9.1) on the `forms` 1.0 catalog, with
 //! no approval controls in anything drawn; drawings over AG-UI; and, with `genui-apps`, a
 //! governed MCP Apps host.
 
@@ -6,6 +6,7 @@ use super::capabilities_wire::{
     CatalogView, Claim, ClaimScope, ClaimStatus, GenuiCapabilities, ProtocolClaims,
 };
 use super::catalog::{Catalog, Catalogs, LEFT_OUT};
+use super::wire::{DISPLAY_ONLY_EXTENSION, DISPLAY_ONLY_EXTENSION_VERSION};
 
 /// The note of a claim this build supports that the server did not wire.
 const NOT_WIRED: &str = "Not set on this server";
@@ -75,7 +76,7 @@ fn claim(id: &str, label: &str, status: ClaimStatus, scope: ClaimScope) -> Claim
 /// let claims = capabilities();
 /// let a2ui = &claims.protocols[0];
 /// assert_eq!(a2ui.id, "a2ui");
-/// assert_eq!(a2ui.claims[0].label, "Version 0.9.1");
+/// assert_eq!(a2ui.claims[0].label, "Version 1.0");
 /// assert_eq!(a2ui.claims[0].status, ClaimStatus::Supported);
 /// assert_eq!(claims.catalogs[0].label, "forms 1.0");
 /// ```
@@ -115,15 +116,15 @@ pub fn capabilities_wired(wiring: GenuiWiring) -> GenuiCapabilities {
 /// ```
 pub fn capabilities_with(wiring: GenuiWiring, catalogs: &Catalogs) -> GenuiCapabilities {
     use ClaimScope::{Runtime, Security, Transport};
-    use ClaimStatus::{Candidate, Supported};
+    use ClaimStatus::{Legacy, Supported};
     GenuiCapabilities {
         protocols: vec![
             ProtocolClaims {
                 id: "a2ui".into(),
                 name: "A2UI".into(),
                 claims: vec![
-                    claim("version_0_9_1", "Version 0.9.1", Supported, Runtime),
-                    claim("version_1_0", "Version 1.0", Candidate, Runtime),
+                    claim("version_1_0", "Version 1.0", Supported, Runtime),
+                    claim("version_0_9_1", "Version 0.9.1", Legacy, Runtime),
                     claim("trusted_catalog", "Trusted component catalog", Supported, Security),
                     claim(
                         "no_approval_controls",
@@ -131,6 +132,18 @@ pub fn capabilities_with(wiring: GenuiWiring, catalogs: &Catalogs) -> GenuiCapab
                         Supported,
                         Security,
                     ),
+                    Claim {
+                        note: Some(format!(
+                            "Every A2UI 1.0 surface claims the {DISPLAY_ONLY_EXTENSION} \
+                             {DISPLAY_ONLY_EXTENSION_VERSION} extension"
+                        )),
+                        ..claim(
+                            "display_only_extension",
+                            "Display-only extension",
+                            Supported,
+                            Security,
+                        )
+                    },
                 ],
             },
             ProtocolClaims {

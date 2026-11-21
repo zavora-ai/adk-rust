@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AgentRow, DecisionCard, Origin, RemovedAgent, StatusLine } from "../generated/api";
+import type { AgentRow, AgentThreads, DecisionCard, ImageData, Origin, RemovedAgent, StatusLine } from "../generated/api";
 import { agentLabels } from "../agents/labels";
 import type { HomeClient } from "../client";
 import { problemText } from "../client";
@@ -8,7 +8,8 @@ import { Composer } from "../components/Composer";
 import type { Send, TakeOverSeam } from "../components/DecisionCard";
 import { DecisionList } from "../components/DecisionList";
 import { Roster } from "../components/Roster";
-import { Thread } from "../components/Thread";
+import { ShellBadge } from "../components/RunCard";
+import { CanvasPane, Thread } from "../components/Thread";
 import { emptyThread, followFeed, wakeable } from "../feed";
 import type { ThreadState } from "../feed";
 import { briefingDue, briefingShown, quietWindows, rememberBriefing } from "../away";
@@ -56,6 +57,7 @@ export function Threads({
   onFollow,
   visiting,
   onBack,
+  onVisit,
   focusDecision,
   onOpenDecision,
   canAddAgents = false,
@@ -88,6 +90,8 @@ export function Threads({
   visiting?: { agent: string; session: string };
   /** Back to the agent's own conversation. */
   onBack: () => void;
+  /** Opens one of an agent's earlier threads (spec 3.3 §5.1 "Thread history"). */
+  onVisit?: (agent: string, session: string) => void;
   /** The decision to bring into view. */
   focusDecision?: string;
   onOpenDecision: (card: DecisionCard) => void;
@@ -108,6 +112,10 @@ export function Threads({
   const [sent, setSent] = useState(0);
   const [trouble, setTrouble] = useState(false);
   const [problem, setProblem] = useState("");
+  const [stoppedNote, setStoppedNote] = useState<{ session: string; text: string }>();
+  const [draft, setDraft] = useState<{ text: string; n: number }>();
+  // The drawing shown beside the thread, in the session it belongs to (spec 3.3 §5.1).
+  const [beside, setBeside] = useState<{ session: string; surfaceId: string }>();
   const feed = useRef(wakeable());
 
   // Until the person picks one, the first agent waiting for them, else the first; once shown,
@@ -159,13 +167,16 @@ export function Threads({
   }, [client, session, thread.open, thread.entries.length, sent]);
   const shownQueued = queued.session === session ? queued.items : [];
 
-  async function message(text: string, origin: Origin) {
+  async function message(text: string, origin: Origin, images?: ImageData[]) {
     setProblem("");
     try {
       // The first message of an added agent's thread goes to that agent (spec 3.3 §5.7).
       const starts = current?.added === true && thread.entries.length === 0;
+      const attached = images && images.length > 0 ? { images } : {};
       await client.command(
-        starts ? { type: "newThread", agent: key, sessionId: own, text } : { type: "send", sessionId: own, text },
+        starts
+          ? { type: "newThread", agent: key, sessionId: own, text, ...attached }
+          : { type: "send", sessionId: own, text, ...attached },
         origin,
       );
       if (!pinned) onFollow(key, own);
@@ -179,10 +190,11 @@ export function Threads({
     }
   }
 
+  const pin = beside && beside.session === session ? beside.surfaceId : undefined;
   const name = reading ? reading.agent.agent.displayName : current?.agent.displayName;
   const shownAgent = reading ? reading.agent.agent : current?.agent;
   return (
-    <div className="threads">
+    <div className={`threads${pin ? " threads-canvas" : ""}`}>
       <aside className="rail">
         <Roster
           agents={agents}
@@ -213,14 +225,22 @@ export function Threads({
           {shownAgent && (
             <header className="thread-head">
               <Avatar agent={shownAgent} size="lg" />
-              <div>
+              <div className="thread-head-text">
                 <h1 className="thread-name">{shownAgent.displayName}</h1>
                 {reading ? (
                   <p className="thread-sub">{reading.agent.removedText}</p>
                 ) : (
-                  status?.mode && <p className="thread-sub">{status.mode.status}</p>
+                  (status?.mode || current?.shell) && (
+                    <p className="thread-sub">
+                      {status?.mode && <span>{status.mode.status}</span>}
+                      {current?.shell && <ShellBadge shell={current.shell} />}
+                    </p>
+                  )
                 )}
               </div>
+              {!reading && client.agentThreads && onVisit && (
+                <ThreadHistory client={client} agent={key} current={session} onOpen={(chosen) => onVisit(key, chosen)} />
+              )}
               {cameraLinks?.[shownAgent.name] && (
                 <a className="thread-camera" href={cameraLinks[shownAgent.name].href}>
                   {cameraLinks[shownAgent.name].text}
@@ -243,10 +263,19 @@ export function Threads({
             focusDecision={focusDecision}
             takeOver={takeOver}
             session={session}
+            shell={reading ? undefined : current?.shell ?? undefined}
+            pinned={pin}
+            onPin={(surfaceId) => setBeside(surfaceId ? { session, surfaceId } : undefined)}
+            onSuggest={reading ? undefined : (text) => setDraft((last) => ({ text, n: (last?.n ?? 0) + 1 }))}
           />
           {problem && (
             <p className="decision-problem" role="alert">
               {problem}
+            </p>
+          )}
+          {stoppedNote?.session === session && (
+            <p className="turn-stopped" role="status">
+              {stoppedNote.text}
             </p>
           )}
         </div>
@@ -265,6 +294,23 @@ export function Threads({
           </div>
         ) : (
           <Composer
+            attach
+            askDrawing
+            draft={draft}
+            onStopTurn={
+              current?.status === "working" && current.sessionId === session
+                ? (origin) => {
+                    setProblem("");
+                    client
+                      .command({ type: "stopTurn", sessionId: session }, origin)
+                      .then((outcome) => {
+                        if (outcome.type === "turnStopped" && outcome.stopped) setStoppedNote({ session, text: outcome.text });
+                        onChanged();
+                      })
+                      .catch((error: unknown) => setProblem(problemText(error)));
+                  }
+                : undefined
+            }
             placeholder={name ? labels.message(name) : labels.messageYourAgents}
             queued={shownQueued}
             disabled={status?.stopped}
@@ -272,10 +318,24 @@ export function Threads({
           />
         )}
       </main>
-      <aside className="side">
+      {pin && (
+        <CanvasPane
+          entries={thread.session === session ? thread.entries : []}
+          pinned={pin}
+          open={thread.session === session ? thread.open : []}
+          client={client}
+          send={send}
+          session={session}
+          onSettled={onChanged}
+          focusDecision={focusDecision}
+          takeOver={takeOver}
+          onClose={() => setBeside(undefined)}
+        />
+      )}
+      <aside className="side" hidden={pin !== undefined}>
         <MorningBriefing away={awayPage} areas={areas} status={status} onToday={onToday} />
         <DecisionList decisions={decisions} onOpen={onOpenDecision} />
-        <section className="side-section" aria-labelledby="coming-up-heading">
+        <section className="side-section" aria-labelledby="coming-up-heading" data-empty={planned.length === 0 || undefined}>
           <h2 id="coming-up-heading" className="side-heading">
             {labels.comingUp}
           </h2>
@@ -371,5 +431,65 @@ function MorningBriefing({
         </button>
       </div>
     </section>
+  );
+}
+
+/**
+ * Thread history (spec 3.3 §5.1): the person's earlier threads with the agent, newest first,
+ * read when opened. Choosing one shows it in place of the conversation, with the way back.
+ */
+function ThreadHistory({
+  client,
+  agent,
+  current,
+  onOpen,
+}: {
+  client: HomeClient;
+  agent: string;
+  current: string;
+  onOpen: (session: string) => void;
+}) {
+  const [threads, setThreads] = useState<AgentThreads["threads"]>();
+  const menu = useRef<HTMLDetailsElement>(null);
+  return (
+    <details
+      ref={menu}
+      className="thread-history"
+      onToggle={(event) => {
+        if ((event.currentTarget as HTMLDetailsElement).open) {
+          void client.agentThreads?.(agent).then((found) => setThreads(found?.threads ?? []), () => setThreads([]));
+        }
+      }}
+    >
+      <summary className="button button-secondary">
+        <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4h4M12 8v4l3 2" />
+        </svg>
+        {labels.threadHistory}
+      </summary>
+      <div className="thread-history-list" role="group" aria-label={labels.threadHistory}>
+        {threads === undefined ? null : threads.length <= 1 ? (
+          <p className="thread-history-empty">{labels.noOtherThreads}</p>
+        ) : (
+          <ul>
+            {threads.map((thread) => (
+              <li key={thread.sessionId}>
+                <button
+                  type="button"
+                  aria-current={thread.sessionId === current ? "true" : undefined}
+                  onClick={() => {
+                    if (menu.current) menu.current.open = false;
+                    onOpen(thread.sessionId);
+                  }}
+                >
+                  <span>{thread.when}</span>
+                  {thread.sessionId === current && <span className="thread-history-current">{labels.thisConversation}</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </details>
   );
 }

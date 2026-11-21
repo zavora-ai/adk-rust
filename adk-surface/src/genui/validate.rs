@@ -243,6 +243,9 @@ pub struct ValidatedSurface {
     pub draft: SurfaceDraft,
     /// Every string it shows, in tree order.
     pub texts: Vec<ResolvedText>,
+    /// What it should say differently: dark patterns, at warning severity (it is shown).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ValidationResult>,
     /// What each extension component shows, by component id and list item, as checked: the
     /// projection draws these and never resolves or projects a component again.
     #[serde(skip)]
@@ -346,6 +349,71 @@ impl DrawRefusal {
         };
         format!("{plain}. ({})", self.technical())
     }
+
+    /// The refusal in A2UI 1.0's `ValidationResult` shape: not valid, severity `error`, its
+    /// code, and its technical reason as the message.
+    pub fn validation_result(&self) -> ValidationResult {
+        ValidationResult {
+            valid: false,
+            severity: Severity::Error,
+            code: Some(self.code().to_string()),
+            message: Some(self.technical()),
+        }
+    }
+}
+
+/// How much a check's finding matters (A2UI 1.0 `ValidationResult.severity`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    /// The drawing is refused.
+    #[default]
+    Error,
+    /// The drawing is shown; the agent is told what to change.
+    Warning,
+    /// A note.
+    Info,
+}
+
+/// A check's result in A2UI 1.0's `ValidationResult` shape: a refusal is `valid: false` with
+/// severity `error`; a drawing that is shown may carry warnings.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::genui::{Severity, ValidationResult};
+///
+/// let result = ValidationResult::warning("genui.warned.urgency", "Says 'only 2 left'.");
+/// let wire = serde_json::to_value(&result).unwrap();
+/// assert_eq!(wire["valid"], true);
+/// assert_eq!(wire["severity"], "warning");
+/// assert_eq!(result.severity, Severity::Warning);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ValidationResult {
+    /// Whether the drawing passes.
+    pub valid: bool,
+    /// How much it matters.
+    #[serde(default)]
+    pub severity: Severity,
+    /// A machine-readable code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// What to change, in words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl ValidationResult {
+    /// A warning on a drawing that is still shown.
+    pub fn warning(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            valid: true,
+            severity: Severity::Warning,
+            code: Some(code.into()),
+            message: Some(message.into()),
+        }
+    }
 }
 
 /// Checks drawings against a catalog and rule 5 (spec 3.3 §7.4 rule 5).
@@ -442,7 +510,8 @@ impl Validator {
         let Walk { mut texts, mut extensions, selects, choices, .. } = walk;
         check.selects(draft, &selects, &choices, &mut extensions)?;
         check.actions(draft, &components, self.bindable.as_ref(), &mut texts)?;
-        Ok(ValidatedSurface { draft: draft.clone(), texts, extensions })
+        let warnings = super::patterns::dark_patterns(&texts);
+        Ok(ValidatedSurface { draft: draft.clone(), texts, warnings, extensions })
     }
 }
 
@@ -545,6 +614,17 @@ impl Check {
                 return Err(self.cannot_show(at, format!("{name} is not in the catalog")));
             }
             self.secrets(id, name, props)?;
+            // What a send carries is never hidden from a screen reader (A2UI 1.0
+            // `accessibility.hidden`).
+            if INPUTS.contains(&name) || name == "Button" {
+                let hidden = props
+                    .get("accessibility")
+                    .and_then(|accessibility| accessibility.get("hidden"));
+                if hidden.is_some_and(|hidden| hidden != &Value::Bool(false)) {
+                    return Err(self
+                        .cannot_show(at, "a field or button is never hidden from screen readers"));
+                }
+            }
             if name == "Button" {
                 self.button(id, props, draft)?;
             }
@@ -659,6 +739,14 @@ impl Check {
             return Err(self.cannot_show(at, "a button runs only a declared action"));
         };
         let name = event.get("name").and_then(Value::as_str).unwrap_or_default();
+        // A2UI 1.0 lets an event put words in the person's mouth; a drawing never does.
+        if event.get("userMessage").is_some() {
+            return Err(self.cannot_show(
+                at,
+                "a button never speaks as the person (userMessage); the declared action carries \
+                 the fields",
+            ));
+        }
         if !draft.actions.iter().any(|action| action.id == name) {
             return Err(
                 self.cannot_show(at, format!("the button's action '{name}' is not declared"))
@@ -1647,6 +1735,7 @@ fn display_fields<'a>(name: &str, props: &'a Map<String, Value>) -> Vec<(String,
         "TextField" | "DateTimeInput" => {
             take("label");
             take("value");
+            take("placeholder");
         }
         "CheckBox" | "Slider" | "ChoicePicker" => take("label"),
         _ => {}

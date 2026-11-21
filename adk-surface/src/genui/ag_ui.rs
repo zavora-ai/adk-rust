@@ -19,11 +19,12 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::a2ui::{A2uiBody, A2uiMessage};
+use super::a2ui::A2uiMessage;
 use super::catalog::{Catalog, Catalogs, FORMS_CATALOG_ID};
 use super::draw::DrawnEnvelope;
 use super::drawn::DrawnKind;
 use super::validate::{DrawnAction, Validator};
+use super::wire::{A2uiVersion, from_wire, to_wire};
 use crate::engine::SURFACE_AUDIT_DRAWN_SUBMITTED;
 use crate::error::SurfaceError;
 
@@ -48,7 +49,7 @@ struct ForwardedAction {
 #[serde(rename_all = "camelCase")]
 struct ActivityContent {
     #[serde(rename = "a2ui_operations")]
-    operations: Vec<A2uiMessage>,
+    operations: Vec<Value>,
     #[serde(default)]
     kind: Option<DrawnKind>,
     #[serde(default)]
@@ -89,6 +90,7 @@ struct ActivityContent {
 pub struct GenuiAgUi {
     audit: Option<AuditTrail>,
     catalogs: Catalogs,
+    a2ui_version: A2uiVersion,
 }
 
 impl std::fmt::Debug for GenuiAgUi {
@@ -96,6 +98,7 @@ impl std::fmt::Debug for GenuiAgUi {
         f.debug_struct("GenuiAgUi")
             .field("audit", &self.audit.is_some())
             .field("catalogs", &self.catalogs)
+            .field("a2ui_version", &self.a2ui_version)
             .finish()
     }
 }
@@ -123,6 +126,58 @@ impl GenuiAgUi {
         self
     }
 
+    /// Writes drawings' operations in `version`: A2UI 1.0 unless set, or v0.9.1 for clients
+    /// that render nothing newer. Activities a client sends back are read in either.
+    #[must_use]
+    pub fn with_a2ui_version(mut self, version: A2uiVersion) -> Self {
+        self.a2ui_version = version;
+        self
+    }
+
+    /// The internal messages of an activity's operations, in either A2UI version, and the
+    /// catalog they are drawn in: the one an extension component or the `createSurface`
+    /// names, else `forms`. `None` when an operation cannot be read.
+    fn read_operations(
+        &self,
+        operations: &[Value],
+    ) -> Option<(&'static Catalog, Vec<A2uiMessage>)> {
+        fn named(value: &Value, out: &mut Vec<String>) {
+            match value {
+                Value::Object(map) => {
+                    for (key, value) in map {
+                        if key == "@catalogId" || key == "catalogId" {
+                            if let Some(id) = value.as_str() {
+                                out.push(id.to_string());
+                            }
+                        } else {
+                            named(value, out);
+                        }
+                    }
+                }
+                Value::Array(items) => items.iter().for_each(|item| named(item, out)),
+                _ => {}
+            }
+        }
+        let mut ids = Vec::new();
+        operations.iter().for_each(|operation| named(operation, &mut ids));
+        let catalog = ids
+            .iter()
+            .filter(|id| id.as_str() != FORMS_CATALOG_ID)
+            .find_map(|id| self.catalogs.get(id))
+            .or_else(|| {
+                if ids.iter().all(|id| id == FORMS_CATALOG_ID) {
+                    self.catalogs.get(FORMS_CATALOG_ID)
+                } else {
+                    None
+                }
+            })?;
+        let mut messages = Vec::new();
+        for operation in operations {
+            messages.extend(from_wire(operation, catalog).ok()?);
+        }
+        Some((catalog, messages))
+    }
+
     /// Whether `envelope`'s drawing passes the validator again, against its own catalog.
     fn passes(&self, envelope: &DrawnEnvelope) -> bool {
         self.catalogs.get(&envelope.catalog_id).is_some_and(|catalog| {
@@ -130,14 +185,17 @@ impl GenuiAgUi {
         })
     }
 
-    /// The activity of a drawing: its A2UI messages and what checking them again needs.
-    fn activity(envelope: &DrawnEnvelope) -> Value {
+    /// The activity of a drawing: its A2UI messages, in this extension's A2UI version, and what
+    /// checking them again needs.
+    fn activity(&self, envelope: &DrawnEnvelope) -> Value {
+        let catalog = self.catalogs.get(&envelope.catalog_id).unwrap_or_else(Catalog::forms);
         json!({
             "type": "ACTIVITY_SNAPSHOT",
             "messageId": format!("a2ui-{}", envelope.surface_id),
             "activityType": A2UI_SURFACE_ACTIVITY_TYPE,
             "content": {
-                "a2ui_operations": envelope.messages,
+                "a2ui_operations": to_wire(&envelope.messages, catalog, self.a2ui_version),
+                "a2uiVersion": self.a2ui_version.wire(),
                 "surfaceId": envelope.surface_id,
                 "version": envelope.version,
                 "catalogId": envelope.catalog_id,
@@ -172,7 +230,7 @@ impl AgUiExtension for GenuiAgUi {
                 _ => None,
             })
             .filter(|envelope| envelope.deleted || self.passes(envelope))
-            .map(|envelope| Self::activity(&envelope))
+            .map(|envelope| self.activity(&envelope))
             .collect()
     }
 
@@ -187,27 +245,28 @@ impl AgUiExtension for GenuiAgUi {
         else {
             return false;
         };
-        let Some(surface_id) =
-            content.operations.first().map(|message| message.surface_id().to_string())
+        // The catalog the activity's operations name; forms when they name none.
+        let Some((catalog, messages)) = self.read_operations(&content.operations) else {
+            return false;
+        };
+        let Some(surface_id) = messages.first().map(|message| message.surface_id().to_string())
         else {
             return false;
         };
-        // The catalog the activity's own createSurface names; forms when it names none.
-        let catalog_id = content
-            .operations
-            .iter()
-            .find_map(|message| match &message.body {
-                A2uiBody::CreateSurface(create) => Some(create.catalog_id.clone()),
-                _ => None,
-            })
-            .unwrap_or_else(|| FORMS_CATALOG_ID.to_string());
+        // A drawing never asks a renderer to send its whole data model with every message
+        // (A2UI `sendDataModel`): a send carries only the fields its card shows.
+        if messages.iter().any(|message| {
+            matches!(&message.body, super::a2ui::A2uiBody::CreateSurface(create) if create.send_data_model == Some(true))
+        }) {
+            return false;
+        }
         let envelope = DrawnEnvelope {
             surface_id,
             version: 0,
             kind: content.kind.unwrap_or(DrawnKind::Screen),
-            catalog_id,
+            catalog_id: catalog.id().to_string(),
             title: content.title,
-            messages: content.operations,
+            messages,
             actions: content.actions,
             deleted: false,
         };

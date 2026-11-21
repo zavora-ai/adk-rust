@@ -171,6 +171,8 @@ struct Home {
     engine: SurfaceEngine,
     api: axum::Router,
     harness: Arc<Harness>,
+    /// The approval seals the engine makes and the harness checks.
+    seals: adk_surface::genui::ApprovalSeals,
 }
 
 async fn home(lasting: &Lasting, model: Arc<dyn Llm>, forced: bool) -> Home {
@@ -230,8 +232,10 @@ async fn home_with(
     );
     let workspace = lasting.dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
+    let seals = adk_surface::genui::ApprovalSeals::new();
     let mut agent = HarnessAgent::builder("finance")
         .model(model)
+        .requested_call_seal(Arc::new(seals.clone()))
         .workspace(adk_devtools::Workspace::new(&workspace))
         .project_instructions(InstructionsConfig {
             user_file: None,
@@ -294,6 +298,7 @@ async fn home_with(
         .build()
         .unwrap();
     let engine = SurfaceEngine::builder(Arc::new(source))
+        .approval_seals(seals.clone())
         .audit(AuditTrail::new(Arc::new(lasting.audit.clone())))
         .places([Place::web(), Place::phone(), Place::chat("Telegram")])
         .agent_name(APP, "Finance")
@@ -308,7 +313,7 @@ async fn home_with(
             scopes: vec!["owner".into(), "operator".into()],
             metadata: Default::default(),
         })));
-    Home { kernel, engine, api, harness }
+    Home { kernel, engine, api, harness, seals }
 }
 
 /// `wipe_invoices`: the operator's policy never lets it run.
@@ -490,6 +495,79 @@ async fn a_drawn_form_is_sent_held_and_runs_once_on_postgres() {
     governed_form(Lasting::on_postgres(&url)).await;
 }
 
+/// A person's yes to a form's call is sealed to the drawing they pressed Send on, and the
+/// call runs once, as approved, spending the seal (spec 3.3 §7.4 rule 5).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_approval_of_a_drawn_form_is_sealed_to_its_drawing_and_spent_when_it_runs() {
+    let lasting = Lasting::new();
+    let model = Arc::new(ScriptedLlm::new(
+        "scripted",
+        vec![
+            ScriptedResponse::function_call("render_form", invoice_form("invoice-10", "INV-10")),
+            ScriptedResponse::text("Here is the invoice."),
+            ScriptedResponse::text("Sent."),
+        ],
+    ));
+    let home = home(&lasting, model, false).await;
+    home.engine
+        .execute(
+            &web(),
+            Command::Send {
+                session_id: "s1".into(),
+                text: "Invoice ACME".into(),
+                images: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    eventually("the form", || async {
+        items(&home.engine, &web())
+            .await
+            .iter()
+            .any(|item| matches!(item, ThreadItem::Drawn { .. }))
+            .then_some(())
+    })
+    .await;
+    settled(&home).await;
+    let outcome = home
+        .engine
+        .execute(
+            &web(),
+            submit("invoice-10", 1, "send", json!({ "/to": "ana@example.com", "/amount": 4200 })),
+        )
+        .await
+        .unwrap();
+    let CommandOutcome::FormSent { call_id, .. } = outcome else { panic!("{outcome:?}") };
+    let card = waiting(&home.engine, 1).await.remove(0);
+    home.engine
+        .execute(
+            &web(),
+            Command::Decide {
+                decision_id: card.id.clone(),
+                version: card.version,
+                answer: Answer::AllowOnce,
+                edited_args: None,
+                reason: None,
+                expanded: true,
+                evidence: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    eventually("the call to run", || async { (!lasting.ran().is_empty()).then_some(()) }).await;
+    settled(&home).await;
+    assert_eq!(lasting.ran().len(), 1, "ran once: {:?}", lasting.ran());
+    assert!(!home.seals.is_sealed(&call_id), "the seal was checked and spent");
+    let records = lasting.audit.records();
+    let submitted = records.iter().find(|r| r.action == "surface.drawn.submitted").unwrap();
+    let sealed = records.iter().find(|r| r.action == "surface.drawn.sealed").expect("sealed");
+    assert_eq!(sealed.ext.get("callId"), Some(&json!(call_id)));
+    assert_eq!(sealed.ext.get("surfaceId"), Some(&json!("invoice-10")));
+    assert!(sealed.ext.get("drawingDigest").is_some_and(|digest| digest.is_string()));
+    assert_eq!(sealed.ext.get("drawingDigest"), submitted.ext.get("drawingDigest"));
+    assert_eq!(sealed.ext.get("seal").and_then(Value::as_str).map(str::len), Some(64));
+}
+
 /// Steps 1 to 6 of the scenario over `lasting`'s stores.
 async fn governed_form(lasting: Lasting) {
     let model = Arc::new(ScriptedLlm::new(
@@ -516,6 +594,7 @@ async fn governed_form(lasting: Lasting) {
             Command::Send {
                 session_id: "s1".into(),
                 text: "Prepare the October invoice for ACME".into(),
+                images: Vec::new(),
             },
         )
         .await
@@ -669,6 +748,19 @@ async fn governed_form(lasting: Lasting) {
     let (_, forms) = call(&home1.api, "GET", "/api/surface/genui/sessions/s1/forms", None).await;
     assert_eq!(forms["forms"][0]["status"], "waiting", "{forms}");
     assert!(forms["forms"][0]["text"].as_str().unwrap().ends_with(" · waiting for you"));
+    // The catalogs the home renders, as A2UI 1.0 documents unless v0.9.1 is asked for.
+    let (status, documents) = call(&home1.api, "GET", "/api/surface/genui/catalogs", None).await;
+    assert_eq!(status, 200, "{documents}");
+    assert_eq!(documents["version"], "1.0");
+    assert_eq!(documents["catalogs"][0]["protocolVersion"], "1.0");
+    assert_eq!(documents["catalogs"][0]["catalogId"], adk_surface::genui::FORMS_CATALOG_ID);
+    let (_, older) =
+        call(&home1.api, "GET", "/api/surface/genui/catalogs?version=v0.9.1", None).await;
+    assert_eq!(older["version"], "v0.9.1");
+    assert!(older["catalogs"][0].get("protocolVersion").is_none());
+    let (status, _) =
+        call(&home1.api, "GET", "/api/surface/genui/catalogs?version=0.8", None).await;
+    assert_eq!(status, 400);
 
     // 3. Tampering and origin.
     let refused = |command| {
@@ -845,7 +937,14 @@ async fn the_drawing_agents_rules_refuse_a_sent_form_before_and_after_it_is_held
     ));
     let home = home(&lasting, model, false).await;
     home.engine
-        .execute(&web(), Command::Send { session_id: "s1".into(), text: "Prepare them".into() })
+        .execute(
+            &web(),
+            Command::Send {
+                session_id: "s1".into(),
+                text: "Prepare them".into(),
+                images: Vec::new(),
+            },
+        )
         .await
         .unwrap();
     eventually("both forms", || async {
@@ -956,7 +1055,14 @@ async fn the_terminal_over_the_control_plane_sends_a_drawn_form() {
     let terminal = Caller::human(os_user(), SurfaceKind::Terminal, Origin::Keyboard);
 
     remote
-        .execute(&terminal, Command::Send { session_id: "t1".into(), text: "Prepare it".into() })
+        .execute(
+            &terminal,
+            Command::Send {
+                session_id: "t1".into(),
+                text: "Prepare it".into(),
+                images: Vec::new(),
+            },
+        )
         .await
         .unwrap();
     let version = eventually("the form over the control plane", || async {
@@ -1096,6 +1202,7 @@ async fn a_live_model_draws_a_form_whose_call_waits_for_the_person() {
                        amount, 4200, and a Send action that calls send_invoice with the two \
                        fields and invoice INV-10. Do not call send_invoice yourself."
                     .into(),
+                images: Vec::new(),
             },
         )
         .await
@@ -1127,6 +1234,8 @@ async fn a_live_model_draws_a_form_whose_call_waits_for_the_person() {
         ThreadItem::Message { .. }
         | ThreadItem::Activity { .. }
         | ThreadItem::Result { .. }
+        | ThreadItem::Run { .. }
+        | ThreadItem::Suggestions { .. }
         | ThreadItem::Decision { .. }
         | ThreadItem::Drawn { .. }
         | ThreadItem::DrawnRefused { .. }

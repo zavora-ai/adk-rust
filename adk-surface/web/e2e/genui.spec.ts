@@ -56,7 +56,8 @@ test("a drawn form is sent, waits for the person, and runs once on Allow once", 
   const main = page.getByRole("main");
   const form = main.locator(".drawn");
   await expect(form).toHaveCount(1, { timeout: 20_000 });
-  await expect(form.getByText("Drawn by Finance")).toBeVisible();
+  // The visible line, not the live region that announces the drawing.
+  await expect(form.getByText(/^Drawn by Finance · \d\d:\d\d$/)).toBeVisible();
   await expect(form.getByText("Sending runs send_invoice and asks you first")).toBeVisible();
   await expect(main.getByText("Finance tried to show something that looks like a decision. It wasn't shown.")).toBeVisible();
   await expect(main.getByText(/catalog forms 1.0/)).toHaveCount(0);

@@ -473,6 +473,7 @@ async fn forecast(home: &Home) -> adk_surface::genui::AppView {
             Command::Send {
                 session_id: "s1".into(),
                 text: "Will it rain in Nairobi tomorrow?".into(),
+                images: Vec::new(),
             },
         )
         .await
@@ -765,6 +766,24 @@ async fn leg_11_an_app_that_builds_a_fake_card_in_code_can_never_approve_anythin
         ask(&home, &app.call_id, "resources/read", json!({ "uri": "ui://weather/app" })).await;
     assert_eq!(other.error.map(|error| error.code), Some(-32_601));
 
+    // Display mode stays inline; the host keeps a view state for the next time the app opens,
+    // and says at initialize what the frame was granted.
+    let mode =
+        ask(&home, &app.call_id, "ui/request-display-mode", json!({ "mode": "fullscreen" })).await;
+    assert_eq!(mode.result, Some(json!({ "mode": "inline" })));
+    let kept =
+        ask(&home, &app.call_id, "ui/set-view-state", json!({ "state": { "tab": "radar" } })).await;
+    assert_eq!(kept.result, Some(json!({})));
+    let big = "x".repeat(70 * 1024);
+    let refused =
+        ask(&home, &app.call_id, "ui/set-view-state", json!({ "state": { "blob": big } })).await;
+    assert!(refused.error.is_some());
+    let init = ask(&home, &app.call_id, "ui/initialize", json!({})).await.result.unwrap();
+    assert_eq!(init["hostContext"]["viewState"], json!({ "tab": "radar" }));
+    assert_eq!(init["hostContext"]["containerDimensions"]["maxHeight"], 640);
+    assert!(init["hostCapabilities"]["sandbox"]["csp"].is_object());
+    assert_eq!(init["hostCapabilities"]["sandbox"]["permissions"], json!({}));
+
     // Nothing the app asked for ran: only the agent's own forecast call.
     assert_eq!(home.weather.ran(), ["weather_show"]);
     assert!(home.invoices.lock().unwrap().is_empty());
@@ -956,6 +975,7 @@ async fn a_live_model_shows_an_app_whose_call_waits_for_the_person() {
                 text: "Will it rain in Nairobi tomorrow? Show me the forecast with weather_show, \
                        then answer in one sentence. Do not call any other tool."
                     .into(),
+                images: Vec::new(),
             },
         )
         .await
@@ -1087,7 +1107,11 @@ async fn an_app_whose_showing_call_waited_for_the_person_opens_once_allowed() {
     home.engine
         .execute(
             &web(),
-            Command::Send { session_id: "s1".into(), text: "Alert me if it rains.".into() },
+            Command::Send {
+                session_id: "s1".into(),
+                text: "Alert me if it rains.".into(),
+                images: Vec::new(),
+            },
         )
         .await
         .unwrap();
@@ -1324,4 +1348,47 @@ async fn an_app_asking_again_adds_no_decision_and_one_that_keeps_asking_is_stopp
     assert_eq!(waiting(&home).await.len(), 3);
     assert_eq!(home.weather.ran(), ["weather_show"]);
     home.stop().await;
+}
+
+/// Opt-in tiered consent (spec 3.3 §6.1 `genui-apps`): a host that approves read-only tools
+/// runs an app's call to one without a card, recording the rule and `initiator: "app"`; a
+/// tool that changes things still waits for the person.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_opted_in_host_approves_an_apps_read_only_call_and_holds_the_rest() {
+    let home = home(INNOCENT, Vec::new()).await;
+    let app = forecast(&home).await;
+    let consenting = McpAppsHost::builder()
+        .servers(Arc::clone(&home.servers))
+        .apps_origin(APPS_ORIGIN)
+        .home_origin(HOME_ORIGIN)
+        .app_consent(adk_surface::genui::AppConsent { read_only: true, ..Default::default() })
+        .build();
+    let api = api_with(&home, &consenting, SecurityConfig::development());
+    let ask = |method: &str, params: Value| {
+        let api = api.clone();
+        let uri = format!("/api/surface/genui/sessions/s1/apps/{}/requests", app.call_id);
+        let body = json!(AppRequest { method: method.into(), params });
+        async move { call(&api, "POST", &uri, Some(HOME_ORIGIN), Some(body)).await }
+    };
+    let (status, answer) =
+        ask("tools/call", json!({ "name": "weather_show", "arguments": { "city": "Mombasa" } }))
+            .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    eventually("the read-only call to run", || async {
+        (home.weather.ran().len() == 2).then_some(())
+    })
+    .await;
+    let approved = records(&home, "surface.app.call_auto_approved");
+    assert_eq!(approved.len(), 1);
+    assert_eq!(approved[0].ext.get("policy"), Some(&json!("app-consent:read-only")));
+    assert_eq!(approved[0].ext.get("initiator"), Some(&json!("app")));
+
+    let (_, held) =
+        ask("tools/call", json!({ "name": "set_rain_alert", "arguments": { "city": "Nairobi" } }))
+            .await;
+    assert!(held.get("error").is_none_or(Value::is_null), "{held}");
+    let card =
+        eventually("the alert to wait", || async { waiting(&home).await.into_iter().next() }).await;
+    assert_eq!(card.call.tool, "set_rain_alert");
+    assert_eq!(records(&home, "surface.app.call_auto_approved").len(), 1, "not approved for you");
 }

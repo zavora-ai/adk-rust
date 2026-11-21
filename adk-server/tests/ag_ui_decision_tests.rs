@@ -1188,3 +1188,89 @@ async fn a_failed_decision_read_is_reported_not_called_already_decided() {
     let (_, resumed) = post(&fx.app, Some("alice"), resume_turn("run-3", allow_once)).await;
     assert_eq!(of_type(&resumed, "TOOL_CALL_RESULT").len(), 1, "{resumed:#?}");
 }
+
+/// The same run input, from a client that speaks AG-UI 1.0.
+fn v1(mut body: Value) -> Value {
+    body["input"]["protocolVersion"] = json!("1.0");
+    body
+}
+
+/// An AG-UI 1.0 client gets 1.0's run shape: the version echoed, no nulls echoed, tool calls
+/// marked as run on the server, and the thread's state and messages before the interrupting
+/// RUN_FINISHED (spec 3.3 §10 S2).
+#[tokio::test]
+async fn an_ag_ui_1_0_client_gets_snapshots_and_marked_calls_before_the_interrupt() {
+    let fx = fixture(invoice_script(), true);
+    let (status, events) = post(&fx.app, Some("alice"), v1(first_turn())).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        kinds(&events),
+        [
+            "RUN_STARTED",
+            "MESSAGES_SNAPSHOT",
+            "TOOL_CALL_START",
+            "TOOL_CALL_ARGS",
+            "TOOL_CALL_END",
+            "STATE_SNAPSHOT",
+            "MESSAGES_SNAPSHOT",
+            "RUN_FINISHED"
+        ]
+    );
+    assert_eq!(events[0]["protocolVersion"], "1.0");
+    assert!(events[0]["input"].get("parentRunId").is_none(), "no nulls: {}", events[0]);
+    let start = of_type(&events, "TOOL_CALL_START")[0];
+    assert_eq!(start["metadata"]["ag-ui:tool-execution"], "server");
+    let call_id = start["toolCallId"].as_str().unwrap();
+    let snapshot = of_type(&events, "MESSAGES_SNAPSHOT")[1]["messages"].as_array().unwrap().clone();
+    assert_eq!(snapshot[0]["role"], "user");
+    let call = snapshot
+        .iter()
+        .find_map(|message| message["toolCalls"].as_array()?.first().cloned())
+        .expect("the held call in the snapshot");
+    assert_eq!(call["id"], call_id);
+    assert_eq!(call["function"]["name"], "send_invoice");
+    assert!(call["function"]["arguments"].as_str().unwrap().contains("INV-10"));
+    let interrupt = &of_type(&events, "RUN_FINISHED")[0]["outcome"]["interrupts"][0];
+    assert_eq!(interrupt["reason"], "tool_call");
+    assert_eq!(interrupt["toolCallId"], call_id);
+    assert_eq!(interrupt["metadata"]["ag-ui:tool-execution"], "server");
+    assert!(interrupt["responseSchema"].is_object());
+}
+
+/// Under AG-UI 1.0 new input waits for the open interrupts, a resume answers all of them at
+/// once, and a run that finishes says so.
+#[tokio::test]
+async fn an_ag_ui_1_0_resume_answers_every_interrupt_and_the_run_ends_in_success() {
+    let fx = fixture(two_invoices_script(), true);
+    let (_, events) = post(&fx.app, Some("alice"), v1(first_turn())).await;
+    let open = interrupts(&events);
+    assert_eq!(open.len(), 2);
+
+    let mut again = first_turn();
+    again["input"]["runId"] = json!("run-again");
+    let (_, refused) = post(&fx.app, Some("alice"), v1(again)).await;
+    assert_eq!(kinds(&refused), ["RUN_STARTED", "RUN_ERROR"]);
+    let error = of_type(&refused, "RUN_ERROR")[0];
+    assert_eq!(error["code"], "approval.interrupts_open");
+    assert!(error.get("threadId").is_none(), "strict: {error}");
+
+    let answer = |interrupt: &Value| json!({ "interruptId": interrupt["id"], "status": "resolved", "payload": { "approved": true } });
+    let (_, partial) =
+        post(&fx.app, Some("alice"), v1(resume_turn("run-2", json!([answer(&open[0])])))).await;
+    assert_eq!(of_type(&partial, "RUN_ERROR")[0]["code"], "approval.invalid_resume");
+    assert_eq!(fx.sent.load(Ordering::SeqCst), 0, "nothing ran");
+
+    let (_, done) = post(
+        &fx.app,
+        Some("alice"),
+        v1(resume_turn("run-3", json!([answer(&open[0]), answer(&open[1])]))),
+    )
+    .await;
+    assert_eq!(fx.sent.load(Ordering::SeqCst), 2, "{done:?}");
+    assert_eq!(of_type(&done, "RUN_FINISHED")[0]["outcome"], json!({ "type": "success" }));
+    assert!(
+        of_type(&done, "TOOL_CALL_RESULT")
+            .iter()
+            .all(|result| result.get("toolCallName").is_none())
+    );
+}

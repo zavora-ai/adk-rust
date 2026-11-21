@@ -32,6 +32,17 @@ export const voiceLabels = {
   noMicrophone: "Voice needs your microphone. Allow it in the browser, then start again.",
   ticketRefused: "The voice conversation could not start. Start again.",
   startAgain: "Start again",
+  connected: "Connected",
+  endedShort: "Ended",
+  listeningHint: "Speak any time. It hears you while the mic is on.",
+  speakingHint: "Talk over it to interrupt; it stops and listens.",
+  captions: "Captions",
+  you: "You",
+  spokeOver: "You spoke over it, so it stopped.",
+  sentToModel: "Sent to the model",
+  lastFrames: (count: number) => (count === 1 ? "the last frame" : `the last ${count} frames`),
+  sharingLive: (source: "camera" | "screen") => (source === "screen" ? "Screen live · 1 frame a second" : "Camera live · 1 frame a second"),
+  frameAlt: (source: "camera" | "screen", at: string) => `${source === "screen" ? "Screen" : "Camera"} frame sent at ${at}`,
 } as const;
 
 /** `words::talking_with`: "Talking with Chief of staff". */

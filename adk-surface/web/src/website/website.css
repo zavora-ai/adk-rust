@@ -23,7 +23,7 @@
 }
 
 .w-site-name {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .w-segmented-2 {
@@ -60,19 +60,19 @@ a.segment {
 
 .w-origin {
   color: var(--accent);
-  font-size: 15px;
+  font-size: var(--fs-md);
 }
 
 .w-note {
   color: var(--text-2);
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .w-hint {
   display: block;
   margin-top: 2px;
   color: var(--label);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 400;
 }
 
@@ -100,7 +100,7 @@ a.segment {
 
 .w-field label {
   color: var(--text-2);
-  font-size: 14px;
+  font-size: var(--fs-md);
   font-weight: 600;
 }
 
@@ -116,7 +116,7 @@ a.segment {
   border-radius: 8px;
   background: var(--card);
   color: var(--text);
-  font-size: 15px;
+  font-size: var(--fs-md);
 }
 
 .w-field textarea {
@@ -159,12 +159,12 @@ a.segment {
 
 .w-line dt {
   color: var(--text-2);
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .w-line dd {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--fs-md);
 }
 
 .w-lines-inline {
@@ -190,15 +190,15 @@ a.segment {
 .w-markdown {
   display: grid;
   gap: 10px;
-  font-size: 15px;
+  font-size: var(--fs-md);
 }
 
 .w-markdown h1 {
-  font-size: 22px;
+  font-size: var(--fs-2xl);
 }
 
 .w-markdown h2 {
-  font-size: 18px;
+  font-size: var(--fs-xl);
 }
 
 .w-markdown blockquote {
@@ -221,8 +221,8 @@ a.segment {
 }
 
 .w-section-title {
-  font-size: 17px;
-  font-weight: 800;
+  font-size: var(--fs-lg);
+  font-weight: 650;
   letter-spacing: -0.01em;
 }
 
@@ -236,14 +236,14 @@ a.segment {
 }
 
 .w-code-input {
-  font-size: 22px !important;
+  font-size: var(--fs-2xl) !important;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
 .w-holding {
   margin-top: 24px;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 /* ── Onboarding ────────────────────────────────────────────── */
@@ -268,7 +268,7 @@ a.segment {
   align-items: center;
   gap: 10px;
   padding: 6px 10px;
-  border-radius: 10px;
+  border-radius: var(--radius);
 }
 
 .w-stage-item[aria-current="step"] {
@@ -283,8 +283,8 @@ a.segment {
   border: 1px solid var(--border);
   border-radius: 50%;
   color: var(--text-2);
-  font-size: 13px;
-  font-weight: 700;
+  font-size: var(--fs-sm);
+  font-weight: 600;
 }
 
 .w-stage-done .w-stage-number {
@@ -304,7 +304,7 @@ a.segment {
   border: 0;
   background: none;
   color: var(--text);
-  font-size: 15px;
+  font-size: var(--fs-md);
   text-align: left;
 }
 
@@ -341,7 +341,7 @@ button.w-stage-link {
 .w-evidence {
   display: grid;
   gap: 4px;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .w-question {
@@ -370,7 +370,7 @@ button.w-stage-link {
 .w-browser {
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--card);
   box-shadow: var(--shadow);
 }
@@ -399,8 +399,8 @@ button.w-stage-link {
 }
 
 .w-browser-name {
-  font-size: 20px;
-  font-weight: 800;
+  font-size: var(--fs-xl);
+  font-weight: 650;
 }
 
 .w-browser-nav {
@@ -410,13 +410,13 @@ button.w-stage-link {
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
   color: var(--accent);
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .w-browser-foot {
   padding: 8px 14px;
   border-top: 1px solid var(--border);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 /* Charter cards (spec 3.5 §7.18 stage 5). */
@@ -434,7 +434,7 @@ button.w-stage-link {
 
 .w-charter-sub {
   margin-top: 0;
-  font-size: 16px;
+  font-size: var(--fs-lg);
 }
 
 .decision.w-signers {
@@ -454,7 +454,7 @@ button.w-stage-link {
 }
 
 .w-signer-role {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .w-section-grid {
@@ -475,7 +475,7 @@ button.w-stage-link {
 
 .w-section-summary {
   margin-top: -6px;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 /* Design directions (spec 3.5 §7.18 stage 6). */
@@ -506,9 +506,9 @@ button.w-stage-link {
   place-items: center;
   height: 72px;
   border: 1px dashed var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   color: var(--text-2);
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .w-swatch {
@@ -518,13 +518,13 @@ button.w-stage-link {
   height: 72px;
   padding: 10px;
   border: 1px solid;
-  border-radius: 10px;
+  border-radius: var(--radius);
 }
 
 .w-swatch span {
   margin-right: auto;
-  font-size: 22px;
-  font-weight: 700;
+  font-size: var(--fs-2xl);
+  font-weight: 600;
 }
 
 .w-swatch i {
@@ -554,7 +554,7 @@ button.w-stage-link {
 .bordered .w-markdown {
   margin-top: 12px;
   padding: 14px;
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: var(--raised);
 }
 
@@ -572,7 +572,7 @@ button.w-stage-link {
 
 .w-connection-kind {
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 600;
 }
 
@@ -600,7 +600,7 @@ button.w-stage-link {
 }
 
 .w-stat-sub {
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .w-band {
@@ -649,7 +649,7 @@ button.w-stage-link {
 .w-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14.5px;
+  font-size: var(--fs-md);
 }
 
 .w-table th,
@@ -662,7 +662,7 @@ button.w-stage-link {
 
 .w-table thead th {
   color: var(--label);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 600;
 }
 
@@ -689,7 +689,7 @@ button.w-stage-link {
 }
 
 .w-small-link {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 500;
 }
 
@@ -726,21 +726,21 @@ button.w-stage-link {
   height: 32px;
   border-radius: 8px;
   background: var(--raised);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .w-release-pages {
   display: grid;
   gap: 6px;
   margin: 10px 0 0 52px;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .decision.w-held {
   display: grid;
   gap: 6px;
   padding: 16px;
-  font-size: 14.5px;
+  font-size: var(--fs-md);
 }
 
 .w-money {
@@ -757,14 +757,14 @@ button.w-stage-link {
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .w-bar {
   height: 8px;
   margin-top: 4px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--raised);
 }
 
@@ -778,7 +778,7 @@ button.w-stage-link {
 /* ── The weekly review (spec 3.5 §7.21) ───────────────────── */
 
 .w-summary {
-  font-size: 16px;
+  font-size: var(--fs-lg);
   font-weight: 600;
 }
 
@@ -891,7 +891,7 @@ button.w-stage-link {
   border-top-left-radius: 0 !important;
   border-top-right-radius: 0 !important;
   font-family: var(--mono);
-  font-size: 14px !important;
+  font-size: var(--fs-md) !important;
 }
 
 .w-body-preview {
@@ -970,7 +970,7 @@ button.w-stage-link {
   }
 
   .w-display .display {
-    font-size: 36px;
+    font-size: var(--fs-3xl);
   }
 
   .w-field-row,

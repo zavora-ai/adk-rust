@@ -1,0 +1,740 @@
+/*
+ * The developer view of a run (spec 3.3 §12 developer track) over the §9 tokens: the graph, the
+ * tree and the trace side by side, with an inspector. Step kinds take data colours (model blue,
+ * tool teal, handoff violet); only a call held for the person takes the accent.
+ */
+.dv {
+  --dv-model: var(--chart-1);
+  --dv-tool: var(--chart-2);
+  --dv-handoff: var(--chart-3);
+  --dv-flow: var(--chart-6);
+  --dv-agent: var(--text);
+  --dv-person: var(--label);
+  display: grid;
+  gap: 12px;
+}
+
+.dv-kind-model {
+  --dv-c: var(--dv-model);
+}
+
+.dv-kind-tool {
+  --dv-c: var(--dv-tool);
+}
+
+.dv-kind-handoff {
+  --dv-c: var(--dv-handoff);
+}
+
+.dv-kind-flow {
+  --dv-c: var(--dv-flow);
+}
+
+.dv-kind-agent {
+  --dv-c: var(--dv-agent);
+}
+
+.dv-kind-person,
+.dv-kind-step {
+  --dv-c: var(--dv-person);
+}
+
+.dv-kind-held {
+  --dv-c: var(--accent);
+}
+
+/* ── The run bar ── */
+
+.dv-runbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.dv-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.dv-chip-quiet {
+  background: transparent;
+  color: var(--label);
+}
+
+.dv-chip-live {
+  background: var(--pill-decided-bg);
+  color: var(--pill-decided);
+  font-weight: 600;
+}
+
+.dv-chip-held {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.dv-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: dv-pulse 1.8s ease-out infinite;
+}
+
+@keyframes dv-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 45%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+.dv-refresh {
+  min-height: 30px;
+  margin-left: auto;
+  font-size: var(--fs-sm);
+}
+
+/* ── Panes ── */
+
+.dv-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr) minmax(280px, 340px);
+  gap: 12px;
+  align-items: start;
+}
+
+.dv-center {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.dv-pane {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.dv-pane-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 12px 14px 8px;
+}
+
+.dv-pane-head h2 {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: var(--lh-sm);
+}
+
+.dv-pane-head .muted {
+  font-size: var(--fs-xs);
+}
+
+.dv-empty {
+  padding: 4px 14px 16px;
+  color: var(--label);
+  font-size: var(--fs-sm);
+}
+
+.dv-mark {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--dv-c, var(--label));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dv-c, var(--label)) 14%, transparent);
+}
+
+.dv-mark.dv-kind-handoff,
+.dv-mark.dv-kind-agent {
+  border-radius: 50%;
+}
+
+/* ── Tree ── */
+
+.dv-tree-pane {
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - var(--header-height) - 120px);
+}
+
+.dv-tree {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 6px 8px;
+}
+
+.dv-tree-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding-inline-end: 8px;
+  border-radius: 7px;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease);
+}
+
+.dv-tree-item:hover {
+  background: var(--raised);
+}
+
+.dv-tree-item[aria-selected="true"] {
+  background: color-mix(in srgb, var(--dv-c, var(--text)) 9%, var(--card));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dv-c, var(--text)) 22%, transparent);
+}
+
+.dv-tree-item:has(> .dv-kind-model) {
+  --dv-c: var(--dv-model);
+}
+
+.dv-tree-item:has(> .dv-kind-tool) {
+  --dv-c: var(--dv-tool);
+}
+
+.dv-tree-item:has(> .dv-kind-handoff) {
+  --dv-c: var(--dv-handoff);
+}
+
+.dv-tree-item:has(> .dv-kind-held) {
+  --dv-c: var(--accent);
+}
+
+.dv-tree-item[aria-level="1"] {
+  font-weight: 600;
+}
+
+.dv-fold {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  display: grid;
+  place-items: center;
+  color: var(--label);
+}
+
+.dv-fold[data-open]::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--dur-2) var(--ease);
+}
+
+.dv-fold[data-open="true"]::before {
+  transform: rotate(45deg);
+}
+
+.dv-tree-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dv-time {
+  flex: none;
+  color: var(--label);
+  font: 500 var(--fs-xs) / 1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.dv-time-held {
+  color: var(--accent);
+}
+
+.dv-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: auto;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--divider);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.dv-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── Graph ── */
+
+.dv-graph {
+  position: relative;
+  min-height: 120px;
+  margin: 0 12px 12px;
+  border-radius: var(--radius);
+  background-color: var(--bg);
+  background-image: radial-gradient(color-mix(in srgb, var(--border-strong) 70%, transparent) 1px, transparent 1px);
+  background-size: 16px 16px;
+  overflow: hidden;
+}
+
+.dv-edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.dv-edge {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1.5px;
+}
+
+.dv-edge-delegate {
+  stroke: color-mix(in srgb, var(--dv-handoff) 55%, var(--border-strong));
+}
+
+.dv-edge-handoff {
+  stroke: color-mix(in srgb, var(--dv-handoff) 75%, var(--border-strong));
+}
+
+.dv-edge-flow {
+  stroke: color-mix(in srgb, var(--dv-flow) 60%, var(--border-strong));
+}
+
+.dv-edge-contains {
+  stroke-dasharray: 3 4;
+}
+
+.dv-edge-live {
+  stroke: var(--brand);
+  stroke-width: 2px;
+  stroke-dasharray: 6 4;
+  animation: dv-flow 0.8s linear infinite;
+}
+
+@keyframes dv-flow {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+.dv-edge-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--label);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.dv-node {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(196px, 30%);
+  min-width: 150px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.dv-node:hover {
+  border-color: var(--border-strong);
+}
+
+.dv-node[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--text) 40%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 8%, transparent), var(--shadow);
+}
+
+.dv-node-held {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent), var(--shadow);
+}
+
+.dv-node-mono {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.dv-node-active .dv-node-mono {
+  background: var(--pill-decided-bg);
+  color: var(--pill-decided);
+}
+
+.dv-node-held .dv-node-mono {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.dv-node-text {
+  display: grid;
+  min-width: 0;
+}
+
+.dv-node-name {
+  overflow: hidden;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: var(--lh-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dv-node-state {
+  overflow: hidden;
+  color: var(--label);
+  font-size: 11.5px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dv-node-done .dv-node-state {
+  color: var(--pill-decided);
+}
+
+.dv-node-active .dv-node-state {
+  color: var(--working);
+}
+
+.dv-node-held .dv-node-state {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ── Trace ── */
+
+.dv-trace {
+  margin: 0 12px 12px;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.dv-axis {
+  position: relative;
+  height: 26px;
+  margin-left: 180px;
+  margin-right: 44px;
+  border-bottom: 1px solid var(--divider);
+  color: var(--label);
+  font: 500 11px / 26px var(--mono);
+}
+
+.dv-axis span {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.dv-axis span:first-child {
+  transform: none;
+}
+
+.dv-rows {
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.dv-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 26px;
+  padding: 0 44px 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.dv-row:hover {
+  background: var(--raised);
+}
+
+.dv-row[aria-pressed="true"] {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.dv-row-label {
+  flex: none;
+  width: 170px;
+  overflow: hidden;
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dv-track {
+  position: relative;
+  flex: 1;
+  height: 14px;
+}
+
+.dv-gridline {
+  position: absolute;
+  top: -6px;
+  bottom: -6px;
+  width: 1px;
+  background: var(--divider);
+}
+
+.dv-span {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  min-width: 3px;
+  border-radius: 4px;
+  background: var(--dv-c, var(--label));
+}
+
+.dv-span.dv-kind-agent {
+  background: color-mix(in srgb, var(--text) 18%, var(--raised));
+}
+
+.dv-span.dv-kind-handoff {
+  background: color-mix(in srgb, var(--dv-handoff) 45%, var(--card));
+}
+
+.dv-span-live {
+  background-image: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--card) 35%, transparent) 6px 12px);
+  background-size: 17px 17px;
+  animation: dv-stripes 1s linear infinite;
+}
+
+@keyframes dv-stripes {
+  to {
+    background-position: 17px 0;
+  }
+}
+
+.dv-row[aria-pressed="true"] .dv-span {
+  box-shadow: 0 0 0 2px var(--card), 0 0 0 3.5px var(--dv-c, var(--text));
+}
+
+/* ── Inspector ── */
+
+.dv-inspector {
+  position: sticky;
+  top: 12px;
+  display: grid;
+  gap: 14px;
+  max-height: calc(100vh - var(--header-height) - 120px);
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.dv-inspect-head {
+  display: grid;
+  gap: 6px;
+}
+
+.dv-kind-chip {
+  justify-self: start;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--dv-c, var(--label)) 12%, var(--card));
+  color: color-mix(in srgb, var(--dv-c, var(--label)) 80%, var(--text));
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.dv-inspect-title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  line-height: var(--lh-lg);
+  word-break: break-word;
+}
+
+.dv-inspect-sub {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.dv-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--border);
+}
+
+.dv-facts > div {
+  display: grid;
+  gap: 2px;
+  padding: 9px 12px;
+  background: var(--card);
+}
+
+.dv-facts dt {
+  color: var(--label);
+  font-size: 11.5px;
+}
+
+.dv-facts dd {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+}
+
+.dv-accent {
+  color: var(--accent);
+}
+
+.dv-block {
+  display: grid;
+  gap: 6px;
+}
+
+.dv-block h3 {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.dv-pre {
+  max-height: 280px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--code-bg);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dv-attrs {
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: 400 11.5px / 16px var(--mono);
+}
+
+.dv-attrs > div {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 10px;
+  padding: 6px 10px;
+}
+
+.dv-attrs > div + div {
+  border-top: 1px solid var(--divider);
+}
+
+.dv-attrs dt {
+  overflow: hidden;
+  color: var(--label);
+  text-overflow: ellipsis;
+}
+
+.dv-attrs dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.dv-caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.dv-caps li {
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  font-size: 11px;
+}
+
+/* Narrower: the inspector goes under; then everything stacks. */
+@media (max-width: 1180px) {
+  .dv-grid {
+    grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  }
+
+  .dv-inspector {
+    position: static;
+    grid-column: 1 / -1;
+    max-height: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .dv-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dv-tree-pane {
+    position: static;
+    max-height: 360px;
+  }
+
+  .dv-axis {
+    margin-left: 110px;
+    margin-right: 12px;
+  }
+
+  .dv-row {
+    padding-right: 12px;
+  }
+
+  .dv-row-label {
+    width: 100px;
+  }
+}

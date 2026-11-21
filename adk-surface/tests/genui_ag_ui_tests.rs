@@ -20,7 +20,7 @@ use adk_server::rest::controllers::AgUiExtension;
 use adk_server::rest::controllers::runtime::AgUiInputMessage;
 use adk_server::{ServerBuilder, ServerConfig};
 use adk_session::{InMemorySessionService, SessionService};
-use adk_surface::genui::{DrawToolset, GenuiAgUi};
+use adk_surface::genui::{A2uiVersion, DrawToolset, GenuiAgUi};
 use async_trait::async_trait;
 use axum::Router;
 use axum::body::Body;
@@ -29,7 +29,10 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 const APP: &str = "finance";
+/// The activity a drawing becomes, in A2UI 1.0 (the default).
 const FIXTURE: &str = "tests/genui_ag_ui_activity.json";
+/// The same activity for a client that renders A2UI v0.9.1 only.
+const FIXTURE_0_9_1: &str = "tests/genui_ag_ui_activity-0.9.1.json";
 
 /// Sends an invoice; counts how often it runs.
 struct SendInvoice(Arc<AtomicUsize>);
@@ -269,13 +272,15 @@ async fn an_echoed_activity_is_kept_only_when_it_passes_the_validator() {
     };
     assert!(extension.keeps_activity(&echoed(ours["content"].clone(), "a2ui-surface")));
 
-    // The same form with its button relabelled "Approve".
+    // The same form with its button relabelled "Approve". In 1.0 the components ride in the
+    // one createSurface.
     let operations = ours["content"]["a2ui_operations"].as_array_mut().unwrap();
-    let components =
-        operations.iter_mut().find_map(|operation| operation.get_mut("updateComponents")).unwrap()
-            ["components"]
-            .as_array_mut()
-            .unwrap();
+    let components = operations
+        .iter_mut()
+        .find_map(|operation| operation.get_mut("createSurface"))
+        .unwrap()["components"]
+        .as_array_mut()
+        .unwrap();
     for component in components.iter_mut() {
         if component["text"] == "Send" {
             component["text"] = json!("Approve");
@@ -284,6 +289,65 @@ async fn an_echoed_activity_is_kept_only_when_it_passes_the_validator() {
     assert!(!extension.keeps_activity(&echoed(ours["content"].clone(), "a2ui-surface")));
     assert!(!extension.keeps_activity(&echoed(json!({ "anything": 1 }), "a2ui-surface")));
     assert!(extension.keeps_activity(&echoed(json!({ "anything": 1 }), "progress")));
+
+    // A client on A2UI v0.9.1 echoes the drawing in that version: kept too.
+    let pinned: Value =
+        serde_json::from_str(&std::fs::read_to_string(FIXTURE_0_9_1).unwrap()).unwrap();
+    assert!(extension.keeps_activity(&echoed(pinned["content"].clone(), "a2ui-surface")));
+    // One that asks for the data model on every message is not: a drawing never does.
+    let mut asks = pinned["content"].clone();
+    asks["a2ui_operations"][0]["createSurface"]["sendDataModel"] = json!(true);
+    assert!(!extension.keeps_activity(&echoed(asks, "a2ui-surface")));
+}
+
+/// The session event that holds the drawing `draw` made.
+async fn fx_last_drawing_event(fx: &Fixture) -> adk_core::Event {
+    let session = fx
+        .sessions
+        .get(adk_session::GetRequest {
+            app_name: APP.into(),
+            user_id: "ana".into(),
+            session_id: "thread-1".into(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .unwrap();
+    session
+        .events()
+        .all()
+        .into_iter()
+        .rev()
+        .find(|event| {
+            event.llm_response.content.as_ref().is_some_and(|content| {
+                content.parts.iter().any(|part| {
+                    matches!(part, adk_core::Part::FunctionResponse { function_response, .. }
+                        if adk_core::DRAW_TOOL_NAMES.contains(&function_response.name.as_str()))
+                })
+            })
+        })
+        .expect("a drawing event")
+}
+
+/// A client that renders A2UI v0.9.1 only gets the drawing in that version, as pinned.
+#[tokio::test]
+async fn a_drawing_reaches_a_v0_9_1_client_in_v0_9_1() {
+    let fx = fixture();
+    let events = draw(&fx).await;
+    let ours = of_type(&events, "ACTIVITY_SNAPSHOT")[0].clone();
+    let extension = GenuiAgUi::new().with_a2ui_version(A2uiVersion::V0_9_1);
+    let event = fx_last_drawing_event(&fx).await;
+    let activities = extension.events_for(&event);
+    assert_eq!(activities.len(), 1);
+    let pinned: Value =
+        serde_json::from_str(&std::fs::read_to_string(FIXTURE_0_9_1).unwrap()).unwrap();
+    let mut written = activities[0].clone();
+    assert_eq!(written["content"]["a2uiVersion"], "v0.9.1");
+    written["content"].as_object_mut().unwrap().remove("a2uiVersion");
+    assert_eq!(written, pinned);
+    // The default writes the same drawing in 1.0, one createSurface carrying it.
+    assert_eq!(ours["content"]["a2uiVersion"], "1.0");
+    assert_eq!(ours["content"]["a2ui_operations"][0]["version"], "1.0");
 }
 
 /// A form another agent of the home drew is not the run's agent's to hold: the drawing agent

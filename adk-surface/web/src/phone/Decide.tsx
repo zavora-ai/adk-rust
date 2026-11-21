@@ -403,6 +403,12 @@ export function Decide({
       {who}
       <h1 id="phone-decide-heading" className="phone-display">
         <TwoTone text={visible(card.heading)} />
+        {/* Question first, as on the home: drawn, not spoken, so the card keeps its name. */}
+        {!/[?.!]$/.test(card.heading.trim()) && (
+          <span className="phone-brand" aria-hidden="true">
+            ?
+          </span>
+        )}
       </h1>
       {lede}
       {summary}

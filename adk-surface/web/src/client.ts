@@ -5,6 +5,8 @@
  * (§11).
  */
 import type {
+  AnswerSummary,
+  AgentThreads,
   AgentRow,
   AgentsResponse,
   AppAnswer,
@@ -177,6 +179,10 @@ export interface HomeClient {
   confirmAgentChange?(command: AgentCommand): Promise<AgentOutcome>;
   /** The roster with the primary agent and whether agents can be added here. */
   agentsWithPrimary?(): Promise<AgentsResponse>;
+  /** The caller's threads with `agent`, newest first; undefined where the server has no such route. */
+  agentThreads?(agent: string): Promise<AgentThreads | undefined>;
+  /** How the caller answered since `since` (default the last 7 days); undefined where the server has no such route. */
+  answers?(since?: string): Promise<AnswerSummary | undefined>;
   /** Apps from MCP servers in a thread (spec 3.3 §6.1 `genui-apps`): opening them and relaying what they ask. */
   apps?(): AppsSeam;
   /** The annotated viewer's routes (spec 3.7 §8.2, §8.3). */
@@ -277,6 +283,15 @@ export class HttpClient implements HomeClient {
   /** The agents with the one a message goes to when the person names none (spec 3.3 §5.5). */
   agentsWithPrimary() {
     return this.request<AgentsResponse>(`/surface/agents?surface=${this.surface}`);
+  }
+
+  answers(since?: string) {
+    const from = since ? `&since=${encodeURIComponent(since)}` : "";
+    return this.optional<AnswerSummary>(`/surface/answers?surface=${this.surface}${from}`);
+  }
+
+  agentThreads(agent: string) {
+    return this.optional<AgentThreads>(`/surface/agents/${encodeURIComponent(agent)}/threads?surface=${this.surface}`);
   }
 
   /** "Confirm it's you" for an agent change at high risk (spec 3.3 §7.2). */

@@ -1,0 +1,7 @@
+- **Web home fixes** (`adk-surface`):
+  - Earlier versions of a drawing fold into one control on the latest ("Earlier versions · 3"), except a version a form was sent from, which keeps its place with its decision.
+  - A drawing's title isn't printed twice when its first words already say it.
+  - A screen that only shows says "Finance changed this", and "changed this form" only when it has fields or actions.
+  - 3D labels stay inside the scene's frame, and a label that would cover another is left out (the text view keeps them all).
+  - On a phone the conversation comes first: empty side sections are left out, and agents are chips that keep their whole name.
+  - `/ui/agents` on a server without adding agents says so, instead of a blank page.

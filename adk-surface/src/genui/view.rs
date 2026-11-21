@@ -11,8 +11,8 @@ use super::a2ui::DataModel;
 use super::catalog::{Catalog, HomeNode};
 use super::draw::{DRAWN_STATE_KEY, DrawnEnvelope, DrawnRecord, REFUSED_STATE_KEY};
 use super::drawn::{
-    DrawnActionView, DrawnArg, DrawnCheck, DrawnExtension, DrawnField, DrawnInput, DrawnKind,
-    DrawnNode, DrawnOption, DrawnSurface, RefusalKind, RefusedDrawing,
+    DrawnAccessibility, DrawnActionView, DrawnArg, DrawnCheck, DrawnExtension, DrawnField,
+    DrawnInput, DrawnKind, DrawnNode, DrawnOption, DrawnSurface, RefusalKind, RefusedDrawing,
 };
 use super::scene::ScenePanel;
 use super::validate::{
@@ -85,14 +85,28 @@ fn drawn(
     let catalog = known.unwrap_or_else(Catalog::forms);
     let agent = projector.agent(&event.author);
     let at = projector.hh_mm(event.timestamp);
+    // A screen is a form only when the person can fill something in or send it; a dashboard
+    // that only shows is "this".
+    let asks = |envelope: &DrawnEnvelope| {
+        !envelope.actions.is_empty()
+            || envelope.draft().is_some_and(|draft| {
+                draft.components.iter().any(|component| {
+                    component.get("component").and_then(Value::as_str).is_some_and(|name| {
+                        matches!(
+                            name,
+                            "TextField" | "CheckBox" | "ChoicePicker" | "Slider" | "DateTimeInput"
+                        )
+                    })
+                })
+            })
+    };
     let changed_text = match (envelope.deleted, envelope.kind) {
         (true, _) => words::removed_this(&agent.display_name, &at),
-        (false, DrawnKind::Form | DrawnKind::Screen) => {
+        (false, DrawnKind::Form) => words::changed_this_form(&agent.display_name, &at),
+        (false, DrawnKind::Screen) if asks(envelope) => {
             words::changed_this_form(&agent.display_name, &at)
         }
-        (false, DrawnKind::Card | DrawnKind::Table) => {
-            words::changed_this(&agent.display_name, &at)
-        }
+        (false, _) => words::changed_this(&agent.display_name, &at),
     };
     let mut surface = DrawnSurface {
         surface_id: envelope.surface_id.clone(),
@@ -198,6 +212,32 @@ type Texts<'a> = HashMap<(&'a str, &'a str, &'a str), &'a str>;
 /// The drawing's tree from `root`, templates expanded and strings resolved; `catalog` is the
 /// one `validated` was checked against.
 pub(crate) fn tree(catalog: &'static Catalog, validated: &ValidatedSurface) -> DrawnNode {
+    drawn_tree(catalog, validated)
+}
+
+/// What a renderer draws of a drawing [`Validator::validate`] accepted: its tree from `root`,
+/// templates expanded, every binding and text function resolved and every string already
+/// checked by rule 5, each extension component with what the home shows for it. `catalog` is
+/// the one `validated` was checked against. The home projects every drawing this way; a host
+/// that shows a drawing elsewhere, such as in an MCP App, uses it too.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::genui::{Catalog, SurfaceDraft, Validator, drawn_tree, DrawnKind};
+/// use serde_json::json;
+///
+/// let draft = SurfaceDraft {
+///     surface_id: "s".into(), kind: DrawnKind::Screen, title: None,
+///     components: vec![json!({ "id": "root", "component": "Text", "text": { "path": "/greeting" } })],
+///     data_model: json!({ "greeting": "Hello" }), actions: Vec::new(),
+/// };
+/// let validated = Validator::new(Catalog::forms()).validate(&draft)?;
+/// let tree = drawn_tree(Catalog::forms(), &validated);
+/// assert_eq!(tree.text.as_deref(), Some("Hello"));
+/// # Ok::<(), adk_surface::genui::DrawRefusal>(())
+/// ```
+pub fn drawn_tree(catalog: &'static Catalog, validated: &ValidatedSurface) -> DrawnNode {
     let mut texts: Texts<'_> = HashMap::new();
     for text in &validated.texts {
         if let Some(id) = &text.component_id {
@@ -237,6 +277,7 @@ pub(crate) fn tree(catalog: &'static Catalog, validated: &ValidatedSurface) -> D
         scene: None,
         depth: None,
         extension: None,
+        accessibility: None,
     })
 }
 
@@ -253,6 +294,39 @@ struct Builder<'a> {
 impl Builder<'_> {
     fn text(&self, id: &str, scope: &str, field: &str) -> Option<String> {
         self.texts.get(&(id, scope, field)).map(|text| (*text).to_string())
+    }
+
+    /// What assistive technology reads for component `id` (A2UI 1.0 `@accessibility`): its
+    /// label and description as the validator resolved and checked them, its live setting,
+    /// and whether it is hidden, a binding read from the data model.
+    fn accessibility(
+        &self,
+        id: &str,
+        scope: &str,
+        props: &Map<String, Value>,
+    ) -> Option<DrawnAccessibility> {
+        let attributes = props.get("accessibility")?.as_object()?;
+        let hidden = match attributes.get("hidden") {
+            Some(Value::Bool(hidden)) => *hidden,
+            Some(Value::Object(binding)) => binding
+                .get("path")
+                .and_then(Value::as_str)
+                .and_then(|path| self.model.get(&Self::absolute(scope, path)))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            _ => false,
+        };
+        let drawn = DrawnAccessibility {
+            label: self.text(id, scope, "accessibility/label"),
+            description: self.text(id, scope, "accessibility/description"),
+            live: attributes
+                .get("live")
+                .and_then(Value::as_str)
+                .filter(|live| matches!(*live, "polite" | "assertive"))
+                .map(str::to_string),
+            hidden,
+        };
+        (drawn != DrawnAccessibility::default()).then_some(drawn)
     }
 
     /// `path` from a component in the list item `scope`, absolute.
@@ -282,7 +356,9 @@ impl Builder<'_> {
             scene: None,
             depth: None,
             extension: None,
+            accessibility: None,
         };
+        node.accessibility = self.accessibility(id, scope, props);
         // An extension component draws its home view as the validator checked it, and the
         // components it holds where that view places them.
         if let Some(view) = self.extensions.get(&(id.to_string(), scope.to_string())) {
@@ -408,6 +484,7 @@ impl Builder<'_> {
             scene: None,
             depth: None,
             extension: None,
+            accessibility: None,
         };
         let mut nested = |children: &[HomeNode], parts: &mut usize| -> Vec<DrawnNode> {
             children.iter().filter_map(|child| Self::home(child, key, parts, held)).collect()

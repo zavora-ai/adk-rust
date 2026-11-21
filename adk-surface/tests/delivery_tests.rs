@@ -368,7 +368,7 @@ async fn spoken(
 }
 
 fn send(text: &str) -> Command {
-    Command::Send { session_id: "s1".into(), text: text.into() }
+    Command::Send { session_id: "s1".into(), text: text.into(), images: Vec::new() }
 }
 
 fn decide(request: &ApprovalRequest, version: u64, answer: Answer) -> Command {

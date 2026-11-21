@@ -186,6 +186,27 @@ pub enum AppPrompt {
         /// "Cancel".
         dismiss_label: String,
     },
+    /// "The Weather app wants to save forecast.csv (2 KB)", with **Save** and **Cancel**: a
+    /// file an app offers (MCP Apps `ui/download-file`), saved only by the person's press.
+    #[serde(rename_all = "camelCase")]
+    Download {
+        /// "The Weather app wants to save forecast.csv (2 KB)"
+        text: String,
+        /// The file's name, sanitized.
+        name: String,
+        /// Its media type; never one a browser opens as a page.
+        mime_type: String,
+        /// Its contents as text, when the app sent text.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text_content: Option<String>,
+        /// Its contents in base64, when the app sent bytes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        blob: Option<String>,
+        /// "Save".
+        save_label: String,
+        /// "Cancel".
+        dismiss_label: String,
+    },
 }
 
 /// The home's answer to an [`AppRequest`]: the JSON-RPC `result` or `error` the page passes
