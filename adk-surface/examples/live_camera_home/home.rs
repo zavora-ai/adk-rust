@@ -6,20 +6,20 @@ use std::sync::Arc;
 use adk_agent::LlmAgentBuilder;
 use adk_artifact::{ArtifactService, InMemoryArtifactService};
 use adk_core::{
-    ApprovalPolicy, ApprovalService, ApproverSelector, ArtifactLocator, Evidence,
-    ImageEvidence, InMemoryApprovalStore, Llm, LlmRequest, LlmResponseStream, Part,
-    RequestContext, SingleAgentLoader, StoreApprovalService, Tool, ToolContext,
+    ApprovalPolicy, ApprovalService, ApproverSelector, ArtifactLocator, Evidence, ImageEvidence,
+    InMemoryApprovalStore, Llm, LlmRequest, LlmResponseStream, Part, RequestContext,
+    SingleAgentLoader, StoreApprovalService, Tool, ToolContext,
 };
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_runner::Runner;
 use adk_server::auth_bridge::{RequestContextError, RequestContextExtractor};
 use adk_server::{ServerBuilder, ServerConfig};
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
-use adk_surface::camera::{
-    CameraFacts, Ingest, LiveCamera, LiveWatch, PipelineCameras, ZoneFacts,
-};
+use adk_surface::camera::{CameraFacts, Ingest, LiveCamera, LiveWatch, PipelineCameras, ZoneFacts};
 use adk_surface::{CardHint, CardHints, LocalSource, Place, SurfaceEngine};
-use adk_vision::stream::fixtures::{ConveyorClip, ConveyorSpec, RtspTestOptions, RtspTestServer, TestVideo};
+use adk_vision::stream::fixtures::{
+    ConveyorClip, ConveyorSpec, RtspTestOptions, RtspTestServer, TestVideo,
+};
 use adk_vision::stream::{FrameBudget, NoRedaction, RtspSource};
 use adk_vision::{DetectQuery, FrameSourceId, GreedyIouTracker, VisionCx, VisionRuntime};
 use async_trait::async_trait;
@@ -238,11 +238,10 @@ pub async fn serve(
         })
         .await?;
     let store = Arc::new(InMemoryApprovalStore::new());
-    let approvals: Arc<dyn ApprovalService> = Arc::new(
-        StoreApprovalService::new(store.clone()).with_router(
+    let approvals: Arc<dyn ApprovalService> =
+        Arc::new(StoreApprovalService::new(store.clone()).with_router(
             ApprovalPolicy::new([ApproverSelector::group("owner")]).allow_self_approval(),
-        ),
-    );
+        ));
     let artifacts = Arc::new(InMemoryArtifactService::new());
     let agent = Arc::new(
         LlmAgentBuilder::new(APP)

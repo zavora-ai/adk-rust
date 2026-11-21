@@ -65,12 +65,7 @@ fn blobs(
         while let Some((c, r)) = stack.pop() {
             count += 1;
             (x0, y0, x1, y1) = (x0.min(c), y0.min(r), x1.max(c), y1.max(r));
-            let around = [
-                (c.wrapping_sub(1), r),
-                (c + 1, r),
-                (c, r.wrapping_sub(1)),
-                (c, r + 1),
-            ];
+            let around = [(c.wrapping_sub(1), r), (c + 1, r), (c, r.wrapping_sub(1)), (c, r + 1)];
             for (nc, nr) in around {
                 if nc < cols && nr < rows && !seen[(nr * cols + nc) as usize] && hit(nc, nr) {
                     seen[(nr * cols + nc) as usize] = true;
@@ -122,16 +117,15 @@ impl Detector for BeltDetector {
                 continue;
             }
             let cracks = blobs(pixels, inner, 1, crack);
-            let Some(([cx0, cy0, cx1, cy1], cells)) = cracks
-                .into_iter()
-                .filter(|(_, cells)| *cells >= 6)
-                .max_by_key(|(_, cells)| *cells)
+            let Some(([cx0, cy0, cx1, cy1], cells)) =
+                cracks.into_iter().filter(|(_, cells)| *cells >= 6).max_by_key(|(_, cells)| *cells)
             else {
                 continue;
             };
             // Padded to a box a tracker follows from frame to frame as the belt moves it.
             let (mx, my) = ((cx0 + cx1) as f32 / 2.0, (cy0 + cy1) as f32 / 2.0);
-            let (hw, hh) = (((cx1 - cx0) as f32 / 2.0).max(28.0), ((cy1 - cy0) as f32 / 2.0).max(18.0));
+            let (hw, hh) =
+                (((cx1 - cx0) as f32 / 2.0).max(28.0), ((cy1 - cy0) as f32 / 2.0).max(18.0));
             let score = (0.7 + cells as f32 / 200.0).min(0.97);
             regions.push(RawRegion::boxed(
                 BBox::new(

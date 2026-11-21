@@ -177,6 +177,20 @@ const surfaces: Surface[] = [
     ready: "/ui/",
   },
   {
+    // The live camera surface on the real frame pipeline (spec 3.7 §8.2, S12): the conveyor
+    // clip over RTSP, two cameras through the stream pipeline, a zone edited, a camera switched
+    // off, and a card that holds the line stop with its frame. `CAMERA_E2E_BIN` names an example
+    // built with another detector, such as RF-DETR.
+    name: "camera",
+    prefix: "CAMERA",
+    example: "live_camera_home",
+    features: "web,vision-camera",
+    // 8791 to 8812 are taken.
+    port: 8815,
+    testMatch: ["camera.spec.ts"],
+    ready: "/ui/",
+  },
+  {
     // Agent-drawn UI (spec 3.3 §6.1 `genui`, §12 "Governed form"): Finance draws the invoice
     // form, the person sends it, and the call waits for them.
     name: "genui",

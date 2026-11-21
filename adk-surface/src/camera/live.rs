@@ -734,22 +734,35 @@ impl PipelineCameras {
     /// `surface.not_found` for an unknown camera, `surface.unsupported` before its pipeline
     /// runs or without a budget, and the audit trail's error when it fails closed.
     pub async fn escalate(&self, camera: &str, frames: u64) -> Result<EscalationVerdict> {
+        self.escalate_at(camera, Utc::now(), frames).await
+    }
+
+    /// As [`escalate`](Self::escalate), asked at `at`: for a replayed stream, whose governor
+    /// runs on the frames' capture times.
+    ///
+    /// # Errors
+    ///
+    /// As [`escalate`](Self::escalate).
+    pub async fn escalate_at(
+        &self,
+        camera: &str,
+        at: DateTime<Utc>,
+        frames: u64,
+    ) -> Result<EscalationVerdict> {
         let run = self.run(camera)?;
         let governor = run.lock().governor.clone().ok_or_else(|| {
             SurfaceError::unsupported("escalating before the camera's governor runs")
         })?;
-        let verdict = governor.request_escalation(&self.shared.cx, frames).await.map_err(vision)?;
+        let verdict =
+            governor.request_escalation_at(&self.shared.cx, at, frames).await.map_err(vision)?;
         if let EscalationVerdict::Granted { billed_frames } = verdict {
-            let now = Utc::now();
+            let period = governor.state();
+            let length = run.budget.as_ref().map_or(86_400, |budget| budget.period_secs);
+            let period_start = period.period_ends_at
+                - chrono::Duration::seconds(i64::try_from(length).unwrap_or(86_400));
             let mut state = run.lock();
-            let period_end = governor.state().period_ends_at;
-            let period_start = period_end
-                - chrono::Duration::seconds(
-                    i64::try_from(run.budget.as_ref().map_or(86_400, |budget| budget.period_secs))
-                        .unwrap_or(86_400),
-                );
-            state.grants.retain(|(at, _)| *at >= period_start);
-            state.grants.push_back((now, billed_frames));
+            state.grants.retain(|(granted, _)| *granted >= period_start);
+            state.grants.push_back((at, billed_frames));
         }
         Ok(verdict)
     }

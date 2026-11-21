@@ -21,8 +21,7 @@ use adk_core::{
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use adk_surface::camera::{
     CameraFacts, CameraSource, CameraState, Cameras, DropReason, GovernorStepKind, Ingest,
-    LiveCamera, LiveWatch, Offered, PipelineCameras, RaiseCard, StreamState, ZoneChange,
-    ZoneFacts,
+    LiveCamera, LiveWatch, Offered, PipelineCameras, RaiseCard, StreamState, ZoneChange, ZoneFacts,
 };
 use adk_surface::{Caller, Command, LocalSource, Origin, Place, SurfaceEngine, SurfaceKind};
 use adk_vision::stream::{
@@ -244,17 +243,31 @@ impl Home {
         self.live.counts("line-2").unwrap()
     }
 
-    /// Pushes `bytes` captured `at` and waits until the pipeline has read it.
+    /// Pushes `bytes` captured `at` and waits until the pipeline has read it. The camera takes
+    /// frames once its pipeline reads it.
     async fn push(&self, bytes: Vec<u8>, at: DateTime<Utc>) {
         let arrived = self.counts().arrived;
-        assert!(self.feed.push_frame(bytes, at), "the test camera takes the frame");
+        until("the test camera to take the frame", async || {
+            self.feed.push_frame(bytes.clone(), at)
+        })
+        .await;
         until("the frame to arrive", async || self.counts().arrived > arrived).await;
+    }
+
+    /// Waits until the pipeline is done with every frame that arrived.
+    async fn settle(&self) {
+        until("the pipeline to settle", async || {
+            let counts = self.counts();
+            counts.observed + counts.dropped == counts.arrived
+        })
+        .await;
     }
 
     /// Pushes a part moving right 8 pixels a frame, `frames` frames `apart` from `from`.
     async fn belt(&self, from: DateTime<Utc>, x: u32, frames: u32, apart: chrono::Duration) {
         for step in 0..frames {
-            self.push(frame(x + step * 8, false), from + apart * i32::try_from(step).unwrap()).await;
+            self.push(frame(x + step * 8, false), from + apart * i32::try_from(step).unwrap())
+                .await;
         }
     }
 
@@ -268,14 +281,15 @@ impl Home {
 async fn the_surface_shows_what_the_pipeline_measured() {
     let home = home(|camera| camera.budget(FrameBudget::new(5.0).with_min_local_fps(1.0))).await;
     home.belt(start(), 100, 6, chrono::Duration::milliseconds(200)).await;
-    until("five frames observed", async || home.counts().observed >= 5).await;
+    home.settle().await;
+    assert_eq!(home.counts().observed, 6);
 
     let held = home.cameras.latest("line-2").await.expect("a frame is shown");
     assert_eq!(held.frame.mime_type, "image/jpeg");
     assert_eq!((held.frame.width, held.frame.height), (WIDTH, HEIGHT));
     let part = held.frame.overlays.iter().find(|overlay| overlay.label == "part").unwrap();
     let [x0, y0, x1, y1] = part.bbox.unwrap();
-    assert_eq!([x0, y0, x1, y1], [132.0, 70.0, 172.0, 110.0], "the newest frame's part");
+    assert_eq!([x0, y0, x1, y1], [140.0, 70.0, 180.0, 110.0], "the newest frame's part");
     assert!(part.track.is_some(), "an anonymous track");
     // The shown frame is the pipeline's, as a JPEG of the camera's size.
     let (shown, _) = DecodedImage::decode(&held.frame.bytes, &DecodeLimits::default()).unwrap();
@@ -286,7 +300,7 @@ async fn the_surface_shows_what_the_pipeline_measured() {
     assert_eq!(facts.tracks.len(), 1);
     assert_eq!(facts.tracks[0].label, "part");
     assert_eq!(facts.governor.rate, 5.0);
-    assert_eq!(facts.governor.frames_today, 5, "frames the governor let through");
+    assert_eq!(facts.governor.frames_today, 6, "frames the governor let through");
     assert_eq!(facts.governor.min_rate, Some(1.0));
 
     let view = home.engine.camera_view(&caller(), "line-2").await.unwrap();
@@ -318,7 +332,8 @@ async fn a_small_quota_steps_the_governor_down_and_the_surface_says_so() {
     until("the first steps", async || home.facts().await.governor.steps.len() >= 2).await;
 
     let facts = home.facts().await;
-    let kinds: Vec<GovernorStepKind> = facts.governor.steps.iter().map(|s| s.kind.clone()).collect();
+    let kinds: Vec<GovernorStepKind> =
+        facts.governor.steps.iter().map(|s| s.kind.clone()).collect();
     assert_eq!(
         kinds,
         [GovernorStepKind::LookLessOften { from: 5.0, to: 1.0 }, GovernorStepKind::StopAsking],
@@ -333,19 +348,41 @@ async fn a_small_quota_steps_the_governor_down_and_the_surface_says_so() {
     assert_eq!(view.state, CameraState::SavingFrames);
     let notice = view.notice.unwrap();
     assert_eq!(notice.title, "Saving frames.");
-    assert!(notice.text.starts_with("Looking 1 times a second instead of 5, and no longer asking sam-3.1"), "{}", notice.text);
-    assert!(view.budget.steps.iter().any(|step| step.text == "Looked less often: 5 → 1 a second (17% used)"), "{:?}", view.budget.steps);
-    assert_eq!(view.budget.steps.last().unwrap().text, "At 100%: pause the camera until 10:00");
+    assert!(
+        notice
+            .text
+            .starts_with("Looking 1 times a second instead of 5, and no longer asking sam-3.1"),
+        "{}",
+        notice.text
+    );
+    let steps: Vec<&str> = view.budget.steps.iter().map(|step| step.text.as_str()).collect();
+    assert_eq!(
+        steps,
+        [
+            "Looked less often: 5 → 1 a second (0% used)",
+            "Stopped asking sam-3.1 (0% used)",
+            "At 100%: pause the camera until 10:00",
+        ]
+    );
 
     // An escalation is refused once the governor stopped asking.
-    let refused = home.live.escalate("line-2", 50).await.unwrap();
-    assert!(matches!(refused, adk_vision::stream::EscalationVerdict::Refused { .. }), "{refused:?}");
+    let refused =
+        home.live.escalate_at("line-2", start() + chrono::Duration::seconds(1), 50).await.unwrap();
+    assert!(
+        matches!(refused, adk_vision::stream::EscalationVerdict::Refused { .. }),
+        "{refused:?}"
+    );
 
     // The sixth frame spends the quota: the camera pauses until the hour renews.
     for second in 2..8 {
-        home.push(frame(40 + second * 8, false), start() + chrono::Duration::seconds(i64::from(second))).await;
+        home.push(
+            frame(40 + second * 8, false),
+            start() + chrono::Duration::seconds(i64::from(second)),
+        )
+        .await;
     }
-    until("the pause", async || matches!(home.facts().await.state, StreamState::Paused { .. })).await;
+    until("the pause", async || matches!(home.facts().await.state, StreamState::Paused { .. }))
+        .await;
     let view = home.engine.camera_view(&caller(), "line-2").await.unwrap();
     assert_eq!(view.state, CameraState::Paused);
     assert_eq!(view.state_text, "Paused until 10:00");
@@ -361,8 +398,12 @@ async fn a_zone_edited_on_the_surface_changes_what_fires() {
             .budget(FrameBudget::new(5.0).with_min_local_fps(1.0))
             .zone(zone([0.0, 0.0, 80.0, 180.0]))
             .watch(
-                LiveWatch::new("part", "Part", WatchCondition::new("part", ["part"]).with_min_frames(3))
-                    .in_zone("window"),
+                LiveWatch::new(
+                    "part",
+                    "Part",
+                    WatchCondition::new("part", ["part"]).with_min_frames(3),
+                )
+                .in_zone("window"),
             )
     })
     .await;
@@ -401,7 +442,11 @@ async fn a_zone_edited_on_the_surface_changes_what_fires() {
     // The new condition and its firing are recorded.
     let actions: Vec<String> =
         home.audit.records().into_iter().map(|record| record.action).collect();
-    assert_eq!(actions.iter().filter(|a| *a == "vision.watch.registered").count(), 2, "{actions:?}");
+    assert_eq!(
+        actions.iter().filter(|a| *a == "vision.watch.registered").count(),
+        2,
+        "{actions:?}"
+    );
     assert_eq!(actions.iter().filter(|a| *a == "vision.watch.fired").count(), 1, "{actions:?}");
 }
 
@@ -411,11 +456,12 @@ async fn a_zone_edited_on_the_surface_changes_what_fires() {
 async fn switching_off_drops_frames_on_the_server() {
     let home = home(|camera| camera).await;
     home.belt(start(), 100, 2, chrono::Duration::milliseconds(200)).await;
-    until("a frame observed", async || home.counts().observed >= 1).await;
+    home.settle().await;
     home.engine.switch_camera(&caller(), "line-2", false).await.unwrap();
     assert!(home.cameras.latest("line-2").await.is_none(), "off forgets the frames held");
     let before = home.counts();
-    home.belt(start() + chrono::Duration::seconds(1), 120, 4, chrono::Duration::milliseconds(200)).await;
+    home.belt(start() + chrono::Duration::seconds(1), 120, 4, chrono::Duration::milliseconds(200))
+        .await;
     let after = home.counts();
     assert_eq!(after.observed, before.observed, "the pipeline looked at nothing");
     assert_eq!(after.dropped - before.dropped, 4, "every frame dropped on arrival");
@@ -436,7 +482,8 @@ async fn switching_off_drops_frames_on_the_server() {
     assert!(stored.file_names.is_empty(), "{:?}", stored.file_names);
 
     home.engine.switch_camera(&caller(), "line-2", true).await.unwrap();
-    home.belt(start() + chrono::Duration::seconds(2), 140, 2, chrono::Duration::milliseconds(200)).await;
+    home.belt(start() + chrono::Duration::seconds(2), 140, 2, chrono::Duration::milliseconds(200))
+        .await;
     until("frames again", async || home.counts().observed > after.observed).await;
 }
 
@@ -446,11 +493,12 @@ async fn switching_off_drops_frames_on_the_server() {
 async fn stop_all_pauses_every_camera() {
     let home = home(|camera| camera).await;
     home.belt(start(), 100, 2, chrono::Duration::milliseconds(200)).await;
-    until("a frame observed", async || home.counts().observed >= 1).await;
+    home.settle().await;
     home.engine.execute(&caller(), Command::StopAll { reason: None }).await.unwrap();
     assert!(home.cameras.is_frozen());
     let before = home.counts();
-    home.belt(start() + chrono::Duration::seconds(1), 120, 3, chrono::Duration::milliseconds(200)).await;
+    home.belt(start() + chrono::Duration::seconds(1), 120, 3, chrono::Duration::milliseconds(200))
+        .await;
     assert_eq!(home.counts().observed, before.observed, "no frame is looked at");
     let view = home.engine.camera_view(&caller(), "line-2").await.unwrap();
     assert_eq!(view.state, CameraState::Frozen);
@@ -459,13 +507,17 @@ async fn stop_all_pauses_every_camera() {
     // A frame offered from anywhere is dropped at the gate.
     let offered = home
         .cameras
-        .offer("line-2", adk_surface::camera::CameraFrame::new(vec![1], "image/jpeg", 1, 1, start()))
+        .offer(
+            "line-2",
+            adk_surface::camera::CameraFrame::new(vec![1], "image/jpeg", 1, 1, start()),
+        )
         .await;
     assert_eq!(offered, Offered::Dropped(DropReason::Frozen));
 
     home.engine.execute(&caller(), Command::ResumeAll).await.unwrap();
     assert!(!home.cameras.is_frozen());
-    home.belt(start() + chrono::Duration::seconds(2), 140, 2, chrono::Duration::milliseconds(200)).await;
+    home.belt(start() + chrono::Duration::seconds(2), 140, 2, chrono::Duration::milliseconds(200))
+        .await;
     until("frames after Resume all", async || home.counts().observed > before.observed).await;
     let view = home.engine.camera_view(&caller(), "line-2").await.unwrap();
     assert_eq!(view.state, CameraState::Live);
@@ -486,7 +538,8 @@ async fn a_card_keeps_the_shown_frame_with_people_covered() {
     let [r, g, b, _] = shown.pixel(30, 90);
     assert!(r < 30 && g < 30 && b < 30, "the person's pixels are filled: {:?}", [r, g, b]);
 
-    let list = || ListRequest { app_name: APP.into(), user_id: OWNER.into(), session_id: SESSION.into() };
+    let list =
+        || ListRequest { app_name: APP.into(), user_id: OWNER.into(), session_id: SESSION.into() };
     assert!(home.artifacts.list(list()).await.unwrap().file_names.is_empty(), "nothing kept yet");
     home.engine.freeze_camera_frame(&caller(), "line-2", &held.digest).await.unwrap();
     let raised = home
@@ -516,9 +569,17 @@ async fn a_card_keeps_the_shown_frame_with_people_covered() {
     assert_eq!(format!("sha256:{}", sha256(&data)), raised.digest);
     let (image, _) = DecodedImage::decode(&data, &DecodeLimits::default()).unwrap();
     assert_eq!(image.pixel(30, 90)[..3], [0, 0, 0], "covered again before it was written");
-    let actions: Vec<String> = home.audit.records().into_iter().map(|record| record.action).collect();
+    let actions: Vec<String> =
+        home.audit.records().into_iter().map(|record| record.action).collect();
     assert!(actions.contains(&"vision.evidence.kept".to_string()), "{actions:?}");
     // The card reached the Inspector as the person's message naming the frame by digest.
+    until("the card in the session", async || {
+        card_texts(&home).await.iter().any(|text| text.contains(&raised.digest))
+    })
+    .await;
+}
+
+async fn card_texts(home: &Home) -> Vec<String> {
     let session = home
         .sessions
         .get(adk_session::GetRequest {
@@ -530,7 +591,7 @@ async fn a_card_keeps_the_shown_frame_with_people_covered() {
         })
         .await
         .unwrap();
-    let texts: Vec<String> = session
+    let texts = session
         .events()
         .all()
         .into_iter()
@@ -541,7 +602,7 @@ async fn a_card_keeps_the_shown_frame_with_people_covered() {
             _ => None,
         })
         .collect();
-    assert!(texts.iter().any(|text| text.contains(&raised.digest)), "{texts:?}");
+    texts
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -572,7 +633,10 @@ async fn the_voice_screens_camera_goes_through_the_pipeline() {
         Offered::Dropped(DropReason::Off)
     );
     home.engine.switch_camera(&caller(), "this-computer", true).await.unwrap();
-    assert_eq!(cameras.ingest("this-computer", frame(100, false), start()).await, Offered::Forwarded);
+    assert_eq!(
+        cameras.ingest("this-computer", frame(100, false), start()).await,
+        Offered::Forwarded
+    );
     until("the frame shown", async || cameras.latest("this-computer").await.is_some()).await;
     let held = cameras.latest("this-computer").await.unwrap();
     assert_eq!(held.frame.overlays[0].label, "part");
@@ -641,7 +705,10 @@ async fn a_lost_source_is_retried_and_reported() {
     home.engine.retry_camera(&caller(), "line-2").await.unwrap();
     // The stream opens; its first frame makes the camera live again.
     for step in 0..50u32 {
-        if home.feed.push_frame(frame(100, false), start() + chrono::Duration::milliseconds(200 * i64::from(step))) {
+        if home.feed.push_frame(
+            frame(100, false),
+            start() + chrono::Duration::milliseconds(200 * i64::from(step)),
+        ) {
             break;
         }
         tokio::time::sleep(StdDuration::from_millis(20)).await;
