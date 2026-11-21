@@ -182,10 +182,21 @@ match outcome {
 | `send` | Starts a turn; while a decision of the session is open (whoever may answer it), a turn runs, or earlier input waits, the message is queued instead and sent, oldest first, once the session is free, whichever surface answered the decision (S-I4). A message queued behind a running turn is offered to that turn; see [Steering a running turn](#steering-a-running-turn) |
 | `steer` | Sends a message to the running turn of the caller's own session and answers once it has a fate: `steered` when the turn took it, `queued` or `sent` when it goes as the session's next message |
 | `queue` | Queues the message as the session's next; never offered to a running turn |
+| `newThread` | Starts a thread with an agent: the session's first message goes to it, and its harness stamps the session as its own (spec 3.3 §5.7) |
+| `stopTurn` | Stops the running turn of the caller's own session (spec 3.3 §5.1): a person only. A kernel kills the session's running and queued runs; a harness or a runner interrupts its run in flight. The agent waits for the next message, and nothing held for a decision is answered; the outcome is `turnStopped` |
 | `stopAll` | Freezes every agent, from any surface (S-I10) |
 | `resumeAll` | Unfreezes, only from the web home or a paired local terminal (S-I10) |
 | `setMode` | Changes the session's mode; making agents act more on their own is a standing permission, so only the web home, the phone and the terminal may loosen it |
 | `submitDrawn` | Sends a form an agent drew (`genui`): checks the version the person saw, the declared action and each value, then asks the drawing agent for the call, which it holds for the person; nothing runs until they decide. Only a person at a screen sends one. See [Agent-Drawn UI](genui.md#sending-a-form) |
+
+
+`send`, `queue` and `newThread` carry `images`: up to four PNG, JPEG, WebP or GIF images
+(`ImageData { mimeType, data }`, base64), each at most 3 MB once decoded. The engine checks
+each one's bytes against its declared type before they reach the agent as parts of the
+message, through `Source::start_turn_with_images` (`LocalSource`: the kernel's `content`
+input, or `Harness::send_content_as`). A message with images is never offered to a running
+turn; it waits for the next one. A source that can't take images refuses them rather than
+dropping them.
 
 ### Steering a running turn
 
@@ -244,8 +255,9 @@ hint names what the call acts on, or the decision is one the kernel itself asks 
 suggestion adds, an agenda item, a driver to start — the record also carries that `title` and
 the card's `summary`, so "What your agents did" reads "You said yes to adding Finance" and never
 the kernel's tool name.
-`surface.send`, `surface.stop_all`, `surface.resume_all` and `surface.set_mode` record the
-other commands the same way. `surface.steer` records a message for a running turn with
+`surface.send`, `surface.stop_all`, `surface.resume_all`, `surface.set_mode` and
+`surface.stop_turn` record the other commands the same way; a message with images also
+carries how many (`images`), never the images. `surface.steer` records a message for a running turn with
 `sessionId` and `outcome`: `offered` before the turn holds a `steer`, `delivered` with the
 `eventId` once a turn took a message, `returned` when it handed a `steer` back, and `refused`
 with the `code` of the refusal. `surface.drawn.submitted` records a drawn form's send with
@@ -299,9 +311,11 @@ the server's auth middleware authenticates every request.
 | `GET /surface/sessions/{session}/thread` | The session's entries |
 | `GET /surface/sessions/{session}/feed` | Server-sent events: `entry` (with `id` = `seq`), `decisions`, `reset`; resumes after `Last-Event-ID` or `?after=` |
 | `GET /surface/sessions/{session}/queued` | `QueuedResponse`: what the caller typed while a decision of the session was open or a turn ran, sent oldest first once the session is free (§7.4 rule 2) |
+| `GET /surface/agents/{id}/threads` | `AgentThreads`: the caller's threads with the agent (`ThreadSummary` each), for **Thread history** |
 | `GET /surface/agents` | The roster, and `primary`: the agent a message goes to when the person names none (`Source::primary_agent`; `LocalSource`'s kernel target, else its harness's agent), absent when the source has none |
 | `GET /surface/status?session=` | The status line |
 | `GET /surface/briefing?since=` | "While you were away" |
+| `GET /surface/answers?since=` | `AnswerSummary`: how the caller answered since `since` (the last seven days by default) — allowed once, always allowed, edited, denied — and on which surfaces, from the engine's `AnswerLog` |
 | `POST /surface/commands` | `{"surface", "origin", "command"}` → the outcome |
 | `GET /surface/openapi.json` | The OpenAPI 3.1 document |
 | `GET /surface/genui/capabilities` | What the home claims of A2UI, AG-UI and MCP Apps, and the catalogs it renders; with `genui`, mounted by `adk_surface::web::genui::router` |

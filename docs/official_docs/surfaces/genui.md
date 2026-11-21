@@ -747,6 +747,13 @@ three.js loads in its own chunk, only for a drawing that has a scene, once it is
 - At most six scenes draw at once. Where WebGL is missing or fails, and on **Show as text**,
   the scene is its words.
 
+`examples/scripted_genui_scenes.rs`: Logistics draws yard B, and a click on Dock 3 fills the
+Dock picker before **Reserve** asks.
+
+| The yard (light) | Dock 3 picked (dark) |
+|---|---|
+| ![A yard drawn in 3D](../images/surfaces/genui-scene-light.png) | ![Dock 3 picked into the form, dark](../images/surfaces/genui-scene-picked-dark.png) |
+
 Depth is CSS 3D. A flip card turns with its own **Show back** button, and its hidden face can't
 be reached. A carousel turns with **Previous** and **Next**. A face holding a field with a
 problem turns to the front. Under reduced motion and on narrow screens, depth lays out flat.
