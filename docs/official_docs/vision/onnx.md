@@ -327,6 +327,9 @@ cores, 24 GB, macOS 26.2), onnxruntime 1.28 on the CPU, one image at a time:
 The 4-bit RF-DETR export scores the same objects lower than the full-precision one (the bear
 at 0.43 against 0.97), so `rf-detr-n` is the default in the examples.
 
+On onnxruntime 1.31 (`ort` 2.0.0-rc.15) every accuracy column above is unchanged except
+`rf-detr-n-q4f16`'s, which reads IoU 0.853–0.969 and scores 0.423–0.888.
+
 ## Related
 
 - [Vision overview](index.md)

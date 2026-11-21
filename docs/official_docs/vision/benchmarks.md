@@ -65,6 +65,12 @@ per size) and on the CPU (one timed run at 1024 px) ran later and were appended,
 load average it started under.
 Recorded rows replay the responses recorded on 2026-11-19.
 
+> **Note:** These rows ran on `ort` 2.0.0-rc.13 and onnxruntime 1.28. On 2026-11-21 the
+> `rf-detr-n`, `rf-detr-n-q4f16`, `pp-ocrv6-tiny` and `pp-ocrv6-small` rows ran again on `ort`
+> 2.0.0-rc.15 and onnxruntime 1.31, alternating with the earlier build on the same machine: the
+> same scores (`rf-detr-n-q4f16` region IoU 0.892 against 0.890), latency within run-to-run
+> noise, and a lower peak RSS.
+
 | Machine | |
 |---|---|
 | Run | 2026-11-19T17:27:18Z |
