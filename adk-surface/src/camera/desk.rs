@@ -65,6 +65,7 @@ impl SurfaceEngine {
                 on: camera.on,
                 switched: None,
                 stopped: None,
+                frozen: hub.is_frozen(),
             });
             cameras.push(Camera { facts: camera, gate, recent: hub.recent(&camera.id).await });
         }
@@ -105,8 +106,10 @@ impl SurfaceEngine {
         });
         let agent_name = first.map_or_else(String::new, |camera| camera.facts.agent.clone());
         let ctx = self.camera_ctx(caller, &agent_name);
-        let on =
-            cameras.iter().filter(|camera| camera.gate.on && camera.gate.stopped.is_none()).count();
+        let on = cameras
+            .iter()
+            .filter(|camera| camera.gate.on && camera.gate.stopped.is_none() && !camera.gate.frozen)
+            .count();
         let mut decisions = Vec::new();
         let mut sessions: Vec<&str> = facts.iter().map(|facts| facts.session.as_str()).collect();
         sessions.dedup();
@@ -176,7 +179,7 @@ impl SurfaceEngine {
             state,
             state_text: project::state_text(state, shown.facts, ctx.offset),
             tone: project::tone(state),
-            on: shown.gate.on && shown.gate.stopped.is_none(),
+            on: shown.gate.on && shown.gate.stopped.is_none() && !shown.gate.frozen,
             agent: self.camera_agent(shown),
             stage: project::stage(shown, Place::Main, &ctx),
             notice: project::notice(shown, &ctx),

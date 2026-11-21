@@ -59,6 +59,12 @@ voice = ["adk-harness/voice", "dep:adk-realtime", "adk-realtime/integration", "d
 # charter cards, the site view and the weekly review over `adk-website`'s desk, with their own
 # OpenAPI document and generated TypeScript. Implies `web`.
 website = ["web", "dep:adk-website", "dep:base64"]
+# The live camera surface on the real frame pipeline (spec 3.7 §7.13, §8.2, S12):
+# `camera::PipelineCameras` runs each camera through adk-vision's `StreamPipeline` — source,
+# frame governor, privacy, detector, tracker — and reports its state, tracks, watch conditions
+# and zones; the voice screen's camera comes in through `SurfaceCameraSource`. Shown frames are
+# JPEG through `image`, already in the tree through adk-vision.
+vision-camera = ["dep:adk-vision", "adk-vision/surface-camera", "dep:image", "dep:tokio-util"]
 # Gemini Live and the OpenAI Realtime API, for the live voice test and the `voice_home`
 # example only: a host builds its own provider models.
 voice-live = ["voice", "adk-realtime/gemini", "adk-realtime/openai"]
@@ -96,6 +102,12 @@ adk-kernel.workspace = true
 adk-harness = { workspace = true, features = ["kernel"] }
 # The realtime session a voice conversation runs on (`voice`).
 adk-realtime = { workspace = true, optional = true }
+# The frame pipeline the live camera surface runs cameras through (`vision-camera`).
+adk-vision = { workspace = true, optional = true }
+# Shown camera frames as JPEG (`vision-camera`).
+image = { version = "0.25", optional = true, default-features = false, features = ["jpeg"] }
+# A camera's stream stopped on its own, apart from the host's run (`vision-camera`).
+tokio-util = { version = "0.7", optional = true, default-features = false }
 # The website's desk: its views and the decisions people make on them (`website`).
 adk-website = { workspace = true, optional = true }
 # Graph agents' checkpoints, records and forks (`workflow`).
