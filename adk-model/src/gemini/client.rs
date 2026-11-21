@@ -91,6 +91,62 @@ impl Default for InteractionOptions {
     }
 }
 
+/// A file uploaded through the Gemini File API.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct GeminiFile {
+    /// The resource name, `files/<id>`.
+    pub name: String,
+    /// The URI a `Part::FileData` names.
+    pub uri: String,
+    /// The MIME type Gemini recorded.
+    pub mime_type: Option<String>,
+    /// The size in bytes.
+    pub size_bytes: Option<u64>,
+    /// Whether Gemini has processed it.
+    pub state: GeminiFileState,
+}
+
+impl GeminiFile {
+    fn from_wire(file: &adk_gemini::File) -> Result<Self> {
+        let uri = file.uri.as_ref().map(ToString::to_string).ok_or_else(|| {
+            adk_core::AdkError::model(format!("the File API returned {} without a URI", file.name))
+        })?;
+        Ok(Self {
+            name: file.name.clone(),
+            uri,
+            mime_type: file.mime_type.clone(),
+            size_bytes: file.size_bytes.and_then(|n| u64::try_from(n).ok()),
+            state: match file.state {
+                Some(adk_gemini::FileState::Active) => GeminiFileState::Active,
+                Some(adk_gemini::FileState::Processing) => GeminiFileState::Processing,
+                Some(adk_gemini::FileState::Failed) => GeminiFileState::Failed,
+                _ => GeminiFileState::Unknown,
+            },
+        })
+    }
+}
+
+/// Where Gemini is in processing an uploaded file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum GeminiFileState {
+    /// Being processed; a video is not usable yet.
+    Processing,
+    /// Ready to use.
+    Active,
+    /// Processing failed.
+    Failed,
+    /// Not reported, or deleted.
+    Unknown,
+}
+
+/// `true` for a URI Gemini fetches itself: a File API, Cloud Storage or HTTP(S) URI.
+fn is_fetchable_uri(uri: &str) -> bool {
+    let scheme = uri.split_once("://").map(|(s, _)| s.to_ascii_lowercase());
+    matches!(scheme.as_deref(), Some("https" | "http" | "gs"))
+}
+
 /// Gemini model client wrapping the `adk-gemini` crate for the `Llm` trait.
 pub struct GeminiModel {
     client: Gemini,
@@ -1108,7 +1164,7 @@ impl GeminiModel {
                             converted_parts.push(Part::Text { text: text.clone() });
                         }
                     }
-                    adk_gemini::Part::InlineData { inline_data } => {
+                    adk_gemini::Part::InlineData { inline_data, .. } => {
                         let decoded =
                             BASE64_STANDARD.decode(&inline_data.data).map_err(|error| {
                                 adk_core::AdkError::model(format!(
@@ -1154,7 +1210,7 @@ impl GeminiModel {
                         converted_parts
                             .push(Part::ServerToolResponse { server_tool_response: value });
                     }
-                    adk_gemini::Part::FileData { file_data } => {
+                    adk_gemini::Part::FileData { file_data, .. } => {
                         converted_parts.push(Part::FileData {
                             mime_type: file_data.mime_type.clone(),
                             file_uri: file_data.file_uri.clone(),
@@ -1528,13 +1584,32 @@ impl GeminiModel {
                                     thought_signature: None,
                                 });
                             }
-                            Part::InlineData { data, mime_type, .. } => {
+                            Part::InlineData { data, mime_type, annotations, .. } => {
                                 let encoded = attachment::encode_base64(data);
                                 gemini_parts.push(adk_gemini::Part::InlineData {
                                     inline_data: adk_gemini::Blob {
                                         mime_type: mime_type.clone(),
                                         data: encoded,
                                     },
+                                    video_metadata: super::options::video_metadata(
+                                        annotations.as_ref(),
+                                    ),
+                                });
+                            }
+                            // Gemini fetches File API, Cloud Storage and HTTP(S) URIs itself;
+                            // any other scheme (`artifact://`, `file://`) would fail the
+                            // request, so it stays a text reference.
+                            Part::FileData { mime_type, file_uri, annotations }
+                                if is_fetchable_uri(file_uri) =>
+                            {
+                                gemini_parts.push(adk_gemini::Part::FileData {
+                                    file_data: adk_gemini::FileDataRef {
+                                        mime_type: mime_type.clone(),
+                                        file_uri: file_uri.clone(),
+                                    },
+                                    video_metadata: super::options::video_metadata(
+                                        annotations.as_ref(),
+                                    ),
                                 });
                             }
                             Part::FileData { mime_type, file_uri, .. } => {
@@ -1677,6 +1752,7 @@ impl GeminiModel {
         // Add generation config
         if let Some(config) = req.config {
             let has_schema = config.response_schema.is_some();
+            let options = super::options::GeminiRequestOptions::from_config(&config);
             let gen_config = adk_gemini::GenerationConfig {
                 temperature: config.temperature,
                 top_p: config.top_p,
@@ -1702,6 +1778,7 @@ impl GeminiModel {
                     None
                 },
                 thinking_config: thinking_config.clone(),
+                media_resolution: options.media_resolution,
                 ..Default::default()
             };
             builder = builder.with_generation_config(gen_config);
@@ -1884,6 +1961,102 @@ impl GeminiModel {
             .await
             .map_err(|(_, e)| adk_core::AdkError::model(format!("cache deletion failed: {e}")))?;
         Ok(())
+    }
+
+    /// Uploads `bytes` through the Gemini File API, for media above the 20 MB a request may
+    /// carry inline; a `Part::FileData` naming the returned [`GeminiFile::uri`] then goes
+    /// out as native `fileData`. A video is usable once its state is
+    /// [`GeminiFileState::Active`] ([`wait_for_file`](Self::wait_for_file)). Files expire
+    /// after 48 hours. AI Studio only: Vertex AI reads Cloud Storage URIs instead.
+    ///
+    /// # Errors
+    ///
+    /// An invalid MIME type, the upload's failure, or an answer without a file URI.
+    pub async fn upload_file(
+        &self,
+        bytes: Vec<u8>,
+        mime_type: &str,
+        display_name: Option<&str>,
+    ) -> Result<GeminiFile> {
+        let parsed: mime::Mime = mime_type.parse().map_err(|_| {
+            adk_core::AdkError::model(format!("`{mime_type}` is not a valid MIME type"))
+        })?;
+        let mut builder = self.client.create_file(bytes).with_mime_type(parsed);
+        if let Some(name) = display_name {
+            builder = builder.display_name(name);
+        }
+        let handle = builder
+            .upload()
+            .await
+            .map_err(|e| adk_core::AdkError::model(format!("file upload failed: {e}")))?;
+        GeminiFile::from_wire(handle.get_file_meta())
+    }
+
+    /// The File API's current view of an uploaded file.
+    ///
+    /// # Errors
+    ///
+    /// The lookup's failure, or an answer without a file URI.
+    pub async fn get_file(&self, name: &str) -> Result<GeminiFile> {
+        let handle = self
+            .client
+            .get_file(name)
+            .await
+            .map_err(|e| adk_core::AdkError::model(format!("file lookup failed: {e}")))?;
+        GeminiFile::from_wire(handle.get_file_meta())
+    }
+
+    /// Polls an uploaded file every `interval` until Gemini has processed it.
+    ///
+    /// # Errors
+    ///
+    /// A file whose processing failed, one still processing after `timeout`, and the
+    /// lookup's failure.
+    pub async fn wait_for_file(
+        &self,
+        name: &str,
+        interval: std::time::Duration,
+        timeout: std::time::Duration,
+    ) -> Result<GeminiFile> {
+        let started = std::time::Instant::now();
+        loop {
+            let file = self.get_file(name).await?;
+            match file.state {
+                GeminiFileState::Active => return Ok(file),
+                GeminiFileState::Failed => {
+                    return Err(adk_core::AdkError::model(format!(
+                        "Gemini could not process file {name}; check that it is a supported format"
+                    )));
+                }
+                GeminiFileState::Processing | GeminiFileState::Unknown => {}
+            }
+            if started.elapsed() >= timeout {
+                return Err(adk_core::AdkError::new(
+                    adk_core::ErrorComponent::Model,
+                    adk_core::ErrorCategory::Timeout,
+                    "model.gemini.file_processing_timeout",
+                    format!("file {name} was still processing after {timeout:?}"),
+                ));
+            }
+            tokio::time::sleep(interval).await;
+        }
+    }
+
+    /// Deletes an uploaded file.
+    ///
+    /// # Errors
+    ///
+    /// The deletion's failure.
+    pub async fn delete_file(&self, name: &str) -> Result<()> {
+        let handle = self
+            .client
+            .get_file(name)
+            .await
+            .map_err(|e| adk_core::AdkError::model(format!("file lookup failed: {e}")))?;
+        handle
+            .delete()
+            .await
+            .map_err(|(_, e)| adk_core::AdkError::model(format!("file deletion failed: {e}")))
     }
 
     /// Drives a single turn through the Interactions API (Beta), non-streaming.
@@ -3079,6 +3252,7 @@ mod tests {
                                 mime_type: "image/png".to_string(),
                                 data: encoded,
                             },
+                            video_metadata: None,
                         },
                     ]),
                 },

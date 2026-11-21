@@ -47,9 +47,11 @@ pub mod nim;
 mod normalized;
 mod preflight;
 
+pub(crate) use adapter::extract_json;
 pub use adapter::{PROMPT_VERSION, RegionAdapter, adapter_for_model};
 pub use claude::{ClaudePixels, ClaudeVisionTier};
 pub use describer::LlmDescriber;
 pub use gemini::{GeminiBox2d, GeminiMaskForm};
 pub use normalized::Normalized1000;
 pub use preflight::Preflight;
+pub(crate) use preflight::Preflighted;

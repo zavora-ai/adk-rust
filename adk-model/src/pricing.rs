@@ -70,9 +70,7 @@
 //! | `muse-image-1.0` | images returned | $0.01 per image |
 //! | `muse-voice-transcribe-1.0` | audio milliseconds, billed in whole seconds rounded down | $0.18 per hour |
 //! | `sam-3.1` | images segmented | $2.50 per 1,000 images |
-//!
-//! `sam-3.1` video segmentation ($0.20 per 1,000 frames) is not priced: frames are not a
-//! usage unit.
+//! | `sam-3.1` | video frames segmented | $0.20 per 1,000 frames, at least 50 frames per request |
 //!
 //! # Example
 //!
@@ -1551,6 +1549,13 @@ fn standard_unit_prices() -> Vec<UnitPrice> {
         ),
         // sam-3.1 image segmentation "$2.50 per 1,000 images".
         UnitPrice::new(Meta, "sam-3.1", UnitRate::new(UsageUnit::Images, 2_500_000, 1_000)),
+        // sam-3.1 video segmentation "$0.20 per 1,000 frames", "a minimum of 50 frames per
+        // request" (https://dev.meta.ai/docs/sam/segmenting, fetched 2026-11-21).
+        UnitPrice::new(
+            Meta,
+            "sam-3.1",
+            UnitRate::new(UsageUnit::Frames, 200_000, 1_000).with_minimum_per_request(50),
+        ),
     ]
 }
 
@@ -1605,6 +1610,13 @@ mod tests {
             Some(2_500_000)
         );
         assert_eq!(catalog.unit_cost_micro_usd(Some("muse"), "sam-3.1", &images(1)), Some(2_500));
+        let frames = |count| UsageVector::new().with(UsageUnit::Frames, count);
+        let video = |count| catalog.unit_cost_micro_usd(Some("muse"), "sam-3.1", &frames(count));
+        // Thirty seconds at 30 fps; a 12-frame clip bills the 50-frame minimum.
+        assert_eq!(video(900), Some(180_000));
+        assert_eq!(video(12), Some(10_000));
+        assert_eq!(video(50), Some(10_000));
+        assert_eq!(video(3_600), Some(720_000));
         let audio = |ms| UsageVector::new().with(UsageUnit::AudioMillis, ms);
         let transcribe =
             |ms| catalog.unit_cost_micro_usd(Some("muse"), "muse-voice-transcribe-1.0", &audio(ms));

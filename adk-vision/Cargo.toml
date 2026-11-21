@@ -17,7 +17,7 @@ exclude = ["tests/"]
 [package.metadata.docs.rs]
 # docs.rs has no CUDA or Metal toolchain, so the GPU features are left out; ort-sys skips
 # linking on docs.rs.
-features = ["fetch", "conformance", "eval", "guardrail", "onnx", "ocr", "ocr-vl", "cloud", "nim", "sam", "sam-codec", "mistralrs"]
+features = ["fetch", "conformance", "eval", "guardrail", "onnx", "ocr", "ocr-vl", "cloud", "nim", "sam", "sam-codec", "mistralrs", "track", "gemini-video"]
 
 # Spec 3.7 §7.1: media, geometry, manifests, the traits, `VisionRuntime`, the egress boundary
 # and the deterministic `Editor` always build; each runtime and provider is a feature, added
@@ -92,6 +92,12 @@ surface-camera = ["stream"]
 # The generated conveyor clip and an in-process RTSP test server (MJPEG in process, H.264
 # from a user-installed ffmpeg), for tests and the phase B scenarios.
 stream-fixtures = ["stream", "dep:base64", "tokio/net", "tokio/io-util"]
+# `GeminiVideoAnalyzer`: Gemini native video through adk-model's Gemini client, uploading
+# clips above 20 MB through the File API (§7.13, X8, X9).
+gemini-video = ["cloud", "adk-model/gemini"]
+# `ByteTracker`: ByteTrack through `trackforge` (MIT, pure Rust) for anonymous tracks with
+# stable identifiers across frames (§7.13).
+track = ["dep:trackforge"]
 
 [dependencies]
 adk-core.workspace = true
@@ -150,6 +156,8 @@ retina = { version = "0.4.21", optional = true }
 url = { version = "2.5", optional = true }
 # `ffmpeg`: spawns the ffmpeg binary the user installed. `download_ffmpeg` stays off.
 ffmpeg-sidecar = { version = "2.7", optional = true, default-features = false }
+# `track`: ByteTrack and its Kalman filter; default features off, so no ONNX or OpenCV.
+trackforge = { version = "0.5.1", optional = true, default-features = false }
 
 [dev-dependencies]
 # Path-only self dependency, so the crate's own tests run the conformance suite.
@@ -269,3 +277,19 @@ required-features = ["screen", "browser", "surface-camera"]
 [[test]]
 name = "stream_live_tests"
 required-features = ["rtsp", "onnx", "stream-fixtures"]
+
+[[test]]
+name = "track_property_tests"
+required-features = ["track", "conformance"]
+
+[[test]]
+name = "video_tests"
+required-features = ["cloud", "sam", "gemini-video"]
+
+[[test]]
+name = "video_live_tests"
+required-features = ["cloud", "sam", "gemini-video"]
+
+[[test]]
+name = "video_local_live_tests"
+required-features = ["mistralrs"]

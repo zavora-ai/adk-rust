@@ -308,7 +308,7 @@ fn parse_inline_data_response() {
     let resp: GenerationResponse = serde_json::from_value(json).unwrap();
     let parts = resp.candidates[0].content.parts.as_ref().unwrap();
     match &parts[0] {
-        Part::InlineData { inline_data } => {
+        Part::InlineData { inline_data, .. } => {
             assert_eq!(inline_data.mime_type, "image/png");
             assert_eq!(inline_data.data, "iVBORw0KGgoAAAANSUhEUg==");
         }

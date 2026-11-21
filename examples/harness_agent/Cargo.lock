@@ -481,6 +481,7 @@ dependencies = [
  "futures",
  "http",
  "httpdate",
+ "mime",
  "ollama-rs",
  "reqwest 0.13.4",
  "schemars 1.2.1",

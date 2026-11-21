@@ -65,7 +65,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
                     adk_gemini::Part::Text { text, .. } => {
                         info!(response = text, "model text response received");
                     }
-                    adk_gemini::Part::InlineData { inline_data } => {
+                    adk_gemini::Part::InlineData { inline_data, .. } => {
                         info!(mime_type = inline_data.mime_type, "image generated");
 
                         // Decode and save the image

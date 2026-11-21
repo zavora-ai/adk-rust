@@ -89,12 +89,19 @@ pub trait VisionInput: sealed::Sealed + Send + Sync + 'static {
     /// `true` for [`ReleasedImage`].
     const REMOTE: bool;
 
+    /// The clip a video backend of the same kind is handed:
+    /// [`SentClip`](crate::SentClip) on the device, [`ReleasedClip`](crate::ReleasedClip)
+    /// off it.
+    type Clip: Send + Sync + std::fmt::Debug + 'static;
+
     /// The pixels and transform chain.
     fn sent(&self) -> &SentImage;
 }
 
 impl VisionInput for SentImage {
     const REMOTE: bool = false;
+
+    type Clip = crate::video::SentClip;
 
     fn sent(&self) -> &SentImage {
         self
@@ -103,6 +110,8 @@ impl VisionInput for SentImage {
 
 impl VisionInput for ReleasedImage {
     const REMOTE: bool = true;
+
+    type Clip = crate::egress::ReleasedClip;
 
     fn sent(&self) -> &SentImage {
         self.image()

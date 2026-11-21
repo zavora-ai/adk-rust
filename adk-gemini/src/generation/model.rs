@@ -977,6 +977,42 @@ pub struct GenerationConfig {
     /// Configuration for the model's thinking process (Gemini 2.5 series only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_config: Option<ThinkingConfig>,
+
+    /// The resolution images and video frames are tokenised at, which their token count
+    /// and cost depend on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_resolution: Option<MediaResolution>,
+}
+
+/// The resolution Gemini tokenises images and video frames at: `generationConfig.mediaResolution`.
+///
+/// A video frame costs about 66 tokens at `Low` and about 258 at `Medium` and `High`; with
+/// 32 tokens a second of audio, a second of video at 1 fps is about 100 or about 300 tokens.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_gemini::{GenerationConfig, MediaResolution};
+///
+/// let config = GenerationConfig { media_resolution: Some(MediaResolution::Low), ..Default::default() };
+/// let json = serde_json::to_value(&config).unwrap();
+/// assert_eq!(json["mediaResolution"], "MEDIA_RESOLUTION_LOW");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum MediaResolution {
+    /// The model's default.
+    #[serde(rename = "MEDIA_RESOLUTION_UNSPECIFIED")]
+    Unspecified,
+    /// 64 tokens a frame (about 66 with overhead).
+    #[serde(rename = "MEDIA_RESOLUTION_LOW")]
+    Low,
+    /// 256 tokens a frame.
+    #[serde(rename = "MEDIA_RESOLUTION_MEDIUM")]
+    Medium,
+    /// Up to 256 tokens a frame, with zoomed reframing for images.
+    #[serde(rename = "MEDIA_RESOLUTION_HIGH")]
+    High,
 }
 
 impl GenerationConfig {

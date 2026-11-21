@@ -29,6 +29,7 @@
 
 mod decode;
 mod parse;
+mod video;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,6 +46,7 @@ pub use crate::mask_decoder::MaskDecoderChoice;
 pub use decode::LicensedMaskDecoder;
 pub use decode::{ExternalMaskDecoder, SamMaskDecoder};
 pub use parse::{SamMask, SamMaskEncoding, SamRecord, SamStreamParser};
+pub use video::{Propagation, SAM_VIDEO_INLINE_LIMIT, SamVideoTracker};
 
 use crate::backend::{BackendDescriptor, Locality, PriceRef};
 use crate::cx::VisionCx;
@@ -427,9 +429,13 @@ impl SamSegmenter {
 
     /// Sends one request, retrying rate limits, and reads its stream to the end.
     async fn request(&self, cx: &VisionCx, text: &str, image: &ReleasedImage) -> Result<Answer> {
+        self.send(cx, &self.body(text, image)).await
+    }
+
+    /// Posts `body` to `/responses`, retrying rate limits, and reads its stream to the end.
+    async fn send(&self, cx: &VisionCx, body: &Value) -> Result<Answer> {
         let backend = self.descriptor.id.to_string();
         let url = format!("{}/responses", self.config.base_url);
-        let body = self.body(text, image);
         let mut attempt = 0u32;
         loop {
             cx.check()?;
@@ -438,7 +444,7 @@ impl SamSegmenter {
                 .post(&url)
                 .bearer_auth(&self.config.api_key)
                 .header("accept", "text/event-stream")
-                .json(&body)
+                .json(body)
                 .send()
                 .await;
             let response = match sent {

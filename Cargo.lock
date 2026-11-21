@@ -988,6 +988,7 @@ dependencies = [
  "google-cloud-gax 1.15.0",
  "http",
  "httpdate",
+ "mime",
  "ollama-rs",
  "proptest",
  "reqwest 0.13.5",
@@ -1609,6 +1610,7 @@ dependencies = [
  "tokio-util",
  "toml 0.8.23",
  "tracing",
+ "trackforge",
  "ureq 3.5.2",
  "url",
  "uuid 1.29.2",
@@ -19173,6 +19175,15 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-serde",
+]
+
+[[package]]
+name = "trackforge"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a0f0725dddf165c09485e3d09ee6bf6bbd14ab31561a072484f62bae402e5ef"
+dependencies = [
+ "nalgebra 0.35.0",
 ]
 
 [[package]]

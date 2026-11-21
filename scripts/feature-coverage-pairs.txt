@@ -483,6 +483,11 @@
 # The licensed sam-3.1 mask decoder: Meta's parser as the oracle, the licence gate, conformance
 # with masks; the codec crate itself is a default workspace member.
 6 adk-vision sam-codec doc
+# Video (spec 3.7 §7.13): ByteTrack's conformance and property tests; clip egress, the video
+# runtime call, sam-3.1 video, Gemini native video and questions over sampled frames against
+# local servers, with the doctests; the live runs are ignored.
+6 adk-vision track,conformance doc
+6 adk-vision cloud,sam,gemini-video doc
 # The conformance suite and its macros on their own.
 6 adk-vision conformance
 # Frame streams (spec 3.7 §7.13): the sampler, the frame governor, retention and the pipeline

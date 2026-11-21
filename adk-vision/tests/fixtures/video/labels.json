@@ -1,0 +1,20 @@
+{
+  "aisle-forklift-120s.mp4": {
+    "durationMs": 120000,
+    "frames": 1200,
+    "width": 640,
+    "height": 360,
+    "question": "When does the forklift enter the aisle?",
+    "event": "the orange forklift crosses the yellow entrance line into aisle 3; its forks cross at 45.0 s and the whole forklift is inside at 50.0 s",
+    "startMs": 45000,
+    "toleranceMs": 5000
+  },
+  "forklift-crossing-3s.mp4": {
+    "durationMs": 3000,
+    "frames": 30,
+    "width": 640,
+    "height": 360,
+    "concept": "orange forklift",
+    "event": "one forklift in every frame: the sprite's left edge at x = -40 + 40 t (t in seconds, partly off screen at first), 200 px wide (the orange body 141 px, then the mast and forks), from y = 135 to y = 279"
+  }
+}

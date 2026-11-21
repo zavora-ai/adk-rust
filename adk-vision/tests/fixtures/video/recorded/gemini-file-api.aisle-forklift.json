@@ -1,0 +1,315 @@
+{
+  "recorded": "2026-11-21",
+  "note": "gemini-3.8-flash: the File API upload, two polls from PROCESSING to ACTIVE, then two generateContent attempts answered 503 (high demand). The retry on gemini-3.7-flash after a fresh upload was answered 503 too, after about ten minutes; its generateContent is kept as `retry`.",
+  "exchanges": [
+    {
+      "method": "POST",
+      "path": "/upload/v1beta/files",
+      "request": {
+        "file": {
+          "displayName": "sha256:7162e2366f34f123bfb8cccd99000a7e001b7d3f594a5d9437fef17af11c8188"
+        }
+      },
+      "status": 200,
+      "contentType": "text/plain; charset=utf-8",
+      "uploadUrl": "http://127.0.0.1:18762/upload/v1beta/files?upload_id=<upload>&upload_protocol=resumable",
+      "response": ""
+    },
+    {
+      "method": "POST",
+      "path": "/upload/v1beta/files?upload_id=<upload>&upload_protocol=resumable",
+      "request": "{{media:binary:sha256:7162e2366f34f123bfb8cccd99000a7e001b7d3f594a5d9437fef17af11c8188:76391}}",
+      "status": 200,
+      "contentType": "application/json; charset=UTF-8",
+      "uploadUrl": null,
+      "response": {
+        "file": {
+          "name": "files/c79io5wyjotq",
+          "displayName": "sha256:7162e2366f34f123bfb8cccd99000a7e001b7d3f594a5d9437fef17af11c8188",
+          "mimeType": "video/mp4",
+          "sizeBytes": "76391",
+          "createTime": "2026-11-21T03:48:56.718866Z",
+          "updateTime": "2026-11-21T03:48:56.718866Z",
+          "expirationTime": "2026-11-23T03:48:55.992690891Z",
+          "sha256Hash": "NzE2MmUyMzY2ZjM0ZjEyM2JmYjhjY2NkOTkwMDBhN2UwMDFiN2QzZjU5NGE1ZDk0MzdmZWYxN2FmMTFjODE4OA==",
+          "uri": "https://generativelanguage.googleapis.com/v1beta/files/c79io5wyjotq",
+          "state": "PROCESSING",
+          "source": "UPLOADED"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1beta/files/c79io5wyjotq",
+      "request": null,
+      "status": 200,
+      "contentType": "application/json; charset=UTF-8",
+      "uploadUrl": null,
+      "response": {
+        "name": "files/c79io5wyjotq",
+        "displayName": "sha256:7162e2366f34f123bfb8cccd99000a7e001b7d3f594a5d9437fef17af11c8188",
+        "mimeType": "video/mp4",
+        "sizeBytes": "76391",
+        "createTime": "2026-11-21T03:48:56.718866Z",
+        "updateTime": "2026-11-21T03:48:56.718866Z",
+        "expirationTime": "2026-11-23T03:48:55.992690891Z",
+        "sha256Hash": "NzE2MmUyMzY2ZjM0ZjEyM2JmYjhjY2NkOTkwMDBhN2UwMDFiN2QzZjU5NGE1ZDk0MzdmZWYxN2FmMTFjODE4OA==",
+        "uri": "https://generativelanguage.googleapis.com/v1beta/files/c79io5wyjotq",
+        "state": "PROCESSING",
+        "source": "UPLOADED"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1beta/files/c79io5wyjotq",
+      "request": null,
+      "status": 200,
+      "contentType": "application/json; charset=UTF-8",
+      "uploadUrl": null,
+      "response": {
+        "name": "files/c79io5wyjotq",
+        "displayName": "sha256:7162e2366f34f123bfb8cccd99000a7e001b7d3f594a5d9437fef17af11c8188",
+        "mimeType": "video/mp4",
+        "sizeBytes": "76391",
+        "createTime": "2026-11-21T03:48:56.718866Z",
+        "updateTime": "2026-11-21T03:49:01.399088Z",
+        "expirationTime": "2026-11-23T03:48:55.992690891Z",
+        "sha256Hash": "NzE2MmUyMzY2ZjM0ZjEyM2JmYjhjY2NkOTkwMDBhN2UwMDFiN2QzZjU5NGE1ZDk0MzdmZWYxN2FmMTFjODE4OA==",
+        "uri": "https://generativelanguage.googleapis.com/v1beta/files/c79io5wyjotq",
+        "state": "ACTIVE",
+        "videoMetadata": {
+          "videoDuration": "120s"
+        },
+        "source": "UPLOADED"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1beta/models/gemini-3.8-flash:generateContent",
+      "request": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "fileData": {
+                  "mimeType": "video/mp4",
+                  "fileUri": "https://generativelanguage.googleapis.com/v1beta/files/c79io5wyjotq"
+                },
+                "videoMetadata": {
+                  "fps": 1.0
+                }
+              },
+              {
+                "text": "Question about the video above, which is 2:00.0 long: When does the forklift enter the aisle?\n\nAnswer with JSON only: {\"answer\": <the answer in words>, \"events\": [{\"start\": \"m:ss.s\", \"end\": \"m:ss.s\", \"text\": <what happens>}]}, with times from the start of the video. List an event only for what the question asks about; if it does not happen, say so in the answer and give no events."
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "generationConfig": {
+          "maxOutputTokens": 2048,
+          "responseMimeType": "application/json",
+          "responseSchema": {
+            "properties": {
+              "answer": {
+                "type": "string"
+              },
+              "events": {
+                "items": {
+                  "properties": {
+                    "end": {
+                      "description": "m:ss.s from the start of the video",
+                      "type": "string"
+                    },
+                    "start": {
+                      "description": "m:ss.s from the start of the video",
+                      "type": "string"
+                    },
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "start",
+                    "end",
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "answer",
+              "events"
+            ],
+            "type": "object"
+          },
+          "mediaResolution": "MEDIA_RESOLUTION_LOW"
+        }
+      },
+      "status": 503,
+      "contentType": "application/json; charset=UTF-8",
+      "uploadUrl": null,
+      "response": {
+        "error": {
+          "code": 503,
+          "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.",
+          "status": "UNAVAILABLE"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1beta/models/gemini-3.8-flash:generateContent",
+      "request": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "fileData": {
+                  "mimeType": "video/mp4",
+                  "fileUri": "https://generativelanguage.googleapis.com/v1beta/files/c79io5wyjotq"
+                },
+                "videoMetadata": {
+                  "fps": 1.0
+                }
+              },
+              {
+                "text": "Question about the video above, which is 2:00.0 long: When does the forklift enter the aisle?\n\nAnswer with JSON only: {\"answer\": <the answer in words>, \"events\": [{\"start\": \"m:ss.s\", \"end\": \"m:ss.s\", \"text\": <what happens>}]}, with times from the start of the video. List an event only for what the question asks about; if it does not happen, say so in the answer and give no events."
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "generationConfig": {
+          "maxOutputTokens": 2048,
+          "responseMimeType": "application/json",
+          "responseSchema": {
+            "properties": {
+              "answer": {
+                "type": "string"
+              },
+              "events": {
+                "items": {
+                  "properties": {
+                    "end": {
+                      "description": "m:ss.s from the start of the video",
+                      "type": "string"
+                    },
+                    "start": {
+                      "description": "m:ss.s from the start of the video",
+                      "type": "string"
+                    },
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "start",
+                    "end",
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "answer",
+              "events"
+            ],
+            "type": "object"
+          },
+          "mediaResolution": "MEDIA_RESOLUTION_LOW"
+        }
+      },
+      "status": 503,
+      "contentType": "application/json; charset=UTF-8",
+      "uploadUrl": null,
+      "response": {
+        "error": {
+          "code": 503,
+          "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.",
+          "status": "UNAVAILABLE"
+        }
+      }
+    }
+  ],
+  "retry": {
+    "method": "POST",
+    "path": "/v1beta/models/gemini-3.7-flash:generateContent",
+    "request": {
+      "contents": [
+        {
+          "parts": [
+            {
+              "fileData": {
+                "mimeType": "video/mp4",
+                "fileUri": "https://generativelanguage.googleapis.com/v1beta/files/sn0csxs75xit"
+              },
+              "videoMetadata": {
+                "fps": 1.0
+              }
+            },
+            {
+              "text": "Question about the video above, which is 2:00.0 long: When does the forklift enter the aisle?\n\nAnswer with JSON only: {\"answer\": <the answer in words>, \"events\": [{\"start\": \"m:ss.s\", \"end\": \"m:ss.s\", \"text\": <what happens>}]}, with times from the start of the video. List an event only for what the question asks about; if it does not happen, say so in the answer and give no events."
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "generationConfig": {
+        "maxOutputTokens": 2048,
+        "responseMimeType": "application/json",
+        "responseSchema": {
+          "properties": {
+            "answer": {
+              "type": "string"
+            },
+            "events": {
+              "items": {
+                "properties": {
+                  "end": {
+                    "description": "m:ss.s from the start of the video",
+                    "type": "string"
+                  },
+                  "start": {
+                    "description": "m:ss.s from the start of the video",
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "start",
+                  "end",
+                  "text"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "answer",
+            "events"
+          ],
+          "type": "object"
+        },
+        "mediaResolution": "MEDIA_RESOLUTION_LOW"
+      }
+    },
+    "status": 503,
+    "contentType": "application/json; charset=UTF-8",
+    "uploadUrl": null,
+    "response": {
+      "error": {
+        "code": 503,
+        "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.",
+        "status": "UNAVAILABLE"
+      }
+    }
+  }
+}

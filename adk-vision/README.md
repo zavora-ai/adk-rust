@@ -23,7 +23,8 @@ Local-first perception for Rust Agent Development Kit (ADK-Rust) agents.
 | Manifests | `ModelManifest`, `LicenceGate`, `VerifiedModel` | Every weight file is pinned by revision and SHA-256 and names its licence; nothing loads unverified |
 | Traits | `Detector`, `Segmenter`, `DocumentReader`, `Embedder`, `Describer`, `Tracker`, `VideoAnalyzer`, `Editor` | One contract per perception task, each with a conformance suite |
 | Runtime | `VisionRuntime` | Local-first routing, metering, cancellation, mapping to source pixels, crop escalation |
-| Egress | `EgressGate`, `ReleasedImage` | A remote backend only ever receives an image the gate cropped, redacted, approved and recorded |
+| Egress | `EgressGate`, `ReleasedImage`, `ReleasedClip` | A remote backend only ever receives an image the gate cropped, redacted, approved and recorded, or a clip it checked and recorded |
+| Video | `SourceClip`, `VideoSource`, `FramesAnalyzer`, `SamVideoTracker` | `analyze_video` holds a call's frames before anything leaves; questions over sampled frames on any model (`cloud`), tracks through a clip with `sam-3.1` video (`sam`) |
 | Tools | `VisionToolset` | `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`, `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure` on the governed path; a remote call is held with the exact egress image and releases only that digest |
 | Watch | `WatchCondition`, `WatchEvaluator`, `WatchSink` | Conditions held on the device against tracked objects; one event per object, keyed for the kernel's `VisionWakeSource`, never carrying pixels |
 | Measurement | `Calibration`, `Measurement` | A fiducial of known size gives pixels per millimetre; maximum length and area from masks with their uncertainty, valid only in the fiducial's plane |
@@ -62,6 +63,8 @@ features — `fetch`, `cloud`, `nim`, `sam`, `guardrail` — as `adk_rust::visio
 | `ffmpeg` | `FileSource` (MP4, MOV) and H.264/H.265 decoding through a user-installed `ffmpeg`; nothing vendored or downloaded |
 | `screen`, `browser`, `surface-camera` | `ScreenSource` (a `ComputerActuator` or computer-use-mcp observations), `BrowserSource` (`browser_screenshot`), `SurfaceCameraSource` (frames the web home pushes) |
 | `stream-fixtures` | The generated conveyor clip and an in-process RTSP test server |
+| `track` | `ByteTracker`: ByteTrack through `trackforge` 0.5, anonymous tracks that keep their identifiers through jitter and occlusion |
+| `gemini-video` | `GeminiVideoAnalyzer`: Gemini native video, uploading clips above 20 MB once through the File API, at an explicit frame rate and media resolution; implies `cloud` |
 
 ## Quick Start
 

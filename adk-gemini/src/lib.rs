@@ -116,7 +116,7 @@ pub use client::GeminiBuilder;
 pub use client::Model;
 
 /// Core primitive types for building requests and parsing responses
-pub use models::{Blob, Content, FileDataRef, Message, Modality, Part, Role};
+pub use models::{Blob, Content, FileDataRef, Message, Modality, Part, Role, VideoMetadata};
 
 // ========== Content Generation ==========
 // Types for generating text, images, and audio content
@@ -126,11 +126,11 @@ pub use generation::{
     model::CitationSource, model::FinishReason, model::GenerateContentRequest,
     model::GenerationConfig, model::GenerationResponse, model::GroundingChunk,
     model::GroundingMetadata, model::GroundingSegment, model::GroundingSupport,
-    model::LogprobsCandidate, model::LogprobsResult, model::MultiSpeakerVoiceConfig,
-    model::PrebuiltVoiceConfig, model::PromptFeedback, model::PromptTokenDetails,
-    model::SearchEntryPoint, model::SpeakerVoiceConfig, model::SpeechConfig, model::ThinkingConfig,
-    model::ThinkingLevel, model::TopLogprobsCandidates, model::UsageMetadata, model::VoiceConfig,
-    model::WebGroundingChunk,
+    model::LogprobsCandidate, model::LogprobsResult, model::MediaResolution,
+    model::MultiSpeakerVoiceConfig, model::PrebuiltVoiceConfig, model::PromptFeedback,
+    model::PromptTokenDetails, model::SearchEntryPoint, model::SpeakerVoiceConfig,
+    model::SpeechConfig, model::ThinkingConfig, model::ThinkingLevel, model::TopLogprobsCandidates,
+    model::UsageMetadata, model::VoiceConfig, model::WebGroundingChunk,
 };
 
 // ========== Text Embeddings ==========
