@@ -305,7 +305,8 @@ impl CameraSource for ScriptedCameras {
         let (bytes, mime_type) = if people.is_empty() {
             (picture.bytes.clone(), picture.mime_type.clone())
         } else if picture.mime_type == "image/png" {
-            let change = crate::evidence::ImageChange { image: 0, crop: None, cover: people };
+            let change =
+                crate::evidence::ImageChange { image: 0, crop: None, cover: people.clone() };
             let (covered, _, _) = crate::evidence::changed_png(&picture.bytes, &change)
                 .map_err(SurfaceError::Invalid)?;
             (covered, "image/png".to_string())
@@ -338,24 +339,17 @@ impl CameraSource for ScriptedCameras {
                 version: None,
             })
             .await?;
-        let regions: Vec<Value> = picture
-            .overlays
+        // The evidence's regions are what was covered, as an approval card reads them (spec 3.7
+        // §8.2); the detections on the frame go with the card's message.
+        let regions: Vec<Value> = people
             .iter()
-            .filter_map(|overlay| {
-                let [x0, y0, x1, y1] = overlay.bbox?;
-                let mut region = json!({
+            .map(|[x0, y0, x1, y1]| {
+                json!({
                     "image": digest,
                     "shape": { "kind": "box", "x0": x0, "y0": y0, "x1": x1, "y1": y1 },
-                    "label": overlay.label,
+                    "label": "person",
                     "origin": { "backend": "camera", "frame": "sourcePixels" },
-                });
-                if let Some(score) = overlay.score {
-                    region["score"] = json!(score);
-                }
-                if let Some(track) = overlay.track {
-                    region["track"] = json!(track);
-                }
-                Some(region)
+                })
             })
             .collect();
         Ok(ImageEvidence::new(

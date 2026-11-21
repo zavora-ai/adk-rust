@@ -186,6 +186,7 @@ pub fn openapi() -> Value {
     let example_body = schema_ref::<crate::viewer::LabelledExample>(&mut input);
     let zone_body = schema_ref::<crate::camera::ZoneChange>(&mut input);
     let card_body = schema_ref::<crate::camera::RaiseCard>(&mut input);
+    let freeze_body = schema_ref::<crate::camera::FreezeFrame>(&mut input);
     let surface_query = input.subschema_for::<SurfaceQuery>().to_value();
     for (name, schema) in input.take_definitions(true) {
         schemas.entry(name).or_insert(schema);
@@ -353,7 +354,7 @@ pub fn openapi() -> Value {
                 let mut ok = Map::new();
                 ok.insert("200".into(), json!({
                     "description": "`text/event-stream`; a `frame` event's data is a StageView",
-                    "content": { "text/event-stream": { "schema": stage_view } },
+                    "content": { "text/event-stream": { "schema": stage_view.clone() } },
                 }));
                 ok
             }),
@@ -393,6 +394,16 @@ pub fn openapi() -> Value {
             json!([camera_param.clone(), path_param("zone")]),
             Some(zone_body),
             ("200", answer("The zone now", zone_saved)),
+        ),
+    );
+    routes.insert(
+        with(paths::CAMERA_FREEZE),
+        write(
+            "post",
+            "Freeze the frame on screen for a card (board choice C11): held in memory for 15 minutes while the person writes it, forgotten when the camera is switched off; nothing is written",
+            json!([camera_param.clone(), query("surface", "The surface asking", surface.clone())]),
+            Some(freeze_body),
+            ("200", answer("The frozen frame's picture", stage_view.clone())),
         ),
     );
     routes.insert(

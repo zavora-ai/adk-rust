@@ -21,6 +21,12 @@ use crate::error::{Result, SurfaceError};
 /// second, enough to freeze the frame on screen and draw each track's trail.
 pub const HELD_FRAMES: usize = 10;
 
+/// How many frozen frames of each camera the hub holds while people write their cards.
+pub const FROZEN_FRAMES: usize = 4;
+
+/// How long a frozen frame is held for its card, in minutes.
+pub const FROZEN_MINUTES: i64 = 15;
+
 /// Where the live camera surface reads cameras and acts on them (spec 3.7 §8.2): the seam
 /// between the surface and a frame pipeline.
 ///
@@ -140,6 +146,8 @@ struct Feed {
     stopped: Option<Acted>,
     /// The latest frames, newest last; memory only.
     recent: VecDeque<HeldFrame>,
+    /// Frames a person froze to raise a card from, with when; memory only.
+    frozen: VecDeque<(HeldFrame, DateTime<Utc>)>,
     /// Frames dropped at the gate.
     dropped: u64,
 }
@@ -324,6 +332,7 @@ impl Cameras {
             feed.switched = Some(Acted { by: by.to_string(), at });
             if !on {
                 feed.recent.clear();
+                feed.frozen.clear();
             }
         }
         self.changed(camera);
@@ -345,6 +354,7 @@ impl Cameras {
             feed.on = false;
             feed.stopped = Some(Acted { by: by.to_string(), at });
             feed.recent.clear();
+            feed.frozen.clear();
         }
         self.changed(camera);
         self.inner.source.stop(camera).await
@@ -369,17 +379,45 @@ impl Cameras {
         self.inner.feeds.read().await.get(camera)?.recent.back().cloned()
     }
 
-    /// The frame of `camera` with `digest`, while the hub still holds it.
+    /// The frame of `camera` with `digest`, while the hub still holds it: among the latest, or
+    /// frozen for a card.
     pub async fn held(&self, camera: &str, digest: &str) -> Option<HeldFrame> {
-        self.inner
-            .feeds
-            .read()
-            .await
-            .get(camera)?
-            .recent
+        let feeds = self.inner.feeds.read().await;
+        let feed = feeds.get(camera)?;
+        // Newest first: a still scene repeats its bytes, and the newest copy is the one shown.
+        feed.recent
             .iter()
+            .rev()
             .find(|held| held.digest == digest)
+            .or_else(|| feed.frozen.iter().map(|(held, _)| held).find(|held| held.digest == digest))
             .cloned()
+    }
+
+    /// Freezes frame `digest` of `camera` at `at` for a card (board choice C11): held in memory
+    /// for [`FROZEN_MINUTES`], the newest [`FROZEN_FRAMES`] of them, and forgotten when the camera
+    /// is switched off. Nothing is written. Returns the frames up to it, oldest first, for its
+    /// trails; `None` when the hub no longer holds it.
+    pub async fn freeze(
+        &self,
+        camera: &str,
+        digest: &str,
+        at: DateTime<Utc>,
+    ) -> Option<Vec<HeldFrame>> {
+        let mut feeds = self.inner.feeds.write().await;
+        let feed = feeds.get_mut(camera)?;
+        feed.frozen.retain(|(_, frozen)| at - *frozen < chrono::Duration::minutes(FROZEN_MINUTES));
+        let upto: Vec<HeldFrame> = match feed.recent.iter().rposition(|held| held.digest == digest)
+        {
+            Some(index) => feed.recent.iter().take(index + 1).cloned().collect(),
+            None => vec![feed.frozen.iter().find(|(held, _)| held.digest == digest)?.0.clone()],
+        };
+        let frame = upto.last()?.clone();
+        feed.frozen.retain(|(held, _)| held.digest != digest);
+        if feed.frozen.len() == FROZEN_FRAMES {
+            feed.frozen.pop_front();
+        }
+        feed.frozen.push_back((frame, at));
+        Some(upto)
     }
 
     /// The frames held for `camera`, oldest first.

@@ -1055,7 +1055,7 @@ pub(crate) fn tile_meter(camera: &Camera<'_>, ctx: &Ctx<'_>) -> Option<MeterView
     });
     let _ = ctx;
     Some(MeterView {
-        label: format!("{} · frames today", capital(&facts.place)),
+        label: format!("{} · frames today", facts.name.trim_end_matches(" camera")),
         value: format!(
             "{} of {}",
             thousands(governor.frames_today),

@@ -540,6 +540,14 @@ pub struct ZoneSaved {
     pub text: String,
 }
 
+/// `POST /surface/cameras/{camera}/freeze` body: the frame on screen, by its digest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FreezeFrame {
+    /// The frame's `sha256:` digest; the hub must still hold it.
+    pub frame: String,
+}
+
 /// `POST /surface/cameras/{camera}/cards` body: a card from a frozen frame (board choice C11).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

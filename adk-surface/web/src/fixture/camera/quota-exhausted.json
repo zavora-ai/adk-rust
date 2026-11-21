@@ -1,0 +1,401 @@
+{
+  "actions": {
+    "raiseCard": false,
+    "retry": false,
+    "stop": true,
+    "switch": true,
+    "zone": true
+  },
+  "agent": {
+    "agent": {
+      "avatar": {
+        "color": "#0E7490",
+        "monogram": "I"
+      },
+      "displayName": "Inspector",
+      "name": "inspector"
+    },
+    "line": "Paused by the frame budget",
+    "sessionId": "s-line",
+    "tone": "fail"
+  },
+  "budget": {
+    "limit": "Change the daily frame limit",
+    "meters": [
+      {
+        "label": "Looking",
+        "note": "Since 15:12",
+        "percent": 0,
+        "tone": "fail",
+        "value": "Paused"
+      },
+      {
+        "label": "Asking sam-3.1 about unclear tracks",
+        "percent": 0,
+        "tone": "fail",
+        "value": "Stopped at 14:31"
+      },
+      {
+        "label": "Frames today",
+        "note": "Renews at midnight",
+        "percent": 100,
+        "tone": "fail",
+        "value": "300,000 of 300,000"
+      }
+    ],
+    "rows": [
+      {
+        "label": "Looking",
+        "tone": "fail",
+        "value": "Paused since 15:12"
+      },
+      {
+        "label": "Frames today",
+        "tone": "fail",
+        "value": "300,000 of 300,000"
+      },
+      {
+        "label": "Renews",
+        "tone": "plain",
+        "value": "At midnight"
+      }
+    ],
+    "scope": "for line 2",
+    "steps": [
+      {
+        "at": "14:02",
+        "next": false,
+        "text": "Looked less often: 5 → 2 a second"
+      },
+      {
+        "at": "14:31",
+        "next": false,
+        "text": "Stopped asking sam-3.1"
+      },
+      {
+        "at": "15:12",
+        "next": false,
+        "text": "Paused the camera until midnight"
+      }
+    ]
+  },
+  "decisions": [],
+  "id": "line-2",
+  "ingest": "RTSP · 1920 × 1080 · on the line 2 server",
+  "name": "Line 2 camera",
+  "nothingWaiting": "Nothing is waiting for you.",
+  "notice": {
+    "action": {
+      "href": "/ui/memory",
+      "kind": "limit",
+      "short_text": "Change the limit",
+      "text": "Change the daily frame limit"
+    },
+    "shortText": "until midnight.",
+    "shortTitle": "Parts are passing without inspection",
+    "text": "The frame budget paused the camera at 15:12.",
+    "title": "Parts on line 2 are passing without inspection.",
+    "tone": "warn"
+  },
+  "on": true,
+  "sources": [
+    {
+      "id": "line-2",
+      "name": "Line 2 camera",
+      "selected": true,
+      "stage": {
+        "frame": {
+          "at": "2026-11-18T15:12:03Z",
+          "atText": "15:12:03",
+          "digest": "sha256:271466dd61b118d409df9e882569d311f9c68438b9d15135708dfd99df1e1cfe",
+          "href": "/api/surface/cameras/line-2/frames/sha256%3A271466dd61b118d409df9e882569d311f9c68438b9d15135708dfd99df1e1cfe"
+        },
+        "height": 1080,
+        "look": "dimmed",
+        "regions": [],
+        "trails": [],
+        "width": 1920,
+        "zones": []
+      },
+      "state": "paused",
+      "stateText": "Paused",
+      "tone": "fail"
+    },
+    {
+      "id": "line-3",
+      "name": "Line 3 camera",
+      "selected": false,
+      "stage": {
+        "frame": {
+          "at": "2026-11-18T15:19:59Z",
+          "atText": "15:19:59",
+          "digest": "sha256:aeabde37525b6d416f73c42fb07488dd51b6804a8886d64699217ded3f6eff2f",
+          "href": "/api/surface/cameras/line-3/frames/sha256%3Aaeabde37525b6d416f73c42fb07488dd51b6804a8886d64699217ded3f6eff2f"
+        },
+        "height": 1080,
+        "look": "live",
+        "regions": [
+          {
+            "bbox": [
+              330.0,
+              300.0,
+              630.0,
+              530.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T45",
+            "tag": "part · T45",
+            "tagAt": "above",
+            "track": 45
+          },
+          {
+            "bbox": [
+              840.0,
+              400.0,
+              1140.0,
+              630.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T43",
+            "tag": "part · T43",
+            "tagAt": "above",
+            "track": 43
+          },
+          {
+            "bbox": [
+              1290.0,
+              250.0,
+              1590.0,
+              480.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T42",
+            "tag": "part · T42",
+            "tagAt": "above",
+            "track": 42
+          },
+          {
+            "bbox": [
+              1720.0,
+              470.0,
+              1920.0,
+              700.0
+            ],
+            "finding": false,
+            "label": "part",
+            "shortTag": "T41",
+            "tag": "part · T41",
+            "tagAt": "in",
+            "track": 41
+          }
+        ],
+        "trails": [
+          {
+            "points": [
+              [
+                434.0,
+                415.0
+              ],
+              [
+                388.0,
+                415.0
+              ],
+              [
+                342.0,
+                415.0
+              ],
+              [
+                296.0,
+                415.0
+              ]
+            ],
+            "track": 45
+          },
+          {
+            "points": [
+              [
+                944.0,
+                515.0
+              ],
+              [
+                898.0,
+                515.0
+              ],
+              [
+                852.0,
+                515.0
+              ],
+              [
+                806.0,
+                515.0
+              ]
+            ],
+            "track": 43
+          },
+          {
+            "points": [
+              [
+                1394.0,
+                365.0
+              ],
+              [
+                1348.0,
+                365.0
+              ],
+              [
+                1302.0,
+                365.0
+              ],
+              [
+                1256.0,
+                365.0
+              ]
+            ],
+            "track": 42
+          },
+          {
+            "points": [
+              [
+                1774.0,
+                585.0
+              ],
+              [
+                1728.0,
+                585.0
+              ],
+              [
+                1682.0,
+                585.0
+              ],
+              [
+                1636.0,
+                585.0
+              ]
+            ],
+            "track": 41
+          }
+        ],
+        "width": 1920,
+        "zones": []
+      },
+      "state": "savingFrames",
+      "stateText": "Saving frames",
+      "tone": "warn"
+    },
+    {
+      "id": "packing-bench",
+      "name": "Packing bench",
+      "selected": false,
+      "stage": {
+        "frame": {
+          "at": "2026-11-18T15:19:59Z",
+          "atText": "15:19:59",
+          "digest": "sha256:bc878ffe74159d0b7c7a8b01897601fb653e51b876b89e2ffe126a7e7c641dd6",
+          "href": "/api/surface/cameras/packing-bench/frames/sha256%3Abc878ffe74159d0b7c7a8b01897601fb653e51b876b89e2ffe126a7e7c641dd6"
+        },
+        "height": 1080,
+        "look": "live",
+        "regions": [
+          {
+            "bbox": [
+              200.0,
+              150.0,
+              720.0,
+              720.0
+            ],
+            "finding": false,
+            "label": "person",
+            "shortTag": "person · blurred",
+            "tag": "person · blurred",
+            "tagAt": "in"
+          }
+        ],
+        "trails": [],
+        "width": 1920,
+        "zones": []
+      },
+      "state": "live",
+      "stateText": "Live",
+      "tone": "ok"
+    },
+    {
+      "id": "this-computer",
+      "name": "This computer's camera",
+      "selected": false,
+      "stage": {
+        "height": 720,
+        "look": "dark",
+        "regions": [],
+        "trails": [],
+        "width": 1280,
+        "zones": []
+      },
+      "state": "off",
+      "stateText": "Off",
+      "tone": "muted"
+    }
+  ],
+  "stage": {
+    "badge": {
+      "text": "Last frame · 15:12:03",
+      "tone": "warn"
+    },
+    "cover": {
+      "off": false,
+      "retrying": false,
+      "text": "Today's 300,000 frames are used. Nothing on line 2 is being checked until the budget renews at 00:00.",
+      "title": "Paused until midnight"
+    },
+    "frame": {
+      "at": "2026-11-18T15:12:03Z",
+      "atText": "15:12:03",
+      "digest": "sha256:271466dd61b118d409df9e882569d311f9c68438b9d15135708dfd99df1e1cfe",
+      "href": "/api/surface/cameras/line-2/frames/sha256%3A271466dd61b118d409df9e882569d311f9c68438b9d15135708dfd99df1e1cfe"
+    },
+    "height": 1080,
+    "look": "dimmed",
+    "regions": [],
+    "trails": [],
+    "width": 1920,
+    "zones": []
+  },
+  "state": "paused",
+  "stateText": "Paused until midnight",
+  "tone": "fail",
+  "tracks": [],
+  "tracksNote": "No tracks while paused.",
+  "watches": [
+    {
+      "active": false,
+      "after": ". Then wait 30 s before waking again for the same track.",
+      "before": "Score 0.80 or more, 3 frames in a row, inside",
+      "id": "seal-tear",
+      "label": "seal tear",
+      "name": "Seal tear",
+      "pill": "Paused",
+      "shortAfter": " · not watching",
+      "shortBefore": "Seal tear, 0.80+, 3 frames in",
+      "woke": "Woke the Inspector 3 times today",
+      "zone": "Inspection window"
+    }
+  ],
+  "zones": [
+    {
+      "corners": [
+        760.0,
+        170.0,
+        1560.0,
+        910.0
+      ],
+      "cornersText": "760, 170 → 1560, 910",
+      "id": "inspection-window",
+      "name": "Inspection window",
+      "usedBy": [
+        "Seal tear watch"
+      ]
+    }
+  ]
+}

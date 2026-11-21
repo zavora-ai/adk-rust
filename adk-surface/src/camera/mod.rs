@@ -37,14 +37,17 @@ pub use facts::{
     GovernorStepKind, HeldFrame, Ingest, Measurement, Overlay, StreamState, TrackFacts, TrackPhase,
     WatchFacts, ZoneFacts,
 };
-pub use hub::{Acted, CameraSource, CameraUpdate, Cameras, DropReason, HELD_FRAMES, Offered};
+pub use hub::{
+    Acted, CameraSource, CameraUpdate, Cameras, DropReason, FROZEN_FRAMES, FROZEN_MINUTES,
+    HELD_FRAMES, Offered,
+};
 #[cfg(feature = "web")]
 pub use scripted::{CameraBoard, ScriptedCameras};
 pub use view::{
     BadgeView, BudgetRow, BudgetView, CameraActions, CameraAgent, CameraState, CameraTile,
-    CameraView, CamerasView, CardRaised, CoverView, FrameView, MeasurementView, MeterView,
-    NoticeAction, NoticeView, RaiseCard, RegionView, SourceTile, StageLook, StageView, StepView,
-    TagAt, Tone, TrackRow, TrailView, WatchView, ZoneChange, ZoneSaved, ZoneView,
+    CameraView, CamerasView, CardRaised, CoverView, FrameView, FreezeFrame, MeasurementView,
+    MeterView, NoticeAction, NoticeView, RaiseCard, RegionView, SourceTile, StageLook, StageView,
+    StepView, TagAt, Tone, TrackRow, TrailView, WatchView, ZoneChange, ZoneSaved, ZoneView,
 };
 
 /// The audit action of switching a camera on or off (spec 3.7 §8.2, board choice C2).

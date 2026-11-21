@@ -143,6 +143,8 @@ pub mod paths {
     pub const CAMERA_RETRY: &str = "/surface/cameras/{camera}/retry";
     /// `PUT`: change a zone (board choice C12).
     pub const CAMERA_ZONE: &str = "/surface/cameras/{camera}/zones/{zone}";
+    /// `POST`: freeze the frame on screen for a card; held in memory, never written.
+    pub const CAMERA_FREEZE: &str = "/surface/cameras/{camera}/freeze";
     /// `POST`: raise a card from a frozen frame (board choice C11).
     pub const CAMERA_CARDS: &str = "/surface/cameras/{camera}/cards";
     /// `GET`: the roster.
@@ -238,6 +240,7 @@ pub fn router(engine: SurfaceEngine) -> Router {
         .route(paths::CAMERA_STOP, post(camera_stop))
         .route(paths::CAMERA_RETRY, post(camera_retry))
         .route(paths::CAMERA_ZONE, put(camera_zone))
+        .route(paths::CAMERA_FREEZE, post(camera_freeze))
         .route(paths::CAMERA_CARDS, post(camera_card))
         .route(paths::THREAD, get(thread))
         .route(paths::FEED, get(feed))
@@ -806,6 +809,21 @@ async fn camera_zone(
     let caller = try_or_respond!(caller(context, SurfaceKind::Web, None));
     match engine.save_camera_zone(&caller, &camera, &zone, &change).await {
         Ok(saved) => Json(saved).into_response(),
+        Err(error) => failed(error),
+    }
+}
+
+/// Freezes the frame on screen for a card: held in memory while the person writes it.
+async fn camera_freeze(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path(camera): Path<String>,
+    Query(query): Query<SurfaceQuery>,
+    Json(freeze): Json<crate::camera::FreezeFrame>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine.freeze_camera_frame(&caller, &camera, &freeze.frame).await {
+        Ok(stage) => Json(stage).into_response(),
         Err(error) => failed(error),
     }
 }

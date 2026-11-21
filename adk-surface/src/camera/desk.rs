@@ -208,6 +208,33 @@ impl SurfaceEngine {
         Ok(project::stage(&shown[0], Place::Main, &ctx))
     }
 
+    /// Freezes frame `frame` of `camera` for a card (board choice C11): the hub holds it in
+    /// memory while the person writes what the agent should look at. Returns the picture of that
+    /// frame with what was found on it. Nothing is written.
+    ///
+    /// # Errors
+    ///
+    /// `surface.not_found` when the camera is not `caller`'s or the frame is no longer held;
+    /// `surface.not_here` from anything but a person at a screen.
+    pub async fn freeze_camera_frame(
+        &self,
+        caller: &Caller,
+        camera: &str,
+        frame: &str,
+    ) -> Result<StageView> {
+        at_a_screen(caller)?;
+        let facts = self.owned_camera(caller, camera).await?;
+        let recent = self.hub()?.freeze(camera, frame, self.clock_now()).await.ok_or_else(|| {
+            SurfaceError::not_found(format!(
+                "frame '{frame}' of camera '{camera}': it is no longer held; freeze the picture again"
+            ))
+        })?;
+        let mut shown = self.with_gates(std::slice::from_ref(&facts)).await?;
+        shown[0].recent = recent;
+        let ctx = self.camera_ctx(caller, &facts.agent);
+        Ok(project::stage(&shown[0], Place::Main, &ctx))
+    }
+
     /// The frame of `camera` with `digest`, while the hub holds it in memory, its bytes checked
     /// against the digest (spec 3.7 §8.3). A camera that is off holds none.
     ///
