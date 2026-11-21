@@ -288,6 +288,7 @@ an approval card can show the exact image; see [Governed Vision Tools](governed-
 - [Governed Vision Tools](governed-tools.md)
 - [Watch Conditions and Visual Wakes](wake.md): a stream wakes a sleeping agent once per tracked object
 - [Calibration and Measurement](measure.md): lengths and areas in millimetres in a fiducial's plane
+- [Visual Memory](memory.md): images by embedding in any `adk-rag` vector store, found by text or an example image, and erased by source
 - [The Annotated Viewer](../surfaces/annotated-viewer.md): what an agent saw, on the web home
 - [Image Privacy](../security/image-privacy.md)
 - [Local ONNX backends](onnx.md)

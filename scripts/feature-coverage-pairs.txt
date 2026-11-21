@@ -13,11 +13,11 @@
 # To cover another feature-gated module, add ONE line with the shard its crate already has.
 # Shards are numbered 0 to 10. A crate's pairs share one shard, so its combined test build
 # runs once; adk-cli is the exception, split over three shards because its `solo` pairs each
-# build alone.
+# build alone, and adk-vision's LanceDB pair runs in shard 0 beside adk-rag's.
 #
 # | Shard | Crates |
 # |-------|--------|
-# | 0  | adk-rag |
+# | 0  | adk-rag, and adk-vision's LanceDB run |
 # | 1  | adk-rust, adk-payments, adk-realtime, adk-session, adk-memory, adk-eval, adk-bench, cargo-adk, adk-deploy |
 # | 2  | adk-kernel, adk-drivers |
 # | 3  | adk-server, adk-durability-gates, adk-graph, adk-managed, adk-code |
@@ -498,6 +498,11 @@
 6 adk-vision stream doc
 6 adk-vision rtsp,ffmpeg,stream-fixtures,conformance doc
 6 adk-vision screen,browser,surface-camera,conformance doc
+# Visual memory (spec 3.7 §7.15): the memory suite over the in-memory store — index, text and
+# example-image search, the space record and its refusal, captions and graph memory, an
+# adk-rag pipeline, erasure by source — and the S16 week corpus, with the doctests; the
+# SigLIP 2 run is ignored.
+6 adk-vision memory doc
 # `onnx-coreml`, `onnx-cuda` and `ocr-vl-metal` need GPU toolchains a runner does not have, and
 # stay out as adk-mistralrs's `cuda` and `metal` do.
 6 adk-site gen-astro
@@ -508,5 +513,8 @@
 # fifteen minutes. It stays in the PR tier because an arrow version
 # mismatch once sat broken on main for weeks with nothing compiling the LanceDB backend.
 0 adk-rag lancedb
+# The visual memory suite against LanceDB, a new connection for every reopen. It sits in
+# shard 0 to reuse that shard's LanceDB build rather than compile lance again in shard 6.
+0 adk-vision memory-lancedb
 7 adk-harness mcp
 4 adk-model gemini no-default
