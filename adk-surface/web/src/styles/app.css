@@ -2791,7 +2791,8 @@ button.segment {
 
 /* ── The icon rail of a wide screen (spec 3.3 §5.1) ───────────── */
 /* The section links stand in a rail down the left edge: a mark each, the name on hover and to
-   assistive technology, Developer at the foot. Narrower screens keep them in the header. */
+   assistive technology, Developer at the foot. Narrower screens keep them in the header. Only
+   the header's nav is the rail: a screen's own tabs (New agent's) keep their look. */
 
 .tab-icon {
   display: none;
@@ -2820,7 +2821,7 @@ button.segment {
     background: var(--bg);
   }
 
-  .tabs {
+  .header .tabs {
     position: fixed;
     z-index: 6;
     top: 0;
@@ -2836,7 +2837,7 @@ button.segment {
     background: var(--side);
   }
 
-  .tab {
+  .header .tab {
     position: relative;
     justify-content: center;
     width: 40px;
@@ -2845,20 +2846,20 @@ button.segment {
     border-radius: var(--radius);
   }
 
-  .tab:hover:not([aria-current="page"]) {
+  .header .tab:hover:not([aria-current="page"]) {
     background: color-mix(in srgb, var(--raised) 70%, var(--card));
   }
 
-  .tab[aria-current="page"] {
+  .header .tab[aria-current="page"] {
     background: var(--card);
     box-shadow: var(--shadow);
   }
 
-  .tab-icon {
+  .header .tab-icon {
     display: block;
   }
 
-  .tab-label {
+  .header .tab-label {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -2867,14 +2868,14 @@ button.segment {
     white-space: nowrap;
   }
 
-  .tab .badge-tab {
+  .header .tab .badge-tab {
     position: absolute;
     top: 1px;
     right: -1px;
     display: inline-grid;
   }
 
-  .tab-developer {
+  .header .tab-developer {
     margin-top: auto;
   }
 

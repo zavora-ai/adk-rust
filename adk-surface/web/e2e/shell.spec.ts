@@ -132,6 +132,25 @@ test("Today and Memory & rules scroll inside their own area, under the header", 
   expect(await page.locator("#content").evaluate((element) => element.scrollTop)).toBe(0);
 });
 
+test("on a wide screen only the sections stand in the rail: a screen's own tabs stay in its content", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/ui/fixture.html?screen=agents&agents=new");
+  const rail = page.getByRole("navigation", { name: "Sections" });
+  const tab = page.getByRole("tablist", { name: "New agent" }).getByRole("tab", { name: "Describe it" });
+  await expect(tab).toBeVisible();
+  const railBox = (await rail.boundingBox())!;
+  const tabBox = (await tab.boundingBox())!;
+  // The tab sits right of the rail, and the rail's marks are not covered.
+  expect(tabBox.x).toBeGreaterThanOrEqual(railBox.x + railBox.width);
+  const today = rail.getByRole("link", { name: "Today" });
+  const mark = (await today.boundingBox())!;
+  const top = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest("a")?.textContent ?? "", {
+    x: mark.x + mark.width / 2,
+    y: mark.y + mark.height / 2,
+  });
+  expect(top).toContain("Today");
+});
+
 test("under the phone width the column scrolls under the header and the message box stays reachable", async ({ page }) => {
   await page.setViewportSize({ width: 354, height: 807 });
   await page.goto("/ui/fixture.html?section=threads");
