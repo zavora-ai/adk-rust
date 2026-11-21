@@ -320,9 +320,9 @@ impl ChatterboxTtsProvider {
         let mut builder = adk_core::onnx::ort_environment()
             .and_then(|environment| Session::builder(&environment))
             .map_err(|e| AudioError::Tts {
-            provider: "Chatterbox".into(),
-            message: format!("failed to create session builder: {e}"),
-        })?;
+                provider: "Chatterbox".into(),
+                message: format!("failed to create session builder: {e}"),
+            })?;
 
         let ep = config.execution_provider;
         if let Some(provider) = ep.dispatch() {

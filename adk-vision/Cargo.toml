@@ -211,5 +211,9 @@ name = "local_redactor_tests"
 required-features = ["onnx", "ocr", "guardrail"]
 
 [[test]]
+name = "ort_environment_tests"
+required-features = ["ocr"]
+
+[[test]]
 name = "mistralrs_tests"
 required-features = ["mistralrs", "conformance"]

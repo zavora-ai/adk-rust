@@ -164,7 +164,7 @@ async fn fetch(id: &str) -> Result<adk_vision::VerifiedModel> {
     fetcher().fetch(manifest).await.map_err(super::vision_error)
 }
 
-/// The onnxruntime release this build links, such as `1.28.0`, from its build info.
+/// The onnxruntime release this build links, such as `1.31.0`, from its build info.
 #[cfg(feature = "vision-onnx")]
 pub fn onnxruntime_version() -> Option<String> {
     let info = ort::info();

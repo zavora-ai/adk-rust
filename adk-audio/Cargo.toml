@@ -57,8 +57,9 @@ base64 = { version = "0.22", optional = true }
 
 # Local inference (optional)
 # The workspace `ort` pin with `ort`'s default features listed: `download-binaries` fetches the
-# onnxruntime binary at build time. `ort` compiles each execution provider other than the CPU
-# only under its own feature (`onnx-cuda` and `onnx-coreml` below).
+# onnxruntime binary at build time. API level 27 in place of rc.15's default 31, as every crate
+# on the pin requests. `ort` compiles each execution provider other than the CPU only under its
+# own feature (`onnx-cuda` and `onnx-coreml` below).
 ort = { workspace = true, optional = true, features = ["std", "ndarray", "tracing", "download-binaries", "tls-native", "copy-dylibs", "api-27"] }
 tokenizers = { version = "0.22", optional = true }
 hf-hub = { version = "0.5", optional = true }
