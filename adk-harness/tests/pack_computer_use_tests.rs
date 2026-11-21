@@ -86,6 +86,7 @@ impl FakeRuntime {
                     bounds: None,
                     observation_id: "observation-1".into(),
                     screenshot_hash: None,
+                    device_pixel_ratio: None,
                     ui_tree_revision: None,
                     confidence: 1.0,
                     captured_at: "2026-07-13T10:00:00Z".into(),
