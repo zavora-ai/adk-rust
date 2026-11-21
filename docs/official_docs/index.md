@@ -160,6 +160,7 @@ Local-first perception (`adk-vision`, spec 3.7, Experimental): regions in source
 - [Local ONNX Backends](vision/onnx.md) - RF-DETR detection and instance masks, EfficientSAM and SAM 2.1 point and box segmentation, and SigLIP 2 image and text embeddings on ONNX Runtime; the built-in Apache-2.0 models, your own exports, execution providers, offline builds and measured latency
 - [Document Readers](vision/document-readers.md) - PP-OCRv6, PaddleOCR-VL-1.6 and NVIDIA NIM read a page into blocks, reading order, table cells and Markdown, with regions in source pixels
 - [Cloud backends](vision/cloud.md) - `LlmDescriber` over Gemini, Claude, Muse and any `Llm`, region adapters and preflight, NVIDIA NIM, and Meta `sam-3.1`
+- [Streams](vision/streams.md) - Frames from RTSP cameras, video files, screens, browser pages and the web home camera; sampling, the frame governor, the privacy step before any write, 30-day evidence retention, and the stream pipeline with its observation sink
 - [Local Describer](vision/local-describer.md) - Qwen3-VL in this process through mistral.rs: verified weights, regions in the model's own 0–1000 frame, `InProcess` so no image reaches the egress gate
 - [Vision Evals](vision/evals.md) - Image fixtures pinned by digest, regions, masks, OCR, fields, detections and grounding scored in source pixels, backends as eval agents, and `cargo adk eval` baselines
 - [Vision Benchmarks](vision/benchmarks.md) - Latency, accuracy and cost per backend side by side, measured with the machine and versions, and the nightly run
