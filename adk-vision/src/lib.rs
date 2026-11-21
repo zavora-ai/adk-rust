@@ -30,6 +30,7 @@
 //! | `cloud` | `LlmDescriber` over any `adk_core::Llm` that takes images, with the Gemini, Claude and 0–1000 region adapters |
 //! | `nim` | NVIDIA NIM: vision-language models over the OpenAI-compatible client, and `NimDocumentReader` for NVIDIA's OCR, page, table and chart endpoints, remote (implies `cloud`) |
 //! | `sam` | The Meta `sam-3.1` client: `SamSegmenter`, its stream parser and mask placement |
+//! | `sam-codec` | `LicensedMaskDecoder`: `sam-3.1` masks decoded in process by `adk-vision-sam-codec`, the port of Meta's codec under the SAM License, after a person records acceptance (implies `sam`) |
 //! | `ocr` | `PpOcrReader`: PP-OCRv6 text lines and words through `oar-ocr` on ONNX Runtime |
 //! | `ocr-vl` | `PaddleOcrVlReader`: PaddleOCR-VL-1.6 with PP-DocLayoutV3 through `oar-ocr-vl` on Candle |
 //! | `ocr-vl-metal` | `ocr-vl` on Apple GPUs |
@@ -110,6 +111,7 @@ mod geometry;
 #[cfg(feature = "guardrail")]
 mod guardrail;
 mod manifest;
+mod mask_decoder;
 mod measure;
 mod media;
 #[cfg(feature = "mistralrs")]
@@ -164,6 +166,9 @@ pub use manifest::{
     AcceptanceStore, FileAcceptanceStore, InMemoryAcceptanceStore, InputSpec, IoSpec,
     LicenceAcceptance, LicenceClass, LicenceGate, LicenceInfo, LicencePolicy, ManifestSet,
     ModelFile, ModelManifest, ModelSource, RuntimeSpec, VerifiedFile, VerifiedModel, VisionTask,
+};
+pub use mask_decoder::{
+    DEFAULT_MASK_DECODER_TIMEOUT_SECS, MaskDecoderChoice, SAM_MASK_CODEC_MANIFEST, SamSettings,
 };
 pub use measure::{
     Calibration, CalibrationSource, FiducialSpec, MEASUREMENT_VALIDITY, MeasuredGeometry,

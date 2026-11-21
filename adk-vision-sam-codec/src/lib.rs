@@ -392,7 +392,7 @@ impl<'a> RangeDecoder<'a> {
     }
 
     fn frequency(&mut self, total: u32) -> Result<u32, InvalidMask> {
-        self.scaled = if total == 0 { 0 } else { self.range / total };
+        self.scaled = self.range.checked_div(total).unwrap_or(0);
         if self.scaled == 0 {
             return Err(invalid("Mask payload has invalid coding state."));
         }

@@ -549,3 +549,155 @@ async fn sam_is_reachable_on_a_detection_route() {
     assert_eq!(out.value.len(), 2);
     assert_eq!(out.calls[0].units.get(UsageUnit::Images), 2);
 }
+
+/// A user-installed decoder (`MaskDecoderChoice::External`), played by stub shell scripts.
+#[cfg(unix)]
+mod external_decoder {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    use adk_vision::MaskDecoderChoice;
+    use adk_vision::sam::{ExternalMaskDecoder, SamMaskEncoding};
+
+    use super::*;
+
+    fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    fn mask() -> SamMask {
+        SamMask {
+            height: 2,
+            width: 2,
+            encoding: SamMaskEncoding::Lossless,
+            payload: "~!!!!%abcde".into(),
+        }
+    }
+
+    async fn refusal(body: &str, timeout: Duration) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let decoder =
+            ExternalMaskDecoder::new(script(dir.path(), "decoder", body)).with_timeout(timeout);
+        decoder.decode(&[mask()]).await.unwrap_err().to_string()
+    }
+
+    #[tokio::test]
+    async fn a_configured_program_decodes_the_masks_of_an_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        // The stub keeps what it was given and answers a 2x2 raster with its diagonal set.
+        let input = dir.path().join("input.json");
+        let program = script(
+            dir.path(),
+            "decoder",
+            r#"[ "$1" = "--json" ] || exit 3
+cat > "$2"
+printf '["AQAAAQ=="]'"#,
+        );
+        let line = "<0f>0<|box;x1=100;y1=80;x2=259;y2=199;w=960;h=540|><|mask;x=0;y=0;data=2,2,~!!!!%abcde|>\n";
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(stream(line)),
+            )
+            .mount(&server)
+            .await;
+        let choice = MaskDecoderChoice::external(
+            &program,
+            ["--json".to_string(), input.to_string_lossy().into_owned()],
+        );
+        let sam = SamSegmenter::new(config(&server).with_mask_decoder(choice)).unwrap();
+        let harness = Harness::new(sam, RunBudget::new());
+        let out = harness
+            .runtime
+            .segment(
+                &harness.cx(),
+                &load("cloud/shapes-960x540.png"),
+                &[SegmentPrompt::Concept { text: "red rectangle".into() }],
+            )
+            .await
+            .unwrap();
+        let Shape::Mask(placed) = &out.value[0].shape else { panic!("not a mask") };
+        // Two of the box's four 80x60 quadrants.
+        assert_eq!(placed.area(), 2 * 80 * 60);
+        assert_eq!(placed.bbox().unwrap(), BBox::new(100.0, 80.0, 260.0, 200.0));
+        let sent: Value = serde_json::from_str(&std::fs::read_to_string(input).unwrap()).unwrap();
+        assert_eq!(
+            sent,
+            json!([{"encoding": "lossless", "width": 2, "height": 2, "payload": "~!!!!%abcde"}])
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_program_is_refused_when_the_segmenter_is_built() {
+        for (program, says) in [
+            ("/nonexistent/sam-mask-decode", "`/nonexistent/sam-mask-decode` was not found;"),
+            ("no-such-sam-mask-decoder", "`no-such-sam-mask-decoder` was not found on PATH"),
+        ] {
+            let choice = MaskDecoderChoice::external(program, Vec::<String>::new());
+            let err = SamSegmenter::new(SamConfig::new("k").with_mask_decoder(choice)).unwrap_err();
+            assert!(matches!(err, VisionError::InvalidInput(_)), "{err}");
+            assert!(err.to_string().contains(says), "{err}");
+            assert!(err.to_string().contains("decoder = \"boxes\""), "{err}");
+        }
+        // A program removed after the segmenter was built fails the answer, not a guess.
+        let err = ExternalMaskDecoder::new("/nonexistent/sam-mask-decode")
+            .decode(&[mask()])
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("was not found"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn malformed_answers_are_refused_with_what_went_wrong() {
+        let second = Duration::from_secs(10);
+        let cases = [
+            ("echo not json", "answered unreadable output"),
+            ("echo '[]'", "answered 0 rasters for 1 masks"),
+            ("echo '[\"AQID\"]'", "raster 0 has 3 bytes for a 2x2 mask"),
+            ("echo '[\"%%%\"]'", "raster 0 is not base64"),
+            ("echo 'parser missing' >&2; exit 4", "parser missing"),
+            ("head -c 100000 /dev/zero | tr '\\0' 'A'", "wrote more than"),
+        ];
+        for (body, says) in cases {
+            let message = refusal(body, second).await;
+            assert!(message.contains(says), "{body}: {message}");
+            assert!(message.contains("sam-3.1 mask decoder"), "{message}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_slow_program_is_stopped_at_its_timeout() {
+        let started = Instant::now();
+        let message = refusal("sleep 30", Duration::from_millis(300)).await;
+        assert!(message.contains("took longer than 300ms and was stopped"), "{message}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn metas_parser_runs_in_node_with_the_package_path() {
+        let decoder = ExternalMaskDecoder::meta_parser("/opt/sam/node_modules/@meta-sam/parser");
+        assert_eq!(decoder.program(), Path::new("node"));
+        assert!(format!("{decoder:?}").contains("/opt/sam/node_modules/@meta-sam/parser"));
+        let other = decoder.with_program("/usr/local/bin/node");
+        assert_eq!(other.program(), Path::new("/usr/local/bin/node"));
+    }
+}
+
+#[test]
+fn the_licensed_decoder_without_its_feature_says_how_to_get_it() {
+    let config = SamConfig::new("k").with_mask_decoder(adk_vision::MaskDecoderChoice::Licensed);
+    let result = SamSegmenter::new(config);
+    if cfg!(feature = "sam-codec") {
+        let err = result.unwrap_err();
+        assert!(matches!(err, VisionError::LicenceAcceptanceRequired { .. }), "{err}");
+    } else {
+        let err = result.unwrap_err();
+        assert!(matches!(err, VisionError::Unsupported(_)), "{err}");
+        assert!(err.to_string().contains("`sam-codec` feature"), "{err}");
+    }
+}

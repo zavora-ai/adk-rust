@@ -147,6 +147,10 @@ pub enum RuntimeSpec {
         /// The mistral.rs architecture name.
         architecture: String,
     },
+    /// Rust code compiled into the program, such as the `sam-3.1` mask codec
+    /// (`sam-mask-codec`): its files pin the source the code was ported from, and nothing
+    /// loads them at run time. Its manifest entry exists for the licence acceptance.
+    Native,
 }
 
 /// A model's fixed input size and how an image is fitted into it.

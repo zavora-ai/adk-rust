@@ -1581,6 +1581,7 @@ dependencies = [
  "adk-runner",
  "adk-session",
  "adk-vision",
+ "adk-vision-sam-codec",
  "async-trait",
  "base64 0.22.1",
  "chrono",
