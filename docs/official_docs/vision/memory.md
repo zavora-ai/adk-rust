@@ -199,7 +199,19 @@ Tuesday" by text and by an example torn seal that is not in the corpus. Recall@5
 of Tuesday's three torn seals among the first five hits; the run fails below the baseline
 recorded in `adk-vision/tests/fixtures/memory/s16-baseline.json`.
 
-S16_RESULTS
+The recorded baseline, on an Apple Silicon laptop CPU with `ort` 2.0.0-rc.15:
+
+| Query (Tuesday only) | Torn seals in the first five | Recall@5 |
+|----------------------|------------------------------|----------|
+| Text "a cardboard box with a torn tape seal" | 3 of 3 | 1.00 |
+| Example image of a torn seal | 2 of 3 | 0.67 |
+
+The example image ranks the whole scene — belt, carton, lighting — close to every frame
+(cosines around 0.96), so dented and intact cartons interleave with the torn seals; the text
+query separates them. Indexing the 105 images took about 50 s on the CPU, and the run also
+checks that every hit's artifact loads with its digest and names its storing run, that the
+collection refuses another embedder, and that erasing `conveyor-2` removes its 42 chunks,
+42 captions, 42 artifacts and its graph entity.
 
 ```text
 HF_HUB_CACHE=/path/to/models cargo test -p adk-vision --features memory,onnx \
