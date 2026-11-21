@@ -511,14 +511,22 @@ impl SurfaceEngine {
         );
         let outcome = self.send_message(caller, &facts.session, text).await?;
         let agent = self.projector().agent(&facts.agent).display_name;
+        // Behind an open decision or a running turn the card waits its turn, as a typed message
+        // does (spec 3.3 S-I4).
+        let when = match &outcome {
+            crate::engine::CommandOutcome::Queued { .. } => {
+                format!(
+                    "Raised to the {agent}, who reads it once the open decision or turn is done."
+                )
+            }
+            _ => format!("Raised to the {agent}."),
+        };
         Ok(CardRaised {
             short_digest: crate::evidence::short_digest(&evidence.digest),
             href: crate::viewer::viewer_path(&facts.session, &evidence.artifact.file_name),
             digest: evidence.digest,
             regions: lines.len(),
-            text: format!(
-                "Raised to the {agent}. This one frame is kept as evidence until {kept_until}."
-            ),
+            text: format!("{when} This one frame is kept as evidence until {kept_until}."),
             kept_until: format!("Kept as evidence until {kept_until}"),
             outcome,
         })
