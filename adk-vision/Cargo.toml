@@ -184,6 +184,10 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync
 wiremock = "0.6"
 
 [[test]]
+name = "screen_live_tests"
+required-features = ["computer-use"]
+
+[[test]]
 name = "fetch_tests"
 required-features = ["fetch"]
 

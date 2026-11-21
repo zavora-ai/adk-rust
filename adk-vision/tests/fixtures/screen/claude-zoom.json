@@ -1,0 +1,43 @@
+{
+  "answer": "The small button in the bottom-left corner is labeled \"HELP\". I zoomed in to confirm it, then clicked SAVE once. I didn't take a screenshot afterward, so I haven't confirmed that the save went through.",
+  "calls": [
+    {
+      "args": {},
+      "name": "computer.screenshot"
+    },
+    {
+      "args": {
+        "region": [
+          0,
+          1460,
+          300,
+          1546
+        ]
+      },
+      "name": "computer.zoom"
+    },
+    {
+      "args": {
+        "coordinate": [
+          1580,
+          960
+        ]
+      },
+      "name": "computer.left_click"
+    }
+  ],
+  "model": "claude-sonnet-5-5",
+  "recorded": "2026-11-21T10:45:39.624197+00:00",
+  "screenshot": {
+    "devicePixelRatio": 2.0,
+    "sent": [
+      2380,
+      1546
+    ],
+    "source": [
+      3024,
+      1964
+    ]
+  },
+  "tool": "computer_toolset_20260801"
+}
