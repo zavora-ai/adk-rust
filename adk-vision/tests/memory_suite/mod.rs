@@ -225,7 +225,7 @@ where
                 pixels,
                 format!("camera-1 carton {n}: seal torn"),
                 "camera-1",
-                at(&format!("2026-11-17T0{}:00:00Z", 8 + n)),
+                at(&format!("2026-11-17T{:02}:00:00Z", 8 + n)),
             )
             .with_labels(["torn seal"])
             .with_run("run-tue"),
@@ -355,6 +355,7 @@ where
         .config(RagConfig::builder().top_k(1).similarity_threshold(-1.0).build().unwrap())
         .embedding_provider(provider)
         .vector_store(store.clone())
+        .chunker(Arc::new(adk_rag::FixedSizeChunker::new(512, 0)))
         .build()
         .unwrap();
     let found = pipeline.scoped(scope.clone()).query(COLLECTION, "green").await.unwrap();

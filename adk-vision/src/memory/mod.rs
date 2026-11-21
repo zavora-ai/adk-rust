@@ -7,7 +7,7 @@
 //! | Index | [`VisualMemory::index`] embeds each image through the [`VisionRuntime`] — metered, local first — and stores one [`Chunk`] per image: `text` is the caption, `embedding` the image vector, `source_uri` the artifact's URI, and `metadata` the digest, artifact, region, source, capture time and the run that stored it |
 //! | Query | [`VisualMemory::search_text`] embeds the text into the same space (SigLIP 2 has one space for texts and images); [`VisualMemory::search_image`] embeds an example image. Each [`VisualHit`] names its artifact and its run |
 //! | One space | The collection records its [`EmbeddingSpace`] — model, revision, dimensions, metric — when it is first opened, and refuses an embedder of another space with [`VisionError::SpaceMismatch`]: changing the embedder means a new collection, never mixed vectors |
-//! | Captions | With [`captions`](VisualMemoryBuilder::captions), each caption is an `adk-memory` entry whose content is the caption's text and a `Part::FileData` reference to its artifact, so keyword recall finds it and returns the image's locator |
+//! | Captions | With [`captions`](VisualMemoryBuilder::captions), each caption is an `adk-memory` entry — its own memory session, named by its chunk — whose content is the caption's text and a `Part::FileData` reference to its artifact, so keyword recall finds it and returns the image's locator |
 //! | Graph | With [`graph`](VisualMemoryBuilder::graph), each source is an entity whose observations are its captions, related to the labels seen in it |
 //! | Erasure | [`VisualMemory::erase_source`] deletes a source's chunks, captions, graph entity and the artifacts no other chunk of the scope still uses, and writes `vision.memory.erased` |
 //!
@@ -729,6 +729,9 @@ impl VisualMemory {
         if let Some(captions) = &self.captions {
             for (item, chunk) in items.iter().zip(&chunks) {
                 let at = &item.image.artifact;
+                // Each caption is a memory session of its own, named by its chunk:
+                // `add_session` replaces a session on some backends and appends on others,
+                // and one caption per session behaves the same on both.
                 captions.delete_memory(&at.app_name, &at.user_id, &chunk.id).await?;
                 let entry = MemoryEntry::new(
                     Content::new("model").with_text(item.caption.clone()),
@@ -737,9 +740,7 @@ impl VisualMemory {
                 .with_id(chunk.id.clone())
                 .with_timestamp(item.captured_at)
                 .with_artifact(artifact_uri(at), item.image.mime_type.clone());
-                captions
-                    .add_session(&at.app_name, &at.user_id, &at.session_id, vec![entry])
-                    .await?;
+                captions.add_session(&at.app_name, &at.user_id, &chunk.id, vec![entry]).await?;
             }
         }
         if let Some(graph) = &self.graph {

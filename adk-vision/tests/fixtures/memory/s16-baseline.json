@@ -1,0 +1,7 @@
+{
+  "scenario": "S16",
+  "model": "siglip2-base-patch16-256-quantized",
+  "textQuery": "a cardboard box with a torn tape seal",
+  "textRecallAt5": 0.0,
+  "imageRecallAt5": 0.0
+}
