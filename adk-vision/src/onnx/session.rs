@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use ort::ep::ExecutionProviderDispatch;
 use ort::session::Session;
-use ort::session::builder::{AutoDevicePolicy, GraphOptimizationLevel};
+use ort::session::builder::GraphOptimizationLevel;
 use ort::value::{DynValue, Tensor};
 use serde::{Deserialize, Serialize};
 
@@ -31,8 +31,8 @@ use crate::manifest::{ModelManifest, RuntimeSpec, VerifiedFile, VerifiedModel, V
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum OnnxExecutionProvider {
-    /// The CPU. The session is pinned to it rather than left to onnxruntime's automatic
-    /// device selection.
+    /// The CPU. No accelerator is registered, and onnxruntime's automatic device selection
+    /// stays off: the workspace turns on no `ort` API level that enables it.
     #[default]
     Cpu,
     /// CoreML on Apple silicon (feature `onnx-coreml`).
@@ -176,11 +176,7 @@ impl OrtModel {
                     options.execution_provider
                 ))
             })?,
-            // `ort` asks onnxruntime to pick a device for efficiency unless told otherwise,
-            // and an onnxruntime build with CoreML then picks CoreML.
-            None => builder
-                .with_auto_device(AutoDevicePolicy::PreferCPU)
-                .map_err(|e| failed(format!("could not pin the session to the cpu: {e}")))?,
+            None => builder,
         };
         let session = builder
             .commit_from_file(file.path())
@@ -358,6 +354,15 @@ pub(crate) fn manifest_error(manifest: &ModelManifest, reason: String) -> Vision
 mod tests {
     use super::*;
     use crate::manifest::{InMemoryAcceptanceStore, LicenceGate, LicencePolicy, ManifestSet};
+
+    #[test]
+    fn onnxruntime_picks_no_device_by_itself() {
+        // From API level 22 `ort` asks onnxruntime to pick each session's device, and on Apple
+        // silicon it picks CoreML for PP-OCRv6, which then reads at about half the speed.
+        const {
+            assert!(ort::sys::ORT_API_VERSION < 22, "a crate in this build turns on `ort` api-22+");
+        }
+    }
 
     #[test]
     fn an_accelerator_registers_only_when_its_feature_is_compiled() {

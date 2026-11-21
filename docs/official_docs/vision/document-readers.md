@@ -186,10 +186,7 @@ the backend's line box.
 | PaddleOCR-VL-1.6, CPU | 135.6 s | 100.0% without chart labels, 92.5% with | 4/27 (blocks, not lines) | 5 px / 44 px |
 | PaddleOCR-VL-1.6, Metal | 12.4 s | the same | the same | the same |
 
-PP-OCRv6's line boxes include the detector's unclip margin, about 5–7 px around the ink. The
-PP-OCRv6 rows ran on onnxruntime 1.28; on 1.31 (`ort` 2.0.0-rc.15) the text is unchanged, and
-small's boxes are about 2 px wider (edge error 9 px / 11 px), with one extra single-character
-block over a chart bar.
+PP-OCRv6's line boxes include the detector's unclip margin, about 5–7 px around the ink.
 PaddleOCR-VL answers in layout blocks, so only single-line blocks match a ground-truth line,
 and it reads a chart as a figure: its tick and axis labels need chart recognition, which the
 reader does not run.

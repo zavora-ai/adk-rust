@@ -110,8 +110,9 @@ reqwest = { workspace = true, optional = true }
 hf-hub = { version = "0.5", optional = true, default-features = false, features = ["ureq"] }
 # Only to read the HTTP status of a refused download (401 and 403 mean licence acceptance).
 ureq = { version = "3", optional = true, default-features = false }
-# The workspace `ort` pin; each `onnx*` feature adds how onnxruntime is linked.
-ort = { workspace = true, optional = true, features = ["std", "tracing", "api-27"] }
+# The workspace `ort` pin, with no `api-*` level (see the root `ort` pin); each `onnx*` feature
+# adds how onnxruntime is linked.
+ort = { workspace = true, optional = true, features = ["std", "tracing"] }
 # SigLIP 2's Gemma tokenizer. `onig` alone, as adk-rag: `esaxx_fast` links a static-CRT object
 # that rust-lld refuses next to ort's dynamic-CRT objects on MSVC.
 tokenizers = { version = "0.22", optional = true, default-features = false, features = ["onig"] }

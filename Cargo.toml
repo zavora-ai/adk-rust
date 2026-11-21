@@ -208,7 +208,9 @@ pgvector = "0.4.2"
 # ONNX Runtime for every crate that runs ONNX models. One exact pin: every 2.0.0 pre-release is
 # one Cargo compatibility range, so two exact pins cannot resolve together. It is the version
 # `oar-ocr` 0.11 pins (spec 3.7 Q7). Default features are off so each crate states how it links.
-# `ort` allows one environment per process: crates take it from `adk_core::onnx`.
+# `ort` allows one environment per process: crates take it from `adk_core::onnx`. No crate turns
+# on an `api-*` level of 22 or more: from 22 `ort` lets onnxruntime pick each session's device,
+# which on Apple silicon is CoreML, and `oar-ocr` sessions offer no way to opt out.
 ort = { version = "=2.0.0-rc.15", default-features = false }
 
 # ADK internal crates (use { workspace = true } in member crates)

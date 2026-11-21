@@ -246,7 +246,7 @@ assert_eq!(options.execution_provider, OnnxExecutionProvider::CoreMl);
 
 | `OnnxExecutionProvider` | Needs | Behaviour |
 |-------------------------|-------|-----------|
-| `Cpu` (default) | — | The session is pinned to the CPU. `ort` otherwise asks onnxruntime to pick a device for efficiency, which an onnxruntime build with CoreML resolves to CoreML |
+| `Cpu` (default) | — | No accelerator is registered and onnxruntime picks no device itself: the workspace turns on no `ort` API level of 22 or more, from which `ort` asks onnxruntime to pick a device for efficiency, CoreML on Apple silicon |
 | `CoreMl` | `onnx-coreml` | CoreML takes the nodes it supports; the CPU runs the rest |
 | `Cuda` | `onnx-cuda` | CUDA takes the nodes it supports; the CPU runs the rest |
 
@@ -269,8 +269,8 @@ HF_HUB_CACHE=/var/lib/models HF_HUB_OFFLINE=1 \
   ./my-agent
 ```
 
-The crate's live tests pass against onnxruntime 1.28 (the `ort` download) and against
-onnxruntime 1.32 loaded this way.
+The crate's live tests pass against onnxruntime 1.31 (the `ort` download); with `ort`
+2.0.0-rc.13 they also passed against onnxruntime 1.32 loaded this way.
 
 ## One ONNX Runtime Environment
 
@@ -304,6 +304,11 @@ fn main() -> ort::Result<()> {
 | Nothing installed | The first model load builds the environment; it lives until the process exits |
 | `set_ort_environment` after a model loaded, or called twice | An error: the environment is already installed |
 | Other code built an environment first and did not install it | Loading a model fails with an error that names `set_ort_environment` |
+
+> **Note:** Keep `ort`'s `api-*` features below 22 in a build that runs ADK-Rust's ONNX models,
+> `ort`'s own default features included. From 22, `ort` lets onnxruntime pick each session's
+> device; on Apple silicon it picks CoreML for PP-OCRv6, which then reads at about half the speed
+> with two to three times the memory, and `oar-ocr` sessions cannot be pinned back to the CPU.
 
 ## Measured Results
 

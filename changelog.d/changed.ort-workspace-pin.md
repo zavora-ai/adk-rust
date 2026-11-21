@@ -8,3 +8,8 @@
   so `adk-audio`, `adk-rag` and `adk-vision` take it from `adk_core::onnx::ort_environment`, and
   `adk-vision` hands it to `oar-ocr`. An application installs its own with
   `adk_core::onnx::set_ort_environment` before the first model loads.
+- **ONNX models run on the CPU unless an accelerator is chosen** (`adk-audio`, `adk-rag`,
+  `adk-vision`): no crate on the pin turns on an `ort` API level of 22 or more, from which `ort`
+  lets onnxruntime pick each session's device, CoreML on Apple silicon. `adk-audio` and
+  `adk-rag` sessions on Apple silicon no longer move to CoreML on their own; PP-OCRv6 keeps its
+  CPU speed and memory under onnxruntime 1.31.
