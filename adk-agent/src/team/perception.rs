@@ -9,7 +9,7 @@
 //! | Role | Capability | Edge input | Edge output |
 //! |---|---|---|---|
 //! | Perceiver | [`PERCEIVER_CAPABILITY`] | [`perceiver_input_schema`]: an image and what to look for | Free-form regions |
-//! | Reasoner | [`REASONER_CAPABILITY`] | [`reasoner_input_schema`]: a question, a `RegionSet`, measurements and released crop digests — no pixels | [`opinion_schema`] |
+//! | Reasoner | [`REASONER_CAPABILITY`] | [`reasoner_input_schema`]: a question, its verdicts, a `RegionSet`, measurements and released crop digests — no pixels | [`opinion_schema`] |
 //! | Verifier | [`VERIFIER_CAPABILITY`] | [`verifier_input_schema`]: a claim, its regions and the source image's digest | [`opinion_schema`] |
 //!
 //! Every edge is isolated with no history, so a member sees only the request its contract
@@ -96,6 +96,12 @@ pub fn reasoner_input_schema() -> Value {
         "required": ["question", "regions"],
         "properties": {
             "question": { "type": "string", "minLength": 1 },
+            "verdicts": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 },
+                "minItems": 2,
+                "description": "The verdicts the answer must be one of."
+            },
             "regions": { "type": "object", "description": "A RegionSet in source pixels." },
             "measurements": { "type": "array", "items": { "type": "object" } },
             "crops": {
