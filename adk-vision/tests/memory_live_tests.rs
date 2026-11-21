@@ -4,7 +4,7 @@
 //!
 //! | Check | Pass condition |
 //! |-------|----------------|
-//! | Recall@5, text and example image | at or above the baseline in `fixtures/memory/s16-baseline.json` |
+//! | Recall@5, text and example image | at or above the baseline in `fixtures/memory/s16-baseline.json`, recorded as hit counts |
 //! | Links | each hit's artifact loads with the hit's digest; its run is the run that stored it |
 //! | One space | the SigLIP 2 collection refuses an embedder of another space |
 //! | Erasure | erasing a camera leaves none of its chunks, captions or artifacts |
@@ -54,22 +54,24 @@ const TEXT_VARIANTS: [&str; 3] =
 struct Baseline {
     model: String,
     text_query: String,
-    text_recall_at_5: f32,
-    image_recall_at_5: f32,
+    /// Tuesday's torn seals: the denominator of Recall@5.
+    relevant: usize,
+    /// Of them, how many the first five hits hold, by text and by the example image. Counts,
+    /// not ratios, so the gate compares integers.
+    text_hits_at_5: usize,
+    image_hits_at_5: usize,
 }
 
 fn baseline() -> Baseline {
     serde_json::from_str(include_str!("fixtures/memory/s16-baseline.json")).unwrap()
 }
 
-fn recall_at(
-    k: usize,
-    hits: &[VisualHit],
-    relevant: &BTreeSet<String>,
-    ids: &dyn Fn(&VisualHit) -> String,
-) -> f32 {
-    let found = hits.iter().take(k).filter(|h| relevant.contains(&ids(h))).count();
-    found as f32 / relevant.len() as f32
+fn hits_at(k: usize, hits: &[VisualHit], relevant: &BTreeSet<String>) -> usize {
+    hits.iter().take(k).filter(|h| relevant.contains(&h.id)).count()
+}
+
+fn recall_at(k: usize, hits: &[VisualHit], relevant: &BTreeSet<String>) -> f32 {
+    hits_at(k, hits, relevant) as f32 / relevant.len() as f32
 }
 
 struct Week {
@@ -146,7 +148,7 @@ async fn s16(
     store: Arc<dyn VectorStore>,
     runtime: Arc<VisionRuntime>,
     week: &Week,
-) -> (f32, f32) {
+) -> (usize, usize, usize) {
     let captions = Arc::new(InMemoryMemoryService::new());
     let graph = Arc::new(GraphMemoryService::new("sqlite::memory:").await.unwrap());
     graph.migrate().await.unwrap();
@@ -182,14 +184,13 @@ async fn s16(
             week.items[n].chunk_id()
         })
         .collect();
-    let by_id = |h: &VisualHit| h.id.clone();
     let from_tuesday = VisualQuery::top(5).captured_on([tuesday]);
 
     let text = memory.search_text(&cx, &scope, TEXT_QUERY, &from_tuesday).await.unwrap().value;
-    let text_recall = recall_at(5, &text, &relevant, &by_id);
+    let text_recall = recall_at(5, &text, &relevant);
     let example = SourceImage::from_pixels(week.corpus.example(Some(Defect::TornSeal))).unwrap();
     let image = memory.search_image(&cx, &scope, &example, &from_tuesday).await.unwrap().value;
-    let image_recall = recall_at(5, &image, &relevant, &by_id);
+    let image_recall = recall_at(5, &image, &relevant);
     for (query, hits) in [(TEXT_QUERY, &text), ("example image", &image)] {
         eprintln!("{label} | torn seals from Tuesday by {query:?}:");
         for hit in hits.iter() {
@@ -209,7 +210,7 @@ async fn s16(
         let hits = memory.search_text(&cx, &scope, variant, &from_tuesday).await.unwrap().value;
         eprintln!(
             "{label}: Recall@5 for {variant:?} (not gated): {:.3}",
-            recall_at(5, &hits, &relevant, &by_id)
+            recall_at(5, &hits, &relevant)
         );
     }
     let week_relevant: BTreeSet<String> = week
@@ -225,7 +226,7 @@ async fn s16(
     eprintln!(
         "{label}: whole week by example image, Recall@10 of the {} torn seals: {:.3}",
         week_relevant.len(),
-        recall_at(10, &whole, &week_relevant, &by_id)
+        recall_at(10, &whole, &week_relevant)
     );
 
     // Each hit links to its artifact (the bytes load and match the digest) and its run.
@@ -313,7 +314,7 @@ async fn s16(
         erased.artifacts.len(),
         erased.entities
     );
-    (text_recall, image_recall)
+    (relevant.len(), hits_at(5, &text, &relevant), hits_at(5, &image, &relevant))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -326,17 +327,18 @@ async fn live_s16_torn_seals_from_tuesday() {
     assert_eq!(baseline.model, MODEL);
     assert_eq!(baseline.text_query, TEXT_QUERY);
 
-    let (text, image) =
+    let (relevant, text, image) =
         s16("in-memory", Arc::new(InMemoryVectorStore::new()), runtime.clone(), &week).await;
+    assert_eq!(relevant, baseline.relevant);
     assert!(
-        text >= baseline.text_recall_at_5,
-        "text Recall@5 {text} under the baseline {}",
-        baseline.text_recall_at_5
+        text >= baseline.text_hits_at_5,
+        "text: {text} of {relevant} in the first five, under the baseline {}",
+        baseline.text_hits_at_5
     );
     assert!(
-        image >= baseline.image_recall_at_5,
-        "image Recall@5 {image} under the baseline {}",
-        baseline.image_recall_at_5
+        image >= baseline.image_hits_at_5,
+        "example image: {image} of {relevant} in the first five, under the baseline {}",
+        baseline.image_hits_at_5
     );
 
     #[cfg(feature = "memory-lancedb")]
@@ -346,11 +348,7 @@ async fn live_s16_torn_seals_from_tuesday() {
             adk_rag::lancedb::LanceDBVectorStore::new(dir.path().to_str().unwrap()).await.unwrap();
         // The artifacts conveyor-2 lost in the first run are stored again.
         let week = self::week().await;
-        let (lance_text, lance_image) = s16("lancedb", Arc::new(store), runtime, &week).await;
-        assert_eq!(
-            (lance_text, lance_image),
-            (text, image),
-            "the backend does not change the answer"
-        );
+        let lance = s16("lancedb", Arc::new(store), runtime, &week).await;
+        assert_eq!(lance, (relevant, text, image), "the backend does not change the answer");
     }
 }
