@@ -249,6 +249,10 @@ vision = ["dep:adk-vision", "adk-vision/fetch", "adk-vision/cloud", "adk-vision/
 # SAM 2.1 on ONNX Runtime, PP-OCRv6 and PaddleOCR-VL-1.6, and the face and personal-text
 # redactors the egress gate runs. ONNX Runtime is downloaded at build time.
 vision-local = ["vision", "adk-vision/onnx", "adk-vision/ocr", "adk-vision/ocr-vl"]
+# `vision run --mask-decoder licensed`: `sam-3.1` masks decoded in process by
+# `adk-vision-sam-codec`, the port of Meta's codec under the SAM License (not Apache-2.0), once
+# `vision models accept sam-mask-codec` records a person's acceptance. In no adk-rust tier.
+vision-sam-codec = ["vision", "adk-vision/sam-codec"]
 
 # Standard error to terminal.log while the full screen is up (spec 3.3 §5.2, S-I9)
 [target.'cfg(unix)'.dependencies]

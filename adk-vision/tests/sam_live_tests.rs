@@ -95,7 +95,7 @@ impl SamMaskDecoder for Dump {
                     "encoding": mask.encoding,
                     "width": mask.width,
                     "height": mask.height,
-                    "payload": mask.payload,
+                    "payload": format!("{}{}", mask.encoding.marker(), mask.payload),
                     "sha256": hex::encode(sha2::Sha256::digest(&bytes)),
                 });
                 writeln!(file, "{line}").unwrap();

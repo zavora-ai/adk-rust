@@ -159,6 +159,8 @@
 # with `vision-local` the on-device backends and the gate's redactors.
 8 adk-cli vision
 8 adk-cli vision-local
+# `vision run --mask-decoder licensed`: the SAM-licensed codec behind recorded acceptance.
+8 adk-cli vision-sam-codec
 # The `chat` end-to-end tests in a pseudo-terminal: held calls, Ctrl-C, sessions; with
 # `audit-sql`, "Hire a helper" (spec 3.3 §12 phase 4) checks the kernel's record with `audit verify`.
 10 adk-cli scripted-model,audit-sql solo
@@ -475,6 +477,9 @@
 # building, stream parser and mask placement on recorded streams.
 6 adk-vision cloud,conformance doc
 6 adk-vision sam doc
+# The licensed sam-3.1 mask decoder: Meta's parser as the oracle, the licence gate, conformance
+# with masks; the codec crate itself is a default workspace member.
+6 adk-vision sam-codec doc
 # The conformance suite and its macros on their own.
 6 adk-vision conformance
 # `onnx-coreml`, `onnx-cuda` and `ocr-vl-metal` need GPU toolchains a runner does not have, and

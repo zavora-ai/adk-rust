@@ -155,6 +155,20 @@ allow = ["CDDL-1.0"]
 crate = "intel-mkl-src"
 allow = ["LicenseRef-Intel-Simplified-Software-License"]
 
+# `adk-vision-sam-codec` is this workspace's port of the mask codec in Meta's
+# `@meta-sam/parser`, a derivative of SAM Materials that clause 1.b.i of the SAM License
+# requires to be distributed under that licence. It is the only crate allowed it, reached only
+# through the opt-in `adk-vision/sam-codec` feature, which is in no adk-rust tier. See
+# docs/security/DEPENDENCY-ADVISORIES.md ("Non-OSI dependency licenses").
+[[licenses.clarify]]
+crate = "adk-vision-sam-codec"
+expression = "LicenseRef-SAM"
+license-files = [{ path = "LICENSE", hash = 0x00000000 }]
+
+[[licenses.exceptions]]
+crate = "adk-vision-sam-codec"
+allow = ["LicenseRef-SAM"]
+
 [licenses.private]
 # `xtask` is the repo-internal task runner (`publish = false`) and carries no
 # license field.

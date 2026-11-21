@@ -573,7 +573,7 @@ mod external_decoder {
             height: 2,
             width: 2,
             encoding: SamMaskEncoding::Lossless,
-            payload: "~!!!!%abcde".into(),
+            payload: "!!!!%abcde".into(),
         }
     }
 

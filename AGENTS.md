@@ -291,6 +291,7 @@ adk-sandbox/       Process/WASM sandboxes; Seatbelt, bubblewrap and Windows rest
 adk-audio/         STT/TTS providers, desktop audio, ONNX models (Whisper, Kokoro, ...)
 adk-rag/           Retrieval-augmented generation pipelines and vector store backends
 adk-vision/        Perception: regions in source pixels, manifests, traits, runtime, egress gate, governed tools, image privacy guardrail (`guardrail`)
+adk-vision-sam-codec/ Meta sam-3.1 mask codec ported from `@meta-sam/parser`; SAM License, not Apache-2.0 (`adk-vision/sam-codec`)
 adk-action/        Action node types and variable interpolation for adk-graph
 adk-enterprise/    HTTP/SSE client for the ADK-Rust Enterprise Managed Agent Service
 adk-managed/       Provider-neutral managed agent runtime with durable, parked turns

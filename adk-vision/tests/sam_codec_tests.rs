@@ -182,7 +182,13 @@ async fn recorded_masks_cover_the_drawn_shapes() {
         let region = out.value.iter().find(|r| r.label.as_deref() == Some(*name)).unwrap();
         let Shape::Mask(mask) = &region.shape else { panic!("{name} is not a mask") };
         let score = iou(mask, want);
-        println!("recorded sam-3.1 {name}: mask IoU {score:.4}");
+        let b = mask.bbox().unwrap();
+        let mut boxed = vec![false; 960 * 540];
+        for y in b.y0 as usize..b.y1 as usize {
+            boxed[y * 960 + b.x0 as usize..y * 960 + b.x1 as usize].fill(true);
+        }
+        let box_score = iou(&Mask::encode(960, 540, &boxed), want);
+        println!("recorded sam-3.1 {name}: mask IoU {score:.4}, its box alone {box_score:.4}");
         // A box covers a circle at pi/4 and a triangle at 1/2; only a decoded mask scores here.
         assert!(score > 0.97, "{name}: mask IoU {score}");
     }

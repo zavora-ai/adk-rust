@@ -217,7 +217,8 @@ impl SamMaskDecoder for ExternalMaskDecoder {
                     "encoding": m.encoding,
                     "width": m.width,
                     "height": m.height,
-                    "payload": m.payload,
+                    // The wire text: Meta's decoders read the marker as part of the payload.
+                    "payload": format!("{}{}", m.encoding.marker(), m.payload),
                 })
             })
             .collect();
@@ -242,6 +243,13 @@ impl SamMaskDecoder for ExternalMaskDecoder {
         let mut stdin = child.stdin.take().ok_or_else(|| decoder_error("no stdin".into()))?;
         let stdout = child.stdout.take().ok_or_else(|| decoder_error("no stdout".into()))?;
         let stderr = child.stderr.take().ok_or_else(|| decoder_error("no stderr".into()))?;
+        // Standard error drains on its own, so a program stopped for writing too much still
+        // closes it.
+        let errors = tokio::spawn(async move {
+            let mut err = Vec::new();
+            let _ = stderr.take(MAX_STDERR).read_to_end(&mut err).await;
+            err
+        });
         let work = async {
             // A program that exits without reading its input closes the pipe; its exit
             // status and output say why.
@@ -250,20 +258,17 @@ impl SamMaskDecoder for ExternalMaskDecoder {
                 drop(stdin);
             };
             let mut out = Vec::new();
-            let mut err = Vec::new();
             let mut stdout = stdout.take(max_stdout + 1);
-            let mut stderr = stderr.take(MAX_STDERR);
-            let (_, a, b) = tokio::join!(
-                written,
-                stdout.read_to_end(&mut out),
-                stderr.read_to_end(&mut err),
-            );
-            a?;
-            b?;
-            let status = child.wait().await?;
-            Ok::<_, std::io::Error>((status, out, err))
+            let (_, read) = tokio::join!(written, stdout.read_to_end(&mut out));
+            read?;
+            if out.len() as u64 > max_stdout {
+                child.start_kill()?;
+                child.wait().await?;
+                return Ok((None, out));
+            }
+            Ok::<_, std::io::Error>((Some(child.wait().await?), out))
         };
-        let (status, out, err) = tokio::time::timeout(self.timeout, work)
+        let (status, out) = tokio::time::timeout(self.timeout, work)
             .await
             .map_err(|_| {
                 decoder_error(format!(
@@ -273,18 +278,25 @@ impl SamMaskDecoder for ExternalMaskDecoder {
                 ))
             })?
             .map_err(|e| decoder_error(format!("`{program}`: {e}")))?;
+        let Some(status) = status else {
+            return Err(decoder_error(format!(
+                "`{program}` wrote more than {max_stdout} bytes for {} masks and was stopped; it \
+                 must write one JSON array of base64 rasters",
+                masks.len()
+            )));
+        };
         if !status.success() {
+            // A child the program left behind may hold standard error open; wait briefly.
+            let err = tokio::time::timeout(Duration::from_secs(1), errors)
+                .await
+                .ok()
+                .and_then(std::result::Result::ok)
+                .unwrap_or_default();
             let err = String::from_utf8_lossy(&err);
             let first = err.lines().find(|l| !l.trim().is_empty()).unwrap_or_default();
             return Err(decoder_error(format!("`{program}` exited with {status}: {first}")));
         }
-        if out.len() as u64 > max_stdout {
-            return Err(decoder_error(format!(
-                "`{program}` wrote more than {max_stdout} bytes for {} masks; it must write one \
-                 JSON array of base64 rasters",
-                masks.len()
-            )));
-        }
+        errors.abort();
         let rasters: Vec<String> = serde_json::from_slice(&out).map_err(|e| {
             decoder_error(format!(
                 "`{program}` answered unreadable output ({e}); it must write one JSON array of \
@@ -399,12 +411,9 @@ impl SamMaskDecoder for LicensedMaskDecoder {
                         SamMaskEncoding::Lossless => Encoding::Lossless,
                         SamMaskEncoding::OneBit => Encoding::OneBit,
                     };
-                    let mask = EncodedMask {
-                        encoding,
-                        width: m.width,
-                        height: m.height,
-                        payload: &m.payload,
-                    };
+                    let text = format!("{}{}", m.encoding.marker(), m.payload);
+                    let mask =
+                        EncodedMask { encoding, width: m.width, height: m.height, payload: &text };
                     decode_mask_to_raster(&mask, max_area)
                         .map(|raster| raster.into_iter().map(|b| b == 1).collect())
                         .map_err(|e| VisionError::Parse {

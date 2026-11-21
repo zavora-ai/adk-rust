@@ -67,6 +67,7 @@ The table below assigns one stability tier to every public `adk-*` crate in the 
 | `adk-site` | **Experimental** | Site pipeline for AWP 2.0 websites: content, generator, launch gate, signed releases, site log, hosts (spec 3.5) |
 | `adk-drivers` | **Experimental** | Service drivers: DNS and registrar, email, analytics and search console, social and advertising, as kernel driver manifests with conformance suites (spec 3.5 §7.13) |
 | `adk-vision` | **Experimental** | Local-first perception: media by digest, regions in source pixels with their transform chains, model manifests pinned by revision and SHA-256, the perception traits with conformance suites, the runtime and the egress gate (spec 3.7) |
+| `adk-vision-sam-codec` | **Experimental** | Meta `sam-3.1` mask codec, ported from `@meta-sam/parser` and distributed under the SAM License, not Apache-2.0 (spec 3.7 §7.7) |
 | `adk-website` | **Experimental** | The prebuilt AWP 2.0 website: site kinds, the team of eight agents, onboarding, themes, capability packs, playbooks, incidents, alarms and the weekly review (spec 3.5 Part C) |
 
 ### Beta Crate Rationale
@@ -242,7 +243,7 @@ the major version on the breaking changes listed in the
 | Server exposure | `adk-server` binds `127.0.0.1` through the launchers, refuses unlisted hosts, and allows no cross-origin access by default |
 | Errors | `ErrorCategory` gains `Conflict` and `ResourceExhausted`; guardrail blocks and tool argument errors carry stable codes |
 | Dependencies | SQLx 0.9 for every SQL backend; see the [Public Dependency Policy](#public-dependency-policy) |
-| New crates | `adk-harness`, `adk-kernel` and `adk-surface` (Beta); `adk-site`, `adk-drivers`, `adk-website` and `adk-vision` (Experimental) |
+| New crates | `adk-harness`, `adk-kernel` and `adk-surface` (Beta); `adk-site`, `adk-drivers`, `adk-website`, `adk-vision` and `adk-vision-sam-codec` (Experimental) |
 
 [What's new in 3.0](docs/official_docs/whats-new-3.0.md) lists what the release adds.
 

@@ -248,18 +248,19 @@ The following crates are flagged by `cargo audit` as unmaintained. Each has been
 
 ## Non-OSI dependency licenses
 
-One optional feature links code under a license that is not OSI-approved, and one
-links file-level copyleft code. Both are allowed per-crate in
+Two optional features link code under a license that is not OSI-approved, and one
+links file-level copyleft code. Each is allowed per-crate in
 [`deny.toml`](../../deny.toml) rather than through the global allow-list, so enabling
 the feature is a visible decision.
 
 | Crate | License | Reached through | Note |
 |---|---|---|---|
 | `intel-mkl-src` | Intel Simplified Software License | `adk-mistralrs/mkl` | Intel's redistribution terms apply to the bundled MKL binaries. |
+| `adk-vision-sam-codec` | SAM License (`LicenseRef-SAM`) | `adk-vision/sam-codec`, `adk-cli/vision-sam-codec` | This workspace's port of Meta's `@meta-sam/parser` mask codec, distributed under the SAM License as its clause 1.b.i requires; use restrictions apply, and `adk-vision` refuses it until a person records acceptance. |
 | `inferno` | CDDL-1.0 (OSI-approved, file-level copyleft) | `adk-rag/lancedb` → `lance-testing` → `pprof` | No obligation on this workspace's own sources. |
 
-`intel-mkl-src` is not enabled by any default, `standard`, `enterprise`, or `full`
-feature tier.
+Neither `intel-mkl-src` nor `adk-vision-sam-codec` is enabled by any default,
+`standard`, `enterprise`, or `full` feature tier.
 
 ---
 
