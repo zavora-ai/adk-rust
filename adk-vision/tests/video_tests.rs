@@ -945,7 +945,8 @@ async fn a_strided_visibility_pass_checks_in_batches_and_refines_every_frame() {
 
 #[tokio::test]
 async fn a_subject_no_frame_shows_names_no_event() {
-    let judge = Arc::new(Judge::new(1..=0, 0));
+    // The forklift is only in frame 99, past the six sampled.
+    let judge = Arc::new(Judge::new(99..=99, 99));
     let describer = LlmDescriber::local(judge.clone()).unwrap();
     let pass = VisibilityPass::new().with_target("the orange forklift");
     let (runtime, _) = local_runtime(FramesAnalyzer::local(&describer).with_visibility_pass(pass));

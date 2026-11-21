@@ -17,7 +17,8 @@
 //!     --test video_local_live_tests -- --ignored --nocapture --test-threads 1
 //! ```
 //!
-//! `ADK_VISION_CLIP` and `ADK_VISION_ENTRY_MS` run the same question over another clip of the
+//! `ADK_VISION_DEVICE` (`cpu`, `metal`, or automatic) picks the device. `ADK_VISION_CLIP` and
+//! `ADK_VISION_ENTRY_MS` run the same question over another clip of the
 //! scene, such as S13's twenty minutes with the entry at 12:45 (765,000 ms), made from the
 //! fixtures' sprites with the overlay of `generate.sh`, `-t 1200`, and the forklift's left
 //! edge at `if(lt(t,760),-400,-200+40*(t-760))`.
@@ -27,7 +28,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use adk_core::{BudgetTracker, ModelCallScope, RunBudget, UsageUnit};
-use adk_mistralrs::MistralRsConfig;
+use adk_mistralrs::{Device, DeviceConfig, MistralRsConfig};
 use adk_vision::mistralrs::QWEN3_VL_4B;
 use adk_vision::{
     DecodeLimits, EgressAction, EgressConfig, EgressGate, FetchConfig, FrameMeta, FrameSourceId,
@@ -79,7 +80,18 @@ async fn qwen() -> LlmDescriber<SentImage> {
         ModelFetcher::new(FetchConfig::from_env(), Arc::new(InMemoryAcceptanceStore::new()));
     let model = fetcher.fetch(ManifestSet::builtin().unwrap().get(&id).unwrap()).await.unwrap();
     let loaded = Instant::now();
-    let qwen = LlmDescriber::mistralrs(&model, MistralRsConfig::default()).await.unwrap();
+    // `ADK_VISION_DEVICE=cpu` skips mistral.rs's automatic device map, which refuses a model
+    // larger than the memory the system reports free at load time.
+    let device = match std::env::var("ADK_VISION_DEVICE").as_deref() {
+        Ok("cpu") => Device::Cpu,
+        Ok("metal") => Device::Metal,
+        _ => Device::Auto,
+    };
+    let config = MistralRsConfig {
+        device: DeviceConfig { device, ..DeviceConfig::default() },
+        ..MistralRsConfig::default()
+    };
+    let qwen = LlmDescriber::mistralrs(&model, config).await.unwrap();
     println!("loaded {id} in {:?}", loaded.elapsed());
     qwen
 }
