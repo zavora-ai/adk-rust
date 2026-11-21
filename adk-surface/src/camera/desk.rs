@@ -203,6 +203,27 @@ impl SurfaceEngine {
     /// As [`camera_view`](Self::camera_view).
     pub async fn camera_stage(&self, caller: &Caller, camera: &str) -> Result<StageView> {
         let facts = self.owned_camera(caller, camera).await?;
+        self.stage_of(caller, facts).await
+    }
+
+    /// Camera `camera`'s picture for a feed that already checked the caller may see it: the
+    /// sessions are not read again for every frame.
+    pub(crate) async fn camera_stage_after_check(
+        &self,
+        caller: &Caller,
+        camera: &str,
+    ) -> Result<StageView> {
+        let facts = self
+            .hub()?
+            .facts()
+            .await?
+            .into_iter()
+            .find(|facts| facts.id == camera)
+            .ok_or_else(|| SurfaceError::not_found(format!("camera '{camera}'")))?;
+        self.stage_of(caller, facts).await
+    }
+
+    async fn stage_of(&self, caller: &Caller, facts: CameraFacts) -> Result<StageView> {
         let shown = self.with_gates(std::slice::from_ref(&facts)).await?;
         let ctx = self.camera_ctx(caller, &facts.agent);
         Ok(project::stage(&shown[0], Place::Main, &ctx))

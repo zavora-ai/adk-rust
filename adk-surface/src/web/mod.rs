@@ -708,7 +708,7 @@ async fn camera_feed(
             async move {
                 let event = match update {
                     crate::camera::CameraUpdate::Frame { camera, .. } => {
-                        match engine.camera_stage(&caller, &camera).await {
+                        match engine.camera_stage_after_check(&caller, &camera).await {
                             Ok(stage) => SseEvent::default().event("frame").json_data(&stage),
                             Err(error) => SseEvent::default()
                                 .event("error")
