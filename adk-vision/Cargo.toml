@@ -289,3 +289,7 @@ required-features = ["cloud", "sam", "gemini-video"]
 [[test]]
 name = "video_live_tests"
 required-features = ["cloud", "sam", "gemini-video"]
+
+[[test]]
+name = "video_local_live_tests"
+required-features = ["mistralrs"]
