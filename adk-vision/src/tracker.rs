@@ -97,4 +97,8 @@ impl Tracker for GreedyIouTracker {
         self.live.clear();
         self.next = 0;
     }
+
+    fn live_tracks(&self) -> Vec<TrackId> {
+        self.live.iter().map(|track| track.id).collect()
+    }
 }

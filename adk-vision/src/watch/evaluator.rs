@@ -81,6 +81,65 @@ impl WatchEvaluator {
         &self.conditions
     }
 
+    /// The condition named `name`.
+    pub fn condition(&self, name: &str) -> Option<&WatchCondition> {
+        self.conditions.iter().find(|condition| condition.name == name)
+    }
+
+    /// Adds a condition while the stream runs. It starts with no streaks; the other
+    /// conditions keep theirs.
+    ///
+    /// # Errors
+    ///
+    /// [`VisionError::InvalidInput`] for an invalid condition or a name already in use.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_vision::{WatchCondition, WatchEvaluator};
+    ///
+    /// let mut watch = WatchEvaluator::new(Vec::new()).unwrap();
+    /// watch.add(WatchCondition::new("seal", ["torn seal"])).unwrap();
+    /// assert!(watch.add(WatchCondition::new("seal", ["scratch"])).is_err());
+    /// assert_eq!(watch.remove("seal").unwrap().labels, vec!["torn seal".to_string()]);
+    /// assert!(watch.conditions().is_empty());
+    /// ```
+    pub fn add(&mut self, condition: WatchCondition) -> Result<()> {
+        condition.validate()?;
+        if self.condition(&condition.name).is_some() {
+            return Err(VisionError::InvalidInput(format!(
+                "a watch condition named `{}` is already registered; each name keys its own events",
+                condition.name
+            )));
+        }
+        self.conditions.push(condition);
+        for state in self.sources.values_mut() {
+            state.last_fire.push(None);
+        }
+        Ok(())
+    }
+
+    /// Removes the condition named `name`, with its state; the other conditions keep theirs.
+    pub fn remove(&mut self, name: &str) -> Option<WatchCondition> {
+        let index = self.conditions.iter().position(|condition| condition.name == name)?;
+        let removed = self.conditions.remove(index);
+        let shift = |c: usize| if c > index { c - 1 } else { c };
+        for state in self.sources.values_mut() {
+            state.last_fire.remove(index);
+            state.streaks = std::mem::take(&mut state.streaks)
+                .into_iter()
+                .filter(|((c, _), _)| *c != index)
+                .map(|((c, track), streak)| ((shift(c), track), streak))
+                .collect();
+            state.fired = std::mem::take(&mut state.fired)
+                .into_iter()
+                .filter(|(c, _)| *c != index)
+                .map(|(c, track)| (shift(c), track))
+                .collect();
+        }
+        Some(removed)
+    }
+
     /// Forgets every source's state, as a new session would.
     pub fn reset(&mut self) {
         self.sources.clear();

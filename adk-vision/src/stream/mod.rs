@@ -67,6 +67,8 @@ mod queue;
 mod records;
 mod retention;
 mod sampler;
+mod sources;
+mod watching;
 
 #[cfg(feature = "browser")]
 mod browser;
@@ -134,6 +136,10 @@ pub use rtsp::{RtspSource, RtspTransport};
 pub use sampler::Sampler;
 #[cfg(feature = "screen")]
 pub use screen::{ScreenSource, VisualObserver};
+pub use sources::{
+    FrameSources, SourceSpec, SourceStatus, StreamEnd, TrackerFactory, WatchChange, WatchOutcome,
+};
+pub use watching::StreamWatch;
 
 /// How many decoded frames a source holds for a consumer that has fallen behind, before it
 /// drops the oldest.

@@ -240,7 +240,7 @@ pub use video::{FramesAnalyzer, VisibilityPass};
 #[cfg(feature = "gemini-video")]
 pub use video::{GEMINI_INLINE_LIMIT, GeminiVideoAnalyzer, MediaResolution};
 pub use watch::{
-    FrameRef, TrackedObservation, VISION_WATCH_FIRED, VISION_WATCH_REGISTERED, WatchCondition,
-    WatchEvaluator, WatchEvent, WatchEventKind, WatchSink, Zone, ZoneAnchor,
-    watch_registered_draft,
+    FrameRef, TrackedObservation, VISION_WATCH_FIRED, VISION_WATCH_REGISTERED,
+    VISION_WATCH_STOPPED, WatchCondition, WatchEvaluator, WatchEvent, WatchEventKind, WatchSink,
+    Zone, ZoneAnchor, watch_registered_draft,
 };
