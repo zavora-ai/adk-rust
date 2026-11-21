@@ -4,18 +4,18 @@
 //! `vision_detect` by the digest the payload names. The pipeline, the watch, the frame
 //! keeper, the wake source, the kernel and the harness are all real.
 //!
-//! The scripted run streams a drawn belt through an on-device colour detector. The live run
-//! (feature `vision-fixtures`, ignored) plays adk-vision's conveyor clip over the in-process
-//! RTSP server and detects with RF-DETR Nano, fetched into the Hugging Face cache and
-//! verified against the built-in manifest:
+//! The scripted run (feature `vision-fixtures`) streams a drawn belt through an on-device
+//! colour detector. The live run (with `vision-local` too, ignored) plays adk-vision's
+//! conveyor clip over the in-process RTSP server and detects with RF-DETR Nano, fetched into
+//! the Hugging Face cache and verified against the built-in manifest:
 //!
 //! ```text
 //! HF_HUB_CACHE=/path/to/models cargo nextest run -p adk-harness \
-//!     --features vision-local,vision-fixtures,kernel --test integration \
+//!     --features vision-local,vision-fixtures --test integration \
 //!     vision_wake_tests::live --run-ignored only --no-capture
 //! ```
 
-#![cfg(all(feature = "vision", feature = "kernel"))]
+#![cfg(feature = "vision-fixtures")]
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -277,12 +277,28 @@ async fn wake_once(
     let cx =
         VisionCx::new().with_audit(AuditTrail::new(Arc::new(audit.clone())), AuditActor::default());
     sources.start_watch(&cx, &FrameSourceId(STREAM.into()), condition.clone()).await.unwrap();
-    eventually("the woken process to complete", Duration::from_secs(120), || {
-        let runs = runs.clone();
-        let pid = pid.clone();
-        async move { (runs.get(&pid).await.unwrap()?.state == RunState::Completed).then_some(()) }
-    })
-    .await;
+    let started = tokio::time::Instant::now();
+    let state = loop {
+        let run = runs.get(&pid).await.unwrap().unwrap();
+        let settled =
+            !matches!(run.state, RunState::Waiting | RunState::Queued | RunState::Running)
+                && inspector.requests().len() >= 2;
+        if settled
+            || matches!(run.state, RunState::Failed | RunState::Cancelled)
+            || started.elapsed() > Duration::from_secs(60)
+        {
+            break run.state;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(
+        state,
+        RunState::Completed,
+        "the woken process; model requests {}, stream {:?}, records {:?}",
+        inspector.requests().len(),
+        sources.status(&FrameSourceId(STREAM.into())).ok(),
+        audit.records().iter().map(|r| r.action.clone()).collect::<Vec<_>>(),
+    );
     // Further frames of the same track wake nothing more.
     tokio::time::sleep(Duration::from_millis(300)).await;
     sources.stop_watch(&cx, &FrameSourceId(STREAM.into()), &condition.name).await.unwrap();
@@ -479,7 +495,7 @@ mod scripted {
     }
 }
 
-#[cfg(all(feature = "vision-local", feature = "vision-fixtures"))]
+#[cfg(feature = "vision-local")]
 mod live {
     use std::sync::Arc;
 
