@@ -23,6 +23,7 @@ mod blackboard;
 mod discovery;
 mod evaluation;
 mod lifecycle;
+pub mod perception;
 mod runtime;
 mod templates;
 pub use blackboard::{
@@ -38,6 +39,10 @@ pub use evaluation::{
 pub use lifecycle::{
     TeamLifecycleContext, TeamLifecycleDecision, TeamLifecycleHook, TeamLifecycleOutcome,
     TeamLifecyclePhase,
+};
+pub use perception::{
+    PERCEIVER_CAPABILITY, REASONER_CAPABILITY, VERIFIER_CAPABILITY, opinion_schema,
+    perceiver_input_schema, reasoner_input_schema, verifier_input_schema,
 };
 use runtime::{EventDisposition, TeamEdgeStart, TeamRuntimeRegistry};
 pub use runtime::{
