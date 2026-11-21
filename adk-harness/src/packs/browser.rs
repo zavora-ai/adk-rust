@@ -41,6 +41,7 @@ pub const BROWSER_READ_TOOLS: &[&str] = &[
     "browser_extract_links",
     "browser_page_info",
     "browser_page_source",
+    "browser_elements",
     "browser_screenshot",
     "browser_element_state",
     "browser_wait",
