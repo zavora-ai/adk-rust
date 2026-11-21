@@ -13,9 +13,12 @@
 //! same recall. Weights come through the fetcher (`HF_HUB_CACHE` chooses the cache).
 //!
 //! ```text
-//! HF_HUB_CACHE=/path/to/models cargo nextest run -p adk-vision --features memory,onnx \
-//!     --run-ignored only -E 'binary(memory_live_tests)' --no-capture
+//! HF_HUB_CACHE=/path/to/models cargo test -p adk-vision --features memory,onnx \
+//!     --test memory_live_tests -- --ignored --nocapture
 //! ```
+//!
+//! `cargo test` rather than nextest, whose default profile ends a test after 90 s: the first
+//! run downloads the weights.
 
 #![cfg(feature = "onnx")]
 

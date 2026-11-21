@@ -202,8 +202,8 @@ recorded in `adk-vision/tests/fixtures/memory/s16-baseline.json`.
 S16_RESULTS
 
 ```text
-HF_HUB_CACHE=/path/to/models cargo nextest run -p adk-vision --features memory,onnx \
-    --run-ignored only -E 'binary(memory_live_tests)' --no-capture
+HF_HUB_CACHE=/path/to/models cargo test -p adk-vision --features memory,onnx \
+    --test memory_live_tests -- --ignored --nocapture
 ```
 
 Add `memory-lancedb` to repeat the run on LanceDB; the answer must be the same.
