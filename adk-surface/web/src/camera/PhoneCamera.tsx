@@ -308,7 +308,14 @@ function Several({
                   <CameraOffIcon size={16} color="#94A3B8" />
                 </span>
               ) : (
-                <CameraStage stage={{ ...tile.stage, badge: undefined }} width={96} name={tile.name} size="strip" tags={false} />
+                <CameraStage
+                  stage={{ ...tile.stage, badge: undefined }}
+                  width={96}
+                  name={tile.name}
+                  size="strip"
+                  tags={false}
+                  layers={tile.id === first?.id ? undefined : { boxes: false, masks: false, tracks: false, zones: false }}
+                />
               )}
             </button>
             <span className="cam-switch-words">

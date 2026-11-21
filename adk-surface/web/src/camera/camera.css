@@ -147,6 +147,11 @@
   cursor: pointer;
 }
 
+.cam-sec > .cam-link {
+  align-self: flex-start;
+  font-size: 13.5px;
+}
+
 .cam-link:disabled {
   opacity: 0.55;
   cursor: default;
@@ -796,7 +801,6 @@
 }
 
 .cam-watch-rule b {
-  margin-left: 4px;
   font-weight: 600;
   color: var(--text);
 }
@@ -1133,8 +1137,14 @@
 
 /* ------------------------------------------------------------ the phone */
 
-.cam-phone {
-  padding-bottom: 12px;
+.phone-main.cam-phone {
+  padding: 0 0 12px;
+  gap: 0;
+  line-height: normal;
+}
+
+.cam-phone > * {
+  flex-shrink: 0;
 }
 
 .cam-phone-head {

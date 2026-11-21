@@ -65,7 +65,7 @@ export function RaiseCard({
       <div className="cam-panel-body">
         <div className="cam-panel-picture">
           <CameraStage
-            stage={{ ...frozen, badge: { text: words.frozen(at), tone: "muted" }, rate: undefined }}
+            stage={{ ...frozen, badge: { text: words.frozen(at), tone: "plain" }, rate: undefined }}
             width={width}
             name={name}
             size="small"

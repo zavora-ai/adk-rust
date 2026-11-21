@@ -33,7 +33,8 @@ const DOT: Record<Tone, string> = {
   warn: "#F59E0B",
   fail: "#EF4444",
   muted: "#94A3B8",
-  plain: "#94A3B8",
+  // A frozen frame's badge (board choice C11).
+  plain: "#38BDF8",
 };
 
 /** "small": a tile or a phone draws short tags and no rate badge; "strip": no tags at all. */

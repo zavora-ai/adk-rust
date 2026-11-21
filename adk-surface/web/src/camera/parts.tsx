@@ -257,6 +257,7 @@ export function Watch({ watch, onEditZone }: { watch: WatchView; onEditZone?: ()
           <>
             {" "}
             <Swatch label="zone" />
+            {"\u00a0"}
             <b>{watch.zone}</b>
           </>
         )}
@@ -360,7 +361,15 @@ export function Sources({ sources, onSelect }: { sources: SourceTile[]; onSelect
             aria-current={tile.selected ? "true" : undefined}
             onClick={() => onSelect(tile.id)}
           >
-            <CameraStage stage={tile.stage} width={176} name={tile.name} size="strip" tags={tile.selected} />
+            {/* Only the camera shown large carries its overlays in the strip (board choice C15). */}
+            <CameraStage
+              stage={tile.stage}
+              width={176}
+              name={tile.name}
+              size="strip"
+              tags={tile.selected}
+              layers={tile.selected ? undefined : { boxes: false, masks: false, tracks: false, zones: false }}
+            />
             <span className="cam-source-foot">
               <b>{tile.name}</b>
               <span className="cam-spacer" />
