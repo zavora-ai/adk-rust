@@ -24,9 +24,9 @@ use adk_vision::{
     DetectQuery, Digest, DocumentPage, EditOp, EgressGate, EgressRecord, EgressRecorder,
     FetchConfig, FileAcceptanceStore, LicenceAcceptance, LicenceClass, Locality, ManifestSet,
     MaskDecoderChoice, MediaScope, MediaStore, ModelFetcher, ModelManifest, ModelSource, Overlay,
-    ReadOptions, RedactionClass, Region, RegionSet, ReleaseRequest, Rgba, SegmentPrompt, Shape,
-    SourceImage, TransformChain, VisionConfig, VisionCx, VisionError, VisionRuntime,
-    VisionRuntimeBuilder, VisionTask, apply_edit,
+    ReadOptions, RedactionClass, Region, RegionSet, ReleaseRequest, Rgba, RuntimeSpec,
+    SegmentPrompt, Shape, SourceImage, TransformChain, VisionConfig, VisionCx, VisionError,
+    VisionRuntime, VisionRuntimeBuilder, VisionTask, apply_edit,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -429,6 +429,15 @@ async fn models(project: &Path, command: ModelsCommand) -> Result<()> {
             let fetcher = fetcher(project, None);
             for id in &ids {
                 let manifest = lookup(&set, id)?;
+                if matches!(manifest.runtime, RuntimeSpec::Native) {
+                    println!(
+                        "{id} is code compiled into the program, so there is nothing to fetch; \
+                         `adk-rust vision models accept {id}` records your acceptance of its \
+                         licence ({})",
+                        manifest.licence.id
+                    );
+                    continue;
+                }
                 let size: u64 = manifest.files.iter().map(|f| f.size).sum();
                 eprintln!("fetching {id} ({}, {})", megabytes(size), manifest.licence.id);
                 let verified = fetcher.fetch(manifest).await?;

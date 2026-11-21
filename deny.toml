@@ -163,7 +163,7 @@ allow = ["LicenseRef-Intel-Simplified-Software-License"]
 [[licenses.clarify]]
 crate = "adk-vision-sam-codec"
 expression = "LicenseRef-SAM"
-license-files = [{ path = "LICENSE", hash = 0x00000000 }]
+license-files = [{ path = "LICENSE", hash = 0x83483f00 }]
 
 [[licenses.exceptions]]
 crate = "adk-vision-sam-codec"

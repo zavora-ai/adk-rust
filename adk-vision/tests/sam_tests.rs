@@ -701,3 +701,37 @@ fn the_licensed_decoder_without_its_feature_says_how_to_get_it() {
         assert!(err.to_string().contains("`sam-codec` feature"), "{err}");
     }
 }
+
+/// Meta's own parser as the external decoder, on a recorded stream: `node` and an unpacked
+/// `@meta-sam/parser` package directory in `ADK_VISION_SAM_PARSER`.
+#[tokio::test]
+#[ignore = "needs node and @meta-sam/parser in ADK_VISION_SAM_PARSER"]
+async fn metas_parser_decodes_a_recorded_answer_as_the_external_decoder() {
+    let Ok(package) = std::env::var("ADK_VISION_SAM_PARSER") else { return };
+    let fixture = recording("sam-3-1.shapes-blue-circle.json");
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(sse(&fixture["response"]))
+        .mount(&server)
+        .await;
+    let decoder = adk_vision::sam::ExternalMaskDecoder::meta_parser(package);
+    let sam = SamSegmenter::new(config(&server)).unwrap().with_mask_decoder(Arc::new(decoder));
+    let harness = Harness::new(sam, RunBudget::new());
+    let out = harness
+        .runtime
+        .segment(
+            &harness.cx(),
+            &load("cloud/shapes-960x540.png"),
+            &[SegmentPrompt::Concept { text: "blue circle".into() }],
+        )
+        .await
+        .unwrap();
+    let Shape::Mask(mask) = &out.value[0].shape else { panic!("not a mask") };
+    // The oracle's set-pixel count for this raster, stretched 1:1 over its 180x178 box.
+    assert_eq!(mask.area(), 25_253);
+    println!(
+        "@meta-sam/parser via ExternalMaskDecoder: blue circle mask of {} pixels",
+        mask.area()
+    );
+}
