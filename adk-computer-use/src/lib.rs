@@ -83,10 +83,10 @@ pub use toolset::{
 pub use contracts::{
     ActionClass, ActionEnvelope, ActionPostcondition, ActionPreview, ActionProvenance,
     ActionResourceContext, ApprovalGrant, ApprovalGrantScope, Bounds, ControlLease,
-    ExecutionCapability, ExecutionMode, ExecutionReceipt, LeaseBoundaries, PolicyDecision,
-    PostconditionEvidence, ReceiptStatus, RuntimeSession, SafetyCorpus, SafetyExpectation,
-    SafetyScenario, SessionCompletionEvidence, SessionDeletionResult, SessionEvent,
-    SessionFollowUp, SessionFollowUpPage, TargetEvidence, TargetReservation,
+    CoordinateSpace, ExecutionCapability, ExecutionMode, ExecutionReceipt, LeaseBoundaries,
+    PolicyDecision, PostconditionEvidence, ReceiptStatus, RuntimeSession, SafetyCorpus,
+    SafetyExpectation, SafetyScenario, SessionCompletionEvidence, SessionDeletionResult,
+    SessionEvent, SessionFollowUp, SessionFollowUpPage, TargetEvidence, TargetReservation,
     TargetReservationScope, TargetSensitivityAssessment, TargetSensitivityEvidence,
     TargetSensitivitySignal, TargetSensitivitySource,
 };

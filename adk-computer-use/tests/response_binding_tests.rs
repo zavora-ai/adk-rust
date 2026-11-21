@@ -366,6 +366,7 @@ fn target_for(app_id: &str) -> adk_computer_use::TargetEvidence {
         bounds: None,
         observation_id: "obs-1".into(),
         screenshot_hash: None,
+        device_pixel_ratio: None,
         ui_tree_revision: None,
         confidence: 1.0,
         captured_at: "2026-01-01T00:00:00Z".into(),
