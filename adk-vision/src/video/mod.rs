@@ -208,6 +208,7 @@ impl SentClip {
 }
 
 /// `m:ss.s` for a time in milliseconds, the form timestamps take in prompts and answers.
+#[cfg(feature = "cloud")]
 pub(crate) fn timestamp(ms: u64) -> String {
     let tenths = ms / 100;
     format!("{}:{:02}.{}", tenths / 600, (tenths / 10) % 60, tenths % 10)
@@ -234,6 +235,7 @@ mod tests {
         assert!(SourceClip::from_ref(&video, other).is_err());
     }
 
+    #[cfg(feature = "cloud")]
     #[test]
     fn timestamps_read_as_minutes_and_seconds() {
         assert_eq!(timestamp(0), "0:00.0");
