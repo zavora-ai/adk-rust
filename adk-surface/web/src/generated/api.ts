@@ -504,6 +504,14 @@ export interface Avatar {
 /** An axis. */
 export type Axis = "x" | "y" | "z";
 
+/** A badge on the picture. */
+export interface BadgeView {
+  /** "Live · 10:41:09". */
+  text: string;
+  /** The dot's colour. */
+  tone: Tone;
+}
+
 /** "While you were away" (spec 3.3 §5.1, §8.1). */
 export interface Briefing {
   /** One line per event, oldest first. */
@@ -543,6 +551,32 @@ export interface BriefingLine {
   text: string;
 }
 
+/** One of the phone's budget rows. */
+export interface BudgetRow {
+  /** "Looking". */
+  label: string;
+  /** Its colour; `muted` for plain words. */
+  tone: Tone;
+  /** "2 a second (was 5)". */
+  value: string;
+}
+
+/** "Frame budget" (board choice C3). */
+export interface BudgetView {
+  /** "Change the daily frame limit", once the camera paused. */
+  limit?: string | null;
+  /** Looking, Asking, Frames today. */
+  meters: MeterView[];
+  /** "Steps down in this order: …", while nothing has stepped down. */
+  order?: string | null;
+  /** The phone's rows. */
+  rows: BudgetRow[];
+  /** "for line 2". */
+  scope: string;
+  /** "What the budget did": each step with its time, then the next. */
+  steps: StepView[];
+}
+
 /** The exact call a decision is about (spec 3.3 §7.1). */
 export interface CallView {
   /** Its arguments in full, as the inbox shows them to approvers (secrets removed). */
@@ -555,8 +589,162 @@ export interface CallView {
   truncated: boolean;
 }
 
+/** What a person may do with a camera now. */
+export interface CameraActions {
+  /** "Raise a card from this frame". */
+  raiseCard: boolean;
+  /** "Try again now". */
+  retry: boolean;
+  /** "Stop the stream". */
+  stop: boolean;
+  /** "Camera on / Off". */
+  switch: boolean;
+  /** "Draw a zone", "Edit the zone". */
+  zone: boolean;
+}
+
+/** The agent that watches a camera. */
+export interface CameraAgent {
+  /** The agent. */
+  agent: AgentRef;
+  /** "Asleep until a defect", "Paused by the frame budget", "Not watching: no frames". */
+  line: string;
+  /** The session its thread follows: "Open the thread". */
+  sessionId: string;
+  /** The line's colour. */
+  tone: Tone;
+}
+
 /** A camera view. */
 export type CameraPreset = "fit" | "front" | "top" | "side" | "iso";
+
+/** Something found on the frame, in the camera's pixels. */
+export interface CameraRegion {
+  /** `[x0, y0, x1, y1]`; absent for a mask drawn alone. */
+  bbox?: number[] | null;
+  /** What a watch looks for: drawn selected. */
+  finding: boolean;
+  /** "part", "seal tear", "fiducial", "person": the overlay's colour (board choice S1). */
+  label: string;
+  /** A measured length. */
+  measurement?: MeasurementView | null;
+  /** A mask's outline (the Masks layer). */
+  outline?: number[][];
+  /** The phone's and a tile's tag: "T45", "14.3 mm". */
+  shortTag: string;
+  /** "part · T45", "seal tear · 0.91 · 5 frames · 14.3 mm", "person · blurred". */
+  tag: string;
+  /** Where the tag sits. */
+  tagAt: TagAt;
+  /** The anonymous track. */
+  track?: number | null;
+}
+
+/** A camera's state, as its pill and its picture show it. */
+export type CameraState = "live" | "savingFrames" | "paused" | "lost" | "off" | "stopped";
+
+/** One camera of the grid. */
+export interface CameraTile {
+  /** The switch may be changed here. */
+  canSwitch: boolean;
+  /** "watching for seal tears", "shown only, nothing watched", "from the voice screen". */
+  caption: string;
+  /** The camera's id. */
+  id: string;
+  /** The switch list's line: "5 a second · 20% of today's frames". */
+  line: string;
+  /** "Line 2 camera". */
+  name: string;
+  /** The switch. */
+  on: boolean;
+  /** The phone's line: "watching", "2 a second", "shown only". */
+  shortLine: string;
+  /** The picture, with its overlays. */
+  stage: StageView;
+  /** The state. */
+  state: CameraState;
+  /** "Live", "Saving frames", "Off". */
+  stateText: string;
+  /** Its colour. */
+  tone: Tone;
+}
+
+/** `GET /surface/cameras/{camera}` answer: one camera, watched large (board choice C1). */
+export interface CameraView {
+  /** What the person may do here now. */
+  actions: CameraActions;
+  /** The agent that watches it. */
+  agent: CameraAgent;
+  /** "Frame budget". */
+  budget: BudgetView;
+  /** The agent's open decisions on this session, such as the held line stop (board choice C13). */
+  decisions: DecisionCard[];
+  /** The camera's id. */
+  id: string;
+  /** "RTSP · 1920 × 1080 · on the line 2 server". */
+  ingest: string;
+  /** "Line 2 camera". */
+  name: string;
+  /** "Nothing is waiting for you." */
+  nothingWaiting: string;
+  /** The banner over the picture, when there is something to warn about. */
+  notice?: NoticeView | null;
+  /** The switch: on, or off (board choice C2). */
+  on: boolean;
+  /** "Sources": every camera, this one's tile following its state (board choice C15). */
+  sources: SourceTile[];
+  /** The picture. */
+  stage: StageView;
+  /** The state. */
+  state: CameraState;
+  /** "Live", "Saving frames", "Paused until midnight", "Can't reach the camera", "Camera off". */
+  stateText: string;
+  /** The pill's colour. */
+  tone: Tone;
+  /** "Tracks now". */
+  tracks: TrackRow[];
+  /** The words under the tracks: "Tracks are anonymous and start again when the camera does." */
+  tracksNote: string;
+  /**
+   * The phone's words under the budget while the camera is off: "Tracks start again when the
+   * camera is back on."
+   */
+  tracksShortNote?: string | null;
+  /** "Watching for". */
+  watches: WatchView[];
+  /** The zones a person may edit, in the camera's pixels. */
+  zones: ZoneView[];
+}
+
+/** `GET /surface/cameras` answer: every camera, a grid of them (board choice C8). */
+export interface CamerasView {
+  /** The agent that watches them. */
+  agent?: CameraAgent | null;
+  /** Each camera's frames today. */
+  budget: MeterView[];
+  /** The phone's: "4 · 3 on". */
+  countShort: string;
+  /** "4 sources · 3 on". */
+  countText: string;
+  /** The agents' open decisions on these cameras' sessions. */
+  decisions: DecisionCard[];
+  /** "Select a camera to watch it large. People are blurred before any frame is shown or kept." */
+  footer: string;
+  /** "Each source has its own frame budget. Stop all pauses every one of them." */
+  note: string;
+  /** "Nothing is waiting for you." */
+  nothingWaiting: string;
+  /** The camera shown first, by its id. */
+  selected?: string | null;
+  /** The phone's line under the large picture: "Line 2 camera · Live · 5 a second". */
+  selectedLine?: string | null;
+  /** "Each camera has its own frame budget. People are blurred before any frame is shown or kept." */
+  shortNote: string;
+  /** Every camera. */
+  tiles: CameraTile[];
+  /** "Cameras". */
+  title: string;
+}
 
 /**
  * A line under a decision's details that a feature adds through a
@@ -637,6 +825,24 @@ export interface CardMedia {
   what?: string | null;
   /** What qualifies `what`: "never the page". */
   whatNote?: string | null;
+}
+
+/** `POST /surface/cameras/{camera}/cards` answer. */
+export interface CardRaised {
+  /** The kept frame's digest, after blurring: the evidence the card and a held call carry. */
+  digest: string;
+  /** The kept frame in the annotated viewer. */
+  href: string;
+  /** "Kept as evidence until 18 Dec". */
+  keptUntil: string;
+  /** What sending it to the agent did: sent, or queued behind a decision or a turn. */
+  outcome: CommandOutcome;
+  /** The regions that went with it. */
+  regions: number;
+  /** The short form: `sha256:c52ca5…ce7550`. */
+  shortDigest: string;
+  /** "Raised to the Inspector. This one frame is kept as evidence until 18 Dec." */
+  text: string;
 }
 
 /** Where a decision is in its life. */
@@ -1074,6 +1280,18 @@ export interface ConfirmRequest {
  * (spec 3.7 §7.8 step 3).
  */
 export type CoverClass = "face" | "personalText" | "schemaField" | "marked" | "other";
+
+/** The words over a picture that is not live. */
+export interface CoverView {
+  /** The camera-off icon. */
+  off: boolean;
+  /** A spinner: the source is being tried again. */
+  retrying: boolean;
+  /** "Nothing is captured or sent. You switched line 2 off at 11:05." */
+  text: string;
+  /** "Paused until midnight", "Can't reach the line 2 camera", "Camera off". */
+  title: string;
+}
 
 /** What was covered of one class, as a line of "Covered before it leaves". */
 export interface CoveredLine {
@@ -1733,6 +1951,24 @@ export interface FormsResponse {
   sessionId: string;
 }
 
+/** A frame the hub holds, served by its digest. */
+export interface FrameView {
+  /** When it was captured. */
+  at: string;
+  /** "10:41:09". */
+  atText: string;
+  /** `sha256:` of its bytes. */
+  digest: string;
+  /** `/api/surface/cameras/{camera}/frames/{digest}`: the bytes, while the hub holds them. */
+  href: string;
+}
+
+/** `POST /surface/cameras/{camera}/freeze` body: the frame on screen, by its digest. */
+export interface FreezeFrame {
+  /** The frame's `sha256:` digest; the hub must still hold it. */
+  frame: string;
+}
+
 /**
  * What `GET /api/surface/genui/capabilities` answers: a table of claims per protocol, and
  * the catalogs this home renders.
@@ -1859,6 +2095,16 @@ export interface MeasureTile {
   value: string;
 }
 
+/** A measured length, drawn as a line with its ends. */
+export interface MeasurementView {
+  /** One end, in the camera's pixels. */
+  from: number[];
+  /** "14.3 mm". */
+  text: string;
+  /** The other end. */
+  to: number[];
+}
+
 /** An answer's measurements (board choice V9). */
 export interface MeasurementsView {
   /**
@@ -1887,6 +2133,20 @@ export interface MediaNotice {
 /** Why a card's images cannot be sent. */
 export type MediaNoticeKind = "purged" | "allCovered";
 
+/** One meter. */
+export interface MeterView {
+  /** "Looking", "Asking sam-3.1 about unclear tracks", "Frames today". */
+  label: string;
+  /** "As set", "At most 6 a minute · 14 today · $0.14", "Renews at midnight". */
+  note?: string | null;
+  /** How full the bar is, in hundredths. */
+  percent: number;
+  /** The bar's colour. */
+  tone: Tone;
+  /** "5 a second", "2 in the last minute", "61,240 of 300,000". */
+  value: string;
+}
+
 /** How much agents act on their own (spec 3.3 §8.1). */
 export type Mode = "justLook" | "suggest" | "askFirst" | "goAhead";
 
@@ -1910,6 +2170,41 @@ export interface ModelView {
 
 /** How an object moves. */
 export type MotionKind = "spin" | "bob" | "pulse" | "orbit" | "path";
+
+/** What a banner offers. */
+export type NoticeAction = {
+  kind: "retry";
+  /** The phone's words. */
+  shortText: string;
+  /** The words. */
+  text: string;
+} | {
+  /** Where it opens. */
+  href: string;
+  kind: "limit";
+  /** The phone's words. */
+  shortText: string;
+  /** The words. */
+  text: string;
+};
+
+/** The banner over the picture. */
+export interface NoticeView {
+  /** What the banner offers. */
+  action?: NoticeAction | null;
+  /** The error, credentials hidden: "connection refused · rtsp://[credentials hidden]@…". */
+  detail?: string | null;
+  /** The phone's shorter text. */
+  shortText: string;
+  /** The phone's shorter title. */
+  shortTitle: string;
+  /** What follows the title. */
+  text: string;
+  /** "Saving frames.", "Parts on line 2 are passing without inspection." */
+  title: string;
+  /** Its colour. */
+  tone: Tone;
+}
 
 /**
  * How an input was given (spec 3.3 §6, §11): every command carries one, and it reaches the
@@ -2084,6 +2379,14 @@ export interface QuietView {
   start: string;
   /** "Quiet from 22:00", or "Quiet until 07:00" while it holds. */
   text: string;
+}
+
+/** `POST /surface/cameras/{camera}/cards` body: a card from a frozen frame (board choice C11). */
+export interface RaiseCard {
+  /** The frozen frame, by its digest; the hub must still hold it. */
+  frame: string;
+  /** "What should it look at?" */
+  note: string;
 }
 
 /** Why a drawing was refused, in a person's terms (spec 3.3 §7.4 rule 5). */
@@ -2497,6 +2800,24 @@ export type ShapeKind = "point" | "box" | "polygon" | "mask" | "keypoints";
 /** Where an agent's commands run: nowhere, in the sandbox, or on this computer. */
 export type ShellUse = "none" | "sandboxed" | "host";
 
+/** One camera in "Sources", the strip under a single camera (board choice C15). */
+export interface SourceTile {
+  /** The camera's id. */
+  id: string;
+  /** "Line 3 camera". */
+  name: string;
+  /** The camera shown large. */
+  selected: boolean;
+  /** The small picture. */
+  stage: StageView;
+  /** The state. */
+  state: CameraState;
+  /** "Live", "Saving frames", "Paused", "Lost", "Off". */
+  stateText: string;
+  /** Its colour. */
+  tone: Tone;
+}
+
 /** Who wrote a message in a thread. */
 export type Speaker = "you" | "agent";
 
@@ -2508,6 +2829,33 @@ export interface SpendView {
   spentMicroUsd: number;
   /** "$1.84 of $5.00 today", or "$1.84 today" with no limit. */
   text: string;
+}
+
+/** How the picture is drawn. */
+export type StageLook = "live" | "dimmed" | "grey" | "dark";
+
+/** The picture and what is drawn over it. */
+export interface StageView {
+  /** "Live · 10:41:09", "Last frame · 15:12:03". */
+  badge?: BadgeView | null;
+  /** The words over the picture when it is not live. */
+  cover?: CoverView | null;
+  /** The frame shown, when one is held. */
+  frame?: FrameView | null;
+  /** The camera's height in pixels. */
+  height: number;
+  /** How the picture is drawn. */
+  look: StageLook;
+  /** "Looking 5 a second · overlays 0.1 s behind" (board choice C10). */
+  rate?: string | null;
+  /** What was found on the frame. */
+  regions: CameraRegion[];
+  /** Where each track was over the frames held. */
+  trails: TrailView[];
+  /** The camera's width in pixels; every region is in these pixels. */
+  width: number;
+  /** The zones. */
+  zones: ZoneView[];
 }
 
 /**
@@ -2533,6 +2881,16 @@ export interface StatusLine {
   stopped: boolean;
   /** "All agents stopped", while stopped. */
   stoppedText?: string | null;
+}
+
+/** One step the governor took, or the next. */
+export interface StepView {
+  /** "14:02", or "next". */
+  at: string;
+  /** The next step, not taken yet. */
+  next: boolean;
+  /** "Looked less often: 5 → 2 a second (90% used)". */
+  text: string;
 }
 
 /** `POST /surface/stop` body: **Stop all** from a paired device (spec 3.3 §11 S-I10). */
@@ -2569,6 +2927,9 @@ export interface SurfaceQuery {
   /** The surface; defaults to the web home. */
   surface?: SurfaceKind | null;
 }
+
+/** Where a region's tag sits: above its box, below it, or inside it at the frame's edge. */
+export type TagAt = "above" | "below" | "in";
 
 /**
  * `POST /surface/decisions/{id}/take-over` body: the secret typed on a surface, for the card
@@ -2660,6 +3021,25 @@ export interface TimelineStep {
   text: string;
 }
 
+/** The colour a line of words takes. */
+export type Tone = "ok" | "warn" | "fail" | "muted" | "plain";
+
+/** One track now. */
+export interface TrackRow {
+  /** A watch looks for what was found on it: the row is marked. */
+  finding: boolean;
+  /** "T43". */
+  id: string;
+  /** "part". */
+  label: string;
+  /** "seal tear 0.91 · in the zone · 5 frames". */
+  note: string;
+  /** The phone's note: "seal tear 0.91 · in the zone". */
+  shortNote: string;
+  /** The swatch: the finding's label, else the track's. */
+  swatch: string;
+}
+
 /** One track of a video (board choice V10). */
 export interface TrackView {
   /** People are blurred. */
@@ -2676,6 +3056,14 @@ export interface TrackView {
   spans: number[][];
   /** Where it was, oldest first. */
   trail: number[][];
+}
+
+/** Where a track was over the frames held: its trail. */
+export interface TrailView {
+  /** Its centres, newest first, in the camera's pixels. */
+  points: number[][];
+  /** The track. */
+  track: number;
 }
 
 /** What an agent can use (spec 3.3 §5.7 "What it can use"). */
@@ -2926,6 +3314,32 @@ export type VoiceUpdate = {
   type: "error";
 };
 
+/** One watch condition (board choice C1 "Watching for"). */
+export interface WatchView {
+  /** It looks at frames now. */
+  active: boolean;
+  /** ". Then wait 30 s before waking again for the same track." */
+  after: string;
+  /** "Score 0.80 or more, 3 frames in a row, inside". */
+  before: string;
+  /** Its id. */
+  id: string;
+  /** The label it looks for: its colour. */
+  label: string;
+  /** "Seal tear". */
+  name: string;
+  /** "Watching", "Paused", "No frames", "Camera off". */
+  pill: string;
+  /** What follows the zone on the phone: " · not watching" when it does not look. */
+  shortAfter: string;
+  /** The phone's line: "Seal tear, 0.80+, 3 frames in". */
+  shortBefore: string;
+  /** "Woke the Inspector 3 times today". */
+  woke: string;
+  /** The zone it looks inside: "Inspection window". */
+  zone?: string | null;
+}
+
 /** What of the web an agent reaches. */
 export type WebUse = {
   access: "none";
@@ -2936,3 +3350,38 @@ export type WebUse = {
 } | {
   access: "any";
 };
+
+/**
+ * `PUT /surface/cameras/{camera}/zones/{zone}` body: the zone's new name and corners, and the
+ * corners the person saw before changing them.
+ */
+export interface ZoneChange {
+  /** `[x0, y0, x1, y1]` in the camera's pixels. */
+  corners: number[];
+  /** The zone's name. */
+  name: string;
+  /** The corners the person started from: a zone changed since is refused, not overwritten. */
+  was: number[];
+}
+
+/** `PUT /surface/cameras/{camera}/zones/{zone}` answer. */
+export interface ZoneSaved {
+  /** "Saved. The seal tear watch uses it from the next frame." */
+  text: string;
+  /** The zone now. */
+  zone: ZoneView;
+}
+
+/** A zone, in the camera's pixels (board choice C12). */
+export interface ZoneView {
+  /** `[x0, y0, x1, y1]` in the camera's pixels. */
+  corners: number[];
+  /** "700, 200 → 1600, 880". */
+  cornersText: string;
+  /** Its id. */
+  id: string;
+  /** "Inspection window". */
+  name: string;
+  /** The watches that use it: "Seal tear watch". */
+  usedBy: string[];
+}

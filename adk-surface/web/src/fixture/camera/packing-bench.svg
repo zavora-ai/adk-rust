@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080"><defs><filter id="blur2" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="64"></feGaussianBlur></filter></defs>
+<rect width="1920" height="1080" fill="#6E7781"></rect><rect y="560" width="1920" height="520" fill="#8A6A4A"></rect><rect y="560" width="1920" height="16" fill="#6F5339"></rect>
+<rect x="760" y="420" width="360" height="250" fill="#C89B65" stroke="#8C6239" stroke-width="4"></rect><path d="M760 470 h360" stroke="#D9C08F" stroke-width="20"></path>
+<rect x="1220" y="500" width="260" height="200" fill="#B98A57" stroke="#8C6239" stroke-width="4"></rect><rect x="1530" y="640" width="200" height="90" rx="14" fill="#2B2E33"></rect><circle cx="1600" cy="660" r="40" fill="#C9CDD2"></circle>
+<g filter="url(#blur2)"><circle cx="380" cy="260" r="80" fill="#3A2F28"></circle><rect x="260" y="330" width="240" height="380" rx="60" fill="#3E6FB0"></rect><rect x="470" y="440" width="220" height="60" rx="30" fill="#3E6FB0"></rect></g></svg>

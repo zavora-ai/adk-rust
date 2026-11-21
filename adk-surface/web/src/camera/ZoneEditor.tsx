@@ -139,7 +139,7 @@ export function ZoneEditor({
       <div className="cam-panel-body">
         <div className="cam-panel-picture">
           <CameraStage
-            stage={{ ...stage, zones: [], trails: [] }}
+            stage={{ ...stage, zones: [], trails: [], badge: undefined, rate: undefined }}
             width={width}
             name={view.name}
             layers={{ ...ALL_LAYERS, masks: false }}

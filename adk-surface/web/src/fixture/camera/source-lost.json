@@ -64,7 +64,7 @@
   "notice": {
     "action": {
       "kind": "retry",
-      "short_text": "Try again now",
+      "shortText": "Try again now",
       "text": "Try again now"
     },
     "detail": "connection refused · rtsp://[credentials hidden]@10.0.4.21:554/stream1",

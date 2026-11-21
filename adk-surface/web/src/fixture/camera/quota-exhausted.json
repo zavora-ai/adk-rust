@@ -88,7 +88,7 @@
     "action": {
       "href": "/ui/memory",
       "kind": "limit",
-      "short_text": "Change the limit",
+      "shortText": "Change the limit",
       "text": "Change the daily frame limit"
     },
     "shortText": "until midnight.",

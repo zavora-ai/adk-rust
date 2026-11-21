@@ -1298,3 +1298,41 @@
 .cam-phone-card .cam-panel-picture {
   padding: 12px 16px;
 }
+
+/* The fixture's composition of `camera-zone-and-card-web`: both panels, one above the other. */
+.cam-board {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 100vh;
+  padding: 24px;
+  background: var(--cam-canvas);
+  font-family: var(--font);
+  color: var(--text);
+}
+
+.cam-board-cap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--text-2);
+}
+
+.cam-board-cap b {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.cam-board-cap:not(:first-child) {
+  margin-top: 10px;
+}

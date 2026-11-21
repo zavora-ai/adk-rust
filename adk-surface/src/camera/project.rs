@@ -9,9 +9,9 @@ use super::facts::{
 };
 use super::hub::Gate;
 use super::view::{
-    BadgeView, BudgetRow, BudgetView, CameraActions, CameraState, CameraTile, CoverView, FrameView,
-    MeasurementView, MeterView, NoticeAction, NoticeView, RegionView, SourceTile, StageLook,
-    StageView, StepView, TagAt, Tone, TrackRow, TrailView, WatchView, ZoneView,
+    BadgeView, BudgetRow, BudgetView, CameraActions, CameraRegion, CameraState, CameraTile,
+    CoverView, FrameView, MeasurementView, MeterView, NoticeAction, NoticeView, SourceTile,
+    StageLook, StageView, StepView, TagAt, Tone, TrackRow, TrailView, WatchView, ZoneView,
 };
 
 /// What every projection needs beside the facts.
@@ -380,7 +380,7 @@ fn is_finding(label: &str, facts: &CameraFacts) -> bool {
     facts.watches.iter().any(|watch| watch.label == label)
 }
 
-fn region(overlay: &Overlay, facts: &CameraFacts, width: u32) -> RegionView {
+fn region(overlay: &Overlay, facts: &CameraFacts, width: u32) -> CameraRegion {
     let finding = is_finding(&overlay.label, facts);
     let measurement = overlay.measurement.as_ref().map(|measured| MeasurementView {
         from: measured.from,
@@ -420,7 +420,7 @@ fn region(overlay: &Overlay, facts: &CameraFacts, width: u32) -> RegionView {
         _ if overlay.track.is_none() => TagAt::In,
         _ => TagAt::Above,
     };
-    RegionView {
+    CameraRegion {
         label: overlay.label.clone(),
         bbox: overlay.bbox,
         tag,

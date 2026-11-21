@@ -44,6 +44,7 @@ export function Switch({
   on,
   disabled,
   short = false,
+  icon = !short,
   label,
   onSwitch,
 }: {
@@ -51,6 +52,8 @@ export function Switch({
   disabled?: boolean;
   /** "On" in place of "Camera on": the phone and the switch list. */
   short?: boolean;
+  /** The camera beside "On": the phone's own camera screen. */
+  icon?: boolean;
   label: string;
   onSwitch: (on: boolean, origin: Origin) => void;
 }) {
@@ -63,7 +66,7 @@ export function Switch({
         disabled={disabled}
         onClick={(event) => !on && onSwitch(true, originOf(event))}
       >
-        {!short || short === undefined ? <CameraIcon /> : null}
+        {icon && <CameraIcon />}
         {short ? words.on : words.cameraOn}
       </button>
       <button

@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
-import type { RegionView, StageView, Tone } from "../generated/api";
+import type { CameraRegion, StageView, Tone } from "../generated/api";
 import { useEvidenceImage } from "../evidence/images";
 import type { Swatch } from "../viewer/colors";
 import { swatchOf } from "../viewer/colors";
-import type { StageBox } from "../viewer/Stage";
+import type { Box, StageBox } from "../viewer/Stage";
 import { Stage } from "../viewer/Stage";
 import { CameraOffIcon, Spinner } from "./icons";
 
@@ -99,7 +99,7 @@ export function CameraStage({
     for (const zone of stage.zones) {
       boxes.push({
         key: `zone-${zone.id}`,
-        box: zone.corners,
+        box: zone.corners as Box,
         swatch: ZONE,
         dash: true,
         tag: size === "main" && tags ? zone.name : undefined,
@@ -113,7 +113,7 @@ export function CameraStage({
       const tag = !tags ? undefined : small ? region.shortTag : region.tag;
       boxes.push({
         key: `region-${index}`,
-        box: region.bbox,
+        box: region.bbox as Box,
         swatch: swatchFor(region.label),
         tag: tag || undefined,
         tagAt: region.tagAt,
@@ -195,7 +195,7 @@ function Drawn({ stage, layers }: { stage: StageView; layers: Layers }) {
   );
 }
 
-function Outline({ region }: { region: RegionView }) {
+function Outline({ region }: { region: CameraRegion }) {
   const outline = region.outline ?? [];
   if (outline.length < 3) return null;
   const points = outline.map(([x, y]) => `${x},${y}`).join(" ");
@@ -207,7 +207,7 @@ function Outline({ region }: { region: RegionView }) {
 }
 
 /** A measured length: a white line above the defect with its two ends (board choice C1). */
-function Measure({ region }: { region: RegionView }) {
+function Measure({ region }: { region: CameraRegion }) {
   const measured = region.measurement;
   if (!measured) return null;
   const [fx, fy] = measured.from;

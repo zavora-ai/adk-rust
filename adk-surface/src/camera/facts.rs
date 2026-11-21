@@ -191,7 +191,7 @@ impl Ingest {
 
 /// A stream's state as the pipeline sees it. Off and stopped are a person's, kept by the hub.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
 pub enum StreamState {
     /// Frames arrive and are looked at.
     Live,
@@ -333,7 +333,7 @@ pub struct GovernorStep {
 
 /// What a governor step did, in the fixed order it steps down (board choice C3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
 pub enum GovernorStepKind {
     /// Looked less often.
     LookLessOften {

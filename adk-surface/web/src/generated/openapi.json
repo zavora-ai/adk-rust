@@ -1422,6 +1422,24 @@
           }
         ]
       },
+      "BadgeView": {
+        "description": "A badge on the picture.",
+        "properties": {
+          "text": {
+            "description": "\"Live · 10:41:09\".",
+            "type": "string"
+          },
+          "tone": {
+            "$ref": "#/components/schemas/Tone",
+            "description": "The dot's colour."
+          }
+        },
+        "required": [
+          "text",
+          "tone"
+        ],
+        "type": "object"
+      },
       "Briefing": {
         "description": "\"While you were away\" (spec 3.3 §5.1, §8.1).",
         "properties": {
@@ -1532,6 +1550,80 @@
         ],
         "type": "object"
       },
+      "BudgetRow": {
+        "description": "One of the phone's budget rows.",
+        "properties": {
+          "label": {
+            "description": "\"Looking\".",
+            "type": "string"
+          },
+          "tone": {
+            "$ref": "#/components/schemas/Tone",
+            "description": "Its colour; `muted` for plain words."
+          },
+          "value": {
+            "description": "\"2 a second (was 5)\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value",
+          "tone"
+        ],
+        "type": "object"
+      },
+      "BudgetView": {
+        "description": "\"Frame budget\" (board choice C3).",
+        "properties": {
+          "limit": {
+            "description": "\"Change the daily frame limit\", once the camera paused.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "meters": {
+            "description": "Looking, Asking, Frames today.",
+            "items": {
+              "$ref": "#/components/schemas/MeterView"
+            },
+            "type": "array"
+          },
+          "order": {
+            "description": "\"Steps down in this order: …\", while nothing has stepped down.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rows": {
+            "description": "The phone's rows.",
+            "items": {
+              "$ref": "#/components/schemas/BudgetRow"
+            },
+            "type": "array"
+          },
+          "scope": {
+            "description": "\"for line 2\".",
+            "type": "string"
+          },
+          "steps": {
+            "description": "\"What the budget did\": each step with its time, then the next.",
+            "items": {
+              "$ref": "#/components/schemas/StepView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "scope",
+          "meters",
+          "steps",
+          "rows"
+        ],
+        "type": "object"
+      },
       "CallView": {
         "description": "The exact call a decision is about (spec 3.3 §7.1).",
         "properties": {
@@ -1556,6 +1648,67 @@
           "args",
           "text",
           "truncated"
+        ],
+        "type": "object"
+      },
+      "CameraActions": {
+        "description": "What a person may do with a camera now.",
+        "properties": {
+          "raiseCard": {
+            "description": "\"Raise a card from this frame\".",
+            "type": "boolean"
+          },
+          "retry": {
+            "description": "\"Try again now\".",
+            "type": "boolean"
+          },
+          "stop": {
+            "description": "\"Stop the stream\".",
+            "type": "boolean"
+          },
+          "switch": {
+            "description": "\"Camera on / Off\".",
+            "type": "boolean"
+          },
+          "zone": {
+            "description": "\"Draw a zone\", \"Edit the zone\".",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "switch",
+          "stop",
+          "retry",
+          "zone",
+          "raiseCard"
+        ],
+        "type": "object"
+      },
+      "CameraAgent": {
+        "description": "The agent that watches a camera.",
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/AgentRef",
+            "description": "The agent."
+          },
+          "line": {
+            "description": "\"Asleep until a defect\", \"Paused by the frame budget\", \"Not watching: no frames\".",
+            "type": "string"
+          },
+          "sessionId": {
+            "description": "The session its thread follows: \"Open the thread\".",
+            "type": "string"
+          },
+          "tone": {
+            "$ref": "#/components/schemas/Tone",
+            "description": "The line's colour."
+          }
+        },
+        "required": [
+          "agent",
+          "line",
+          "tone",
+          "sessionId"
         ],
         "type": "object"
       },
@@ -1588,6 +1741,406 @@
             "type": "string"
           }
         ]
+      },
+      "CameraRegion": {
+        "description": "Something found on the frame, in the camera's pixels.",
+        "properties": {
+          "bbox": {
+            "description": "`[x0, y0, x1, y1]`; absent for a mask drawn alone.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "finding": {
+            "description": "What a watch looks for: drawn selected.",
+            "type": "boolean"
+          },
+          "label": {
+            "description": "\"part\", \"seal tear\", \"fiducial\", \"person\": the overlay's colour (board choice S1).",
+            "type": "string"
+          },
+          "measurement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeasurementView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A measured length."
+          },
+          "outline": {
+            "description": "A mask's outline (the Masks layer).",
+            "items": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "shortTag": {
+            "description": "The phone's and a tile's tag: \"T45\", \"14.3 mm\".",
+            "type": "string"
+          },
+          "tag": {
+            "description": "\"part · T45\", \"seal tear · 0.91 · 5 frames · 14.3 mm\", \"person · blurred\".",
+            "type": "string"
+          },
+          "tagAt": {
+            "$ref": "#/components/schemas/TagAt",
+            "description": "Where the tag sits."
+          },
+          "track": {
+            "description": "The anonymous track.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "tag",
+          "shortTag",
+          "tagAt",
+          "finding"
+        ],
+        "type": "object"
+      },
+      "CameraState": {
+        "description": "A camera's state, as its pill and its picture show it.",
+        "oneOf": [
+          {
+            "const": "live",
+            "description": "\"Live\".",
+            "type": "string"
+          },
+          {
+            "const": "savingFrames",
+            "description": "\"Saving frames\": the governor looks less often or stopped escalating (board choice C4).",
+            "type": "string"
+          },
+          {
+            "const": "paused",
+            "description": "\"Paused until midnight\": the day's frames are used (board choice C5).",
+            "type": "string"
+          },
+          {
+            "const": "lost",
+            "description": "\"Can't reach the camera\" (board choice C6).",
+            "type": "string"
+          },
+          {
+            "const": "off",
+            "description": "\"Camera off\": a person switched it off; nothing is captured or sent (board choice C7).",
+            "type": "string"
+          },
+          {
+            "const": "stopped",
+            "description": "\"Stream stopped\": a person ended the stream (board choice C2).",
+            "type": "string"
+          }
+        ]
+      },
+      "CameraTile": {
+        "description": "One camera of the grid.",
+        "properties": {
+          "canSwitch": {
+            "description": "The switch may be changed here.",
+            "type": "boolean"
+          },
+          "caption": {
+            "description": "\"watching for seal tears\", \"shown only, nothing watched\", \"from the voice screen\".",
+            "type": "string"
+          },
+          "id": {
+            "description": "The camera's id.",
+            "type": "string"
+          },
+          "line": {
+            "description": "The switch list's line: \"5 a second · 20% of today's frames\".",
+            "type": "string"
+          },
+          "name": {
+            "description": "\"Line 2 camera\".",
+            "type": "string"
+          },
+          "on": {
+            "description": "The switch.",
+            "type": "boolean"
+          },
+          "shortLine": {
+            "description": "The phone's line: \"watching\", \"2 a second\", \"shown only\".",
+            "type": "string"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/StageView",
+            "description": "The picture, with its overlays."
+          },
+          "state": {
+            "$ref": "#/components/schemas/CameraState",
+            "description": "The state."
+          },
+          "stateText": {
+            "description": "\"Live\", \"Saving frames\", \"Off\".",
+            "type": "string"
+          },
+          "tone": {
+            "$ref": "#/components/schemas/Tone",
+            "description": "Its colour."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "state",
+          "stateText",
+          "tone",
+          "on",
+          "canSwitch",
+          "stage",
+          "caption",
+          "line",
+          "shortLine"
+        ],
+        "type": "object"
+      },
+      "CameraView": {
+        "description": "`GET /surface/cameras/{camera}` answer: one camera, watched large (board choice C1).",
+        "properties": {
+          "actions": {
+            "$ref": "#/components/schemas/CameraActions",
+            "description": "What the person may do here now."
+          },
+          "agent": {
+            "$ref": "#/components/schemas/CameraAgent",
+            "description": "The agent that watches it."
+          },
+          "budget": {
+            "$ref": "#/components/schemas/BudgetView",
+            "description": "\"Frame budget\"."
+          },
+          "decisions": {
+            "description": "The agent's open decisions on this session, such as the held line stop (board choice C13).",
+            "items": {
+              "$ref": "#/components/schemas/DecisionCard"
+            },
+            "type": "array"
+          },
+          "id": {
+            "description": "The camera's id.",
+            "type": "string"
+          },
+          "ingest": {
+            "description": "\"RTSP · 1920 × 1080 · on the line 2 server\".",
+            "type": "string"
+          },
+          "name": {
+            "description": "\"Line 2 camera\".",
+            "type": "string"
+          },
+          "nothingWaiting": {
+            "description": "\"Nothing is waiting for you.\"",
+            "type": "string"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NoticeView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The banner over the picture, when there is something to warn about."
+          },
+          "on": {
+            "description": "The switch: on, or off (board choice C2).",
+            "type": "boolean"
+          },
+          "sources": {
+            "description": "\"Sources\": every camera, this one's tile following its state (board choice C15).",
+            "items": {
+              "$ref": "#/components/schemas/SourceTile"
+            },
+            "type": "array"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/StageView",
+            "description": "The picture."
+          },
+          "state": {
+            "$ref": "#/components/schemas/CameraState",
+            "description": "The state."
+          },
+          "stateText": {
+            "description": "\"Live\", \"Saving frames\", \"Paused until midnight\", \"Can't reach the camera\", \"Camera off\".",
+            "type": "string"
+          },
+          "tone": {
+            "$ref": "#/components/schemas/Tone",
+            "description": "The pill's colour."
+          },
+          "tracks": {
+            "description": "\"Tracks now\".",
+            "items": {
+              "$ref": "#/components/schemas/TrackRow"
+            },
+            "type": "array"
+          },
+          "tracksNote": {
+            "description": "The words under the tracks: \"Tracks are anonymous and start again when the camera does.\"",
+            "type": "string"
+          },
+          "tracksShortNote": {
+            "description": "The phone's words under the budget while the camera is off: \"Tracks start again when the\ncamera is back on.\"",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "watches": {
+            "description": "\"Watching for\".",
+            "items": {
+              "$ref": "#/components/schemas/WatchView"
+            },
+            "type": "array"
+          },
+          "zones": {
+            "description": "The zones a person may edit, in the camera's pixels.",
+            "items": {
+              "$ref": "#/components/schemas/ZoneView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "ingest",
+          "state",
+          "stateText",
+          "tone",
+          "on",
+          "agent",
+          "stage",
+          "actions",
+          "decisions",
+          "nothingWaiting",
+          "watches",
+          "budget",
+          "tracks",
+          "tracksNote",
+          "zones",
+          "sources"
+        ],
+        "type": "object"
+      },
+      "CamerasView": {
+        "description": "`GET /surface/cameras` answer: every camera, a grid of them (board choice C8).",
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CameraAgent"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The agent that watches them."
+          },
+          "budget": {
+            "description": "Each camera's frames today.",
+            "items": {
+              "$ref": "#/components/schemas/MeterView"
+            },
+            "type": "array"
+          },
+          "countShort": {
+            "description": "The phone's: \"4 · 3 on\".",
+            "type": "string"
+          },
+          "countText": {
+            "description": "\"4 sources · 3 on\".",
+            "type": "string"
+          },
+          "decisions": {
+            "description": "The agents' open decisions on these cameras' sessions.",
+            "items": {
+              "$ref": "#/components/schemas/DecisionCard"
+            },
+            "type": "array"
+          },
+          "footer": {
+            "description": "\"Select a camera to watch it large. People are blurred before any frame is shown or kept.\"",
+            "type": "string"
+          },
+          "note": {
+            "description": "\"Each source has its own frame budget. Stop all pauses every one of them.\"",
+            "type": "string"
+          },
+          "nothingWaiting": {
+            "description": "\"Nothing is waiting for you.\"",
+            "type": "string"
+          },
+          "selected": {
+            "description": "The camera shown first, by its id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "selectedLine": {
+            "description": "The phone's line under the large picture: \"Line 2 camera · Live · 5 a second\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shortNote": {
+            "description": "\"Each camera has its own frame budget. People are blurred before any frame is shown or kept.\"",
+            "type": "string"
+          },
+          "tiles": {
+            "description": "Every camera.",
+            "items": {
+              "$ref": "#/components/schemas/CameraTile"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "\"Cameras\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "countText",
+          "countShort",
+          "tiles",
+          "note",
+          "shortNote",
+          "footer",
+          "decisions",
+          "nothingWaiting",
+          "budget"
+        ],
+        "type": "object"
       },
       "CardDetail": {
         "description": "A line under a decision's details that a feature adds through a\n`CardHint`: where the call comes from, with an optional link into the\nhome, such as \"From the invoice-run workflow · Open in Runs\" (spec 3.3 §7.1). Never on a\nchat card (S-I5).",
@@ -1771,6 +2324,51 @@
           "coveredAll",
           "canChange",
           "fixedLine"
+        ],
+        "type": "object"
+      },
+      "CardRaised": {
+        "description": "`POST /surface/cameras/{camera}/cards` answer.",
+        "properties": {
+          "digest": {
+            "description": "The kept frame's digest, after blurring: the evidence the card and a held call carry.",
+            "type": "string"
+          },
+          "href": {
+            "description": "The kept frame in the annotated viewer.",
+            "type": "string"
+          },
+          "keptUntil": {
+            "description": "\"Kept as evidence until 18 Dec\".",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/CommandOutcome",
+            "description": "What sending it to the agent did: sent, or queued behind a decision or a turn."
+          },
+          "regions": {
+            "description": "The regions that went with it.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "shortDigest": {
+            "description": "The short form: `sha256:c52ca5…ce7550`.",
+            "type": "string"
+          },
+          "text": {
+            "description": "\"Raised to the Inspector. This one frame is kept as evidence until 18 Dec.\"",
+            "type": "string"
+          }
+        },
+        "required": [
+          "digest",
+          "shortDigest",
+          "regions",
+          "keptUntil",
+          "href",
+          "outcome",
+          "text"
         ],
         "type": "object"
       },
@@ -3243,6 +3841,34 @@
             "type": "string"
           }
         ]
+      },
+      "CoverView": {
+        "description": "The words over a picture that is not live.",
+        "properties": {
+          "off": {
+            "description": "The camera-off icon.",
+            "type": "boolean"
+          },
+          "retrying": {
+            "description": "A spinner: the source is being tried again.",
+            "type": "boolean"
+          },
+          "text": {
+            "description": "\"Nothing is captured or sent. You switched line 2 off at 11:05.\"",
+            "type": "string"
+          },
+          "title": {
+            "description": "\"Paused until midnight\", \"Can't reach the line 2 camera\", \"Camera off\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "text",
+          "retrying",
+          "off"
+        ],
+        "type": "object"
       },
       "CoveredLine": {
         "description": "What was covered of one class, as a line of \"Covered before it leaves\".",
@@ -5015,6 +5641,48 @@
         ],
         "type": "object"
       },
+      "FrameView": {
+        "description": "A frame the hub holds, served by its digest.",
+        "properties": {
+          "at": {
+            "description": "When it was captured.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "atText": {
+            "description": "\"10:41:09\".",
+            "type": "string"
+          },
+          "digest": {
+            "description": "`sha256:` of its bytes.",
+            "type": "string"
+          },
+          "href": {
+            "description": "`/api/surface/cameras/{camera}/frames/{digest}`: the bytes, while the hub holds them.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "digest",
+          "href",
+          "at",
+          "atText"
+        ],
+        "type": "object"
+      },
+      "FreezeFrame": {
+        "description": "`POST /surface/cameras/{camera}/freeze` body: the frame on screen, by its digest.",
+        "properties": {
+          "frame": {
+            "description": "The frame's `sha256:` digest; the hub must still hold it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "frame"
+        ],
+        "type": "object"
+      },
       "GenuiCapabilities": {
         "description": "What `GET /api/surface/genui/capabilities` answers: a table of claims per protocol, and\nthe catalogs this home renders.",
         "properties": {
@@ -5367,6 +6035,41 @@
         ],
         "type": "object"
       },
+      "MeasurementView": {
+        "description": "A measured length, drawn as a line with its ends.",
+        "properties": {
+          "from": {
+            "description": "One end, in the camera's pixels.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "text": {
+            "description": "\"14.3 mm\".",
+            "type": "string"
+          },
+          "to": {
+            "description": "The other end.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "text"
+        ],
+        "type": "object"
+      },
       "MeasurementsView": {
         "description": "An answer's measurements (board choice V9).",
         "properties": {
@@ -5450,6 +6153,44 @@
             "type": "string"
           }
         ]
+      },
+      "MeterView": {
+        "description": "One meter.",
+        "properties": {
+          "label": {
+            "description": "\"Looking\", \"Asking sam-3.1 about unclear tracks\", \"Frames today\".",
+            "type": "string"
+          },
+          "note": {
+            "description": "\"As set\", \"At most 6 a minute · 14 today · $0.14\", \"Renews at midnight\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "percent": {
+            "description": "How full the bar is, in hundredths.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tone": {
+            "$ref": "#/components/schemas/Tone",
+            "description": "The bar's colour."
+          },
+          "value": {
+            "description": "\"5 a second\", \"2 in the last minute\", \"61,240 of 300,000\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value",
+          "percent",
+          "tone"
+        ],
+        "type": "object"
       },
       "Mode": {
         "description": "How much agents act on their own (spec 3.3 §8.1).",
@@ -5546,6 +6287,113 @@
             "type": "string"
           }
         ]
+      },
+      "NoticeAction": {
+        "description": "What a banner offers.",
+        "oneOf": [
+          {
+            "description": "\"Try again now\".",
+            "properties": {
+              "kind": {
+                "const": "retry",
+                "type": "string"
+              },
+              "shortText": {
+                "description": "The phone's words.",
+                "type": "string"
+              },
+              "text": {
+                "description": "The words.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text",
+              "shortText"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "\"Change the daily frame limit\", in Memory & rules.",
+            "properties": {
+              "href": {
+                "description": "Where it opens.",
+                "type": "string"
+              },
+              "kind": {
+                "const": "limit",
+                "type": "string"
+              },
+              "shortText": {
+                "description": "The phone's words.",
+                "type": "string"
+              },
+              "text": {
+                "description": "The words.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text",
+              "shortText",
+              "href"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "NoticeView": {
+        "description": "The banner over the picture.",
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NoticeAction"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the banner offers."
+          },
+          "detail": {
+            "description": "The error, credentials hidden: \"connection refused · rtsp://[credentials hidden]@…\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shortText": {
+            "description": "The phone's shorter text.",
+            "type": "string"
+          },
+          "shortTitle": {
+            "description": "The phone's shorter title.",
+            "type": "string"
+          },
+          "text": {
+            "description": "What follows the title.",
+            "type": "string"
+          },
+          "title": {
+            "description": "\"Saving frames.\", \"Parts on line 2 are passing without inspection.\"",
+            "type": "string"
+          },
+          "tone": {
+            "$ref": "#/components/schemas/Tone",
+            "description": "Its colour."
+          }
+        },
+        "required": [
+          "tone",
+          "title",
+          "text",
+          "shortTitle",
+          "shortText"
+        ],
+        "type": "object"
       },
       "Origin": {
         "description": "How an input was given (spec 3.3 §6, §11): every command carries one, and it reaches the\naudit record, so \"What your agents did\" can say \"from Telegram\".",
@@ -5997,6 +6845,24 @@
           "start",
           "end",
           "text"
+        ],
+        "type": "object"
+      },
+      "RaiseCard": {
+        "description": "`POST /surface/cameras/{camera}/cards` body: a card from a frozen frame (board choice C11).",
+        "properties": {
+          "frame": {
+            "description": "The frozen frame, by its digest; the hub must still hold it.",
+            "type": "string"
+          },
+          "note": {
+            "description": "\"What should it look at?\"",
+            "type": "string"
+          }
+        },
+        "required": [
+          "frame",
+          "note"
         ],
         "type": "object"
       },
@@ -7424,6 +8290,49 @@
           }
         ]
       },
+      "SourceTile": {
+        "description": "One camera in \"Sources\", the strip under a single camera (board choice C15).",
+        "properties": {
+          "id": {
+            "description": "The camera's id.",
+            "type": "string"
+          },
+          "name": {
+            "description": "\"Line 3 camera\".",
+            "type": "string"
+          },
+          "selected": {
+            "description": "The camera shown large.",
+            "type": "boolean"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/StageView",
+            "description": "The small picture."
+          },
+          "state": {
+            "$ref": "#/components/schemas/CameraState",
+            "description": "The state."
+          },
+          "stateText": {
+            "description": "\"Live\", \"Saving frames\", \"Paused\", \"Lost\", \"Off\".",
+            "type": "string"
+          },
+          "tone": {
+            "$ref": "#/components/schemas/Tone",
+            "description": "Its colour."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "state",
+          "stateText",
+          "tone",
+          "selected",
+          "stage"
+        ],
+        "type": "object"
+      },
       "Speaker": {
         "description": "Who wrote a message in a thread.",
         "oneOf": [
@@ -7465,6 +8374,122 @@
         "required": [
           "spentMicroUsd",
           "text"
+        ],
+        "type": "object"
+      },
+      "StageLook": {
+        "description": "How the picture is drawn.",
+        "oneOf": [
+          {
+            "const": "live",
+            "description": "The live frame.",
+            "type": "string"
+          },
+          {
+            "const": "dimmed",
+            "description": "The last frame, frozen and dimmed under the words (board choice C5).",
+            "type": "string"
+          },
+          {
+            "const": "grey",
+            "description": "The last frame in grey under the words (board choice C6).",
+            "type": "string"
+          },
+          {
+            "const": "dark",
+            "description": "A black panel: nothing is shown because nothing is captured (board choice C7).",
+            "type": "string"
+          }
+        ]
+      },
+      "StageView": {
+        "description": "The picture and what is drawn over it.",
+        "properties": {
+          "badge": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BadgeView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "\"Live · 10:41:09\", \"Last frame · 15:12:03\"."
+          },
+          "cover": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CoverView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The words over the picture when it is not live."
+          },
+          "frame": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FrameView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The frame shown, when one is held."
+          },
+          "height": {
+            "description": "The camera's height in pixels.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "look": {
+            "$ref": "#/components/schemas/StageLook",
+            "description": "How the picture is drawn."
+          },
+          "rate": {
+            "description": "\"Looking 5 a second · overlays 0.1 s behind\" (board choice C10).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "regions": {
+            "description": "What was found on the frame.",
+            "items": {
+              "$ref": "#/components/schemas/CameraRegion"
+            },
+            "type": "array"
+          },
+          "trails": {
+            "description": "Where each track was over the frames held.",
+            "items": {
+              "$ref": "#/components/schemas/TrailView"
+            },
+            "type": "array"
+          },
+          "width": {
+            "description": "The camera's width in pixels; every region is in these pixels.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "zones": {
+            "description": "The zones.",
+            "items": {
+              "$ref": "#/components/schemas/ZoneView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "width",
+          "height",
+          "look",
+          "regions",
+          "zones",
+          "trails"
         ],
         "type": "object"
       },
@@ -7533,6 +8558,29 @@
         "required": [
           "decisions",
           "stopped"
+        ],
+        "type": "object"
+      },
+      "StepView": {
+        "description": "One step the governor took, or the next.",
+        "properties": {
+          "at": {
+            "description": "\"14:02\", or \"next\".",
+            "type": "string"
+          },
+          "next": {
+            "description": "The next step, not taken yet.",
+            "type": "boolean"
+          },
+          "text": {
+            "description": "\"Looked less often: 5 → 2 a second (90% used)\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "text",
+          "next"
         ],
         "type": "object"
       },
@@ -7637,6 +8685,26 @@
           }
         },
         "type": "object"
+      },
+      "TagAt": {
+        "description": "Where a region's tag sits: above its box, below it, or inside it at the frame's edge.",
+        "oneOf": [
+          {
+            "const": "above",
+            "description": "Above the box.",
+            "type": "string"
+          },
+          {
+            "const": "below",
+            "description": "Below the box: a finding, so it does not cover the part's tag.",
+            "type": "string"
+          },
+          {
+            "const": "in",
+            "description": "Inside the box, at its top.",
+            "type": "string"
+          }
+        ]
       },
       "TakeOverRequest": {
         "description": "`POST /surface/decisions/{id}/take-over` body: the secret typed on a surface, for the card\nat the version that surface showed (S-I2). Its `Debug` output redacts the secret.",
@@ -7909,6 +8977,74 @@
         ],
         "type": "object"
       },
+      "Tone": {
+        "description": "The colour a line of words takes.",
+        "oneOf": [
+          {
+            "const": "ok",
+            "description": "Green: live, watching, within budget.",
+            "type": "string"
+          },
+          {
+            "const": "warn",
+            "description": "Amber: saving frames, near the limit.",
+            "type": "string"
+          },
+          {
+            "const": "fail",
+            "description": "Red: paused, lost, at the limit.",
+            "type": "string"
+          },
+          {
+            "const": "muted",
+            "description": "Grey: off, nothing to say.",
+            "type": "string"
+          },
+          {
+            "const": "plain",
+            "description": "The text's own colour.",
+            "type": "string"
+          }
+        ]
+      },
+      "TrackRow": {
+        "description": "One track now.",
+        "properties": {
+          "finding": {
+            "description": "A watch looks for what was found on it: the row is marked.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "\"T43\".",
+            "type": "string"
+          },
+          "label": {
+            "description": "\"part\".",
+            "type": "string"
+          },
+          "note": {
+            "description": "\"seal tear 0.91 · in the zone · 5 frames\".",
+            "type": "string"
+          },
+          "shortNote": {
+            "description": "The phone's note: \"seal tear 0.91 · in the zone\".",
+            "type": "string"
+          },
+          "swatch": {
+            "description": "The swatch: the finding's label, else the track's.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "note",
+          "shortNote",
+          "swatch",
+          "finding"
+        ],
+        "type": "object"
+      },
       "TrackView": {
         "description": "One track of a video (board choice V10).",
         "properties": {
@@ -7969,6 +9105,35 @@
           "spans",
           "trail",
           "blurred"
+        ],
+        "type": "object"
+      },
+      "TrailView": {
+        "description": "Where a track was over the frames held: its trail.",
+        "properties": {
+          "points": {
+            "description": "Its centres, newest first, in the camera's pixels.",
+            "items": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "track": {
+            "description": "The track.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "track",
+          "points"
         ],
         "type": "object"
       },
@@ -8739,6 +9904,71 @@
           }
         ]
       },
+      "WatchView": {
+        "description": "One watch condition (board choice C1 \"Watching for\").",
+        "properties": {
+          "active": {
+            "description": "It looks at frames now.",
+            "type": "boolean"
+          },
+          "after": {
+            "description": "\". Then wait 30 s before waking again for the same track.\"",
+            "type": "string"
+          },
+          "before": {
+            "description": "\"Score 0.80 or more, 3 frames in a row, inside\".",
+            "type": "string"
+          },
+          "id": {
+            "description": "Its id.",
+            "type": "string"
+          },
+          "label": {
+            "description": "The label it looks for: its colour.",
+            "type": "string"
+          },
+          "name": {
+            "description": "\"Seal tear\".",
+            "type": "string"
+          },
+          "pill": {
+            "description": "\"Watching\", \"Paused\", \"No frames\", \"Camera off\".",
+            "type": "string"
+          },
+          "shortAfter": {
+            "description": "What follows the zone on the phone: \" · not watching\" when it does not look.",
+            "type": "string"
+          },
+          "shortBefore": {
+            "description": "The phone's line: \"Seal tear, 0.80+, 3 frames in\".",
+            "type": "string"
+          },
+          "woke": {
+            "description": "\"Woke the Inspector 3 times today\".",
+            "type": "string"
+          },
+          "zone": {
+            "description": "The zone it looks inside: \"Inspection window\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "label",
+          "pill",
+          "active",
+          "before",
+          "after",
+          "shortBefore",
+          "shortAfter",
+          "woke"
+        ],
+        "type": "object"
+      },
       "WebUse": {
         "description": "What of the web an agent reaches.",
         "oneOf": [
@@ -8790,6 +10020,101 @@
             "type": "object"
           }
         ]
+      },
+      "ZoneChange": {
+        "description": "`PUT /surface/cameras/{camera}/zones/{zone}` body: the zone's new name and corners, and the\ncorners the person saw before changing them.",
+        "properties": {
+          "corners": {
+            "description": "`[x0, y0, x1, y1]` in the camera's pixels.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "name": {
+            "description": "The zone's name.",
+            "type": "string"
+          },
+          "was": {
+            "description": "The corners the person started from: a zone changed since is refused, not overwritten.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "corners",
+          "was"
+        ],
+        "type": "object"
+      },
+      "ZoneSaved": {
+        "description": "`PUT /surface/cameras/{camera}/zones/{zone}` answer.",
+        "properties": {
+          "text": {
+            "description": "\"Saved. The seal tear watch uses it from the next frame.\"",
+            "type": "string"
+          },
+          "zone": {
+            "$ref": "#/components/schemas/ZoneView",
+            "description": "The zone now."
+          }
+        },
+        "required": [
+          "zone",
+          "text"
+        ],
+        "type": "object"
+      },
+      "ZoneView": {
+        "description": "A zone, in the camera's pixels (board choice C12).",
+        "properties": {
+          "corners": {
+            "description": "`[x0, y0, x1, y1]` in the camera's pixels.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "cornersText": {
+            "description": "\"700, 200 → 1600, 880\".",
+            "type": "string"
+          },
+          "id": {
+            "description": "Its id.",
+            "type": "string"
+          },
+          "name": {
+            "description": "\"Inspection window\".",
+            "type": "string"
+          },
+          "usedBy": {
+            "description": "The watches that use it: \"Seal tear watch\".",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "corners",
+          "cornersText",
+          "usedBy"
+        ],
+        "type": "object"
       }
     }
   },
@@ -9214,6 +10539,829 @@
           }
         },
         "summary": "While you were away (spec 3.3 §5.1)"
+      }
+    },
+    "/api/surface/cameras": {
+      "get": {
+        "parameters": [
+          {
+            "description": "The surface asking",
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": null
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CamerasView"
+                }
+              }
+            },
+            "description": "The cameras"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Every camera the caller may see, as a grid (spec 3.7 §8.2, board choice C8): each with its state, switch, picture and frames today"
+      }
+    },
+    "/api/surface/cameras/{camera}": {
+      "get": {
+        "parameters": [
+          {
+            "description": "The camera's id, such as `line-2`",
+            "in": "path",
+            "name": "camera",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The surface asking",
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": null
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CameraView"
+                }
+              }
+            },
+            "description": "The camera"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "One camera, watched large (board choice C1): live frames with overlays, tracks, watch conditions and zones, the frame governor's state, the agent's decisions and every source"
+      }
+    },
+    "/api/surface/cameras/{camera}/cards": {
+      "post": {
+        "parameters": [
+          {
+            "description": "The camera's id, such as `line-2`",
+            "in": "path",
+            "name": "camera",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The surface asking",
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": null
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RaiseCard"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardRaised"
+                }
+              }
+            },
+            "description": "The evidence kept and what sending the card did"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Raise a card from a frozen frame (board choice C11): that one frame is kept as evidence, everyone in it covered first, with the regions on it, and the card goes to the watching agent as the caller's message naming the evidence by digest. Nothing else is stored"
+      }
+    },
+    "/api/surface/cameras/{camera}/feed": {
+      "get": {
+        "parameters": [
+          {
+            "description": "The camera's id, such as `line-2`",
+            "in": "path",
+            "name": "camera",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The surface asking",
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": null
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/StageView"
+                }
+              }
+            },
+            "description": "`text/event-stream`; a `frame` event's data is a StageView"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "A camera's picture after each frame that passes the server's gate, as server-sent events: `frame` carries a StageView, `changed` says to read the camera again"
+      }
+    },
+    "/api/surface/cameras/{camera}/frames/{frame}": {
+      "get": {
+        "parameters": [
+          {
+            "description": "The camera's id, such as `line-2`",
+            "in": "path",
+            "name": "camera",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The frame's `sha256:` digest",
+            "in": "path",
+            "name": "frame",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The surface asking",
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": null
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The frame"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "A frame the server holds in memory for a camera (spec 3.7 §8.2): the exact bytes whose digest the picture names; a camera switched off holds none; never cached"
+      }
+    },
+    "/api/surface/cameras/{camera}/freeze": {
+      "post": {
+        "parameters": [
+          {
+            "description": "The camera's id, such as `line-2`",
+            "in": "path",
+            "name": "camera",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The surface asking",
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": null
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FreezeFrame"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StageView"
+                }
+              }
+            },
+            "description": "The frozen frame's picture"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Freeze the frame on screen for a card (board choice C11): held in memory for 15 minutes while the person writes it, forgotten when the camera is switched off; nothing is written"
+      }
+    },
+    "/api/surface/cameras/{camera}/off": {
+      "post": {
+        "parameters": [
+          {
+            "description": "The camera's id, such as `line-2`",
+            "in": "path",
+            "name": "camera",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The surface asking",
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": null
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CameraView"
+                }
+              }
+            },
+            "description": "The camera now"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Switch a camera off (board choice C2): the server drops its frames from then on and forgets those it held; nothing is captured or sent. Recorded"
+      }
+    },
+    "/api/surface/cameras/{camera}/on": {
+      "post": {
+        "parameters": [
+          {
+            "description": "The camera's id, such as `line-2`",
+            "in": "path",
+            "name": "camera",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The surface asking",
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": null
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CameraView"
+                }
+              }
+            },
+            "description": "The camera now"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Switch a camera on (board choice C2); recorded first. A paired phone needs the decide scope"
+      }
+    },
+    "/api/surface/cameras/{camera}/retry": {
+      "post": {
+        "parameters": [
+          {
+            "description": "The camera's id, such as `line-2`",
+            "in": "path",
+            "name": "camera",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The surface asking",
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": null
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CameraView"
+                }
+              }
+            },
+            "description": "The camera now"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Try a lost camera again now (board choice C6); recorded"
+      }
+    },
+    "/api/surface/cameras/{camera}/stop": {
+      "post": {
+        "parameters": [
+          {
+            "description": "The camera's id, such as `line-2`",
+            "in": "path",
+            "name": "camera",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The surface asking",
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": null
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CameraView"
+                }
+              }
+            },
+            "description": "The camera now"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "End a camera's stream (board choice C2); recorded"
+      }
+    },
+    "/api/surface/cameras/{camera}/zones/{zone}": {
+      "put": {
+        "parameters": [
+          {
+            "description": "The camera's id, such as `line-2`",
+            "in": "path",
+            "name": "camera",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "zone",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ZoneChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZoneSaved"
+                }
+              }
+            },
+            "description": "The zone now"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Change a zone (board choice C12): the watches that use it read the new corners from their next frame; a zone changed since the person started is refused. Recorded; not from a paired phone"
       }
     },
     "/api/surface/commands": {

@@ -171,7 +171,7 @@ pub struct StageView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cover: Option<CoverView>,
     /// What was found on the frame.
-    pub regions: Vec<RegionView>,
+    pub regions: Vec<CameraRegion>,
     /// The zones.
     pub zones: Vec<ZoneView>,
     /// Where each track was over the frames held.
@@ -219,7 +219,7 @@ pub struct CoverView {
 /// Something found on the frame, in the camera's pixels.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct RegionView {
+pub struct CameraRegion {
     /// "part", "seal tear", "fiducial", "person": the overlay's colour (board choice S1).
     pub label: String,
     /// `[x0, y0, x1, y1]`; absent for a mask drawn alone.
@@ -306,7 +306,7 @@ pub struct NoticeView {
 
 /// What a banner offers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
 pub enum NoticeAction {
     /// "Try again now".
     Retry {

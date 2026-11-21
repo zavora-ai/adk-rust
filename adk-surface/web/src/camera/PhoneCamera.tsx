@@ -167,6 +167,7 @@ function One({
         <Switch
           on={view.on}
           short
+          icon
           disabled={busy || !view.actions.switch}
           label={words.cameraSwitch(view.name)}
           onSwitch={(on) => void act(() => client.switchTo(id, on))}
