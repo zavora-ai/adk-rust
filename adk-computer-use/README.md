@@ -117,7 +117,7 @@ modules.
 
 | Area | What it provides |
 | --- | --- |
-| `contracts` | The `computer-use-mcp` MCP server wire types (`action`, `target`, `approval`, `receipt`, `lease`, `session`, `safety`), each validated so they cannot carry unsafe or disclosing data. |
+| `contracts` | The `computer-use-mcp` MCP server wire types (`action`, `target`, `approval`, `receipt`, `lease`, `session`, `safety`), each validated so they cannot carry unsafe or disclosing data. Target `Bounds` state their `CoordinateSpace` (logical points or screenshot pixels) and device pixel ratio, and `TargetEvidence::check_screen_binding` checks them against the screenshot's ratio. |
 | `runtime` | The `ComputerUseRuntime` trait plus its live MCP adapter, `ComputerUseMcpRuntime`. |
 | `graph` | `build_reference_graph` and its checkpointer-aware variant. |
 | `auth` | `ScopeAuthorizer` and `ComputerUseAuthContext` — the `computer:*` scope gate tied to your adk-auth identity. |
