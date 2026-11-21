@@ -71,7 +71,11 @@ impl<T: ?Sized + Send + Sync + 'static> OnDevice<T> {
         }
     }
 
-    #[cfg(any(feature = "onnx", feature = "onnx-dynamic", feature = "ocr"))]
+    #[cfg(any(
+        feature = "onnx",
+        feature = "onnx-dynamic",
+        all(feature = "ocr", feature = "guardrail")
+    ))]
     pub(crate) fn lazy(name: impl Into<String>, load: Load<T>) -> Self {
         Self { name: name.into(), cell: tokio::sync::OnceCell::new(), load }
     }
