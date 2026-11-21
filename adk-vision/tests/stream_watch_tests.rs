@@ -499,7 +499,7 @@ async fn vision_watch_starts_and_stops_a_watch_through_runner_and_llm_agent() {
     assert_eq!(registered[0].ext["source"], json!("line-1"));
     assert_eq!(
         registered[0].actor.agent.as_ref().map(ToString::to_string).as_deref(),
-        Some("watcher")
+        Some("urn:adk:agent:inspector/watcher")
     );
     assert_eq!(records(&run_audit, VISION_WATCH_STOPPED).len(), 1);
     assert_eq!(records(&stream_audit, VISION_SOURCE_STARTED).len(), 1);

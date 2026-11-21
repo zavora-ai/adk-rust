@@ -22,10 +22,15 @@ adk-kernel = { version = "3.0.0", features = ["vision"] }
 |------|-------|--------------|
 | 1. Track | The stream pipeline | Detector and tracker give each object an anonymous `TrackId` in source pixels |
 | 2. Watch | `WatchEvaluator::observe` | Each `WatchCondition` is held against every track; a `WatchEvent` comes out only when one passes |
-| 3. Keep | The pipeline | The event's frame becomes evidence: it is stored as an artifact and its locator attached (`WatchEvent::with_frame_artifact`) |
+| 3. Keep | `StreamWatch` | The event's frame becomes evidence: it is stored redacted as an artifact through a `FrameKeeper`, its locator attached (`WatchEvent::with_frame_artifact`), and `vision.watch.fired` written |
 | 4. Wake | `VisionWakeSource` | The event becomes a `WakeEvent` keyed `queue:<source>:<session>:<track>:<condition>:<event>` |
 | 5. Route | The kernel | A process asleep on `Wake::Queue { source }` wakes; with none, a `Trigger` on the same wake starts a `Triggered` process |
-| 6. Read | The woken turn | The payload arrives as delimited data, not instructions; the agent loads the frame through the [vision tools](governed-tools.md) |
+| 6. Read | The woken turn | The payload arrives as delimited data, not instructions; the agent loads the frame through the [vision tools](governed-tools.md) by the digest the payload names |
+
+The pipeline, the watch stage and the registry an agent starts watches through are on
+[Streams](streams.md#watch-conditions-and-wakes): `StreamWatch` runs steps 2 to 4 inside the
+pipeline, and `FrameSources` with the `vision_watch` tool lets an agent list the operator's
+sources and start or stop a condition on one.
 
 ## Watch Conditions
 
@@ -83,6 +88,11 @@ assert_eq!(watch.conditions().len(), 1);
 | `regions` | The frame's regions in source pixels, each with the `track` the tracker set |
 | `tracks` | The tracks the tracker still holds, seen in this frame or briefly missed |
 
+The stream pipeline's `Observation::tracked` fills `tracks` from the tracker's
+`Tracker::live_tracks`, so an object the detector misses for a frame or two keeps its track
+and does not fire again when it is seen once more. `WatchEvaluator::add` and `remove` change
+the conditions while a stream runs; the others keep their streaks.
+
 A `WatchEvent` names its source, session, condition, kind (`detected`), track, label, score,
 the consecutive frames counted, the frame, and the regions that met the condition, the firing
 track's first. `WatchEvent::key()` is `<session>:<track>:<condition>:<kind>`.
@@ -100,28 +110,35 @@ pipeline delivers events straight to it:
 ```rust,no_run
 use std::sync::Arc;
 use adk_kernel::{Trigger, VisionWakeSource, Wake};
-use adk_vision::{TrackedObservation, WatchEvaluator, WatchSink};
+use adk_vision::stream::{FrameKeeper, FrameSource, FrameSources, NoRedaction, SourceSpec};
+use adk_vision::{DetectQuery, FrameSourceId, MediaScope, VisionCx, VisionRuntime, WatchCondition};
 
 # async fn run(
 #     builder: adk_kernel::KernelBuilder,
 #     template: adk_core::NewRun,
-#     mut watch: WatchEvaluator,
-#     frames: Vec<TrackedObservation>,
-#     keep: impl Fn(u64) -> adk_core::ArtifactLocator,
+#     camera: Arc<dyn FrameSource>,
+#     artifacts: Arc<dyn adk_artifact::ArtifactService>,
+#     detector: Arc<VisionRuntime>,
 # ) -> adk_vision::Result<()> {
-let source = Arc::new(VisionWakeSource::new("conveyor-1").unwrap());
+let wakes = Arc::new(VisionWakeSource::new("conveyor-1").unwrap());
 // A process asleep on the stream takes each event; with none asleep, this trigger starts one.
 let builder = builder
-    .wake_source(source.clone())
+    .wake_source(wakes.clone())
     .trigger(Trigger::new("inspect", Wake::Queue { source: "conveyor-1".into() }, template));
 # let _ = builder;
-for frame in frames {
-    for event in watch.observe(&frame) {
-        // Keep the frame as evidence, then wake.
-        let event = event.with_frame_artifact(keep(frame.frame.index));
-        source.deliver(&event).await?;
-    }
-}
+// Keep wake frames in the session the sleeping process runs in.
+let keeper = FrameKeeper::new(
+    artifacts,
+    MediaScope::new("inspector", "line-1", "shift-1"),
+    FrameSourceId("conveyor-1".into()),
+);
+let sources = FrameSources::new(VisionCx::new());
+sources.register(
+    SourceSpec::new(camera, Arc::new(NoRedaction), Arc::new(keeper), wakes)
+        .detector(detector, DetectQuery::Classes(vec!["clock".into()])),
+)?;
+let seal = WatchCondition::new("wall-clock", ["clock"]);
+sources.start_watch(&VisionCx::new(), &FrameSourceId("conveyor-1".into()), seal).await?;
 # Ok(())
 # }
 ```
@@ -135,6 +152,7 @@ perception stack can wake the kernel.
 | A source name holds no `:`, `#` or whitespace | The kernel reads a key's source up to its first `:` |
 | One source per stream | A watch event from another stream is refused |
 | No principal | Standing rules and Auto stay inert for the run a camera starts, so a consequential call it makes, such as stopping the line, is held for a person |
+| The frame loads by digest | The image tools resolve `sha256:<digest>` from the session's artifacts, so the keeper's `MediaScope` is the session the woken process runs in; a `Trigger` that starts a process in another session needs a keeper in that session |
 
 ### What the Woken Turn Reads
 
@@ -180,6 +198,8 @@ instructions ([What a woken turn is told](../kernel/index.md#what-a-woken-turn-i
 | Suite | Proves |
 |-------|--------|
 | `adk-vision/tests/watch_property_tests.rs` | Zone containment (a rectangle holds what its box holds at any start vertex and winding; nothing beyond a polygon's bounds is inside), consecutive-frame counting against an oracle, firings a cooldown apart and once per track, redelivered and late frames change nothing, every key in a session distinct; forty frames of one seal fire once |
+| `adk-vision/tests/stream_watch_tests.rs` | The pipeline through `StreamWatch`: one wake per track on its third frame, a frame the detector misses ending nothing, the kept frame loading back by its digest, the `vision.watch.fired` and `vision.evidence.kept` records, and every detector call metered as a frame; `FrameSources` streaming from the first watch to the last; `vision_watch` listing, starting and stopping a watch through `Runner` and `LlmAgent` with a scripted planner |
+| `adk-harness/tests/vision_wake_tests.rs` | A kernel process asleep on a stream is woken once by a watched belt; its harness turn reads the payload and loads the kept frame through the vision pack's `vision_detect` by its digest. The ignored live run does the same with adk-vision's conveyor clip over the in-process RTSP server and RF-DETR Nano |
 | `adk-kernel/tests/vision_wake.rs` | S10: a process asleep on the stream wakes once for forty frames of one seal and reads frame, digest, artifact, track and regions within 4 KiB; with no sleeper the trigger starts a `Triggered` process; a redelivery wakes nothing. With feature `vision`, the same through `WatchEvaluator` and `WatchSink`. The payload stays within the limit for any regions and texts (property test) |
 
 ## Related
