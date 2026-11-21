@@ -31,9 +31,12 @@
 //! | `vision_redact` | A new image with regions filled solid black | `Idempotent` |
 //! | `vision_annotate` | A new image with labelled boxes drawn | `Idempotent` |
 //! | `vision_measure` | Maximum length and area in millimetres, from masks under a fiducial's calibration | `ReadOnly` |
+//! | `vision_watch` | Lists the registered frame sources, and starts or stops a watch condition on one (feature `stream`, with [`VisionToolsetBuilder::frame_sources`]) | `Idempotent` |
 
 mod answer;
 mod tools;
+#[cfg(feature = "stream")]
+mod watch;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -49,6 +52,8 @@ use serde_json::Value;
 
 pub use answer::{ANSWER_ARTIFACT_PREFIX, answer_artifact_name};
 pub use tools::{VISION_TOOL_NAMES, VisionTool, VisionToolKind};
+#[cfg(feature = "stream")]
+pub use watch::VISION_WATCH_TOOL;
 
 use crate::backend::BackendDescriptor;
 use crate::cx::VisionCx;
@@ -93,6 +98,8 @@ pub(crate) struct Inner {
     staged: Mutex<HashMap<String, StagedCall>>,
     governed: Mutex<HashMap<String, EgressAction>>,
     approved: Mutex<HashSet<Digest>>,
+    #[cfg(feature = "stream")]
+    sources: Option<crate::stream::FrameSources>,
 }
 
 /// One planned call: its route, the primary backend's descriptor, the images it names,
@@ -163,6 +170,8 @@ pub struct VisionToolsetBuilder {
     approval: EgressApproval,
     image_class: DataClass,
     crop_class: DataClass,
+    #[cfg(feature = "stream")]
+    sources: Option<crate::stream::FrameSources>,
 }
 
 impl VisionToolsetBuilder {
@@ -178,6 +187,14 @@ impl VisionToolsetBuilder {
     pub fn data_classes(mut self, image: &str, crop: &str) -> Self {
         self.image_class = DataClass::new(image);
         self.crop_class = DataClass::new(crop);
+        self
+    }
+
+    /// Offers `vision_watch` over `sources`: an agent lists them and starts or stops watch
+    /// conditions on them (spec 3.7 §7.8).
+    #[cfg(feature = "stream")]
+    pub fn frame_sources(mut self, sources: crate::stream::FrameSources) -> Self {
+        self.sources = Some(sources);
         self
     }
 
@@ -206,6 +223,8 @@ impl VisionToolsetBuilder {
                 staged: Mutex::new(HashMap::new()),
                 governed: Mutex::new(HashMap::new()),
                 approved: Mutex::new(HashSet::new()),
+                #[cfg(feature = "stream")]
+                sources: self.sources,
             }),
         })
     }
@@ -219,6 +238,8 @@ impl VisionToolset {
             approval: EgressApproval::default(),
             image_class: DataClass::new("image"),
             crop_class: DataClass::new("image_crop"),
+            #[cfg(feature = "stream")]
+            sources: None,
         }
     }
 
@@ -227,22 +248,41 @@ impl VisionToolset {
         &self.inner.runtime
     }
 
-    /// The tools, one per task the runtime has a backend for.
+    /// The tools, one per task the runtime has a backend for, and `vision_watch` when the
+    /// toolset has frame sources.
     pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
-        VisionToolKind::ALL
+        #[allow(unused_mut)] // `vision_watch` joins only with feature `stream`.
+        let mut tools: Vec<Arc<dyn Tool>> = VisionToolKind::ALL
             .iter()
             .filter(|kind| self.inner.serves(**kind))
             .map(|kind| Arc::new(VisionTool::new(*kind, self.inner.clone())) as Arc<dyn Tool>)
-            .collect()
+            .collect();
+        #[cfg(feature = "stream")]
+        if let Some(sources) = &self.inner.sources {
+            tools.push(Arc::new(watch::VisionWatchTool::new(sources.clone())));
+        }
+        tools
     }
 
     /// The names of [`tools`](Self::tools).
     pub fn tool_names(&self) -> Vec<&'static str> {
-        VisionToolKind::ALL
+        #[allow(unused_mut)] // `vision_watch` joins only with feature `stream`.
+        let mut names: Vec<&'static str> = VisionToolKind::ALL
             .iter()
             .filter(|kind| self.inner.serves(**kind))
             .map(|kind| kind.name())
-            .collect()
+            .collect();
+        #[cfg(feature = "stream")]
+        if self.inner.sources.is_some() {
+            names.push(watch::VISION_WATCH_TOOL);
+        }
+        names
+    }
+
+    /// The frame sources `vision_watch` serves, when the toolset has them.
+    #[cfg(feature = "stream")]
+    pub fn frame_sources(&self) -> Option<&crate::stream::FrameSources> {
+        self.inner.sources.as_ref()
     }
 
     /// Whether `name` is one of this toolset's tools.

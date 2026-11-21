@@ -31,6 +31,14 @@ tokio = { workspace = true, features = ["sync", "time"] }
 rmcp = { version = "3.9", features = ["client"] }
 uuid.workspace = true
 tracing.workspace = true
+# `vision`: computer-use observations as an adk-vision `ScreenSource`.
+adk-vision = { workspace = true, optional = true, features = ["screen"] }
+
+[features]
+default = []
+# `vision::RuntimeObserver`: adk-vision's `VisualObserver` over a `ComputerUseRuntime`, so a
+# computer-use-mcp desktop is a frame source the stream pipeline watches (spec 3.7 §7.13).
+vision = ["dep:adk-vision"]
 
 [dev-dependencies]
 proptest = "1.5"
