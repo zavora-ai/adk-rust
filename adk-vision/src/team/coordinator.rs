@@ -236,7 +236,7 @@ impl VisionTeam {
             let opinions = match cached {
                 Some(opinions) => opinions,
                 None => match self.opinions(ctx, &cx, &source, &regions, region, bbox).await? {
-                    Asked::Opinions(opinions) => opinions,
+                    Asked::Opinions(opinions) => *opinions,
                     Asked::Held(request) => {
                         inspection.held = Some(request);
                         break;
@@ -372,11 +372,11 @@ impl VisionTeam {
             regions.height,
             verified.check.found.clone(),
         ));
-        Ok(Asked::Opinions(Opinions {
+        Ok(Asked::Opinions(Box::new(Opinions {
             reasoner: reasoned.opinion,
             verifier,
             crop: reasoned.released.first().map(CropRecord::from),
-        }))
+        })))
     }
 
     /// The arguments and evidence of a disagreement card.
@@ -481,7 +481,7 @@ impl From<&EgressReceipt> for CropRecord {
 }
 
 enum Asked {
-    Opinions(Opinions),
+    Opinions(Box<Opinions>),
     Held(ToolConfirmationRequest),
     Withheld,
 }
