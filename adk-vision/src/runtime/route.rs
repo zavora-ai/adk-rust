@@ -35,6 +35,11 @@ pub enum Trigger {
 
 /// Where a route escalates, on which triggers, and how much margin a crop keeps.
 ///
+/// An escalation the egress gate refuses — a deny rule, an unlisted host, the on-device
+/// profile — leaves the primary backend's answer standing, and the gate records the refusal
+/// with its reason. An escalation the gate holds for approval stops the call, as any held
+/// release does.
+///
 /// # Example
 ///
 /// ```

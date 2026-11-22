@@ -56,19 +56,30 @@ pub struct Extracted {
 
 /// What one run of the desk left behind.
 pub struct DeskRun {
-    pages: Vec<(Page, Digest)>,
-    answers: usize,
-    fields: Vec<Extracted>,
-    released: Vec<EgressReceipt>,
-    records: Vec<EgressRecord>,
+    pub(crate) pages: Vec<(Page, Digest)>,
+    pub(crate) answers: usize,
+    pub(crate) fields: Vec<Extracted>,
+    pub(crate) released: Vec<EgressReceipt>,
+    pub(crate) records: Vec<EgressRecord>,
     audit_released: Vec<AuditRecordDraft>,
-    calls: Vec<AuditRecordDraft>,
+    pub(crate) calls: Vec<AuditRecordDraft>,
     ledger_total: u64,
     nim_requests: Vec<Value>,
     tables: BTreeMap<String, usize>,
     tables_dir: PathBuf,
     /// Blocks the cloud re-read, per page.
-    escalated: BTreeMap<String, usize>,
+    pub(crate) escalated: BTreeMap<String, usize>,
+}
+
+/// The rules a desk runs under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Profile {
+    /// S1 and S2: crops may go to NVIDIA NIM after redaction, which answers from its
+    /// recorded responses on a local server.
+    Recorded,
+    /// S19: the on-device profile. Every release is refused at the egress gate, so NIM is
+    /// configured at its real address and never reached, and no local server is started.
+    OnDevice,
 }
 
 /// The desk run S1 and S2 share.
@@ -79,7 +90,7 @@ pub struct Shared {
 
 impl Shared {
     async fn get(&self) -> Result<&DeskRun> {
-        self.run.get_or_try_init(run_desk).await
+        self.run.get_or_try_init(|| run_desk(Profile::Recorded)).await
     }
 }
 
@@ -180,7 +191,7 @@ fn write_tables(fields: &[Extracted]) -> Result<(BTreeMap<String, usize>, PathBu
     Ok((counts, dir))
 }
 
-async fn run_desk() -> Result<DeskRun> {
+pub(crate) async fn run_desk(profile: Profile) -> Result<DeskRun> {
     let pages = documents()?;
     let artifacts = Arc::new(InMemoryArtifactService::new());
     let mut digested = Vec::new();
@@ -192,25 +203,31 @@ async fn run_desk() -> Result<DeskRun> {
     let local = models().await?;
 
     // NVIDIA NIM: the five crops' recorded answers, in the order the desk escalates them.
-    let server = MockServer::start().await;
-    let (address, key) = match recording_proxy("NIM") {
-        Some(proxy) => {
-            (proxy.parse().context("VISION_RECORD_NIM is host:port")?, live_key("NVIDIA_API_KEY"))
+    let server = match profile {
+        Profile::Recorded => Some(MockServer::start().await),
+        Profile::OnDevice => None,
+    };
+    let nim_config = match (&server, recording_proxy("NIM")) {
+        (None, _) => NimCvConfig::new(format!("https://{NIM_HOST}/v1/cv")).with_api_key("unused"),
+        (Some(_), Some(proxy)) => {
+            let address = proxy.parse().context("VISION_RECORD_NIM is host:port")?;
+            NimCvConfig::new(format!("http://{NIM_HOST}:{}/v1/cv", address.port()))
+                .with_api_key(live_key("NVIDIA_API_KEY"))
+                .with_http_client(client_to(&address, NIM_HOST)?)
         }
-        None => {
+        (Some(server), None) => {
             let recorded = Recording::all(&fixtures().join("recorded").join("nim-crops"))?;
-            serve_in_order(&server, &recorded).await;
-            (*server.address(), "recorded".to_string())
+            serve_in_order(server, &recorded).await;
+            let address = *server.address();
+            NimCvConfig::new(format!("http://{NIM_HOST}:{}/v1/cv", address.port()))
+                .with_api_key("recorded")
+                .with_http_client(client_to(&address, NIM_HOST)?)
         }
     };
-    let nim = NimDocumentReader::new(
-        NimCvConfig::new(format!("http://{NIM_HOST}:{}/v1/cv", address.port()))
-            .with_api_key(key)
-            .with_http_client(client_to(&address, NIM_HOST)?),
-    )?
-    .with_layout(false)
-    .with_tables(false)
-    .with_charts(false);
+    let nim = NimDocumentReader::new(nim_config)?
+        .with_layout(false)
+        .with_tables(false)
+        .with_charts(false);
 
     let reader = local.reader.clone();
     let factory: Factory = Box::new(move |gate, store| {
@@ -230,9 +247,11 @@ async fn run_desk() -> Result<DeskRun> {
             .media_store(store)
             .build()
     });
-    // The operator's rules: crops may go to NIM after redaction; nothing else leaves.
+    // The operator's rules: crops may go to NIM after redaction; nothing else leaves. The
+    // on-device profile keeps the same rules and refuses every release before they apply.
+    let on_device = if profile == Profile::OnDevice { "on_device = true\n" } else { "" };
     let rules = VisionConfig::from_toml_str(&format!(
-        "[egress]\ndefault = \"deny\"\nredact = [\"faces\", \"personal_text\"]\n\n\
+        "[egress]\n{on_device}default = \"deny\"\nredact = [\"faces\", \"personal_text\"]\n\n\
          [[egress.rule]]\nhost = \"{NIM_HOST}\"\nclasses = [\"document_crop\"]\naction = \"allow\"\n"
     ))?;
     let mut script = Vec::new();
@@ -287,7 +306,10 @@ async fn run_desk() -> Result<DeskRun> {
         audit_released: desk.records("vision.egress.released"),
         calls: desk.records("vision.call"),
         ledger_total,
-        nim_requests: requests(&server).await,
+        nim_requests: match &server {
+            Some(server) => requests(server).await,
+            None => Vec::new(),
+        },
         fields,
         tables,
         tables_dir,

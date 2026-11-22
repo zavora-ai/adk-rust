@@ -3,7 +3,7 @@ name = "vision-scenarios"
 version = "0.0.1"
 edition = "2024"
 publish = false
-description = "Spec 3.7 scenarios S1–S8 for adk-vision: the Document desk on local backends, cloud backends on recorded responses, egress, approvals, frames, weights and budgets"
+description = "Spec 3.7 scenarios S1–S8, S18 and S19 for adk-vision: the Document desk on local backends, cloud backends on recorded responses, egress, approvals, frames, weights, budgets, face blur on streams and the on-device profile"
 
 [workspace]
 
@@ -16,9 +16,11 @@ adk-harness = { path = "../../adk-harness", features = ["vision"] }
 adk-model = { path = "../../adk-model", default-features = false, features = ["anthropic", "gemini", "muse"] }
 adk-runner = { path = "../../adk-runner" }
 adk-session = { path = "../../adk-session" }
-# PP-OCRv6 and RF-DETR run on the device, fetched by revision and SHA-256; the cloud
-# backends are the real clients against a local server.
-adk-vision = { path = "../../adk-vision", features = ["fetch", "conformance", "guardrail", "onnx", "ocr", "cloud", "nim", "sam"] }
+# PP-OCRv6, RF-DETR and YuNet run on the device, fetched by revision and SHA-256; the cloud
+# backends are the real clients against a local server; S18 streams drawn passers-by.
+adk-vision = { path = "../../adk-vision", features = ["fetch", "conformance", "guardrail", "onnx", "ocr", "cloud", "nim", "sam", "stream", "stream-fixtures"] }
+# S19 runs S1 again inside the operating system's sandbox, the network denied.
+adk-sandbox = { path = "../../adk-sandbox", features = ["sandbox-native", "egress-proxy"] }
 anyhow = "1.0"
 async-trait = "0.1"
 base64 = "0.22"
