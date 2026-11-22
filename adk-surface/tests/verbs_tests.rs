@@ -793,7 +793,14 @@ async fn the_request(home: &Home) -> ApprovalRequest {
 
 async fn ask(home: &Home) -> ApprovalRequest {
     home.engine
-        .execute(&web(), Command::Send { session_id: "s1".into(), text: "Tidy my evening".into() })
+        .execute(
+            &web(),
+            Command::Send {
+                session_id: "s1".into(),
+                text: "Tidy my evening".into(),
+                images: Vec::new(),
+            },
+        )
         .await
         .unwrap();
     the_request(home).await
@@ -1135,7 +1142,11 @@ mod held {
             .engine
             .execute(
                 &web(),
-                Command::Send { session_id: "s1".into(), text: "Tidy my evening".into() },
+                Command::Send {
+                    session_id: "s1".into(),
+                    text: "Tidy my evening".into(),
+                    images: Vec::new(),
+                },
             )
             .await;
         tokio::time::sleep(Duration::from_millis(500)).await;

@@ -141,7 +141,11 @@ async fn one_verb_three_origins() {
     home.engine
         .execute(
             &web(),
-            Command::Send { session_id: "s1".into(), text: "/snooze News digest".into() },
+            Command::Send {
+                session_id: "s1".into(),
+                text: "/snooze News digest".into(),
+                images: Vec::new(),
+            },
         )
         .await
         .unwrap();
