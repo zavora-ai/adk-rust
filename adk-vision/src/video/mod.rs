@@ -8,7 +8,7 @@
 //!
 //! | Analyzer | Requests | Input | Feature |
 //! |----------|----------|-------|---------|
-//! | `FramesAnalyzer` | `Ask` | sampled frames, on any vision-language model (Qwen3-VL on this machine, or a remote one through the gate) | `cloud` |
+//! | `FramesAnalyzer` | `Ask` | sampled frames, on any vision-language model (Qwen3-VL on this machine, or a remote one through the gate), optionally after a `VisibilityPass` | `cloud` |
 //! | `GeminiVideoAnalyzer` | `Ask` | a clip, as Gemini native video: inline up to 20 MB, else uploaded once through the File API and sent as a file part | `gemini-video` |
 //! | `sam::SamVideoTracker` | `Track` | a clip, through `sam-3.1` video: masks or boxes with stable object identifiers | `sam` |
 
@@ -25,7 +25,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "cloud")]
-pub use frames::FramesAnalyzer;
+pub use frames::{FramesAnalyzer, VisibilityPass};
 #[cfg(feature = "gemini-video")]
 pub use gemini::{GEMINI_INLINE_LIMIT, GeminiVideoAnalyzer, MediaResolution};
 pub use mp4::VideoCodec;

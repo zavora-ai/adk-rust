@@ -8,6 +8,8 @@
 //! | Manifest | Model | Regions | Weights |
 //! |----------|-------|---------|---------|
 //! | [`QWEN3_VL_2B`] | `Qwen/Qwen3-VL-2B-Instruct` | `bbox_2d` on 0–1000, x first: the model's own frame ([`Normalized1000::qwen3_vl`]) | 4.26 GB safetensors, Apache-2.0 |
+//! | [`QWEN3_VL_4B`] | `Qwen/Qwen3-VL-4B-Instruct`, the local describer default (spec 3.7 §7.5) | the same | 8.88 GB safetensors in two shards, Apache-2.0 |
+//! | [`QWEN3_VL_8B`] | `Qwen/Qwen3-VL-8B-Instruct`, the local grounding default (Q15) | the same | 17.5 GB safetensors in four shards, Apache-2.0 |
 //!
 //! mistral.rs 0.8 loads Qwen3-VL from safetensors only; there is no GGUF path for its
 //! vision tower. A manifest for another mistral.rs vision architecture loads too and answers
@@ -52,6 +54,14 @@ use crate::sent::SentImage;
 
 /// The built-in manifest of Qwen3-VL 2B Instruct, the smallest Qwen3-VL.
 pub const QWEN3_VL_2B: &str = "qwen3-vl-2b-instruct";
+
+/// The built-in manifest of Qwen3-VL 4B Instruct, the local describer default; about 9 GB
+/// of weights in bf16.
+pub const QWEN3_VL_4B: &str = "qwen3-vl-4b-instruct";
+
+/// The built-in manifest of Qwen3-VL 8B Instruct, the local GUI grounding default; about
+/// 17.5 GB of weights in bf16.
+pub const QWEN3_VL_8B: &str = "qwen3-vl-8b-instruct";
 
 /// The most pixels a mistral.rs describer is handed: the runtime downscales a larger image
 /// and records the resize, so a call on the CPU stays near 1,000 image tokens. Raise it with
