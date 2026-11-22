@@ -23,8 +23,7 @@ use adk_vision::{
 };
 
 /// Meta's SAM License, pinned to the commit of `facebookresearch/sam3` that published it.
-const SAM_LICENSE_URL: &str =
-    "https://github.com/facebookresearch/sam3/blob/a13e358df479a80938c8bfed0e0754bea8fdb277/LICENSE";
+const SAM_LICENSE_URL: &str = "https://github.com/facebookresearch/sam3/blob/a13e358df479a80938c8bfed0e0754bea8fdb277/LICENSE";
 
 /// A minimal ONNX writer: the protobuf fields of `ModelProto` the stand-ins need.
 mod onnx {
@@ -113,11 +112,21 @@ mod onnx {
         }
 
         pub fn floats(&mut self, name: &str, dims: &[i64], values: &[f32]) {
-            self.initializer(name, dims, FLOAT, values.iter().flat_map(|v| v.to_le_bytes()).collect());
+            self.initializer(
+                name,
+                dims,
+                FLOAT,
+                values.iter().flat_map(|v| v.to_le_bytes()).collect(),
+            );
         }
 
         pub fn ints(&mut self, name: &str, dims: &[i64], values: &[i64]) {
-            self.initializer(name, dims, INT64, values.iter().flat_map(|v| v.to_le_bytes()).collect());
+            self.initializer(
+                name,
+                dims,
+                INT64,
+                values.iter().flat_map(|v| v.to_le_bytes()).collect(),
+            );
         }
 
         pub fn node(&mut self, op: &str, inputs: &[&str], output: &str, attrs: &[(&str, Attr)]) {
@@ -344,11 +353,17 @@ fn files() -> &'static Path {
         let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("sam3-stand-in");
         std::fs::create_dir_all(&dir).unwrap();
         let files: [(&str, Vec<u8>); 6] = [
-            ("vision_encoder.onnx", encoder(["fpn_hidden_state_0", "fpn_hidden_state_1", "fpn_hidden_state_2"])),
+            (
+                "vision_encoder.onnx",
+                encoder(["fpn_hidden_state_0", "fpn_hidden_state_1", "fpn_hidden_state_2"]),
+            ),
             ("text_encoder.onnx", text_encoder()),
             ("prompt_decoder.onnx", concept_decoder()),
             ("tokenizer.json", tokenizer()),
-            ("tracker/vision_encoder.onnx", encoder(["image_embeddings.0", "image_embeddings.1", "image_embeddings.2"])),
+            (
+                "tracker/vision_encoder.onnx",
+                encoder(["image_embeddings.0", "image_embeddings.1", "image_embeddings.2"]),
+            ),
             ("tracker/prompt_encoder_mask_decoder.onnx", tracker_decoder()),
         ];
         for (path, bytes) in files {
@@ -437,8 +452,7 @@ fn shapes() -> Fixture {
 /// The shapes with each object's box as its prompt, for the tracker.
 fn boxed_shapes() -> Fixture {
     let mut fixture = shapes();
-    fixture.prompts =
-        fixture.objects.iter().map(|o| SegmentPrompt::Box { bbox: o.bbox }).collect();
+    fixture.prompts = fixture.objects.iter().map(|o| SegmentPrompt::Box { bbox: o.bbox }).collect();
     fixture
 }
 
@@ -452,7 +466,8 @@ fn within(got: BBox, want: BBox, tolerance: f32) -> bool {
 fn verification_refuses_until_a_person_accepts_the_sam_licence() {
     let manifest = manifest("sam3-stand-in", &CONCEPT_FILES, "useRestricted");
     let store = Arc::new(InMemoryAcceptanceStore::new());
-    let fetcher = ModelFetcher::new(FetchConfig::from_lookup(|_| None).with_offline(true), store.clone());
+    let fetcher =
+        ModelFetcher::new(FetchConfig::from_lookup(|_| None).with_offline(true), store.clone());
     let refused = fetcher.fetch_blocking(&manifest).unwrap_err();
     assert!(
         matches!(&refused, VisionError::LicenceAcceptanceRequired { model, licence_url }
@@ -586,10 +601,7 @@ async fn point_and_box_prompts_need_the_tracker_and_masks_are_refused() {
     }
 
     let mask = adk_vision::Mask::empty(640, 480);
-    let err = both
-        .segment(&cx, &fixture.image, &[SegmentPrompt::Mask { mask }])
-        .await
-        .unwrap_err();
+    let err = both.segment(&cx, &fixture.image, &[SegmentPrompt::Mask { mask }]).await.unwrap_err();
     assert!(matches!(err, VisionError::Unsupported(_)), "{err}");
 }
 

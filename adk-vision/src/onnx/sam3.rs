@@ -120,8 +120,11 @@ fn kept(
                 (b[2] * w).clamp(0.0, w),
                 (b[3] * h).clamp(0.0, h),
             );
-            (score > threshold && bbox.x1 > bbox.x0 && bbox.y1 > bbox.y0)
-                .then_some(Kept { query, score, bbox })
+            (score > threshold && bbox.x1 > bbox.x0 && bbox.y1 > bbox.y0).then_some(Kept {
+                query,
+                score,
+                bbox,
+            })
         })
         .collect();
     kept.sort_by(|a, b| b.score.total_cmp(&a.score));
@@ -158,7 +161,10 @@ fn clip_tokenizer(manifest: &ModelManifest, model: &VerifiedModel) -> Result<Tok
 }
 
 /// A lowercased concept as 32 token ids and their attention mask.
-fn token_ids(tokenizer: &Tokenizer, text: &str) -> std::result::Result<(Vec<i64>, Vec<i64>), String> {
+fn token_ids(
+    tokenizer: &Tokenizer,
+    text: &str,
+) -> std::result::Result<(Vec<i64>, Vec<i64>), String> {
     let encoding = tokenizer.encode(text.to_lowercase(), true).map_err(|e| e.to_string())?;
     let ids: Vec<i64> = encoding.get_ids().iter().map(|&id| i64::from(id)).collect();
     let mask: Vec<i64> = encoding.get_attention_mask().iter().map(|&m| i64::from(m)).collect();
@@ -351,9 +357,9 @@ impl Sam3 {
             (self.text.input_named(&["attention_mask"], 1)?, Input::I64(shape, mask.clone())),
         ];
         let mut outputs = self.text.run(inputs, &["text_features"]).await?;
-        let features = outputs
-            .remove("text_features")
-            .ok_or_else(|| self.text.error("the text encoder produced no `text_features`".into()))?;
+        let features = outputs.remove("text_features").ok_or_else(|| {
+            self.text.error("the text encoder produced no `text_features`".into())
+        })?;
         let encoded = Arc::new(EncodedText { features, mask });
         let mut texts = self.texts.lock().unwrap_or_else(|e| e.into_inner());
         while texts.len() >= TEXT_CACHE {
@@ -653,11 +659,14 @@ mod tests {
 
     #[test]
     fn queries_score_with_the_presence_head_and_boxes_scale_to_the_input() {
-        let boxes = output(vec![1, 3, 4], vec![
-            0.1, 0.2, 0.5, 0.6, // kept
-            0.0, 0.0, 1.0, 1.0, // below the threshold
-            0.3, 0.3, 0.3, 0.9, // no width
-        ]);
+        let boxes = output(
+            vec![1, 3, 4],
+            vec![
+                0.1, 0.2, 0.5, 0.6, // kept
+                0.0, 0.0, 1.0, 1.0, // below the threshold
+                0.3, 0.3, 0.3, 0.9, // no width
+            ],
+        );
         let logits = output(vec![1, 3], vec![4.0, -1.0, 4.0]);
         let presence = output(vec![1, 1], vec![3.0]);
         let found = kept(&boxes, &logits, &presence, 0.5, (1000, 500)).unwrap();
