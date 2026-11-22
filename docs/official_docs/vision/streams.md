@@ -8,7 +8,7 @@ their privacy step, for 30 days by default. It implements spec 3.7 §7.9 and §7
 
 ```toml
 [dependencies]
-adk-vision = { version = "3.0.0", features = ["stream", "rtsp", "ffmpeg"] }
+adk-vision = { version = "3.0.0", features = ["stream", "rtsp", "ffmpeg", "device"] }
 ```
 
 ## Sources
@@ -17,6 +17,7 @@ adk-vision = { version = "3.0.0", features = ["stream", "rtsp", "ffmpeg"] }
 |--------|---------|--------|--------|
 | `RtspSource` | `rtsp` | RTSP cameras through `retina` (MIT OR Apache-2.0): H.264, H.265, MJPEG | MJPEG in process; H.264 and H.265 through a user-installed `ffmpeg` (`ffmpeg` feature) |
 | `FileSource` | `ffmpeg` | MP4 and MOV files | A user-installed `ffmpeg`, spawned through `ffmpeg-sidecar` |
+| `DeviceSource` | `device` | A camera on this machine: AVFoundation (macOS), v4l2 (Linux), DirectShow (Windows) | The same user-installed `ffmpeg` |
 | `ScreenSource` | `screen` | A `ComputerActuator` screenshot, or a computer-use-mcp observation through a `VisualObserver`, at an interval | PNG, JPEG |
 | `BrowserSource` | `browser` | `adk-browser`'s `browser_screenshot` tool at an interval | PNG |
 | `SurfaceCameraSource` | `surface-camera` | Frames the web home pushes through a `CameraFeed` | JPEG |
@@ -44,11 +45,69 @@ source and kills any `ffmpeg` it spawned.
 
 ### `ffmpeg`
 
-H.264, H.265 and video files decode through an `ffmpeg` binary you install. Nothing is
-vendored, linked or downloaded: `ffmpeg-sidecar` is built with its download feature off.
-`ADK_VISION_FFMPEG` names the binary; `ffmpeg` on the `PATH` is used otherwise. A missing
+H.264, H.265, video files and local cameras decode through an `ffmpeg` binary you install.
+Nothing is vendored, linked or downloaded: `ffmpeg-sidecar` is built with its download feature
+off. `ADK_VISION_FFMPEG` names the binary; `ffmpeg` on the `PATH` is used otherwise. A missing
 binary fails the source with the commands that install it (`brew install ffmpeg`,
 `sudo apt install ffmpeg`, `winget install ffmpeg`).
+
+### Local cameras
+
+`DeviceSource` (feature `device`, which implies `ffmpeg`) captures a camera on this machine
+through the platform's capture interface:
+
+| Platform | ffmpeg input | A device is | Listed by |
+|----------|--------------|-------------|-----------|
+| macOS | `-f avfoundation` | an index or a name | `ffmpeg -f avfoundation -list_devices true -i ""` |
+| Linux | `-f v4l2` | `/dev/videoN`, its index `N`, or its card name | `ffmpeg -sources v4l2` (v4l2 has no `-list_devices`) |
+| Windows | `-f dshow` | a name, DirectShow's alternative name, or an index among the video devices | `ffmpeg -f dshow -list_devices true -i dummy` |
+
+`DeviceSource::list` runs the listing and returns each video device's index, name, kind
+(`Camera`, or `Screen` for AVFoundation's `Capture screen N`) and the `DeviceSelector` that
+opens it; audio devices are left out. Listing needs no camera permission.
+
+```rust
+use adk_vision::stream::{DeviceSelector, DeviceSource, FrameSource};
+use adk_vision::{FrameSourceId, Sampling};
+use futures::StreamExt;
+
+async fn desk_camera() -> adk_vision::Result<()> {
+    let devices = tokio::task::spawn_blocking(DeviceSource::list).await.expect("listing ran")?;
+    for device in &devices {
+        tracing::info!(device.index = device.index, device.name = %device.name, "camera found");
+    }
+    let camera = DeviceSource::new(FrameSourceId("desk".into()), DeviceSelector::Index(0))
+        .with_frame_rate(30.0)
+        .with_video_size(1280, 720);
+    let mut frames = camera.frames(Sampling { fps: 2.0, max_long_edge: Some(640) }).await?;
+    while let Some(frame) = frames.next().await {
+        let frame = frame?;
+        tracing::info!(frame.index = frame.index, "frame");
+    }
+    Ok(())
+}
+```
+
+- **Capture mode.** The camera opens at `with_frame_rate` (30 a second by default; AVFoundation's
+  own default, 29.97, is a rate few webcams offer exactly) and `with_video_size` (the camera's
+  choice by default). Both must be a mode the camera offers.
+- **Sampling.** ffmpeg samples at the stream's rate when it is below the capture rate and scales
+  down to `max_long_edge`, so only the kept frames cross the pipe; sampling at or above the
+  capture rate delivers every captured frame and repeats none. Presentation times count from
+  the start of capture; `captured_at` is when each frame arrived.
+- **Backpressure.** A consumer that falls behind sees the newest frames: the source holds four
+  and drops the oldest, and ffmpeg keeps capturing.
+- **Stopping.** Dropping the stream kills the `ffmpeg` child.
+- **A stand-in.** `DeviceSource::test_pattern` captures ffmpeg's `testsrc2` at the requested size
+  and rate, paced like a camera, for tests and demos on a machine with no camera.
+
+> **Note:** on macOS the first capture asks for camera permission for the application that
+> runs the process, usually the terminal. Until it is allowed in System Settings → Privacy &
+> Security → Camera, the camera refuses to open and the error says so; run again once it is
+> allowed. Capturing a `Capture screen N` device needs Screen Recording permission instead.
+
+`adk-rust vision sources list` and `sources test <device>` run both from the terminal
+([CLI](cli.md#vision-sources)).
 
 ### Camera credentials
 
