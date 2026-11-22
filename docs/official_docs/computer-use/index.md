@@ -8,6 +8,15 @@ For Claude's computer use toolset, `ComputerUseToolset` runs each action the mod
 governed tool call over a `ComputerActuator` you supply; see
 [Governed Computer Use and Browser Use](toolsets.md).
 
+> **Note:** No released `computer-use-mcp` serves the governed tools `ComputerUseMcpRuntime`
+> calls: `preview_action`, `execute_action`, `get_execution_capabilities`,
+> `acquire_control_lease`, `reserve_target`, `release_target_reservation`, `pause_session`,
+> `stop_session` and `emergency_stop`. The server exposes plain tools (`screenshot`, `click`,
+> `run_steps`, ...). To act on a desktop through it, give `ComputerUseToolset` an
+> `McpComputerActuator` ([A desktop through computer-use-mcp](toolsets.md#a-desktop-through-computer-use-mcp)).
+> The reference graph runs against any other `ComputerUseRuntime`, such as the in-process one
+> in `minimal_graph`.
+
 ## Use it
 
 ```toml
@@ -45,8 +54,8 @@ The crate's examples run with `cargo run -p adk-computer-use --example <name>`:
 | Example | Needs |
 |---------|-------|
 | `minimal_graph` | Nothing; an in-process runtime, on any platform |
-| `live_clipboard` | A running `computer-use-mcp` server (macOS, Linux, Windows) |
-| `live_form`, `live_background_finder` | A running `computer-use-mcp` server and macOS tooling; see `examples/macos/README.md` |
+| `live_clipboard` | A server that serves the governed tools (macOS, Linux, Windows); no released `computer-use-mcp` does |
+| `live_form`, `live_background_finder` | The same, and macOS tooling; see `examples/macos/README.md` |
 
 ## Response binding
 

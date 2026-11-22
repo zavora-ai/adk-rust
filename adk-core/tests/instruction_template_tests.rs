@@ -1,6 +1,6 @@
 use adk_core::{
-    AdkError, Agent, Artifacts, CallbackContext, Content, InvocationContext, Memory,
-    ReadonlyContext, RunConfig, Session, State, inject_session_state,
+    AdkError, Agent, Artifacts, CallbackContext, Content, ErrorCategory, ErrorComponent,
+    InvocationContext, Memory, ReadonlyContext, RunConfig, Session, State, inject_session_state,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -192,8 +192,28 @@ async fn test_optional_substitution_missing() {
 async fn test_missing_variable_error() {
     let ctx = MockContext::new();
     let template = "Group: {group}";
-    let result = inject_session_state(&ctx, template).await;
-    assert!(result.is_err());
+    let err = inject_session_state(&ctx, template).await.unwrap_err();
+    assert_eq!(
+        (err.component, err.category, err.code, err.message.as_str()),
+        (
+            ErrorComponent::Agent,
+            ErrorCategory::InvalidInput,
+            "agent.instruction.state_missing",
+            "State variable 'group' not found. Set it in session state, or write {group?} when \
+             it may be absent. If the braces are text rather than a placeholder, move that text \
+             to `static_instruction`, which sends it as written, or write {{group}} or \
+             \\{group}, which reach the model unchanged",
+        )
+    );
+}
+
+/// A skill body quoting a tool call, as computer-use-mcp's `blender-direct` skill does.
+#[tokio::test]
+async fn escaped_braces_in_a_skill_body_reach_the_model_unchanged() {
+    let ctx = MockContext::new();
+    let template = "Call set_target {{window_id}} or set_target \\{window_id} first.";
+    let result = inject_session_state(&ctx, template).await.unwrap();
+    assert_eq!(result, template);
 }
 
 #[tokio::test]

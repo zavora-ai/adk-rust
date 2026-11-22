@@ -2075,6 +2075,7 @@ pub struct CodeActAgent {
     max_skill_chars: usize,
     instruction: Option<String>,
     instruction_provider: Option<Arc<InstructionProvider>>,
+    static_instruction: Option<String>,
     global_instruction: Option<String>,
     global_instruction_provider: Option<Arc<GlobalInstructionProvider>>,
     include_contents: IncludeContents,
@@ -2400,6 +2401,7 @@ impl Agent for CodeActAgent {
         let skill_block = self.select_skill_block(&ctx);
         let mut system_prompt = assemble_system_prompt(
             skill_block.as_deref(),
+            self.static_instruction.as_deref(),
             global.as_deref(),
             instruction.as_deref(),
             &self.runtime.capabilities().prompt,
@@ -2614,6 +2616,7 @@ pub struct CodeActAgentBuilder {
     max_skill_chars: usize,
     instruction: Option<String>,
     instruction_provider: Option<Arc<InstructionProvider>>,
+    static_instruction: Option<String>,
     global_instruction: Option<String>,
     global_instruction_provider: Option<Arc<GlobalInstructionProvider>>,
     include_contents: IncludeContents,
@@ -2661,6 +2664,7 @@ impl CodeActAgentBuilder {
             max_skill_chars: DEFAULT_MAX_SKILL_CHARS,
             instruction: None,
             instruction_provider: None,
+            static_instruction: None,
             global_instruction: None,
             global_instruction_provider: None,
             include_contents: IncludeContents::default(),
@@ -3045,6 +3049,16 @@ impl CodeActAgentBuilder {
         self
     }
 
+    /// Set an instruction sent exactly as written, after any selected skill and before the
+    /// global instruction and [`instruction`](Self::instruction).
+    ///
+    /// No `{key}` placeholder is read, so text you do not control — a skill file, a tool's
+    /// documentation — keeps its braces.
+    pub fn static_instruction(mut self, instruction: impl Into<String>) -> Self {
+        self.static_instruction = Some(instruction.into());
+        self
+    }
+
     /// Set a global instruction placed before the agent instruction. Supports the same
     /// `{key}` placeholders as [`instruction`](Self::instruction).
     pub fn global_instruction(mut self, instruction: impl Into<String>) -> Self {
@@ -3122,6 +3136,7 @@ impl CodeActAgentBuilder {
             max_skill_chars: self.max_skill_chars,
             instruction: self.instruction,
             instruction_provider: self.instruction_provider,
+            static_instruction: self.static_instruction,
             global_instruction: self.global_instruction,
             global_instruction_provider: self.global_instruction_provider,
             include_contents: self.include_contents,
@@ -3171,6 +3186,7 @@ impl Default for CodeActAgentBuilder {
 /// section.
 fn assemble_system_prompt(
     skill: Option<&str>,
+    static_instruction: Option<&str>,
     global: Option<&str>,
     instruction: Option<&str>,
     runtime_prompt: &str,
@@ -3179,6 +3195,7 @@ fn assemble_system_prompt(
 ) -> String {
     [
         skill.unwrap_or_default(),
+        static_instruction.unwrap_or_default(),
         global.unwrap_or_default(),
         instruction.unwrap_or_default(),
         CODEACT_SYSTEM_PROMPT,
@@ -4119,6 +4136,7 @@ mod tests {
     fn assemble_orders_sections() {
         let prompt = assemble_system_prompt(
             Some("SKILL"),
+            Some("LITERAL {window_id}"),
             Some("GLOBAL"),
             Some("HOUSE"),
             "RT-ENV",
@@ -4126,6 +4144,7 @@ mod tests {
             Some("XFER"),
         );
         let skill = prompt.find("SKILL").unwrap();
+        let literal = prompt.find("LITERAL {window_id}").unwrap();
         let global = prompt.find("GLOBAL").unwrap();
         let user = prompt.find("HOUSE").unwrap();
         let base = prompt.find("You act by writing code").unwrap();
@@ -4133,7 +4152,8 @@ mod tests {
         let tools = prompt.find("TOOLS").unwrap();
         let xfer = prompt.find("XFER").unwrap();
         assert!(
-            skill < global
+            skill < literal
+                && literal < global
                 && global < user
                 && user < base
                 && base < rt
@@ -4332,6 +4352,23 @@ mod tests {
         run_collect(&agent, Arc::new(MockInvocationContext::new(user("go")))).await;
         let sys = first_transcript_text(&model);
         assert!(sys.find("GLOBAL IDENTITY").unwrap() < sys.find("AGENT RULES").unwrap());
+    }
+
+    #[tokio::test]
+    async fn static_instruction_is_sent_as_written_before_the_global_instruction() {
+        let model = FakeLlm::new("noop");
+        let agent = CodeActAgent::builder()
+            .model(model.clone())
+            .runtime(final_runtime())
+            .static_instruction("Call set_target {window_id} first.")
+            .global_instruction("GLOBAL IDENTITY")
+            .instruction("AGENT RULES")
+            .build()
+            .unwrap();
+        run_collect(&agent, Arc::new(MockInvocationContext::new(user("go")))).await;
+        let sys = first_transcript_text(&model);
+        let literal = sys.find("Call set_target {window_id} first.").unwrap();
+        assert!(literal < sys.find("GLOBAL IDENTITY").unwrap());
     }
 
     #[tokio::test]

@@ -48,6 +48,13 @@ pub struct TraceCorrelation {
 
 /// [`ComputerUseRuntime`] implementation backed by a live `computer-use-mcp` server.
 ///
+/// > **Note:** it calls governed tools — `execute_action`, `get_execution_capabilities`,
+/// > `preview_action`, `acquire_control_lease`, `reserve_target`,
+/// > `release_target_reservation`, `pause_session`, `stop_session` and `emergency_stop` — that
+/// > no released `computer-use-mcp` serves. To act through the server's plain tools, use
+/// > [`McpComputerActuator`](crate::McpComputerActuator) with
+/// > [`ComputerUseToolset`](crate::ComputerUseToolset).
+///
 /// The adapter is bound to a single authenticated session via
 /// [`ComputerUseMcpConfig`]. It forwards every observation through the governed
 /// `execute_action` shadow facade and re-checks the principal/session identity

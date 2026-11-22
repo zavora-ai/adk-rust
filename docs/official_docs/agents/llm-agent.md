@@ -246,8 +246,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 | `{var?}` | `{user_name?}` | Optional (empty if missing) |
 | `{artifact.file}` | `{artifact.resume.pdf}` | Artifact content |
 
-A required `{var}` that is missing from state fails the turn with `State variable 'var' not found`;
-use `{var?}` when the value may be absent.
+A required `{var}` that is missing from state fails the turn with an `InvalidInput` error, code
+`agent.instruction.state_missing`, whose message begins `State variable 'var' not found`; use
+`{var?}` when the value may be absent.
 
 Text that is not a placeholder stays as written, so an instruction can quote code:
 
@@ -257,6 +258,50 @@ Text that is not a placeholder stays as written, so an instruction can quote cod
 | `\{name}` | Unchanged — a brace after `\` opens no placeholder |
 | `{{name}}`, `{{ name }}` | Unchanged — doubled braces open no placeholder |
 | `{"key": 1}`, `{1}` | Unchanged — the content is not a variable name |
+
+The escapes reach the model as written, backslash and doubled braces included. Text you do not
+control, such as a skill file that quotes a tool call as `set_target {window_id}`, has no
+escapes, so `instruction()` reads `{window_id}` as a placeholder. Send it with
+`static_instruction`, which reads no placeholders:
+
+```rust
+use adk_rust::prelude::*;
+use adk_rust::Launcher;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
+
+    let api_key = std::env::var("GOOGLE_API_KEY")?;
+    let model = GeminiModel::new(&api_key, "gemini-3.8-flash")?;
+    let skill = std::fs::read_to_string("skills/blender-direct/SKILL.md")?;
+
+    let agent = LlmAgentBuilder::new("trainer")
+        // Sent as written: `{window_id}` in the skill stays `{window_id}`.
+        .static_instruction(skill)
+        // Templated: `{learner_name?}` reads session state.
+        .instruction("Teach at the learner's pace. The learner is {learner_name?}.")
+        .model(Arc::new(model))
+        .build()?;
+
+    Launcher::new(Arc::new(agent)).run().await?;
+    Ok(())
+}
+```
+
+The agent sends its instructions as `system` contents in this order:
+
+| Order | Source | Templated |
+|-------|--------|-----------|
+| 1 | `static_instruction` | No |
+| 2 | `global_instruction`, or `global_instruction_provider` | The template is; a provider's text is not |
+| 3 | `instruction`, or `instruction_provider` | The template is; a provider's text is not |
+
+`static_instruction` is the same in every request, so it stays in a provider's prompt cache. A
+skill selected by `with_skills` is added to the user message, not the instruction, and is not
+templated either. `CodeActAgentBuilder::static_instruction` places the text after any selected
+skill and before the global instruction.
 
 **Output Example:**
 
@@ -629,7 +674,8 @@ Every `LlmAgentBuilder` method. Methods marked with a feature exist, or take eff
 | `model(Arc<dyn Llm>)` | Sets the LLM (required) |
 | `description(text)` | Agent description |
 | `instruction(text)` | System prompt, with `{var}` templating |
-| `instruction_provider(provider)` | Computes the system prompt per request |
+| `static_instruction(text)` | System prompt sent as written, before the global instruction; no templating |
+| `instruction_provider(provider)` | Computes the system prompt per request; sent as written, without templating |
 | `global_instruction(text)` | Instruction sent before `instruction`, for this agent only |
 | `global_instruction_provider(provider)` | Computes the global instruction per request |
 | `with_skills(index)` | Injects the best-matching skill of a `SkillIndex` into each user message (`skills`; see [Agent Skills](../skills/agent-skills.md)) |

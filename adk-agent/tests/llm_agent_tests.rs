@@ -499,6 +499,36 @@ async fn test_llm_agent_injects_skill_after_cacheable_prefix() {
     assert!(messages[5].ends_with("Please search this repository"));
 }
 
+/// A skill body quoting a tool call, as computer-use-mcp's `blender-direct` skill does.
+#[tokio::test]
+async fn static_instruction_is_sent_as_written_before_the_global_instruction() {
+    let model = SpyLlm::new("done");
+    let captured = model.last_request.clone();
+    let agent = LlmAgentBuilder::new("trainer")
+        .model(Arc::new(model))
+        .static_instruction("Call set_target {window_id} first.")
+        .global_instruction("GLOBAL INSTRUCTION")
+        .instruction("AGENT INSTRUCTION")
+        .build()
+        .unwrap();
+
+    let mut stream = agent.run(Arc::new(TestContext::new("Start the lesson"))).await.unwrap();
+    use futures::StreamExt;
+    while let Some(result) = stream.next().await {
+        result.unwrap();
+    }
+
+    let request = captured.lock().unwrap().clone().expect("expected captured request");
+    assert_eq!(
+        request.contents[..3],
+        [
+            Content::new("system").with_text("Call set_target {window_id} first."),
+            Content::new("system").with_text("GLOBAL INSTRUCTION"),
+            Content::new("system").with_text("AGENT INSTRUCTION"),
+        ]
+    );
+}
+
 /// Replies once with a fixed set of function calls.
 struct FunctionCallLlm {
     calls: Vec<Part>,

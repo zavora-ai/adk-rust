@@ -13,6 +13,16 @@ policy, approvals, the kill switch, budgets and the action ledger decide every a
 an action that is refused or fails stops the rest of the model's batch. See
 [Governed Computer Use and Browser Use](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/computer-use/toolsets.md).
 
+`McpComputerActuator` is that actuator for a desktop: it performs each action with a plain
+tool of a running [`computer-use-mcp`](https://github.com/zavora-ai/computer-use-mcp) server
+(`screenshot`, `click`, `scroll`, `type`, `key`, ...) and converts the model's screenshot
+pixels to the server's screen points.
+
+> **Note:** No released `computer-use-mcp` serves the governed tools `ComputerUseMcpRuntime`
+> calls (`preview_action`, `execute_action`, control leases, target reservations,
+> `emergency_stop`). The reference graph below runs against your own `ComputerUseRuntime`;
+> to act through the server, use `McpComputerActuator`.
+
 This crate is also the ADK-Rust orchestration layer for
 [`computer-use-mcp`](https://github.com/zavora-ai/computer-use-mcp). It does not
 perform any desktop actuation itself. The actual clicking, typing, and

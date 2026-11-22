@@ -309,6 +309,7 @@ pub struct LlmAgent {
     model: Arc<dyn Llm>,
     instruction: Option<String>,
     instruction_provider: Option<Arc<InstructionProvider>>,
+    static_instruction: Option<String>,
     global_instruction: Option<String>,
     global_instruction_provider: Option<Arc<GlobalInstructionProvider>>,
     skills_index: Option<Arc<SkillIndex>>,
@@ -376,6 +377,7 @@ pub struct LlmAgent {
 struct PromptConfig {
     instruction: Option<String>,
     instruction_provider: Option<Arc<InstructionProvider>>,
+    static_instruction: Option<String>,
     global_instruction: Option<String>,
     global_instruction_provider: Option<Arc<GlobalInstructionProvider>>,
     skills_index: Option<Arc<SkillIndex>>,
@@ -390,6 +392,7 @@ impl PromptConfig {
         Self {
             instruction: agent.instruction.clone(),
             instruction_provider: agent.instruction_provider.clone(),
+            static_instruction: agent.static_instruction.clone(),
             global_instruction: agent.global_instruction.clone(),
             global_instruction_provider: agent.global_instruction_provider.clone(),
             skills_index: agent.skills_index.clone(),
@@ -408,6 +411,11 @@ impl PromptConfig {
         // Instructions travel as `system` contents so providers place them in their
         // native system prompt instead of guessing from leading user turns.
         let mut preamble = Vec::new();
+
+        // Sent first and never templated, so a provider can cache it across sessions.
+        if let Some(text) = self.static_instruction.as_ref().filter(|text| !text.is_empty()) {
+            preamble.push(Content::new("system").with_text(text.clone()));
+        }
 
         if let Some(provider) = &self.global_instruction_provider {
             let instruction = provider(ctx.clone() as Arc<dyn ReadonlyContext>).await?;
@@ -1072,6 +1080,7 @@ pub struct LlmAgentBuilder {
     model: Option<Arc<dyn Llm>>,
     instruction: Option<String>,
     instruction_provider: Option<Arc<InstructionProvider>>,
+    static_instruction: Option<String>,
     global_instruction: Option<String>,
     global_instruction_provider: Option<Arc<GlobalInstructionProvider>>,
     skills_index: Option<Arc<SkillIndex>>,
@@ -1127,6 +1136,7 @@ impl LlmAgentBuilder {
             model: None,
             instruction: None,
             instruction_provider: None,
+            static_instruction: None,
             global_instruction: None,
             global_instruction_provider: None,
             skills_index: None,
@@ -1185,14 +1195,56 @@ impl LlmAgentBuilder {
     }
 
     /// Set the system instruction for this agent.
+    ///
+    /// `{key}` is replaced with the session state value under `key` (an error when it is
+    /// missing), `{key?}` with the value or nothing, `{app:key}`, `{user:key}`, and
+    /// `{temp:key}` with prefixed state, and `{artifact.name}` with the artifact's text. See
+    /// [`adk_core::inject_session_state`]. Text whose braces are not placeholders, such as a
+    /// skill file quoting `set_target {window_id}`, belongs in
+    /// [`static_instruction`](Self::static_instruction), which sends it as written.
     pub fn instruction(mut self, instruction: impl Into<String>) -> Self {
         self.instruction = Some(instruction.into());
         self
     }
 
     /// Set a dynamic instruction provider evaluated per invocation.
+    ///
+    /// Takes precedence over [`instruction`](Self::instruction). Its result is sent as
+    /// written, without `{key}` templating.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_agent::LlmAgentBuilder;
+    ///
+    /// let skill = "Call set_target {window_id} before the first click.";
+    /// let builder = LlmAgentBuilder::new("trainer").instruction_provider(Box::new(move |_ctx| {
+    ///     Box::pin(async move { Ok(skill.to_string()) })
+    /// }));
+    /// ```
     pub fn instruction_provider(mut self, provider: InstructionProvider) -> Self {
         self.instruction_provider = Some(Arc::new(provider));
+        self
+    }
+
+    /// Set an instruction sent exactly as written, before the global instruction and
+    /// [`instruction`](Self::instruction).
+    ///
+    /// No `{key}` placeholder is read, so text you do not control — a skill file, a tool's
+    /// documentation — keeps its braces. The text is the same in every request, which keeps
+    /// it cacheable; combine it with `instruction` for the parts that read session state.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_agent::LlmAgentBuilder;
+    ///
+    /// let builder = LlmAgentBuilder::new("trainer")
+    ///     .static_instruction("Call set_target {window_id} before the first click.")
+    ///     .instruction("The learner is {learner_name}.");
+    /// ```
+    pub fn static_instruction(mut self, instruction: impl Into<String>) -> Self {
+        self.static_instruction = Some(instruction.into());
         self
     }
 
@@ -1934,6 +1986,7 @@ impl LlmAgentBuilder {
             model,
             instruction: self.instruction,
             instruction_provider: self.instruction_provider,
+            static_instruction: self.static_instruction,
             global_instruction: self.global_instruction,
             global_instruction_provider: self.global_instruction_provider,
             skills_index: self.skills_index,
