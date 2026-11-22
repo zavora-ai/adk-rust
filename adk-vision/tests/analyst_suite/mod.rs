@@ -114,6 +114,12 @@ pub fn caption_range(prompt: &str) -> Option<(u64, u64)> {
     Some((parse_stamp(start)?, parse_stamp(end)?))
 }
 
+/// The question an expansion prompt asks for a caption of.
+pub fn expansion_of(prompt: &str) -> Option<String> {
+    let rest = prompt.strip_prefix("A question about a video: ")?;
+    Some(rest.split_once("\n\n")?.0.trim().to_string())
+}
+
 /// The question an answer prompt asks.
 pub fn question_of(prompt: &str) -> Option<String> {
     let rest = prompt.split_once("\n\nQuestion: ")?.1;
@@ -175,6 +181,8 @@ pub struct Recording {
     pub frames_per_chunk: usize,
     pub top_k: usize,
     pub captions: Vec<RecordedCaption>,
+    #[serde(default)]
+    pub expansions: Vec<RecordedAnswer>,
     pub answers: Vec<RecordedAnswer>,
     pub scored: Vec<Scored>,
     pub cost_per_hour_micro_usd: Option<u64>,
@@ -222,7 +230,14 @@ impl Llm for Recorder {
             }
         }
         let mut recording = self.recording.lock().unwrap();
-        if let Some((from_ms, to_ms)) =
+        if let Some(question) = expansion_of(&prompt) {
+            recording.expansions.push(RecordedAnswer {
+                question,
+                text,
+                input_tokens: input,
+                output_tokens: output,
+            });
+        } else if let Some((from_ms, to_ms)) =
             caption_range(&prompt).filter(|_| !prompt.contains("Question:"))
         {
             recording.captions.push(RecordedCaption {
@@ -275,6 +290,15 @@ impl Llm for Replay {
         _stream: bool,
     ) -> adk_core::Result<LlmResponseStream> {
         let prompt = prompt_of(&req);
+        if let Some(question) = expansion_of(&prompt) {
+            let found = self
+                .recording
+                .expansions
+                .iter()
+                .find(|a| a.question == question)
+                .unwrap_or_else(|| panic!("no recorded expansion of {question:?}"));
+            return Ok(respond(&found.text, found.input_tokens, found.output_tokens));
+        }
         if let Some(question) = question_of(&prompt) {
             let found = self
                 .recording
@@ -325,6 +349,11 @@ impl Llm for Oracle {
     ) -> adk_core::Result<LlmResponseStream> {
         *self.calls.lock().unwrap() += 1;
         let prompt = prompt_of(&req);
+        if let Some(question) = expansion_of(&prompt) {
+            let event = self.clip.events().iter().find(|e| e.question == question).unwrap();
+            let caption = serde_json::json!({"caption": capitalised(&event.description)});
+            return Ok(respond(&caption.to_string(), 60, 20));
+        }
         if let Some(question) = question_of(&prompt) {
             let event = self.clip.events().iter().find(|e| e.question == question).unwrap();
             let line = prompt

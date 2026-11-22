@@ -207,6 +207,19 @@ impl SentClip {
     }
 }
 
+/// At most `n` of `items`, evenly spaced, the first and last always among them.
+#[cfg(feature = "cloud")]
+pub(crate) fn evenly_spaced<T>(items: &[T], n: usize) -> Vec<&T> {
+    if items.len() <= n {
+        return items.iter().collect();
+    }
+    if n <= 1 {
+        return items.get(items.len() / 2).into_iter().collect();
+    }
+    let last = items.len() - 1;
+    (0..n).map(|i| &items[(i * last + (n - 1) / 2) / (n - 1)]).collect()
+}
+
 /// `m:ss.s` for a time in milliseconds, the form timestamps take in prompts and answers.
 #[cfg(feature = "cloud")]
 pub(crate) fn timestamp(ms: u64) -> String {
@@ -233,6 +246,14 @@ mod tests {
         assert!(SourceClip::from_ref(&video, bytes).is_ok());
         let other = mp4::tests::mp4(b"avc1", 1280, 720, 1_000, 30, 1);
         assert!(SourceClip::from_ref(&video, other).is_err());
+    }
+
+    #[cfg(feature = "cloud")]
+    #[test]
+    fn evenly_spaced_keeps_the_ends() {
+        assert_eq!(evenly_spaced(&[1, 2, 3, 4, 5, 6, 7, 8], 4), vec![&1, &3, &6, &8]);
+        assert_eq!(evenly_spaced(&[1, 2, 3], 1), vec![&2]);
+        assert_eq!(evenly_spaced(&[1, 2], 4), vec![&1, &2]);
     }
 
     #[cfg(feature = "cloud")]

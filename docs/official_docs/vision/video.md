@@ -160,9 +160,11 @@ let runtime = VisionRuntime::builder()
 chunk: chunks of `chunk_ms` counted from the first frame, one call per chunk that holds a
 frame, over at most `frames_per_call` of its frames, evenly spaced. Each chunk becomes one
 `VideoEvent` whose `text` is the caption and whose `labels` name the people, vehicles and
-objects it shows. `with_caption_instructions` replaces `DEFAULT_CAPTION_INSTRUCTIONS`, which
-asks for what is seen, what each thing does, and anything unusual such as something falling,
-spilling, burning, blocking a way or nearly colliding; the answer format stays fixed.
+objects it names. `with_caption_instructions` replaces `DEFAULT_CAPTION_INSTRUCTIONS`, which
+asks for each person, vehicle and object that moves, appears, disappears or changes, what it
+does and where, and changes to the picture itself such as the light — leaving out what stays
+the same, and answering only "Nothing happens." for a quiet chunk, so captions of quiet chunks
+do not crowd out the moments a search looks for. The answer format stays fixed.
 
 ### Finding the Moment First: the Visibility Pass
 

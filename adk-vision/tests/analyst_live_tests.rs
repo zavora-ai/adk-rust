@@ -1,5 +1,6 @@
 //! Scenario S17 live: an hour of generated warehouse video captioned by `claude-haiku-5-5`
-//! through the egress gate, 30-second chunks of six frames sampled every 5 s, indexed with
+//! through the egress gate, 30-second chunks of six frames chosen from frames sampled every
+//! 2.5 s, indexed with
 //! `WordHashEmbedding`, and ten questions answered by the same model from the captions.
 //!
 //! `#[ignore]`d; needs `ANTHROPIC_API_KEY`. `ADK_VISION_ANALYST_MODEL` names another model.
@@ -25,7 +26,7 @@ use adk_vision::stream::{FramePrivacy, NoRedaction};
 use adk_vision::{FramesAnalyzer, LlmDescriber, MediaScope, Sampling};
 use analyst_suite::{COLLECTION, Recorder, Recording, Setup, recording_path, score};
 
-const EVERY_MS: u64 = 5_000;
+const EVERY_MS: u64 = 2_500;
 const CHUNK_MS: u64 = 30_000;
 const FRAMES_PER_CHUNK: usize = 6;
 const TOP_K: usize = 8;
@@ -138,12 +139,13 @@ async fn s17_an_hour_of_warehouse_video_answered_from_captions() {
         answer_cost += answer.usage.cost_micro_usd.unwrap_or(0);
         let s = score(event, &answer);
         println!(
-            "{} {:<20} at {:>8} ms cited {:?}: {}",
+            "{} {:<20} at {:>8} ms cited {:?}: {} [searched with: {}]",
             if s.hit { "HIT " } else { "MISS" },
             s.event,
             s.at_ms,
             s.cited,
-            s.answer
+            s.answer,
+            answer.expanded.as_deref().unwrap_or_default()
         );
         scored.push(s);
     }

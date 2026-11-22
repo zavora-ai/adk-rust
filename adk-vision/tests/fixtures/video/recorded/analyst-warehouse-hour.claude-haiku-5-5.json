@@ -1,0 +1,1003 @@
+{
+  "model": "claude-haiku-5-5",
+  "recordedAt": "2026-11-22T23:37:20Z",
+  "durationMs": 3600000,
+  "width": 480,
+  "height": 270,
+  "sampleEveryMs": 5000,
+  "chunkMs": 30000,
+  "framesPerChunk": 6,
+  "topK": 8,
+  "captions": [
+    {
+      "fromMs": 0,
+      "toMs": 30000,
+      "text": "{\"caption\": \"Security camera CAM 3 shows a warehouse interior from 06:00:00 to 06:00:25 with three aisle racks labeled AISLE 1, AISLE 2 and AISLE 3, each holding stacked cardboard boxes on orange shelving. A dock door on the left and an EXIT door on the right remain closed, and the floor is empty. No people or vehicles appear, and nothing is falling, spilling, or moving across the frames; the scene is static.\", \"objects\": [\"dock 1 roll-up door\", \"AISLE 1 storage rack with cardboard boxes\", \"AISLE 2 storage rack with cardboard boxes\", \"AISLE 3 storage rack with cardboard boxes\", \"EXIT door\", \"yellow floor line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 270
+    },
+    {
+      "fromMs": 30000,
+      "toMs": 60000,
+      "text": "{\"caption\": \"Across all six frames from 0:30 to 0:55 the warehouse scene stays essentially static. Three aisle racks with stacked brown cardboard boxes, a closed roll-up dock door, and a green EXIT door remain unchanged, with no people or vehicles visible and no falling, spilling, or blocked items.\", \"objects\": [\"dock 1 roll-up door\", \"aisle 1 storage rack\", \"aisle 2 storage rack\", \"aisle 3 storage rack\", \"cardboard boxes on rack shelves\", \"aisle 1 sign\", \"aisle 2 sign\", \"aisle 3 sign\", \"EXIT sign\", \"green exit door\", \"yellow floor line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 246
+    },
+    {
+      "fromMs": 60000,
+      "toMs": 90000,
+      "text": "{\"caption\": \"A static security camera view (CAM 3) of a warehouse from 1:00 to 1:25 shows no visible change across the six frames. Three aisle racks labeled AISLE 1, AISLE 2 and AISLE 3 hold stacked cardboard boxes, a roll-up dock door labeled DOCK 1 stays closed, and an EXIT door stays shut. No people, vehicles, or unusual events such as falling, spilling, or blocking are seen.\", \"objects\": [\"DOCK 1 roll-up door\", \"AISLE 1 storage rack\", \"AISLE 2 storage rack\", \"AISLE 3 storage rack\", \"cardboard boxes on AISLE 1 rack\", \"cardboard boxes on AISLE 2 rack\", \"cardboard boxes on AISLE 3 rack\", \"EXIT door\", \"EXIT sign\", \"camera timestamp overlay\", \"yellow floor line\", \"concrete floor\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 320
+    },
+    {
+      "fromMs": 90000,
+      "toMs": 120000,
+      "text": "{\"caption\": \"A static warehouse camera view (CAM 3) from 1:30 to 1:55 shows the dock door, three aisle racks, and an exit door with no visible people or vehicles moving. The stacked cardboard boxes on the racks and the floor appear unchanged across all six frames, and nothing unusual such as falling, spilling, or blocking occurs.\", \"objects\": [\"closed roll-up dock door\", \"DOCK 1 sign\", \"AISLE 1 rack with cardboard boxes\", \"AISLE 2 rack with cardboard boxes\", \"AISLE 3 rack with cardboard boxes\", \"AISLE 1 sign\", \"AISLE 2 sign\", \"AISLE 3 sign\", \"green EXIT sign\", \"grey exit door\", \"yellow floor line\", \"CAM 3 timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 282
+    },
+    {
+      "fromMs": 120000,
+      "toMs": 150000,
+      "text": "{\"caption\": \"A static warehouse camera view (CAM 3) from 2:00 to 2:25 shows three aisle racks labeled Aisle 1, 2 and 3 holding cardboard boxes, a closed roll-up door at Dock 1 and an EXIT door on the right. No people, vehicles or movement are visible, and the boxes appear unchanged across all six frames with nothing falling, spilling or blocking any path.\", \"objects\": [\"Dock 1 roll-up door\", \"Aisle 1 storage rack\", \"Aisle 2 storage rack\", \"Aisle 3 storage rack\", \"cardboard boxes on racks\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"EXIT sign\", \"green exit door\", \"yellow floor line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 282
+    },
+    {
+      "fromMs": 150000,
+      "toMs": 180000,
+      "text": "{\"caption\": \"Camera 3 shows a warehouse scene with a closed roll-up dock door on the left, three aisle racks labeled Aisle 1, 2 and 3 holding stacked brown cardboard boxes, and an exit door on the right. Across all six frames from 2:30 to 2:55 the scene stays static, with no people or vehicles visible and no boxes falling, spilling or moving.\", \"objects\": [\"roll-up dock door\", \"DOCK 1 sign\", \"Aisle 1 rack with stacked cardboard boxes\", \"Aisle 2 rack with stacked cardboard boxes\", \"Aisle 3 rack with stacked cardboard boxes\", \"AISLE 1 sign\", \"AISLE 2 sign\", \"AISLE 3 sign\", \"EXIT sign\", \"exit door\", \"yellow floor line\", \"orange rack shelf beams\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 305
+    },
+    {
+      "fromMs": 180000,
+      "toMs": 210000,
+      "text": "{\"caption\": \"A warehouse camera (CAM 3) shows Dock 1, three pallet-rack aisles stacked with cardboard boxes, and an exit door. Between about 3:10 and 3:25 an orange forklift enters from the right carrying a box, moves left across the floor toward the racks, and pauses in front of Aisle 1 while it lifts or holds the load.\", \"objects\": [\"roller shutter dock door (Dock 1)\", \"aisle 1 pallet rack with cardboard boxes\", \"aisle 2 pallet rack with cardboard boxes\", \"aisle 3 pallet rack with cardboard boxes\", \"exit door\", \"orange forklift\", \"cardboard box carried on forklift\", \"yellow floor safety line\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"Dock 1 sign\", \"Exit sign\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 300
+    },
+    {
+      "fromMs": 210000,
+      "toMs": 240000,
+      "text": "{\"caption\": \"A warehouse camera (CAM 3) shows a static scene from 3:30 to 3:55 with no visible motion: the dock door stays closed, the aisle shelving stacked with cardboard boxes remains unchanged, and no people or vehicles appear. Nothing falls, spills, burns, or blocks a path, and the exit door stays closed.\", \"objects\": [\"dock 1 roll-up door\", \"aisle 1 pallet rack\", \"aisle 2 pallet rack\", \"aisle 3 pallet rack\", \"cardboard boxes on racks\", \"exit door\", \"EXIT sign\", \"DOCK 1 sign\", \"AISLE 1 sign\", \"AISLE 2 sign\", \"AISLE 3 sign\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 258
+    },
+    {
+      "fromMs": 240000,
+      "toMs": 270000,
+      "text": "{\"caption\": \"A static warehouse camera view (CAM 3, 06:04:00 to 06:04:25 timestamps) shows Dock 1 with a closed roll-up shutter door, three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 holding stacked cardboard boxes, and an Exit door on the right. No people or vehicles appear, and the boxes remain in the same positions across all six frames with no visible movement, falling, spilling or blocking.\", \"objects\": [\"closed roll-up dock shutter door (Dock 1)\", \"Aisle 1 storage rack with cardboard boxes\", \"Aisle 2 storage rack with cardboard boxes\", \"Aisle 3 storage rack with cardboard boxes\", \"Exit door\", \"Exit sign\", \"cardboard boxes on pallets\", \"orange rack beams\", \"concrete warehouse floor\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 311
+    },
+    {
+      "fromMs": 270000,
+      "toMs": 300000,
+      "text": "{\"caption\": \"Across all six frames from 4:30 to 4:55 on camera 3, the scene is static: a dock roll-up door on the left, three aisle pallet racks (Aisle 1, 2, 3) stacked with cardboard boxes, and an exit door on the right. No people or vehicles appear, and no boxes move, fall, or spill.\", \"objects\": [\"dock roll-up door labeled DOCK 1\", \"Aisle 1 pallet rack with cardboard boxes\", \"Aisle 2 pallet rack with cardboard boxes\", \"Aisle 3 pallet rack with cardboard boxes\", \"exit door labeled EXIT\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 230
+    },
+    {
+      "fromMs": 300000,
+      "toMs": 330000,
+      "text": "{\"caption\": \"A warehouse camera (CAM 3) from 06:05:00 to 06:05:25 shows a static scene with no visible people or vehicles moving. Three storage racks labeled AISLE 1, AISLE 2 and AISLE 3 hold stacked cardboard boxes, and the dock door and exit door remain closed with no change between frames. Nothing unusual such as falling, spilling or blocking occurs.\", \"objects\": [\"DOCK 1 roll-up door\", \"AISLE 1 sign\", \"AISLE 2 sign\", \"AISLE 3 sign\", \"EXIT sign\", \"EXIT door\", \"storage rack in AISLE 1\", \"storage rack in AISLE 2\", \"storage rack in AISLE 3\", \"cardboard boxes on AISLE 1 rack\", \"cardboard boxes on AISLE 2 rack\", \"cardboard boxes on AISLE 3 rack\", \"yellow floor line\", \"CAM 3 timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 333
+    },
+    {
+      "fromMs": 330000,
+      "toMs": 360000,
+      "text": "{\"caption\": \"A warehouse scene from camera 3 shows three aisle racks with stacked brown cardboard boxes, a closed roll-up dock door on the left, and a green-framed exit door on the right. Across all six frames from 5:30 to 5:55 the scene remains static, with no people or vehicles visible, no boxes moving, and nothing falling or spilling.\", \"objects\": [\"roll-up dock door\", \"dock 1 sign\", \"aisle 1 sign\", \"aisle 2 sign\", \"aisle 3 sign\", \"exit door\", \"exit sign\", \"aisle 1 pallet rack\", \"aisle 2 pallet rack\", \"aisle 3 pallet rack\", \"brown cardboard boxes on racks\", \"camera timestamp overlay\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 265
+    },
+    {
+      "fromMs": 360000,
+      "toMs": 390000,
+      "text": "{\"caption\": \"Camera 3 shows a warehouse scene with a closed roll-up dock door on the left, three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 holding stacked brown cardboard boxes on orange shelves, and a green EXIT door on the right. Across the six frames from 6:00 to 6:25 the scene stays essentially static, with no people, vehicles, or visible movement, and no falling, spilling, or blocking events.\", \"objects\": [\"closed roll-up dock door\", \"DOCK 1 sign\", \"Aisle 1 rack with cardboard boxes\", \"Aisle 2 rack with cardboard boxes\", \"Aisle 3 rack with cardboard boxes\", \"orange rack shelf beams\", \"blue rack uprights\", \"green EXIT sign\", \"gray exit door\", \"yellow floor safety line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 304
+    },
+    {
+      "fromMs": 390000,
+      "toMs": 420000,
+      "text": "{\"caption\": \"Camera 3 shows a warehouse with a closed dock door on the left, three aisle racks with stacked cardboard boxes, and an exit door on the right. A worker in a blue shirt pushes a gray cart from the left side of the floor toward the center between frames at 6:40 and 6:50, then the worker and cart are gone by 6:55. Nothing unusual such as falling or spilling is visible.\", \"objects\": [\"dock door\", \"aisle 1 rack\", \"aisle 2 rack\", \"aisle 3 rack\", \"cardboard boxes\", \"exit door\", \"worker in blue shirt\", \"gray cart\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 220
+    },
+    {
+      "fromMs": 420000,
+      "toMs": 450000,
+      "text": "{\"caption\": \"A static warehouse camera view (CAM 3) shows Dock 1 with a closed roll-up shutter door, three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 holding stacked cardboard boxes, and an EXIT door on the right. Across the six frames from 06:07:00 to 06:07:25 no people or vehicles appear, the boxes stay in place, and nothing falls, spills or moves.\", \"objects\": [\"roll-up dock door\", \"Dock 1 sign\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"EXIT sign\", \"exit door\", \"blue and orange storage rack in Aisle 1\", \"blue and orange storage rack in Aisle 2\", \"blue and orange storage rack in Aisle 3\", \"cardboard boxes on Aisle 1 rack\", \"cardboard boxes on Aisle 2 rack\", \"cardboard boxes on Aisle 3 rack\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 346
+    },
+    {
+      "fromMs": 450000,
+      "toMs": 480000,
+      "text": "{\"caption\": \"Across six frames from 7:30 to 7:55 the scene stays essentially static: a warehouse with a closed roll-up dock door labeled DOCK 1 on the left, three aisle racks labeled AISLE 1, AISLE 2 and AISLE 3 holding stacked cardboard boxes on orange shelving, and an EXIT door on the right. No people, vehicles or moving objects appear, and nothing falls, spills or blocks a path.\", \"objects\": [\"roll-up dock door labeled DOCK 1\", \"AISLE 1 storage rack with cardboard boxes\", \"AISLE 2 storage rack with cardboard boxes\", \"AISLE 3 storage rack with cardboard boxes\", \"EXIT door\", \"orange shelving beams\", \"concrete floor\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 277
+    },
+    {
+      "fromMs": 480000,
+      "toMs": 510000,
+      "text": "{\"caption\": \"The frames show a warehouse scene from camera 3 across six sampled moments, from 06:08:00 to 06:08:25 on the timestamp, with no visible change between frames. Three aisle pallet racks with stacked cardboard boxes stand against the back wall, and a closed roll-up dock door and a green-lit exit door are present. No people, vehicles, or unusual events such as falling, spilling, or blocking are visible.\", \"objects\": [\"dock 1 roll-up door\", \"aisle 1 pallet rack\", \"aisle 2 pallet rack\", \"aisle 3 pallet rack\", \"cardboard boxes on rack shelves\", \"exit door\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 234
+    },
+    {
+      "fromMs": 510000,
+      "toMs": 540000,
+      "text": "{\"caption\": \"A warehouse scene from camera 3 is shown across six frames from 8:30 to 8:55 with no visible change. Stacked cardboard boxes sit on three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3, and a closed roll-up dock door and a green-labeled exit door are visible. No people or vehicles appear, and nothing falls, spills, or blocks a path.\", \"objects\": [\"dock 1 roll-up door\", \"Aisle 1 storage rack\", \"Aisle 2 storage rack\", \"Aisle 3 storage rack\", \"cardboard boxes on Aisle 1 rack\", \"cardboard boxes on Aisle 2 rack\", \"cardboard boxes on Aisle 3 rack\", \"exit door\", \"concrete floor\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 281
+    },
+    {
+      "fromMs": 540000,
+      "toMs": 570000,
+      "text": "{\"caption\": \"A warehouse camera (CAM 3) shows dock 1 with a closed roll-up shutter door, three aisle racks labeled AISLE 1, AISLE 2 and AISLE 3 holding stacked cardboard boxes on orange shelves, and an EXIT door on the right. Across the six frames from 9:00 to 9:25 the scene stays static: no people, vehicles, or movement are visible, and no boxes fall or spill.\", \"objects\": [\"roll-up dock shutter door\", \"DOCK 1 sign\", \"AISLE 1 rack with cardboard boxes\", \"AISLE 2 rack with cardboard boxes\", \"AISLE 3 rack with cardboard boxes\", \"orange rack shelves\", \"blue rack uprights\", \"EXIT sign\", \"green exit door\", \"yellow floor safety line\", \"CAM 3 timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 299
+    },
+    {
+      "fromMs": 570000,
+      "toMs": 600000,
+      "text": "{\"caption\": \"Across six frames from 9:30 to 9:55 on camera 3, the scene at the dock and warehouse aisles stays largely static: stacked cardboard boxes sit on three blue-and-orange shelving racks labeled Aisle 1, 2 and 3, and the exit door remains closed. At 9:45 the dock door shows a light blue opening, and by 9:50 and 9:55 a white roll-up dock door is closed with red bumper markers visible, with no people or vehicles seen moving.\", \"objects\": [\"roll-up dock door (Dock 1) in closed state at 9:50 and 9:55\", \"light blue dock door opening at 9:45\", \"shelving rack Aisle 1 with stacked cardboard boxes\", \"shelving rack Aisle 2 with stacked cardboard boxes\", \"shelving rack Aisle 3 with stacked cardboard boxes\", \"red bumper marker on dock door left side\", \"red bumper marker on dock door right side\", \"green EXIT door on right\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 349
+    },
+    {
+      "fromMs": 600000,
+      "toMs": 630000,
+      "text": "{\"caption\": \"Over the 30 seconds, no people or vehicles appear in the warehouse scene. The Dock 1 door is open with red bumpers in frames 1 and 2, then appears closed as a rolling shutter from 10:10 onward, while the aisle racks of cardboard boxes and the exit door stay unchanged.\", \"objects\": [\"Dock 1 door (white open door, then closed rolling shutter)\", \"red dock bumpers\", \"DOCK 1 sign\", \"AISLE 1 sign\", \"AISLE 2 sign\", \"AISLE 3 sign\", \"metal shelving rack in Aisle 1\", \"metal shelving rack in Aisle 2\", \"metal shelving rack in Aisle 3\", \"cardboard boxes on shelving\", \"EXIT sign\", \"green exit door\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 511
+    },
+    {
+      "fromMs": 630000,
+      "toMs": 660000,
+      "text": "{\"caption\": \"Camera 3 shows a warehouse scene with a dock door on the left, three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 holding stacked cardboard boxes, and an exit door on the right. Across all six frames from 10:30 to 10:55 the scene stays static: no people or vehicles appear, the boxes stay in place, and nothing falls, spills or moves.\", \"objects\": [\"dock door labeled Dock 1\", \"roll-up shutter\", \"Aisle 1 storage rack\", \"Aisle 2 storage rack\", \"Aisle 3 storage rack\", \"cardboard boxes on racks\", \"exit door labeled Exit\", \"yellow floor line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 253
+    },
+    {
+      "fromMs": 660000,
+      "toMs": 690000,
+      "text": "{\"caption\": \"A static warehouse scene from camera 3 across six frames spanning 11:00 to 11:25 shows no visible change: dock 1 roll-up door is closed, three aisle racks (Aisle 1, 2, 3) hold stacked cardboard boxes on orange shelves, and the exit door stays shut. No people, vehicles, or unusual events such as falling, spilling, or blocking appear.\", \"objects\": [\"dock 1 roll-up door\", \"Aisle 1 storage rack\", \"Aisle 2 storage rack\", \"Aisle 3 storage rack\", \"cardboard boxes on Aisle 1 rack\", \"cardboard boxes on Aisle 2 rack\", \"cardboard boxes on Aisle 3 rack\", \"exit door\", \"EXIT sign\", \"yellow floor line\", \"camera 3 timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 290
+    },
+    {
+      "fromMs": 690000,
+      "toMs": 720000,
+      "text": "{\"caption\": \"Across all six frames from 11:30 to 11:55 on camera 3, the scene is static: a closed roll-up dock door on the left, three aisle racks labeled Aisle 1, 2 and 3 holding stacked cardboard boxes, and an exit door on the right. No people or vehicles appear, no boxes move or fall, and nothing unusual happens.\", \"objects\": [\"dock 1 roll-up door\", \"aisle 1 storage rack\", \"aisle 2 storage rack\", \"aisle 3 storage rack\", \"cardboard boxes on racks\", \"exit door\", \"exit sign\", \"yellow floor safety line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 226
+    },
+    {
+      "fromMs": 720000,
+      "toMs": 750000,
+      "text": "{\"caption\": \"A static warehouse camera (CAM 3) shows Dock 1 with a closed roll-up door, three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 holding stacked cardboard boxes, and an Exit door on the right. Across the six frames from 12:00 to 12:25 the scene stays essentially unchanged, with no people or vehicles visible and no boxes falling, spilling, or blocking any path.\", \"objects\": [\"roll-up dock door (Dock 1)\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"storage rack in Aisle 1\", \"storage rack in Aisle 2\", \"storage rack in Aisle 3\", \"cardboard boxes on racks\", \"orange rack beams\", \"Exit sign\", \"green Exit door\", \"concrete warehouse floor\", \"yellow floor safety line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 317
+    },
+    {
+      "fromMs": 750000,
+      "toMs": 780000,
+      "text": "{\"caption\": \"The static warehouse camera view from CAM 3 shows Dock 1 with a closed roll-up door, three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 holding stacked brown cardboard boxes, and an EXIT door on the right. Across all six frames from 12:30 to 12:55 the scene stays essentially unchanged, with no people or vehicles visible and no unusual events such as falls, spills or blockages.\", \"objects\": [\"closed roll-up dock door (Dock 1)\", \"Aisle 1 storage rack with cardboard boxes\", \"Aisle 2 storage rack with cardboard boxes\", \"Aisle 3 storage rack with cardboard boxes\", \"EXIT door\", \"yellow floor safety line\", \"concrete warehouse floor\", \"CAM 3 timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 290
+    },
+    {
+      "fromMs": 780000,
+      "toMs": 810000,
+      "text": "{\"caption\": \"Camera 3 shows a warehouse scene from 13:00 to 13:25 with a static view of Dock 1 on the left, three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 holding stacked cardboard boxes, and an Exit door on the right. No people or vehicles appear in any frame, and no boxes fall, spill, or block a path; the scene remains unchanged throughout.\", \"objects\": [\"Dock 1 roller shutter door\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"Exit sign\", \"Exit door\", \"Aisle 1 pallet rack with cardboard boxes\", \"Aisle 2 pallet rack with cardboard boxes\", \"Aisle 3 pallet rack with cardboard boxes\", \"yellow floor safety line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 302
+    },
+    {
+      "fromMs": 810000,
+      "toMs": 840000,
+      "text": "{\"caption\": \"The six frames from CAM 3 between 13:30 and 13:55 show a warehouse scene with three aisle racks labeled AISLE 1, AISLE 2 and AISLE 3, stocked with cardboard boxes, beside a closed dock door labeled DOCK 1 and an exit door marked EXIT. No people or vehicles appear, and the stacked boxes and doors remain unchanged across all frames with nothing falling, spilling or blocking a way.\", \"objects\": [\"DOCK 1 roll-up door\", \"AISLE 1 storage rack\", \"AISLE 2 storage rack\", \"AISLE 3 storage rack\", \"cardboard boxes on AISLE 1 rack\", \"cardboard boxes on AISLE 2 rack\", \"cardboard boxes on AISLE 3 rack\", \"EXIT door\", \"concrete warehouse floor\", \"yellow floor safety line\", \"CAM 3 timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 322
+    },
+    {
+      "fromMs": 840000,
+      "toMs": 870000,
+      "text": "{\"caption\": \"Across six frames from 14:00 to 14:25 on camera 3, the warehouse scene stays essentially static: a closed roll-up dock door on the left, three aisle pallet racks loaded with brown cardboard boxes, and a green exit door on the right. No people or vehicles appear, and no box falls, spills, or moves between frames.\", \"objects\": [\"roll-up dock door\", \"DOCK 1 sign\", \"pallet rack in Aisle 1\", \"pallet rack in Aisle 2\", \"pallet rack in Aisle 3\", \"AISLE 1 sign\", \"AISLE 2 sign\", \"AISLE 3 sign\", \"cardboard boxes on racks\", \"green exit door\", \"EXIT sign\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 255
+    },
+    {
+      "fromMs": 870000,
+      "toMs": 900000,
+      "text": "{\"caption\": \"The six frames from CAM 3 between 14:30 and 14:55 show a static warehouse scene with no visible change: three pallet racks labeled Aisle 1, Aisle 2 and Aisle 3 hold stacked cardboard boxes, the dock 1 roll-up door stays closed, and the exit door on the right remains shut. No people, vehicles, or moving objects appear, and nothing falls, spills, or blocks a path.\", \"objects\": [\"Dock 1 roll-up door\", \"Aisle 1 pallet rack\", \"Aisle 2 pallet rack\", \"Aisle 3 pallet rack\", \"cardboard boxes on racks\", \"Exit door\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"Exit sign\", \"Dock 1 sign\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 291
+    },
+    {
+      "fromMs": 900000,
+      "toMs": 930000,
+      "text": "{\"caption\": \"Across six frames from 15:00 to 15:25, a warehouse scene from camera 3 stays essentially static. Three pallet racks labeled Aisle 1, Aisle 2 and Aisle 3 hold stacked cardboard boxes, a closed roll-up dock door sits at left, and a green-framed exit door is at right. No people, vehicles, or movement are visible, and nothing falls, spills, or blocks a path.\", \"objects\": [\"DOCK 1 roll-up door\", \"Aisle 1 pallet rack\", \"Aisle 2 pallet rack\", \"Aisle 3 pallet rack\", \"cardboard boxes on racks\", \"EXIT door\", \"yellow floor line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 252
+    },
+    {
+      "fromMs": 930000,
+      "toMs": 960000,
+      "text": "{\"caption\": \"Across all six frames from 15:30 to 15:55, the warehouse scene stays essentially static, with no people or vehicles visible. Cardboard boxes sit on three aisle shelving units, and a small scatter of boxes lies on the floor at right. No falling, spilling, or blocking is seen, though the top boxes in Aisle 3 look slightly different in the last two frames.\", \"objects\": [\"dock 1 loading door\", \"aisle 1 sign\", \"aisle 2 sign\", \"aisle 3 sign\", \"exit sign\", \"exit door\", \"metal shelving unit in aisle 1\", \"metal shelving unit in aisle 2\", \"metal shelving unit in aisle 3\", \"cardboard boxes on shelves\", \"scattered cardboard boxes on floor\", \"yellow floor line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 510
+    },
+    {
+      "fromMs": 960000,
+      "toMs": 990000,
+      "text": "{\"caption\": \"The static warehouse camera (CAM 3) shows Dock 1 with a closed roll-up door, three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 holding stacked cardboard boxes, and an EXIT door on the right. Across the six frames from 06:16:00 to 06:16:25 no people or vehicles appear, the boxes remain in place, and nothing falls, spills or blocks any path.\", \"objects\": [\"closed roll-up dock door (Dock 1)\", \"Aisle 1 storage rack with cardboard boxes\", \"Aisle 2 storage rack with cardboard boxes\", \"Aisle 3 storage rack with cardboard boxes\", \"EXIT door\", \"yellow floor safety line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 270
+    },
+    {
+      "fromMs": 990000,
+      "toMs": 1020000,
+      "text": "{\"caption\": \"The six frames from CAM 3 between 16:30 and 16:55 show a warehouse scene with a closed roll-up dock door on the left, three aisle racks labeled AISLE 1, AISLE 2 and AISLE 3 holding stacked cardboard boxes, and an EXIT door on the right. No people, vehicles or movement are visible, and the boxes and racks appear unchanged across all frames, with nothing falling, spilling or blocking any path.\", \"objects\": [\"roll-up dock door labeled DOCK 1\", \"AISLE 1 storage rack with cardboard boxes\", \"AISLE 2 storage rack with cardboard boxes\", \"AISLE 3 storage rack with cardboard boxes\", \"EXIT door\", \"camera timestamp overlay CAM 3\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 279
+    },
+    {
+      "fromMs": 1020000,
+      "toMs": 1050000,
+      "text": "{\"caption\": \"A static warehouse scene from camera 3 across six frames spanning 17:00 to 17:25 shows no visible change: three pallet racking aisles labeled Aisle 1, Aisle 2 and Aisle 3 hold stacked cardboard boxes, the dock 1 roll-up door stays closed, and the exit door stays shut. No people, vehicles, spills, falls or other unusual events appear in these frames.\", \"objects\": [\"Dock 1 roll-up door\", \"Aisle 1 pallet racking with cardboard boxes\", \"Aisle 2 pallet racking with cardboard boxes\", \"Aisle 3 pallet racking with cardboard boxes\", \"Exit door\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"Exit sign\", \"Dock 1 sign\", \"Yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 300
+    },
+    {
+      "fromMs": 1050000,
+      "toMs": 1080000,
+      "text": "{\"caption\": \"Across six frames from 17:30 to 17:55, the warehouse scene stays essentially static: the dock door on the left stays closed, and three aisle racks (Aisle 1, 2, 3) hold stacked brown cardboard boxes on orange shelving. No people, vehicles, or forklifts appear, and nothing falls, spills, or blocks a path; the exit door on the right remains closed.\", \"objects\": [\"closed dock door with roll-up shutter\", \"DOCK 1 sign\", \"Aisle 1 storage rack with stacked cardboard boxes\", \"Aisle 2 storage rack with stacked cardboard boxes\", \"Aisle 3 storage rack with stacked cardboard boxes\", \"AISLE 1, AISLE 2, AISLE 3 signs\", \"exit door\", \"EXIT sign\", \"yellow floor safety line\", \"concrete warehouse floor\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 314
+    },
+    {
+      "fromMs": 1080000,
+      "toMs": 1110000,
+      "text": "{\"caption\": \"The frames show a warehouse scene from camera 3 across six sampled moments from 18:00 to 18:25, with no visible change: three aisle racks stocked with cardboard boxes, a closed roll-up dock door, and an exit door on the right. No people, vehicles, or moving objects appear, and nothing falls, spills, or blocks a path.\", \"objects\": [\"roll-up dock door labeled DOCK 1\", \"storage rack labeled AISLE 1\", \"storage rack labeled AISLE 2\", \"storage rack labeled AISLE 3\", \"cardboard boxes on AISLE 1 rack\", \"cardboard boxes on AISLE 2 rack\", \"cardboard boxes on AISLE 3 rack\", \"green exit door labeled EXIT\", \"yellow floor safety line\", \"concrete warehouse floor\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 283
+    },
+    {
+      "fromMs": 1110000,
+      "toMs": 1140000,
+      "text": "{\"caption\": \"Across all six frames from 18:30 to 18:55, the warehouse scene stays essentially static: a closed roll-up door at DOCK 1, three aisle racks labeled AISLE 1, AISLE 2 and AISLE 3 holding stacked cardboard boxes, and an EXIT door on the right. No people, vehicles or movement are visible, and nothing falls, spills, burns, or blocks a passage.\", \"objects\": [\"DOCK 1 roll-up door\", \"AISLE 1 storage rack\", \"AISLE 2 storage rack\", \"AISLE 3 storage rack\", \"cardboard boxes on racks\", \"EXIT door\", \"EXIT sign\", \"yellow floor line\", \"concrete floor\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 249
+    },
+    {
+      "fromMs": 1140000,
+      "toMs": 1170000,
+      "text": "{\"caption\": \"Six frames from security camera 3 spanning 19:00 to 19:25 show a warehouse scene with a closed dock door on the left, three aisle racks labeled Aisle 1, 2 and 3 holding stacked brown cardboard boxes on orange shelves, and an exit door on the right. No people or vehicles appear, and the boxes and shelves remain stationary throughout with no visible falling, spilling, or blocking events.\", \"objects\": [\"dock door with roll-up shutter\", \"Aisle 1 storage rack\", \"Aisle 2 storage rack\", \"Aisle 3 storage rack\", \"brown cardboard boxes on racks\", \"orange shelf beams\", \"exit door\", \"EXIT sign\", \"DOCK 1 sign\", \"floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 263
+    },
+    {
+      "fromMs": 1170000,
+      "toMs": 1200000,
+      "text": "{\"caption\": \"The six frames from 19:30 to 19:55 show a static warehouse scene from camera 3, with a closed roll-up dock door, three aisle pallet racks holding cardboard boxes, and an exit door on the right. No people or vehicles appear, and nothing visibly moves, falls, spills, or blocks a path across the frames.\", \"objects\": [\"roll-up dock door labeled DOCK 1\", \"pallet rack labeled AISLE 1\", \"pallet rack labeled AISLE 2\", \"pallet rack labeled AISLE 3\", \"cardboard boxes on pallet racks\", \"green exit door labeled EXIT\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 226
+    },
+    {
+      "fromMs": 1200000,
+      "toMs": 1230000,
+      "text": "{\"caption\": \"Six frames from warehouse camera 3 spanning 20:00 to 20:25 show a static scene: a dock with a rolling shutter door on the left, three aisle racks labeled Aisle 1, 2 and 3 holding stacked cardboard boxes on orange shelves, and an EXIT door on the right. No people or vehicles appear, no boxes move or fall, and nothing unusual happens across the frames.\", \"objects\": [\"dock with rolling shutter door\", \"Aisle 1 storage rack with cardboard boxes\", \"Aisle 2 storage rack with cardboard boxes\", \"Aisle 3 storage rack with cardboard boxes\", \"EXIT door\", \"yellow floor line\", \"concrete floor\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 249
+    },
+    {
+      "fromMs": 1230000,
+      "toMs": 1260000,
+      "text": "{\"caption\": \"Across six frames from 20:30 to 20:55, the warehouse scene stays essentially static: a closed roll-up dock door labeled DOCK 1, three pallet racks labeled AISLE 1, AISLE 2 and AISLE 3 holding stacked cardboard boxes, and an exit door marked EXIT on the right. No people or vehicles appear, and nothing falls, spills, or moves in any frame.\", \"objects\": [\"roll-up dock door labeled DOCK 1\", \"pallet rack labeled AISLE 1 with cardboard boxes\", \"pallet rack labeled AISLE 2 with cardboard boxes\", \"pallet rack labeled AISLE 3 with cardboard boxes\", \"green EXIT sign\", \"green exit door\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 272
+    },
+    {
+      "fromMs": 1260000,
+      "toMs": 1290000,
+      "text": "{\"caption\": \"A worker in a yellow vest and white hard hat walks across the warehouse floor from the left toward the center between frames at 21:10 and 21:20, then continues to the right toward the EXIT door by 21:25. The three aisle racks with stacked cardboard boxes, the dock door, and the exit door remain unchanged throughout, and nothing unusual such as falling, spilling, or collision is shown.\", \"objects\": [\"worker in yellow vest and white hard hat\", \"aisle 1 storage rack with cardboard boxes\", \"aisle 2 storage rack with cardboard boxes\", \"aisle 3 storage rack with cardboard boxes\", \"dock 1 roll-up door\", \"EXIT door\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 251
+    },
+    {
+      "fromMs": 1290000,
+      "toMs": 1320000,
+      "text": "{\"caption\": \"A warehouse scene from camera 3 across six frames from 21:30 to 21:55 shows three storage aisles with pallet racks loaded with cardboard boxes, a dock door on the left and an exit door on the right. The frames appear static: no people, vehicles or box movement are visible, and nothing falls, spills or blocks a path.\", \"objects\": [\"dock door with roll-up shutter\", \"aisle 1 sign\", \"aisle 2 sign\", \"aisle 3 sign\", \"exit sign\", \"exit door\", \"pallet rack in aisle 1\", \"pallet rack in aisle 2\", \"pallet rack in aisle 3\", \"cardboard boxes on racks\", \"yellow floor line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 249
+    },
+    {
+      "fromMs": 1320000,
+      "toMs": 1350000,
+      "text": "{\"caption\": \"Across six frames from 22:00 to 22:25 the warehouse camera view stays essentially static: three pallet-rack aisles (Aisle 1, 2, 3) hold stacked brown cardboard boxes, the dock door on the left stays closed, and the green EXIT door on the right remains shut. No people or vehicles appear, and no box falls, spills, or blocks any path.\", \"objects\": [\"dock 1 roll-up door\", \"Aisle 1 pallet rack\", \"Aisle 2 pallet rack\", \"Aisle 3 pallet rack\", \"stacked cardboard boxes on Aisle 1 rack\", \"stacked cardboard boxes on Aisle 2 rack\", \"stacked cardboard boxes on Aisle 3 rack\", \"EXIT door\", \"aisle name signs\", \"yellow floor safety line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 297
+    },
+    {
+      "fromMs": 1350000,
+      "toMs": 1380000,
+      "text": "{\"caption\": \"Across all six frames from 22:30 to 22:55 on camera 3, the scene remains static: a closed roll-up dock door labeled DOCK 1 on the left, three storage racks labeled AISLE 1, AISLE 2 and AISLE 3 holding stacked cardboard boxes, and a green EXIT door on the right. No people or vehicles appear, and no boxes fall, spill, or block any path.\", \"objects\": [\"DOCK 1 roll-up door\", \"AISLE 1 storage rack\", \"AISLE 2 storage rack\", \"AISLE 3 storage rack\", \"cardboard boxes on AISLE 1 rack\", \"cardboard boxes on AISLE 2 rack\", \"cardboard boxes on AISLE 3 rack\", \"EXIT door\", \"yellow floor line\", \"concrete floor\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 284
+    },
+    {
+      "fromMs": 1380000,
+      "toMs": 1410000,
+      "text": "{\"caption\": \"Security camera 3 shows a warehouse interior from 23:00 to 23:25 with a static scene: a roll-up dock door on the left, three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 holding cardboard boxes on orange shelves, and an exit door on the right. No people or vehicles appear in any frame, and no boxes fall, spill, or block the aisles.\", \"objects\": [\"roll-up dock door labeled DOCK 1\", \"Aisle 1 storage rack with cardboard boxes\", \"Aisle 2 storage rack with cardboard boxes\", \"Aisle 3 storage rack with cardboard boxes\", \"green EXIT door\", \"yellow floor safety line\", \"concrete warehouse floor\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 260
+    },
+    {
+      "fromMs": 1410000,
+      "toMs": 1440000,
+      "text": "{\"caption\": \"The six frames from CAM 3 between 06:23:30 and 06:23:55 show a warehouse scene with a closed roll-up dock door on the left, three aisle racks (Aisle 1, 2, 3) holding stacked tan cardboard boxes, and a green EXIT door on the right. No people or vehicles appear, and the boxes and racks remain unchanged across all frames with nothing falling, spilling, or moving.\", \"objects\": [\"roll-up dock door labeled DOCK 1\", \"Aisle 1 pallet rack with cardboard boxes\", \"Aisle 2 pallet rack with cardboard boxes\", \"Aisle 3 pallet rack with cardboard boxes\", \"green EXIT door\", \"tan cardboard boxes\", \"orange pallet rack beams\", \"concrete warehouse floor\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 291
+    },
+    {
+      "fromMs": 1440000,
+      "toMs": 1470000,
+      "text": "{\"caption\": \"A warehouse scene from camera 3 shows racks of boxes in Aisles 1 to 3, with a dock door and an exit door unchanged across the frames. A worker in a blue shirt pushes a grey hand cart from the left side of the floor toward the right between 24:10 and 24:20, then walks out of view by 24:25. Nothing falls, spills, or collides in these frames.\", \"objects\": [\"worker in blue shirt\", \"grey hand cart\", \"Dock 1 rolling shutter door\", \"Aisle 1 storage rack with boxes\", \"Aisle 2 storage rack with boxes\", \"Aisle 3 storage rack with boxes\", \"EXIT door\", \"cardboard boxes on racks\", \"floor with yellow safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 256
+    },
+    {
+      "fromMs": 1470000,
+      "toMs": 1500000,
+      "text": "{\"caption\": \"A static warehouse camera view from Cam 3 shows Dock 1 with a closed roll-up shutter, three aisle racks labeled Aisle 1, 2 and 3 holding stacked cardboard boxes, and an Exit door on the right. Across all six frames from 24:30 to 24:55 no people or vehicles appear, and nothing moves, falls, spills or blocks any path.\", \"objects\": [\"Dock 1 roll-up shutter door\", \"Aisle 1 pallet rack with stacked cardboard boxes\", \"Aisle 2 pallet rack with stacked cardboard boxes\", \"Aisle 3 pallet rack with stacked cardboard boxes\", \"Exit door\", \"Cam 3 timestamp overlay\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 267
+    },
+    {
+      "fromMs": 1500000,
+      "toMs": 1530000,
+      "text": "{\"caption\": \"The six frames from camera 3, spanning 25:00 to 25:25, show a warehouse scene with a closed roll-up dock door on the left, three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 holding stacked cardboard boxes, and a green EXIT door on the right. No people or vehicles are visible, the boxes appear unchanged across all frames, and nothing falls, spills, or blocks a path.\", \"objects\": [\"roll-up dock door\", \"DOCK 1 sign\", \"Aisle 1 rack with cardboard boxes\", \"Aisle 2 rack with cardboard boxes\", \"Aisle 3 rack with cardboard boxes\", \"aisle sign Aisle 1\", \"aisle sign Aisle 2\", \"aisle sign Aisle 3\", \"EXIT sign\", \"green exit door\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 300
+    },
+    {
+      "fromMs": 1530000,
+      "toMs": 1560000,
+      "text": "{\"caption\": \"The six frames from CAM 3, spanning 25:30 to 25:55, show a warehouse scene with a static view of three aisle racks holding stacked cardboard boxes, a closed roll-up dock door, and an exit door. No people or vehicles appear, and no boxes move, fall, or spill across the frames.\", \"objects\": [\"roll-up dock door labeled DOCK 1\", \"aisle rack labeled AISLE 1\", \"aisle rack labeled AISLE 2\", \"aisle rack labeled AISLE 3\", \"cardboard boxes on AISLE 1 rack\", \"cardboard boxes on AISLE 2 rack\", \"cardboard boxes on AISLE 3 rack\", \"exit door labeled EXIT\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 263
+    },
+    {
+      "fromMs": 1560000,
+      "toMs": 1590000,
+      "text": "{\"caption\": \"A warehouse scene from camera 3 across six frames spanning 26:00 to 26:25 shows three storage aisles with pallet racks loaded with brown cardboard boxes, a closed roll-up dock door on the left, and a green-lit exit door on the right. No people, vehicles, or movement are visible, and the boxes and racks appear unchanged across all frames, with nothing falling, spilling, or blocking a path.\", \"objects\": [\"roll-up dock door\", \"DOCK 1 sign\", \"AISLE 1 sign\", \"AISLE 2 sign\", \"AISLE 3 sign\", \"EXIT sign\", \"exit door\", \"pallet rack in aisle 1\", \"pallet rack in aisle 2\", \"pallet rack in aisle 3\", \"cardboard boxes on racks\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 281
+    },
+    {
+      "fromMs": 1590000,
+      "toMs": 1620000,
+      "text": "{\"caption\": \"A warehouse camera (CAM 3) shows Dock 1, three aisle racks with stacked brown cardboard boxes, and an exit door across six frames from 26:30 to 26:55. The racks and boxes stay still throughout, and no people or vehicles appear. In the last frame at 26:55, a blue object, possibly a dropped or spilled item, lies on the floor in front of the racks.\", \"objects\": [\"Dock 1 roll-up shutter door\", \"Aisle 1 storage rack\", \"Aisle 2 storage rack\", \"Aisle 3 storage rack\", \"brown cardboard boxes on racks\", \"Exit door\", \"EXIT sign\", \"blue object on floor\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 237
+    },
+    {
+      "fromMs": 1620000,
+      "toMs": 1650000,
+      "text": "{\"caption\": \"Across all six frames from 27:00 to 27:25, the warehouse scene stays essentially unchanged: no people or vehicles appear, and the stacked boxes on the three aisle racks remain in place. A blue puddle or spill on the floor near the left stays in the same spot throughout, with no visible movement, falling, or blocking.\", \"objects\": [\"dock 1 roll-up shutter door\", \"aisle 1 storage rack with cardboard boxes\", \"aisle 2 storage rack with cardboard boxes\", \"aisle 3 storage rack with cardboard boxes\", \"blue puddle or spill on the floor\", \"yellow floor line\", \"exit door\", \"EXIT sign\", \"dock and aisle overhead signs\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 490
+    },
+    {
+      "fromMs": 1650000,
+      "toMs": 1680000,
+      "text": "{\"caption\": \"Six frames from security camera 3 between 27:30 and 27:55 show a warehouse scene with a closed roll-up dock door on the left, three aisle racks with stacked cardboard boxes, and an exit door on the right. The racks and boxes remain unchanged across all frames, with no people or vehicles visible and no unusual events such as falling, spilling, or blocking.\", \"objects\": [\"dock 1 roll-up door\", \"aisle 1 storage rack\", \"aisle 2 storage rack\", \"aisle 3 storage rack\", \"cardboard boxes on rack shelves\", \"exit door\", \"yellow floor safety line\", \"aisle signs\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 222
+    },
+    {
+      "fromMs": 1680000,
+      "toMs": 1710000,
+      "text": "{\"caption\": \"Security camera 3 shows a warehouse interior from 28:00 to 28:25 with no visible change across the six frames. Three storage racks labeled Aisle 1, Aisle 2 and Aisle 3 hold stacked brown cardboard boxes on orange shelving, and a closed roll-up door marked Dock 1 sits at left while a green door marked Exit is at right. No people, vehicles, falling, spilling, or blocked paths are seen.\", \"objects\": [\"Dock 1 roll-up door\", \"Aisle 1 storage rack\", \"Aisle 2 storage rack\", \"Aisle 3 storage rack\", \"brown cardboard boxes\", \"orange rack shelves\", \"Exit door\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 252
+    },
+    {
+      "fromMs": 1710000,
+      "toMs": 1740000,
+      "text": "{\"caption\": \"The six frames from CAM 3 between 28:30 and 28:55 show a warehouse scene with a closed dock door on the left, three aisle racks labeled Aisle 1, 2 and 3 holding stacked cardboard boxes, and an exit door on the right. No people or vehicles appear, and the boxes and racks remain unchanged throughout, with no falling, spilling, or blocking events visible.\", \"objects\": [\"dock 1 roll-up door\", \"Aisle 1 pallet rack\", \"Aisle 2 pallet rack\", \"Aisle 3 pallet rack\", \"cardboard boxes on Aisle 1 rack\", \"cardboard boxes on Aisle 2 rack\", \"cardboard boxes on Aisle 3 rack\", \"exit door\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 272
+    },
+    {
+      "fromMs": 1740000,
+      "toMs": 1770000,
+      "text": "{\"caption\": \"Six frames from a fixed security camera (CAM 3, timestamps 06:29:00 to 06:29:25) show a warehouse scene with a dock door on the left, three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 holding cardboard boxes, and an EXIT door on the right. No people or vehicles appear, the boxes stay in place across all frames, and nothing unusual such as falling, spilling or blocking happens.\", \"objects\": [\"roll-up dock door labeled DOCK 1\", \"aisle 1 sign\", \"aisle 2 sign\", \"aisle 3 sign\", \"EXIT sign\", \"exit door\", \"pallet rack in aisle 1\", \"pallet rack in aisle 2\", \"pallet rack in aisle 3\", \"cardboard boxes on racks\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 288
+    },
+    {
+      "fromMs": 1770000,
+      "toMs": 1800000,
+      "text": "{\"caption\": \"Six frames from CAM 3 spanning 29:30 to 29:55 show a warehouse scene with three aisle racks (Aisle 1, 2, 3) stocked with cardboard boxes, a closed roll-up dock door labeled Dock 1, and a green-framed exit door labeled EXIT. No people or vehicles appear, and the boxes and doors remain motionless across all frames with no visible unusual events.\", \"objects\": [\"Dock 1 roll-up door\", \"Aisle 1 storage rack\", \"Aisle 2 storage rack\", \"Aisle 3 storage rack\", \"cardboard boxes on rack shelves\", \"EXIT door\", \"yellow floor line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 247
+    },
+    {
+      "fromMs": 1800000,
+      "toMs": 1830000,
+      "text": "{\"caption\": \"Camera 3 shows a warehouse scene from 06:30:00 to 06:30:25 with no visible change across the six frames. Three pallet racks labeled Aisle 1, Aisle 2 and Aisle 3 hold stacked brown cardboard boxes, and a closed roll-up dock door labeled Dock 1 sits at left while an exit door labeled EXIT is at right. No people or vehicles appear, and nothing falls, spills, or blocks a path.\", \"objects\": [\"Dock 1 roll-up door\", \"Aisle 1 pallet rack\", \"Aisle 2 pallet rack\", \"Aisle 3 pallet rack\", \"brown cardboard boxes on racks\", \"EXIT door\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 256
+    },
+    {
+      "fromMs": 1830000,
+      "toMs": 1860000,
+      "text": "{\"caption\": \"Six frames from security camera CAM 3 at 30:30 to 30:55 show a static warehouse scene with a closed dock door, three aisle pallet racks with stacked cardboard boxes, and an exit door on the right. No people or vehicles appear, and no boxes move, fall, or spill across the frames. The only visible change is the timestamp advancing.\", \"objects\": [\"dock door roll-up shutter\", \"DOCK 1 sign\", \"AISLE 1 sign\", \"AISLE 2 sign\", \"AISLE 3 sign\", \"pallet racking unit in aisle 1\", \"pallet racking unit in aisle 2\", \"pallet racking unit in aisle 3\", \"cardboard boxes on racks\", \"EXIT sign\", \"green exit door\", \"yellow floor safety line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 280
+    },
+    {
+      "fromMs": 1860000,
+      "toMs": 1890000,
+      "text": "{\"caption\": \"Camera 3 shows a warehouse scene from 31:00 to 31:25 with no visible change across the six frames. Three pallet racks labeled Aisle 1, Aisle 2 and Aisle 3 hold stacked brown cardboard boxes, a roll-up dock door sits on the left, and a green-framed exit door is on the right. No people, vehicles, spills, falls or other unusual events are visible.\", \"objects\": [\"roll-up dock door labeled Dock 1\", \"pallet rack labeled Aisle 1 with stacked cardboard boxes\", \"pallet rack labeled Aisle 2 with stacked cardboard boxes\", \"pallet rack labeled Aisle 3 with stacked cardboard boxes\", \"exit door labeled EXIT\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 273
+    },
+    {
+      "fromMs": 1890000,
+      "toMs": 1920000,
+      "text": "{\"caption\": \"Camera 3 shows a static warehouse scene across six frames from 31:30 to 31:55, with a closed dock door on the left, three labeled aisle racks (Aisle 1, 2, 3) holding stacked brown cardboard boxes, and an exit door on the right. No people, vehicles, or movement are visible, and nothing falls, spills, or blocks any path.\", \"objects\": [\"dock 1 roller door\", \"aisle 1 storage rack\", \"aisle 2 storage rack\", \"aisle 3 storage rack\", \"brown cardboard boxes on racks\", \"exit door\", \"EXIT sign\", \"yellow floor safety line\", \"camera 3 timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 235
+    },
+    {
+      "fromMs": 1920000,
+      "toMs": 1950000,
+      "text": "{\"caption\": \"A static warehouse scene from 32:00 to 32:25 shows Dock 1's roll-up door, three aisle racks holding cardboard boxes, and the EXIT door, with no people or vehicles visible. Around 32:20 a stack of red crates on a wooden pallet appears near the exit door and remains there through 32:25. Nothing else changes in the frames.\", \"objects\": [\"Dock 1 roll-up door\", \"Aisle 1 storage rack with cardboard boxes\", \"Aisle 2 storage rack with cardboard boxes\", \"Aisle 3 storage rack with cardboard boxes\", \"orange rack shelf beams\", \"EXIT door with green sign\", \"stack of red crates\", \"wooden pallet\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 574
+    },
+    {
+      "fromMs": 1950000,
+      "toMs": 1980000,
+      "text": "{\"caption\": \"A warehouse camera (CAM 3) shows a static scene from 32:30 to 32:55 with dock 1, three aisle racks labeled Aisle 1, 2 and 3 holding stacked cardboard boxes, and an exit door with a pallet of red-covered stock near the right. No people or vehicles appear, nothing moves, and no falling, spilling, or blocking events are visible across the six frames.\", \"objects\": [\"CAM 3 timestamp overlay\", \"dock 1 sign\", \"roller shutter dock door\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"aisle 1 storage rack with cardboard boxes\", \"aisle 2 storage rack with cardboard boxes\", \"aisle 3 storage rack with cardboard boxes\", \"exit sign\", \"green exit door\", \"stacked red crates on pallet\", \"wooden pallet\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 319
+    },
+    {
+      "fromMs": 1980000,
+      "toMs": 2010000,
+      "text": "{\"caption\": \"A static warehouse camera view (CAM 3) from 33:00 to 33:25 shows no visible change: the dock roller door, three aisle pallet racks loaded with cardboard boxes, and the exit door remain in the same positions across all six frames. No people, vehicles, or movement are seen, and nothing falls, spills, or blocks any path.\", \"objects\": [\"dock 1 roller shutter door\", \"aisle 1 pallet rack with cardboard boxes\", \"aisle 2 pallet rack with cardboard boxes\", \"aisle 3 pallet rack with cardboard boxes\", \"exit door\", \"yellow floor safety line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 231
+    },
+    {
+      "fromMs": 2010000,
+      "toMs": 2040000,
+      "text": "{\"caption\": \"The six frames from 33:30 to 33:55 show a static warehouse scene from camera 3, with no visible motion. Three pallet racks labeled Aisle 1, Aisle 2 and Aisle 3 hold stacked cardboard boxes, and a closed roller door marked Dock 1 and an exit door marked Exit are fixed in place. No people, vehicles, falling, spilling or blocking events are visible.\", \"objects\": [\"Dock 1 roller shutter door\", \"Exit door\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"Aisle 1 pallet rack with cardboard boxes\", \"Aisle 2 pallet rack with cardboard boxes\", \"Aisle 3 pallet rack with cardboard boxes\", \"Camera 3 timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 288
+    },
+    {
+      "fromMs": 2040000,
+      "toMs": 2070000,
+      "text": "{\"caption\": \"A static warehouse camera (CAM 3) shows dock 1 with a closed roll-up door, three aisle racks labeled Aisle 1, 2 and 3 holding stacked cardboard boxes, and an exit door on the right. Across all six frames from 34:00 to 34:25 nothing moves: no people, vehicles, or forklifts appear, and no boxes fall, spill, or block a path.\", \"objects\": [\"CAM 3 timestamp overlay\", \"Dock 1 sign\", \"closed roll-up dock door\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"storage rack in Aisle 1\", \"storage rack in Aisle 2\", \"storage rack in Aisle 3\", \"cardboard boxes on racks\", \"orange rack beams\", \"EXIT sign\", \"green exit door\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 299
+    },
+    {
+      "fromMs": 2070000,
+      "toMs": 2100000,
+      "text": "{\"caption\": \"A static warehouse camera view (CAM 3) from 34:30 to 34:55 shows dock 1 with a closed roll-up shutter door, three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 holding stacked cardboard boxes, and an EXIT door on the right. No people, vehicles or movement are visible across the six frames, and nothing falls, spills or blocks a path.\", \"objects\": [\"Dock 1 sign\", \"closed roll-up shutter door at Dock 1\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"Aisle 1 pallet rack with stacked cardboard boxes\", \"Aisle 2 pallet rack with stacked cardboard boxes\", \"Aisle 3 pallet rack with stacked cardboard boxes\", \"EXIT sign\", \"green exit door\", \"yellow floor safety line\", \"camera timestamp overlay CAM 3\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 330
+    },
+    {
+      "fromMs": 2100000,
+      "toMs": 2130000,
+      "text": "{\"caption\": \"From 35:00 to 35:10 a worker in a blue shirt pushes a gray hand cart from the left near the dock door toward the center of the warehouse floor in front of the Aisle 1 to 3 racks. By 35:15 the worker and cart have left the view, and the scene stays empty through 35:25. Nothing falls, spills, or blocks a path in these frames.\", \"objects\": [\"worker in blue shirt\", \"gray hand cart\", \"dock door (DOCK 1)\", \"pallet racks with cardboard boxes (Aisle 1)\", \"pallet racks with cardboard boxes (Aisle 2)\", \"pallet racks with cardboard boxes (Aisle 3)\", \"EXIT door\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 421
+    },
+    {
+      "fromMs": 2130000,
+      "toMs": 2160000,
+      "text": "{\"caption\": \"Across six frames from 35:30 to 35:55, the scene from camera 3 stays essentially static: a warehouse with a closed roll-up dock door labeled DOCK 1, three pallet racks labeled AISLE 1, AISLE 2 and AISLE 3 holding cardboard boxes, and an EXIT door on the right. No people or vehicles appear, and no falling, spilling, or blocking events are visible.\", \"objects\": [\"camera timestamp overlay\", \"DOCK 1 roll-up door\", \"AISLE 1 pallet rack\", \"AISLE 2 pallet rack\", \"AISLE 3 pallet rack\", \"cardboard boxes on pallet rack\", \"EXIT door\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 252
+    },
+    {
+      "fromMs": 2160000,
+      "toMs": 2190000,
+      "text": "{\"caption\": \"Camera 3 shows a warehouse scene with a dock door on the left, three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 holding stacked cardboard boxes, and an exit door on the right. Across all six frames from 36:00 to 36:25 the scene stays static, with no people or vehicles visible, no box movement, and nothing falling, spilling, or blocking a path.\", \"objects\": [\"dock door with roll-up shutter\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"storage rack in Aisle 1\", \"storage rack in Aisle 2\", \"storage rack in Aisle 3\", \"cardboard boxes on racks\", \"exit sign\", \"exit door\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 268
+    },
+    {
+      "fromMs": 2190000,
+      "toMs": 2220000,
+      "text": "{\"caption\": \"Across six frames from 36:30 to 36:55, the scene is static: a closed roll-up dock door labeled DOCK 1, three storage aisle racks (AISLE 1, 2, 3) holding cardboard boxes on orange shelves, and an EXIT door on the right. No people or vehicles appear, and no boxes fall, spill, or block any path.\", \"objects\": [\"DOCK 1 roll-up door\", \"AISLE 1 storage rack\", \"AISLE 2 storage rack\", \"AISLE 3 storage rack\", \"cardboard boxes on AISLE 1 rack\", \"cardboard boxes on AISLE 2 rack\", \"cardboard boxes on AISLE 3 rack\", \"EXIT door\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 259
+    },
+    {
+      "fromMs": 2220000,
+      "toMs": 2250000,
+      "text": "{\"caption\": \"A warehouse scene from camera 3 is shown across six frames from 37:00 to 37:25, with the dock door, three aisle racks and the exit door all static. No people or vehicles appear, and no boxes move, fall, or spill; the only visible change is the timestamp advancing.\", \"objects\": [\"dock door roller shutter\", \"dock 1 sign\", \"aisle 1 sign\", \"aisle 2 sign\", \"aisle 3 sign\", \"exit sign\", \"exit door\", \"aisle 1 storage rack\", \"aisle 2 storage rack\", \"aisle 3 storage rack\", \"cardboard boxes on racks\", \"concrete floor\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 230
+    },
+    {
+      "fromMs": 2250000,
+      "toMs": 2280000,
+      "text": "{\"caption\": \"A warehouse camera (CAM 3) shows six frames from 37:30 to 37:55 with no visible change: the dock door on the left stays closed, the three pallet racks labeled Aisle 1, Aisle 2 and Aisle 3 hold the same cardboard boxes, and the exit door on the right remains shut. No people or vehicles appear, and nothing falls, spills, or blocks a path.\", \"objects\": [\"DOCK 1 roll-up door\", \"AISLE 1 pallet rack\", \"AISLE 2 pallet rack\", \"AISLE 3 pallet rack\", \"cardboard boxes on racks\", \"EXIT door\", \"yellow floor line\", \"CAM 3 timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 247
+    },
+    {
+      "fromMs": 2280000,
+      "toMs": 2310000,
+      "text": "{\"caption\": \"The six frames from CAM 3, spanning 38:00 to 38:25, show a warehouse scene with three aisle racks holding stacked cardboard boxes, a closed roll-up dock door, and a green EXIT door on the right. The scene is static across all frames, with no people or vehicles visible, no boxes moving or falling, and nothing unusual occurring.\", \"objects\": [\"DOCK 1 roll-up door\", \"AISLE 1 storage rack\", \"AISLE 2 storage rack\", \"AISLE 3 storage rack\", \"cardboard boxes on racks\", \"EXIT door\", \"yellow floor safety line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 227
+    },
+    {
+      "fromMs": 2310000,
+      "toMs": 2340000,
+      "text": "{\"caption\": \"A worker in an orange vest and white hard hat climbs a grey ladder in Aisle 1 between about 38:35 and 38:50, moving up and then pausing near the top beside the pallet racking. The worker is absent in the first and last frames, and nothing falls, spills or collides; the scene otherwise stays static with stacked cardboard boxes on the racks.\", \"objects\": [\"worker in orange vest and white hard hat\", \"grey ladder\", \"Aisle 1 pallet racking\", \"Aisle 2 pallet racking\", \"Aisle 3 pallet racking\", \"cardboard boxes on racks\", \"orange rack beams\", \"Dock 1 roller shutter door\", \"EXIT door\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 247
+    },
+    {
+      "fromMs": 2340000,
+      "toMs": 2370000,
+      "text": "{\"caption\": \"Camera 3 shows a static warehouse scene from 39:00 to 39:25 with no visible motion: three aisle racks (Aisle 1, 2, 3) hold stacked brown boxes, the dock door on the left stays closed, and the exit door on the right remains shut. No people, vehicles, falling items, spills, or other unusual events appear in these frames.\", \"objects\": [\"Dock 1 roll-up door\", \"Aisle 1 storage rack\", \"Aisle 2 storage rack\", \"Aisle 3 storage rack\", \"brown cardboard boxes on racks\", \"Exit door\", \"Camera 3 timestamp overlay\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 230
+    },
+    {
+      "fromMs": 2370000,
+      "toMs": 2400000,
+      "text": "{\"caption\": \"The frames show a static warehouse scene from camera 3 between 39:30 and 39:55, with a dock roll-up door on the left, three aisle racks labeled Aisle 1, 2 and 3 holding stacked brown cardboard boxes, and an exit door on the right. No people or vehicles appear, nothing moves, and no falling, spilling, fire or blockage is visible.\", \"objects\": [\"roll-up dock door labeled DOCK 1\", \"storage rack labeled AISLE 1\", \"storage rack labeled AISLE 2\", \"storage rack labeled AISLE 3\", \"brown cardboard boxes on racks\", \"orange rack shelf beams\", \"green exit door labeled EXIT\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 252
+    },
+    {
+      "fromMs": 2400000,
+      "toMs": 2430000,
+      "text": "{\"caption\": \"A static warehouse scene from camera 3 across six frames spanning 40:00 to 40:25 shows no visible motion. Three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 hold stacked cardboard boxes, a dock door stays closed at left, and an exit door is at right. No people or vehicles appear, and nothing falls, spills, or blocks a path.\", \"objects\": [\"dock 1 roller shutter door\", \"aisle 1 sign\", \"aisle 2 sign\", \"aisle 3 sign\", \"exit sign\", \"exit door\", \"aisle 1 storage rack\", \"aisle 2 storage rack\", \"aisle 3 storage rack\", \"cardboard boxes on aisle 1 rack\", \"cardboard boxes on aisle 2 rack\", \"cardboard boxes on aisle 3 rack\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 302
+    },
+    {
+      "fromMs": 2430000,
+      "toMs": 2460000,
+      "text": "{\"caption\": \"Across six frames from 40:30 to 40:55 on camera 3, the warehouse scene stays essentially static: three aisle racks with stacked brown cardboard boxes, a closed dock door on the left, and a green exit door on the right. No people or vehicles appear, and no boxes fall, spill, or move between frames.\", \"objects\": [\"dock door with roll-up shutter\", \"aisle 1 sign\", \"aisle 2 sign\", \"aisle 3 sign\", \"exit sign\", \"exit door\", \"storage rack 1 with cardboard boxes\", \"storage rack 2 with cardboard boxes\", \"storage rack 3 with cardboard boxes\", \"orange rack shelf beams\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 246
+    },
+    {
+      "fromMs": 2460000,
+      "toMs": 2490000,
+      "text": "{\"caption\": \"A warehouse surveillance camera (CAM 3) shows a static scene from 06:41:00 to 06:41:25 with no visible motion. Three pallet racks labeled Aisle 1, Aisle 2 and Aisle 3 hold stacked cardboard boxes, with a closed roll-up dock door on the left and a green EXIT door on the right. No people, vehicles, or unusual events such as falling, spilling, or blocking are seen.\", \"objects\": [\"roll-up dock door labeled DOCK 1\", \"pallet rack labeled AISLE 1\", \"pallet rack labeled AISLE 2\", \"pallet rack labeled AISLE 3\", \"cardboard boxes on racks\", \"green EXIT door\", \"orange rack beams\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 266
+    },
+    {
+      "fromMs": 2490000,
+      "toMs": 2520000,
+      "text": "{\"caption\": \"A warehouse camera (CAM 3) shows six frames from 41:30 to 41:55 of a static scene with three pallet racks labeled Aisle 1, Aisle 2 and Aisle 3, stacked with cardboard boxes, facing a closed dock door labeled Dock 1 and an exit door. No people, vehicles, or movement are visible, and nothing falls, spills, or blocks any path across the frames.\", \"objects\": [\"Dock 1 roll-up door\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"EXIT sign\", \"exit door\", \"pallet rack in Aisle 1\", \"pallet rack in Aisle 2\", \"pallet rack in Aisle 3\", \"cardboard boxes on racks\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 276
+    },
+    {
+      "fromMs": 2520000,
+      "toMs": 2550000,
+      "text": "{\"caption\": \"A static warehouse scene from camera 3 across six frames spanning 42:00 to 42:25 shows no visible motion. Three pallet racks labeled Aisle 1, Aisle 2 and Aisle 3 hold cardboard boxes, a dock door at left stays closed, and an exit door at right remains shut. No people, vehicles, falling, spilling or blocked-path events appear.\", \"objects\": [\"camera 3 timestamp overlay\", \"Dock 1 sign\", \"closed roll-up dock door\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"Aisle 1 pallet rack\", \"Aisle 2 pallet rack\", \"Aisle 3 pallet rack\", \"cardboard boxes on racks\", \"Exit sign\", \"green exit door\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 288
+    },
+    {
+      "fromMs": 2550000,
+      "toMs": 2580000,
+      "text": "{\"caption\": \"A warehouse camera (CAM 3) shows a static scene from 42:30 to 42:55 with no visible people or vehicles moving. Three aisle racks labeled AISLE 1, AISLE 2 and AISLE 3 hold stacks of cardboard boxes, a roll-up dock door labeled DOCK 1 stays closed, and an EXIT door stays shut. Nothing falls, spills, or blocks a path in these frames.\", \"objects\": [\"DOCK 1 roll-up door\", \"AISLE 1 sign\", \"AISLE 2 sign\", \"AISLE 3 sign\", \"EXIT sign\", \"EXIT door\", \"AISLE 1 pallet rack with cardboard boxes\", \"AISLE 2 pallet rack with cardboard boxes\", \"AISLE 3 pallet rack with cardboard boxes\", \"cardboard boxes\", \"orange pallet rack beams\", \"concrete floor\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 326
+    },
+    {
+      "fromMs": 2580000,
+      "toMs": 2610000,
+      "text": "{\"caption\": \"Across six frames from 43:00 to 43:25 the warehouse scene stays essentially static: a dock roller door on the left, three aisle racks labeled Aisle 1, 2 and 3 holding stacked cardboard boxes, and an exit door on the right. No people or vehicles are visible, no boxes move or fall, and nothing unusual happens.\", \"objects\": [\"dock roller door labeled Dock 1\", \"Aisle 1 storage rack with cardboard boxes\", \"Aisle 2 storage rack with cardboard boxes\", \"Aisle 3 storage rack with cardboard boxes\", \"Exit door\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"Exit sign\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 264
+    },
+    {
+      "fromMs": 2610000,
+      "toMs": 2640000,
+      "text": "{\"caption\": \"A static warehouse camera view (CAM 3) from 43:30 to 43:55 shows three aisle racks labeled Aisle 1, 2 and 3 holding cardboard boxes, a closed roller-shutter dock door on the left, and an exit door on the right. No people, vehicles, or movement are visible, and nothing falls, spills, or blocks a path across the six frames.\", \"objects\": [\"dock 1 roller shutter door\", \"aisle 1 storage rack\", \"aisle 2 storage rack\", \"aisle 3 storage rack\", \"cardboard boxes on racks\", \"exit door\", \"yellow floor safety line\", \"CAM 3 timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 232
+    },
+    {
+      "fromMs": 2640000,
+      "toMs": 2670000,
+      "text": "{\"caption\": \"Security camera 3 shows a warehouse with a closed dock door on the left, three aisles of pallet racks stacked with cardboard boxes, and an exit door on the right. Around 44:10 a blue forklift and an orange forklift appear near the rack bases; by 44:15 they have moved closer together in the center, with the blue forklift's forks and the orange forklift's mast nearly touching, and they remain stationary through 44:25 with no people visible.\", \"objects\": [\"closed dock door labeled DOCK 1\", \"pallet rack aisle 1 with cardboard boxes\", \"pallet rack aisle 2 with cardboard boxes\", \"pallet rack aisle 3 with cardboard boxes\", \"exit door labeled EXIT\", \"blue forklift\", \"orange forklift\", \"orange pallet rack beams\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 289
+    },
+    {
+      "fromMs": 2670000,
+      "toMs": 2700000,
+      "text": "{\"caption\": \"Six frames from security camera 3 spanning 06:44:30 to 06:44:55 show a warehouse with a dock door on the left, three storage aisles with pallet racks holding cardboard boxes, and an exit door on the right. The scene stays static across all frames: no people or vehicles appear, no boxes move or fall, and nothing unusual happens.\", \"objects\": [\"dock door with roll-up shutter\", \"DOCK 1 sign\", \"AISLE 1 sign\", \"AISLE 2 sign\", \"AISLE 3 sign\", \"pallet racking in aisle 1\", \"pallet racking in aisle 2\", \"pallet racking in aisle 3\", \"cardboard boxes on racks\", \"exit door\", \"EXIT sign\", \"yellow floor line\", \"concrete floor\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 278
+    },
+    {
+      "fromMs": 2700000,
+      "toMs": 2730000,
+      "text": "{\"caption\": \"A static warehouse camera view (CAM 3) from 06:45:00 to 06:45:25 shows Dock 1 with a closed roll-up door, three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 holding stacked cardboard boxes, and an EXIT door on the right. No people or vehicles appear, and no boxes are seen falling, spilling, or moving between frames.\", \"objects\": [\"Dock 1 roll-up door\", \"Aisle 1 storage rack\", \"Aisle 2 storage rack\", \"Aisle 3 storage rack\", \"cardboard boxes on racks\", \"EXIT door\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 234
+    },
+    {
+      "fromMs": 2730000,
+      "toMs": 2760000,
+      "text": "{\"caption\": \"Across six frames from 06:45:30 to 06:45:55, the warehouse scene stays essentially static: a closed roll-up dock door labeled DOCK 1, three aisle racks labeled AISLE 1, AISLE 2 and AISLE 3 holding cardboard boxes on orange shelves, and a green EXIT door on the right. No people, vehicles, or moving objects are visible, and nothing falls, spills, or blocks a path.\", \"objects\": [\"roll-up dock door labeled DOCK 1\", \"AISLE 1 storage rack with cardboard boxes\", \"AISLE 2 storage rack with cardboard boxes\", \"AISLE 3 storage rack with cardboard boxes\", \"green EXIT sign\", \"grey exit door\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 269
+    },
+    {
+      "fromMs": 2760000,
+      "toMs": 2790000,
+      "text": "{\"caption\": \"Camera 3 shows a warehouse scene from 46:00 to 46:25 with three pallet racks labeled Aisle 1, Aisle 2 and Aisle 3, each holding cardboard boxes on orange shelves. The dock roller door on the left stays closed and the exit door on the right stays shut. No people, vehicles, or movement are visible, and nothing falls, spills, or blocks a path.\", \"objects\": [\"dock roller door\", \"Dock 1 sign\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"pallet rack in Aisle 1\", \"pallet rack in Aisle 2\", \"pallet rack in Aisle 3\", \"cardboard boxes on racks\", \"exit door\", \"EXIT sign\", \"yellow floor line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 286
+    },
+    {
+      "fromMs": 2790000,
+      "toMs": 2820000,
+      "text": "{\"caption\": \"A static warehouse scene from camera 3 across six frames from 46:30 to 46:55 shows Dock 1 with a closed roller door, three aisle racks labeled Aisle 1, 2 and 3 holding stacked cardboard boxes, and an exit door on the right. No people or vehicles appear, and nothing moves, falls, spills or blocks any path during this interval.\", \"objects\": [\"Dock 1 roller shutter door\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"blue and orange pallet racking in Aisle 1\", \"blue and orange pallet racking in Aisle 2\", \"blue and orange pallet racking in Aisle 3\", \"cardboard boxes on racks\", \"EXIT sign\", \"green exit door\", \"yellow floor safety line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 291
+    },
+    {
+      "fromMs": 2820000,
+      "toMs": 2850000,
+      "text": "{\"caption\": \"Camera 3 shows a warehouse scene from 47:00 to 47:25 with no visible change: three aisle racks (Aisle 1, 2, 3) hold stacked brown cardboard boxes on orange shelving, a closed roll-up dock door labeled DOCK 1 sits on the left, and a green EXIT door is on the right. No people, vehicles, or movement are visible, and nothing falls, spills, or blocks a path.\", \"objects\": [\"roll-up dock door labeled DOCK 1\", \"Aisle 1 storage rack with cardboard boxes\", \"Aisle 2 storage rack with cardboard boxes\", \"Aisle 3 storage rack with cardboard boxes\", \"orange rack shelf beams\", \"blue rack uprights\", \"brown cardboard boxes\", \"green EXIT sign\", \"gray exit door\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 299
+    },
+    {
+      "fromMs": 2850000,
+      "toMs": 2880000,
+      "text": "{\"caption\": \"The six frames, sampled every five seconds from 47:30 to 47:55 on CAM 3, show a warehouse scene that stays essentially static. Three pallet-rack aisles (Aisle 1, 2, 3) hold stacked brown cardboard boxes, the dock door on the left is closed, and the green EXIT door on the right is shut. No people, vehicles, or movement are visible, and nothing falls, spills, or blocks a path.\", \"objects\": [\"Dock 1 roll-up door\", \"Aisle 1 pallet rack\", \"Aisle 2 pallet rack\", \"Aisle 3 pallet rack\", \"brown cardboard boxes on racks\", \"orange rack beams\", \"blue rack uprights\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"Dock 1 sign\", \"green EXIT sign\", \"gray exit door\", \"yellow floor line\", \"camera timestamp overlay CAM 3\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 331
+    },
+    {
+      "fromMs": 2880000,
+      "toMs": 2910000,
+      "text": "{\"caption\": \"Security camera CAM 3 shows a warehouse with a dock door, three racked aisles of stacked cardboard boxes, and an exit door on the right. The first four frames (48:00 to 48:15) show no people, only static racks and boxes. At 48:20 a worker in a blue shirt and dark pants appears on the left, pushing a gray hand cart, and at 48:25 the worker has moved toward the center of the floor with the cart nearby.\", \"objects\": [\"dock door with roll-up shutter\", \"aisle 1 sign\", \"aisle 2 sign\", \"aisle 3 sign\", \"exit sign and exit door\", \"storage racks with orange beams in three aisles\", \"cardboard boxes on racks\", \"worker in blue shirt\", \"gray hand cart\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 261
+    },
+    {
+      "fromMs": 2910000,
+      "toMs": 2940000,
+      "text": "{\"caption\": \"Across these six frames from 48:30 to 48:55, the warehouse stays largely static. A worker in a blue shirt with a two-wheeled hand truck appears near the center at 48:30 and is gone from the view by 48:35, and no one reappears. The racked boxes in Aisles 1 to 3, the closed dock door and the exit door remain unchanged.\", \"objects\": [\"worker in blue shirt\", \"two-wheeled hand truck\", \"Dock 1 roll-up door\", \"Aisle 1 pallet racking with cardboard boxes\", \"Aisle 2 pallet racking with cardboard boxes\", \"Aisle 3 pallet racking with cardboard boxes\", \"green EXIT door\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 501
+    },
+    {
+      "fromMs": 2940000,
+      "toMs": 2970000,
+      "text": "{\"caption\": \"A warehouse scene from camera 3 across six frames at 5-second intervals shows the dock door, three aisle pallet racks with stacked cardboard boxes, and an exit door. No people or vehicles appear, and the boxes and racks remain static with no visible movement, falling items, spills, or collisions.\", \"objects\": [\"dock 1 roller shutter door\", \"aisle 1 pallet rack with cardboard boxes\", \"aisle 2 pallet rack with cardboard boxes\", \"aisle 3 pallet rack with cardboard boxes\", \"aisle 1 sign\", \"aisle 2 sign\", \"aisle 3 sign\", \"exit sign\", \"exit door\", \"yellow floor line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 251
+    },
+    {
+      "fromMs": 2970000,
+      "toMs": 3000000,
+      "text": "{\"caption\": \"A warehouse surveillance camera (CAM 3) shows the same scene across six frames from 49:30 to 49:55: a roll-up dock door on the left, three aisles of pallet racks stacked with brown cardboard boxes, and an exit door on the right. No people, vehicles, or movement are visible, and nothing falls, spills, or blocks a path.\", \"objects\": [\"roll-up dock door labeled DOCK 1\", \"pallet racking labeled AISLE 1\", \"pallet racking labeled AISLE 2\", \"pallet racking labeled AISLE 3\", \"brown cardboard boxes on pallet racks\", \"orange pallet rack beams\", \"exit door labeled EXIT\", \"gray concrete floor\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 258
+    },
+    {
+      "fromMs": 3000000,
+      "toMs": 3030000,
+      "text": "{\"caption\": \"Over these six frames from camera 3, the warehouse scene with dock 1, aisles 1 to 3 and the exit door stays largely static, with stacked cardboard boxes on orange pallet racks. At about 50:25 a dark smoke plume and orange flames appear near the middle rack in aisle 2, indicating a fire starting among the boxes.\", \"objects\": [\"dock 1 roller shutter door\", \"aisle 1 pallet rack\", \"aisle 2 pallet rack\", \"aisle 3 pallet rack\", \"cardboard boxes on racks\", \"exit door\", \"dark smoke plume\", \"orange flames\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 223
+    },
+    {
+      "fromMs": 3030000,
+      "toMs": 3060000,
+      "text": "{\"caption\": \"Flames and a smoke plume rise near the Aisle 2 racking in the first three frames, from 50:30 to 50:40. By 50:45 the fire and smoke are gone, and the warehouse stays empty with no people or vehicles through 50:55.\", \"objects\": [\"dock 1 roller shutter door\", \"aisle 1 sign\", \"aisle 2 sign\", \"aisle 3 sign\", \"blue metal storage racking\", \"cardboard boxes on shelves\", \"fire flames near aisle 2 racking\", \"smoke plume above aisle 2\", \"exit sign\", \"exit door\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 595
+    },
+    {
+      "fromMs": 3060000,
+      "toMs": 3090000,
+      "text": "{\"caption\": \"Camera 3 shows a warehouse scene across six frames from 51:00 to 51:25 with no visible change. Three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 hold cardboard boxes on orange shelves, a roll-up dock door labeled Dock 1 is closed on the left, and an EXIT door is on the right. No people, vehicles, or unusual events such as falling, spilling, or blocking are seen.\", \"objects\": [\"Dock 1 roll-up door\", \"Aisle 1 storage rack\", \"Aisle 2 storage rack\", \"Aisle 3 storage rack\", \"cardboard boxes on rack shelves\", \"EXIT door\", \"floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 248
+    },
+    {
+      "fromMs": 3090000,
+      "toMs": 3120000,
+      "text": "{\"caption\": \"A warehouse scene from a fixed camera labeled CAM 3 shows dock 1 with a closed roll-up door, three pallet-rack aisles stacked with cardboard boxes, and an exit door on the right. Across the six frames from 51:30 to 51:55 the scene stays essentially static; no people, vehicles, or movement are visible, and nothing falls, spills, or blocks a path.\", \"objects\": [\"CAM 3 timestamp overlay\", \"dock 1 sign\", \"roll-up dock door\", \"aisle 1 sign\", \"aisle 2 sign\", \"aisle 3 sign\", \"blue pallet rack with orange beams in aisle 1\", \"blue pallet rack with orange beams in aisle 2\", \"blue pallet rack with orange beams in aisle 3\", \"cardboard boxes on racks\", \"exit sign\", \"green exit door\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 302
+    },
+    {
+      "fromMs": 3120000,
+      "toMs": 3150000,
+      "text": "{\"caption\": \"A warehouse scene from camera 3 over about 25 seconds shows three pallet-rack aisles (Aisle 1, 2, 3) stacked with cardboard boxes, a closed roll-up door at Dock 1, and an exit door on the right marked EXIT. No people, vehicles, or moving objects appear in any frame, and the boxes and racks remain unchanged with nothing falling, spilling, or blocking a path.\", \"objects\": [\"Dock 1 roll-up door\", \"Aisle 1 pallet rack\", \"Aisle 2 pallet rack\", \"Aisle 3 pallet rack\", \"cardboard boxes on racks\", \"orange pallet rack beams\", \"EXIT door\", \"yellow floor line\", \"camera 3 timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 264
+    },
+    {
+      "fromMs": 3150000,
+      "toMs": 3180000,
+      "text": "{\"caption\": \"A static warehouse camera view (CAM 3) of Dock 1, three Aisle racks holding stacked brown cardboard boxes, and an EXIT door, from 52:30 to 53:00. No people or vehicles appear, the boxes and rack contents look unchanged across all six frames, and nothing falls, spills, or blocks any path.\", \"objects\": [\"Dock 1 roller shutter door\", \"DOCK 1 sign\", \"Aisle 1 pallet rack\", \"Aisle 2 pallet rack\", \"Aisle 3 pallet rack\", \"AISLE 1 sign\", \"AISLE 2 sign\", \"AISLE 3 sign\", \"brown cardboard boxes on racks\", \"EXIT sign\", \"green exit door\", \"yellow floor safety line\", \"CAM 3 timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 281
+    },
+    {
+      "fromMs": 3180000,
+      "toMs": 3210000,
+      "text": "{\"caption\": \"Six frames from security camera 3 between 53:00 and 53:25 show a warehouse scene with a dock door on the left, three storage aisles with pallet racks holding cardboard boxes, and an exit door on the right. The camera view stays static across all frames, with no people, vehicles, or movement visible, and nothing falls, spills, or blocks any path.\", \"objects\": [\"roll-up dock door\", \"DOCK 1 sign\", \"AISLE 1 sign\", \"AISLE 2 sign\", \"AISLE 3 sign\", \"pallet rack in aisle 1\", \"pallet rack in aisle 2\", \"pallet rack in aisle 3\", \"cardboard boxes on racks\", \"EXIT sign\", \"exit door\", \"floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 255
+    },
+    {
+      "fromMs": 3210000,
+      "toMs": 3240000,
+      "text": "{\"caption\": \"The six frames from 53:30 to 53:55 show a warehouse scene from camera 3 with static shelving, and no visible change occurs across the frames. Three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 hold stacked cardboard boxes, a dock door on the left is closed, and an exit door on the right is shut. No people or vehicles appear, and nothing falls, spills, or blocks a path.\", \"objects\": [\"Dock 1 sign\", \"closed roll-up dock door\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"Aisle 1 pallet rack with cardboard boxes\", \"Aisle 2 pallet rack with cardboard boxes\", \"Aisle 3 pallet rack with cardboard boxes\", \"EXIT sign\", \"green exit door\", \"yellow floor safety line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 315
+    },
+    {
+      "fromMs": 3240000,
+      "toMs": 3270000,
+      "text": "{\"caption\": \"Six frames from warehouse camera 3 spanning 54:00 to 54:25 show a static scene: a closed roll-up dock door labeled DOCK 1 on the left, three storage aisles (AISLE 1, 2, 3) with blue and orange pallet racks holding cardboard boxes, and a green EXIT door on the right. No people or vehicles appear, and nothing moves, falls, spills, or blocks any path across the frames.\", \"objects\": [\"roll-up dock door labeled DOCK 1\", \"AISLE 1 pallet rack with cardboard boxes\", \"AISLE 2 pallet rack with cardboard boxes\", \"AISLE 3 pallet rack with cardboard boxes\", \"EXIT door\", \"concrete warehouse floor\", \"yellow floor safety line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 273
+    },
+    {
+      "fromMs": 3270000,
+      "toMs": 3300000,
+      "text": "{\"caption\": \"A static warehouse scene from Cam 3 shows dock 1 with a closed roll-up door, three aisle racks holding cardboard boxes, and an exit door on the right. Across all six frames from 54:30 to 54:55 nothing moves: no people or vehicles appear, and no boxes fall, spill or block any path.\", \"objects\": [\"dock 1 roll-up door\", \"aisle 1 storage rack with cardboard boxes\", \"aisle 2 storage rack with cardboard boxes\", \"aisle 3 storage rack with cardboard boxes\", \"exit door\", \"cam 3 timestamp overlay\", \"dock 1 sign\", \"aisle 1 sign\", \"aisle 2 sign\", \"aisle 3 sign\", \"exit sign\", \"yellow floor line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 266
+    },
+    {
+      "fromMs": 3300000,
+      "toMs": 3330000,
+      "text": "{\"caption\": \"A static warehouse scene from camera 3 across six frames spanning 55:00 to 55:25 shows no visible motion. Dock 1 has a closed roll-up shutter door, Aisle 1 to 3 racks hold stacked cardboard boxes, and the Exit door stays closed. No people, vehicles, or unusual events appear.\", \"objects\": [\"dock 1 roll-up shutter door\", \"aisle 1 sign\", \"aisle 2 sign\", \"aisle 3 sign\", \"exit sign\", \"exit door\", \"aisle 1 storage rack\", \"aisle 2 storage rack\", \"aisle 3 storage rack\", \"cardboard boxes on rack shelves\", \"concrete floor\", \"yellow floor marking line\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 252
+    },
+    {
+      "fromMs": 3330000,
+      "toMs": 3360000,
+      "text": "{\"caption\": \"A security camera (CAM 3) shows a warehouse with a dock door labeled DOCK 1, three storage aisles with pallet racks loaded with cardboard boxes, and an EXIT door on the right. The first three frames are well lit and show no people, vehicles or movement, with the dock door closed and the boxes unchanged. From about 55:45 onward the scene grows progressively darker until it is almost black, and the dock door appears to be dark and open; no people, vehicles, falling items or other unusual events are visible.\", \"objects\": [\"DOCK 1 roll-up door\", \"AISLE 1 pallet rack\", \"AISLE 2 pallet rack\", \"AISLE 3 pallet rack\", \"cardboard boxes on racks\", \"EXIT door\", \"yellow floor line\", \"CAM 3 timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 282
+    },
+    {
+      "fromMs": 3360000,
+      "toMs": 3390000,
+      "text": "{\"caption\": \"Across six frames from 56:00 to 56:25, the view of a warehouse camera labeled CAM 3 stays essentially static: Dock 1 roller door on the left, three aisles of blue and orange pallet racks loaded with brown cardboard boxes, and a green EXIT door on the right. No people or vehicles appear, and no boxes fall, spill, or move; the only visible change is the timestamp advancing.\", \"objects\": [\"Dock 1 roller shutter door\", \"Aisle 1 pallet rack with cardboard boxes\", \"Aisle 2 pallet rack with cardboard boxes\", \"Aisle 3 pallet rack with cardboard boxes\", \"green EXIT door\", \"yellow floor safety line\", \"CAM 3 timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 265
+    },
+    {
+      "fromMs": 3390000,
+      "toMs": 3420000,
+      "text": "{\"caption\": \"A warehouse scene from camera 3 is shown across six frames from 56:30 to 56:55, with the three aisle racks, the dock door, and the exit door all static. No people or vehicles are visible, and no items move, fall, or spill; the only change is the timestamp advancing.\", \"objects\": [\"dock 1 roll-up door\", \"aisle 1 storage rack with cardboard boxes\", \"aisle 2 storage rack with cardboard boxes\", \"aisle 3 storage rack with cardboard boxes\", \"exit door\", \"exit sign\", \"aisle signs\", \"yellow floor line\", \"camera 3 timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 218
+    },
+    {
+      "fromMs": 3420000,
+      "toMs": 3450000,
+      "text": "{\"caption\": \"A warehouse camera (CAM 3) shows six frames from 57:00 to 57:25 with no visible change: the dock door on the left stays closed, the three aisle racks with stacked brown cardboard boxes remain in place, and the exit door on the right stays shut. No people, vehicles, or motion are visible, and nothing falls, spills, or blocks a path.\", \"objects\": [\"dock 1 roll-up door\", \"DOCK 1 sign\", \"aisle 1 storage rack with cardboard boxes\", \"aisle 2 storage rack with cardboard boxes\", \"aisle 3 storage rack with cardboard boxes\", \"AISLE 1 sign\", \"AISLE 2 sign\", \"AISLE 3 sign\", \"EXIT sign\", \"green exit door\", \"yellow floor line\", \"CAM 3 timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 288
+    },
+    {
+      "fromMs": 3450000,
+      "toMs": 3480000,
+      "text": "{\"caption\": \"A static warehouse scene from camera 3 is shown across six frames from 57:30 to 57:55, with timestamps advancing every five seconds. Three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 hold cardboard boxes on orange shelves, and the loading dock door and exit door remain closed and unchanged. No people, vehicles, or unusual events such as falling, spilling, or collisions are visible.\", \"objects\": [\"DOCK 1 roll-up door\", \"AISLE 1 storage rack\", \"AISLE 2 storage rack\", \"AISLE 3 storage rack\", \"cardboard boxes on Aisle 1 rack\", \"cardboard boxes on Aisle 2 rack\", \"cardboard boxes on Aisle 3 rack\", \"EXIT door\", \"yellow floor line\", \"camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 298
+    },
+    {
+      "fromMs": 3480000,
+      "toMs": 3510000,
+      "text": "{\"caption\": \"Six frames from camera 3 spanning 58:00 to 58:25 show a warehouse scene with a closed roll-up dock door on the left, three aisle racks labeled Aisle 1, 2 and 3 holding stacked brown cardboard boxes, and an exit door on the right. No people, vehicles, or movement are visible, and the boxes and racks remain unchanged across all frames with nothing falling, spilling, or blocking a path.\", \"objects\": [\"roll-up dock door labeled DOCK 1\", \"storage rack labeled AISLE 1 with cardboard boxes\", \"storage rack labeled AISLE 2 with cardboard boxes\", \"storage rack labeled AISLE 3 with cardboard boxes\", \"green exit door labeled EXIT\", \"yellow floor safety line\", \"camera timestamp overlay CAM 3\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 290
+    },
+    {
+      "fromMs": 3510000,
+      "toMs": 3540000,
+      "text": "{\"caption\": \"Across six frames from 58:30 to 58:55 the warehouse scene stays essentially static: three pallet-rack aisles (Aisle 1, 2, 3) hold cardboard boxes, the dock door on the left is closed, and the exit door on the right is shut. No people, vehicles, or moving objects are visible, and nothing falls, spills, or blocks a path.\", \"objects\": [\"Dock 1 roller door\", \"Aisle 1 pallet racking with cardboard boxes\", \"Aisle 2 pallet racking with cardboard boxes\", \"Aisle 3 pallet racking with cardboard boxes\", \"Exit door\", \"Aisle 1 sign\", \"Aisle 2 sign\", \"Aisle 3 sign\", \"Dock 1 sign\", \"Exit sign\", \"Yellow floor safety line\", \"Camera timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 294
+    },
+    {
+      "fromMs": 3540000,
+      "toMs": 3570000,
+      "text": "{\"caption\": \"A static warehouse camera (CAM 3) shows Dock 1 with a closed roll-up shutter door, three aisle racks labeled Aisle 1, Aisle 2 and Aisle 3 stacked with cardboard boxes, and an EXIT door on the right. Across the six frames from 06:59:00 to 06:59:25 no people or vehicles appear, the boxes and shutter remain unchanged, and nothing falls, spills, or moves.\", \"objects\": [\"closed roll-up shutter door at Dock 1\", \"Aisle 1 storage rack with cardboard boxes\", \"Aisle 2 storage rack with cardboard boxes\", \"Aisle 3 storage rack with cardboard boxes\", \"EXIT door\", \"yellow floor line\", \"concrete floor\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 270
+    },
+    {
+      "fromMs": 3570000,
+      "toMs": 3600000,
+      "text": "{\"caption\": \"The six frames from CAM 3 between 59:30 and 59:55 show a static warehouse scene with no visible change: three aisle racks (Aisle 1, 2, 3) hold stacked brown cardboard boxes on orange shelving, the dock door on the left stays closed, and the exit door on the right stays shut. No people or vehicles appear, and nothing falls, spills, or blocks a path.\", \"objects\": [\"Dock 1 roll-up door\", \"Aisle 1 storage rack\", \"Aisle 2 storage rack\", \"Aisle 3 storage rack\", \"brown cardboard boxes on Aisle 1 rack\", \"brown cardboard boxes on Aisle 2 rack\", \"brown cardboard boxes on Aisle 3 rack\", \"Exit door\", \"yellow floor safety line\", \"CAM 3 timestamp overlay\"]}",
+      "inputTokens": 1581,
+      "outputTokens": 293
+    }
+  ],
+  "answers": [
+    {
+      "question": "When does the forklift drive up to aisle 2?",
+      "text": "{\"answer\": \"None of the captions show a forklift driving up to Aisle 2. The footage shows no people or vehicles near Aisle 2 except flames and smoke around 50:30 to 50:40, so the question cannot be answered from these captions.\", \"chunks\": []}",
+      "inputTokens": 1596,
+      "outputTokens": 115
+    },
+    {
+      "question": "When does a truck back into the dock door?",
+      "text": "{\"answer\": \"None of the captions show a truck backing into the dock door. They describe no vehicles at the dock, so the question can't be answered from these chunks.\", \"chunks\": []}",
+      "inputTokens": 1608,
+      "outputTokens": 167
+    },
+    {
+      "question": "When do boxes fall off the shelf?",
+      "text": "{\"answer\": \"No boxes fall off the shelf in the video. Every captioned segment describes the racks and boxes as static, with nothing falling or spilling. The only movement noted is a worker pushing a hand cart at 24:10 to 24:20, and that does not involve falling boxes.\", \"chunks\": []}",
+      "inputTokens": 1579,
+      "outputTokens": 103
+    },
+    {
+      "question": "When does the worker in the yellow vest walk across the floor?",
+      "text": "{\"answer\": \"The worker in the yellow vest walks across the warehouse floor from the left toward the center between about 21:10 and 21:20, then continues toward the EXIT door by 21:25.\", \"chunks\": [3]}",
+      "inputTokens": 1521,
+      "outputTokens": 75
+    },
+    {
+      "question": "When is there a spill on the floor?",
+      "text": "{\"answer\": \"A blue puddle or spill is on the floor near the left from about 27:00 to 27:25 in the video.\", \"chunks\": [6]}",
+      "inputTokens": 1618,
+      "outputTokens": 96
+    },
+    {
+      "question": "When is the fire exit blocked?",
+      "text": "{\"answer\": \"None of the captions show the fire exit being blocked. The exit door is described as clear in the static chunks, and the only possible obstruction is a blue object that may be a dropped or spilled item in front of the racks at 26:55, which is not described as blocking the exit. The fire near Aisle 2 at 50:30 is not described as blocking any exit.\", \"chunks\": []}",
+      "inputTokens": 1459,
+      "outputTokens": 314
+    },
+    {
+      "question": "When does someone climb a ladder?",
+      "text": "{\"answer\": \"A worker climbs a grey ladder in Aisle 1 between about 38:35 and 38:50, moving up and pausing near the top beside the pallet racking.\", \"chunks\": [7]}",
+      "inputTokens": 1517,
+      "outputTokens": 70
+    },
+    {
+      "question": "When do two forklifts nearly collide?",
+      "text": "{\"answer\": \"Around 44:15, the blue forklift and the orange forklift move close together in the center, with the blue forklift's forks and the orange forklift's mast nearly touching, and they stay stationary through 44:25.\", \"chunks\": [7]}",
+      "inputTokens": 1536,
+      "outputTokens": 84
+    },
+    {
+      "question": "When is there a fire?",
+      "text": "{\"answer\": \"A fire starts at about 50:25 near the middle rack in Aisle 2, with flames and smoke visible from 50:25 through 50:40, and it is gone by 50:45.\", \"chunks\": [7, 8]}",
+      "inputTokens": 1533,
+      "outputTokens": 79
+    },
+    {
+      "question": "When do the lights go out?",
+      "text": "{\"answer\": \"The captions do not mention the lights going out at any point; none of the chunks describe a lighting change or blackout, so the question cannot be answered from these captions.\", \"chunks\": []}",
+      "inputTokens": 1567,
+      "outputTokens": 64
+    }
+  ],
+  "scored": [
+    {
+      "event": "forklift-aisle-2",
+      "atMs": 190000,
+      "cited": null,
+      "hit": false,
+      "answer": "None of the captions show a forklift driving up to Aisle 2. The footage shows no people or vehicles near Aisle 2 except flames and smoke around 50:30 to 50:40, so the question cannot be answered from these captions."
+    },
+    {
+      "event": "truck-docks",
+      "atMs": 583000,
+      "cited": null,
+      "hit": false,
+      "answer": "None of the captions show a truck backing into the dock door. They describe no vehicles at the dock, so the question can't be answered from these chunks."
+    },
+    {
+      "event": "boxes-fall",
+      "atMs": 927000,
+      "cited": null,
+      "hit": false,
+      "answer": "No boxes fall off the shelf in the video. Every captioned segment describes the racks and boxes as static, with nothing falling or spilling. The only movement noted is a worker pushing a hand cart at 24:10 to 24:20, and that does not involve falling boxes."
+    },
+    {
+      "event": "vest-worker-crosses",
+      "atMs": 1266000,
+      "cited": [
+        1260000,
+        1290000
+      ],
+      "hit": true,
+      "answer": "The worker in the yellow vest walks across the warehouse floor from the left toward the center between about 21:10 and 21:20, then continues toward the EXIT door by 21:25."
+    },
+    {
+      "event": "spill",
+      "atMs": 1612000,
+      "cited": [
+        1620000,
+        1650000
+      ],
+      "hit": false,
+      "answer": "A blue puddle or spill is on the floor near the left from about 27:00 to 27:25 in the video."
+    },
+    {
+      "event": "exit-blocked",
+      "atMs": 1938000,
+      "cited": null,
+      "hit": false,
+      "answer": "None of the captions show the fire exit being blocked. The exit door is described as clear in the static chunks, and the only possible obstruction is a blue object that may be a dropped or spilled item in front of the racks at 26:55, which is not described as blocking the exit. The fire near Aisle 2 at 50:30 is not described as blocking any exit."
+    },
+    {
+      "event": "ladder-climb",
+      "atMs": 2311000,
+      "cited": [
+        2310000,
+        2340000
+      ],
+      "hit": true,
+      "answer": "A worker climbs a grey ladder in Aisle 1 between about 38:35 and 38:50, moving up and pausing near the top beside the pallet racking."
+    },
+    {
+      "event": "near-miss",
+      "atMs": 2647000,
+      "cited": [
+        2640000,
+        2670000
+      ],
+      "hit": true,
+      "answer": "Around 44:15, the blue forklift and the orange forklift move close together in the center, with the blue forklift's forks and the orange forklift's mast nearly touching, and they stay stationary through 44:25."
+    },
+    {
+      "event": "fire",
+      "atMs": 3021000,
+      "cited": [
+        3000000,
+        3030000
+      ],
+      "hit": true,
+      "answer": "A fire starts at about 50:25 near the middle rack in Aisle 2, with flames and smoke visible from 50:25 through 50:40, and it is gone by 50:45."
+    },
+    {
+      "event": "lights-out",
+      "atMs": 3342000,
+      "cited": null,
+      "hit": false,
+      "answer": "The captions do not mention the lights going out at any point; none of the chunks describe a lighting change or blackout, so the question cannot be answered from these captions."
+    }
+  ],
+  "costPerHourMicroUsd": 41027
+}

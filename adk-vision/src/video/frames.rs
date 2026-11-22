@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::answer::{ModelAnswer, add_usage, ask_schema, generate};
-use super::timestamp;
+use super::{evenly_spaced, timestamp};
 use crate::backend::BackendDescriptor;
 use crate::cloud::{LlmDescriber, extract_json};
 use crate::cx::VisionCx;
@@ -25,9 +25,11 @@ use crate::traits::{
 /// What a `Caption` chunk's description names unless
 /// [`with_caption_instructions`](FramesAnalyzer::with_caption_instructions) says otherwise.
 pub const DEFAULT_CAPTION_INSTRUCTIONS: &str = "Describe what happens in this part of the \
-     video for a log that is searched later: name the people, vehicles and objects seen, what \
-     each one does, and anything unusual, such as something falling, spilling, burning, \
-     blocking a way or nearly colliding. Describe only what the images show.";
+     video, for a log that is searched later. Name each person, vehicle and object that moves, \
+     appears, disappears or changes, and say what it does and where; say so when the picture \
+     itself changes, such as the light. Leave out what stays the same in every image. When \
+     nothing happens, the caption is only \"Nothing happens.\" Describe only what the images \
+     show.";
 
 /// How [`FramesAnalyzer`] finds when something is first seen, for questions such as "when
 /// does the forklift enter the aisle?" that a small model answers poorly over many frames
@@ -314,8 +316,8 @@ impl<I> FramesAnalyzer<I> {
         format!(
             "These {} images are frames sampled in order from one part of a video, from {} to \
              {}: {}.\n\n{}\n\nAnswer with JSON only: {{\"caption\": <one to three sentences>, \
-             \"objects\": [<a short noun phrase for each distinct person, vehicle or object \
-             seen>]}}.",
+             \"objects\": [<a short noun phrase for each person, vehicle or object the caption \
+             names>]}}.",
             frames.len(),
             timestamp(start_ms),
             timestamp(end_ms),
@@ -656,18 +658,6 @@ impl<I> FramesAnalyzer<I> {
         let refines = cost(&refine).saturating_mul(checked as u64);
         Some(checks.saturating_add(refines))
     }
-}
-
-/// At most `n` of `frames`, evenly spaced, the first and last always among them.
-fn evenly_spaced(frames: &[Shown], n: usize) -> Vec<&Shown> {
-    if frames.len() <= n {
-        return frames.iter().collect();
-    }
-    if n <= 1 {
-        return frames.get(frames.len() / 2).into_iter().collect();
-    }
-    let last = frames.len() - 1;
-    (0..n).map(|i| &frames[(i * last + (n - 1) / 2) / (n - 1)]).collect()
 }
 
 fn check_inline(len: usize, backend: &str) -> Result<()> {

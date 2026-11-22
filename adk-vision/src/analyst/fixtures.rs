@@ -277,15 +277,45 @@ impl WarehouseClip {
         let open = self.during("truck-docks", t_ms).map_or(0.0, |d| (d as f32 / 5_000.0).min(1.0));
         let bottom = 150.0 - 100.0 * open;
         if open > 0.0 {
+            // Daylight and the yard's asphalt behind the doorway.
             c.rect(14.0, bottom, 90.0, 150.0, [170, 200, 230]);
-            c.rect(14.0, 130.0, 90.0, 150.0, [90, 90, 90]);
-            if open >= 1.0 {
-                // The back of a white truck fills the doorway.
-                c.rect(18.0, 56.0, 86.0, 146.0, [244, 244, 240]);
-                c.rect(51.0, 58.0, 53.0, 140.0, [150, 150, 150]);
-                c.rect(18.0, 138.0, 86.0, 146.0, [60, 60, 60]);
-                c.rect(20.0, 128.0, 28.0, 136.0, [220, 30, 30]);
-                c.rect(76.0, 128.0, 84.0, 136.0, [220, 30, 30]);
+            c.rect(14.0, 118.0, 90.0, 150.0, [80, 80, 84]);
+            // After the door is up, a white box truck backs in over 6 s, growing as it nears.
+            let backing = self
+                .during("truck-docks", t_ms)
+                .map_or(0.0, |d| ((d as f32 - 5_000.0) / 6_000.0).clamp(0.0, 1.0));
+            if backing > 0.0 {
+                let (cx, half_w, top, base) =
+                    (52.0, 12.0 + 24.0 * backing, 104.0 - 46.0 * backing, 146.0);
+                let (x0, x1) = (cx - half_w, cx + half_w);
+                c.rect(x0, top, x1, base - 10.0, [246, 246, 242]);
+                c.rect(cx - 1.0, top + 2.0, cx + 1.0, base - 12.0, [150, 150, 150]);
+                c.rect(
+                    cx - 5.0,
+                    (top + base) / 2.0,
+                    cx - 3.0,
+                    (top + base) / 2.0 + 8.0,
+                    [90, 90, 90],
+                );
+                c.rect(
+                    cx + 3.0,
+                    (top + base) / 2.0,
+                    cx + 5.0,
+                    (top + base) / 2.0 + 8.0,
+                    [90, 90, 90],
+                );
+                c.rect(x0 + 2.0, base - 22.0, x0 + 8.0, base - 14.0, [225, 30, 30]);
+                c.rect(x1 - 8.0, base - 22.0, x1 - 2.0, base - 14.0, [225, 30, 30]);
+                // Bumper with warning stripes, number plate and the rear wheels.
+                c.rect(x0, base - 10.0, x1, base - 5.0, [30, 30, 30]);
+                let mut sx = x0;
+                while sx < x1 {
+                    c.rect(sx, base - 10.0, (sx + 4.0).min(x1), base - 5.0, [240, 200, 20]);
+                    sx += 8.0;
+                }
+                c.rect(cx - 7.0, base - 21.0, cx + 7.0, base - 15.0, [250, 250, 250]);
+                c.disc(x0 + 7.0, base - 2.0, 5.0 * backing + 2.0, [15, 15, 15]);
+                c.disc(x1 - 7.0, base - 2.0, 5.0 * backing + 2.0, [15, 15, 15]);
             }
         }
         let mut y = 50.0;
@@ -383,9 +413,10 @@ impl WarehouseClip {
             }
         }
         if let Some(d) = self.during("forklift-aisle-2", t_ms) {
-            // From the right edge to the front of aisle 2 in 8 s, then it waits there.
+            // From the right edge to the front of aisle 2 in 8 s, then it waits there, forks
+            // and all inside the rack's width.
             let p = (d as f32 / 8_000.0).min(1.0);
-            let x = 500.0 + (250.0 - 500.0) * p;
+            let x = 500.0 + (272.0 - 500.0) * p;
             c.forklift(x, 222.0, [235, 130, 20], true, true);
         }
         if let Some(d) = self.during("vest-worker-crosses", t_ms) {

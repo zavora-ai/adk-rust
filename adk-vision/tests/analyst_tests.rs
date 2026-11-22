@@ -235,7 +235,18 @@ async fn an_hour_of_warehouse_video_is_chunked_captioned_indexed_answered_and_er
     // Erasure removes the chunks, captions, graph entity, keyframes and their vectors.
     let erasure = analyst.erase_source(&setup.cx, &scope(), SOURCE).await.unwrap();
     assert_eq!((erasure.chunks, erasure.captions, erasure.entities), (120, 120, 1));
-    assert_eq!((erasure.keyframes.len(), erasure.visual_chunks), (120, 120));
+    // Keyframes are stored by content: chunks whose middle frames are the same picture
+    // share one artifact and one visual-memory vector.
+    let distinct: std::collections::BTreeSet<String> = indexed
+        .chunks
+        .iter()
+        .map(|c| artifact_uri(&c.keyframe.as_ref().unwrap().artifact))
+        .collect();
+    assert!(distinct.len() > 100, "{} distinct keyframes", distinct.len());
+    assert_eq!(
+        (erasure.keyframes.len(), erasure.visual_chunks),
+        (distinct.len(), distinct.len() as u64)
+    );
     assert!(analyst.chunks(&scope(), SOURCE).await.unwrap().is_empty());
     assert_eq!(store.count(COLLECTION, &scope(), None).await.unwrap(), 0);
     assert_eq!(keyframe_store.count("warehouse-keyframes", &scope(), None).await.unwrap(), 0);

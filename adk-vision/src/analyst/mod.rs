@@ -11,7 +11,7 @@
 //! | Index | The caption and the things it names are embedded by any `adk_rag::EmbeddingProvider` and stored as one [`Chunk`] in any [`VectorStore`], with the chunk's time range, keyframe and clip in its metadata |
 //! | Remember | With [`captions`](VideoAnalystBuilder::captions), each caption is an `adk-memory` entry naming its time range, with references to its keyframe and clip artifacts; with [`graph`](VideoAnalystBuilder::graph), the clip is a graph entity whose observations are the captions, related to what they name |
 //! | Keyframes | With [`keyframes`](VideoAnalystBuilder::keyframes), each chunk's middle frame passes the privacy hook and is stored as an image artifact; with [`visual_memory`](VideoAnalystBuilder::visual_memory) it is also embedded in a [`VisualMemory`], so a chunk can be found by an example image |
-//! | Ask | [`VideoAnalyst::ask`] retrieves the chunks nearest a question and asks the [`answerer`](VideoAnalystBuilder::answerer) to answer from their captions alone, citing chunks by number; without an answerer the nearest chunk is the answer |
+//! | Ask | [`VideoAnalyst::ask`] has the [`answerer`](VideoAnalystBuilder::answerer) write the caption it expects the answer's chunk to have, retrieves the chunks nearest the question and that caption, and asks it to answer from their captions alone, citing chunks by number; without an answerer the chunk nearest the question is the answer |
 //! | Cost | [`IndexedClip::cost_per_hour_micro_usd`] is the captioning's cost per hour of video |
 //! | Erasure | [`VideoAnalyst::erase_source`] deletes a clip's chunks, captions, graph entity and keyframes and writes `vision.analyst.erased` |
 //!
@@ -113,7 +113,7 @@ use crate::sent::VisionInput;
 use crate::stream::{FramePrivacy, FrameStream};
 use crate::traits::{Describer, Sampling, VideoRequest, VideoUsage};
 use crate::video::answer::{ModelAnswer, add_usage, generate};
-use crate::video::timestamp;
+use crate::video::{evenly_spaced, timestamp};
 
 /// Action of the record an indexing writes.
 pub const VISION_ANALYST_INDEXED: &str = "vision.analyst.indexed";
@@ -493,7 +493,12 @@ pub struct AnalystAnswer {
     pub citations: Vec<VideoChunk>,
     /// The chunks the answerer was shown, nearest first.
     pub retrieved: Vec<ChunkHit>,
-    /// The answer call's tokens and cost; nothing without an answerer.
+    /// The caption the answerer expected the answer's chunk to have, searched for with the
+    /// question; `None` without an answerer or with
+    /// [`expand_questions(false)`](VideoAnalystBuilder::expand_questions).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expanded: Option<String>,
+    /// The answerer's calls' tokens and cost; nothing without an answerer.
     pub usage: VideoUsage,
     /// The answerer's backend id; `None` when the nearest chunk is the answer.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -554,6 +559,7 @@ pub struct VideoAnalyst {
     graph: Option<Arc<GraphMemoryService>>,
     keyframes: Option<Keyframes>,
     answerer: Option<Answerer>,
+    expand_questions: bool,
 }
 
 impl std::fmt::Debug for VideoAnalyst {
@@ -645,6 +651,15 @@ impl VideoAnalystBuilder {
         self
     }
 
+    /// Before retrieving, asks the answerer for the caption a chunk answering the question
+    /// would have, and searches for the question and that caption together: a question in
+    /// other words than the captions — "when do the lights go out?" over "the picture turns
+    /// dark" — still finds its chunk. On by default; it applies only with an answerer.
+    pub fn expand_questions(mut self, expand: bool) -> Self {
+        self.analyst.expand_questions = expand;
+        self
+    }
+
     /// Creates the collection if needed.
     ///
     /// # Errors
@@ -694,6 +709,7 @@ impl VideoAnalyst {
                 graph: None,
                 keyframes: None,
                 answerer: None,
+                expand_questions: true,
             },
             visual: None,
         }
@@ -807,7 +823,7 @@ impl VideoAnalyst {
         calls: &mut Vec<CallRecord>,
     ) -> Result<()> {
         let PendingChunk { index, start_ms, end_ms, frames } = pending;
-        let picked = pick(&frames, self.frames_per_chunk);
+        let picked = evenly_spaced(&frames, self.frames_per_chunk);
         let images = picked
             .iter()
             .map(|(meta, pixels)| {
@@ -1015,8 +1031,11 @@ impl VideoAnalyst {
     }
 
     /// Answers `question` from the captions of the chunks a retrieval finds, citing the
-    /// chunks the answer rests on. The answerer sees each chunk's number, time range and
-    /// caption, in time order, and cites by number; a number it was not shown is dropped.
+    /// chunks the answer rests on. With [`expand_questions`](VideoAnalystBuilder::expand_questions)
+    /// (the default), the answerer first writes the caption it expects the answer's chunk to
+    /// have, and the retrieval searches for the question and that caption. The answerer
+    /// sees each retrieved chunk's number, time range and caption, in time order, and cites
+    /// by number; a number it was not shown is dropped.
     /// Without an answerer, the nearest chunk is the answer. Writes `vision.analyst.asked`.
     ///
     /// # Errors
@@ -1031,13 +1050,25 @@ impl VideoAnalyst {
         query: &AnalystQuery,
     ) -> Result<AnalystAnswer> {
         cx.check()?;
-        let retrieved = self.retrieve(scope, question, query).await?;
+        let mut usage = VideoUsage::default();
+        let expanded = match (&self.answerer, self.expand_questions) {
+            (Some(answerer), true) => {
+                Some(self.hypothetical(cx, answerer, question, &mut usage).await?)
+            }
+            _ => None,
+        };
+        let search = match &expanded {
+            Some(caption) => format!("{question} {caption}"),
+            None => question.to_string(),
+        };
+        let retrieved = self.retrieve(scope, &search, query).await?;
         let mut answer = AnalystAnswer {
             question: question.to_string(),
             answer: String::new(),
             citations: Vec::new(),
             retrieved,
-            usage: VideoUsage::default(),
+            expanded,
+            usage,
             answered_by: None,
         };
         match &self.answerer {
@@ -1093,8 +1124,11 @@ impl VideoAnalyst {
              chunk: its number, its time range from the start of the video, and its caption.\n\n\
              {}\n\nQuestion: {}\n\nAnswer with JSON only: {{\"answer\": <the answer in words, \
              naming the time>, \"chunks\": [<the numbers of the chunks that show it, the one \
-             where it is first seen first>]}}. Cite only chunks listed above. If no caption \
-             answers the question, say so and give no chunks.",
+             where it is first seen first>]}}. Cite only chunks listed above. The captions \
+             come from a model that saw a few frames of each chunk and can be imprecise about \
+             details such as positions and colours: when a caption describes the asked event \
+             approximately, cite it. If no caption answers the question, say so and give no \
+             chunks.",
             if lines.is_empty() { "(no chunks)".to_string() } else { lines.join("\n") },
             answer.question
         );
@@ -1106,27 +1140,7 @@ impl VideoAnalyst {
             },
             "required": ["answer", "chunks"]
         });
-        let bound = answerer
-            .descriptor
-            .token_estimate
-            .map(|e| e.estimate_micro_usd(&[], prompt.len(), Some(answerer.max_output_tokens)));
-        let config = GenerateContentConfig {
-            max_output_tokens: i32::try_from(answerer.max_output_tokens).ok(),
-            response_schema: Some(schema),
-            ..GenerateContentConfig::default()
-        };
-        let request = LlmRequest {
-            config: Some(config),
-            ..LlmRequest::new(answerer.llm.name(), vec![Content::new("user").with_text(prompt)])
-        };
-        let backend = answerer.descriptor.id.to_string();
-        let ModelAnswer { text, usage } =
-            generate(cx, &answerer.llm, bound, request, &backend).await?;
-        add_usage(&mut answer.usage, &answerer.descriptor, usage.as_ref());
-        let root = extract_json(&text).ok_or_else(|| VisionError::Parse {
-            backend: backend.clone(),
-            message: format!("the answer holds no JSON: {text}"),
-        })?;
+        let root = Self::text_call(cx, answerer, prompt, schema, &mut answer.usage).await?;
         answer.answer =
             root.get("answer").and_then(Value::as_str).unwrap_or_default().trim().to_string();
         for n in root.get("chunks").and_then(Value::as_array).into_iter().flatten() {
@@ -1145,8 +1159,61 @@ impl VideoAnalyst {
                 answer.citations.push((*chunk).clone());
             }
         }
-        answer.answered_by = Some(backend);
+        answer.answered_by = Some(answerer.descriptor.id.to_string());
         Ok(())
+    }
+
+    /// The caption the answerer expects a chunk answering `question` to have.
+    async fn hypothetical(
+        &self,
+        cx: &VisionCx,
+        answerer: &Answerer,
+        question: &str,
+        usage: &mut VideoUsage,
+    ) -> Result<String> {
+        let prompt = format!(
+            "A question about a video: {question}\n\nWrite the caption that a chunk of the video \
+             showing the answer would have: one sentence naming what is seen and what happens, \
+             in plain words. Answer with JSON only: {{\"caption\": <the sentence>}}."
+        );
+        let schema = json!({
+            "type": "object",
+            "properties": {"caption": {"type": "string"}},
+            "required": ["caption"]
+        });
+        let root = Self::text_call(cx, answerer, prompt, schema, usage).await?;
+        Ok(root.get("caption").and_then(Value::as_str).unwrap_or_default().trim().to_string())
+    }
+
+    /// One text-only call to the answerer, metered and added to `usage`: its JSON.
+    async fn text_call(
+        cx: &VisionCx,
+        answerer: &Answerer,
+        prompt: String,
+        schema: Value,
+        usage: &mut VideoUsage,
+    ) -> Result<Value> {
+        let bound = answerer
+            .descriptor
+            .token_estimate
+            .map(|e| e.estimate_micro_usd(&[], prompt.len(), Some(answerer.max_output_tokens)));
+        let config = GenerateContentConfig {
+            max_output_tokens: i32::try_from(answerer.max_output_tokens).ok(),
+            response_schema: Some(schema),
+            ..GenerateContentConfig::default()
+        };
+        let request = LlmRequest {
+            config: Some(config),
+            ..LlmRequest::new(answerer.llm.name(), vec![Content::new("user").with_text(prompt)])
+        };
+        let backend = answerer.descriptor.id.to_string();
+        let ModelAnswer { text, usage: reported } =
+            generate(cx, &answerer.llm, bound, request, &backend).await?;
+        add_usage(usage, &answerer.descriptor, reported.as_ref());
+        extract_json(&text).ok_or_else(|| VisionError::Parse {
+            backend,
+            message: format!("the answer holds no JSON: {text}"),
+        })
     }
 
     /// Every chunk of `source` in `scope`, in time order.
@@ -1155,11 +1222,24 @@ impl VideoAnalyst {
     ///
     /// The store's errors, and [`VisionError::Parse`] for a chunk the analyst did not store.
     pub async fn chunks(&self, scope: &Scope, source: &str) -> Result<Vec<VideoChunk>> {
+        let mut chunks = self
+            .stored(scope, source)
+            .await?
+            .iter()
+            .map(VideoChunk::from_chunk)
+            .collect::<Result<Vec<_>>>()?;
+        chunks.sort_by_key(|c| (c.start_ms, c.end_ms));
+        Ok(chunks)
+    }
+
+    /// Every stored chunk of `source` in `scope`, as the store holds it.
+    async fn stored(&self, scope: &Scope, source: &str) -> Result<Vec<Chunk>> {
         let filter = AnalystQuery::top(0).source(source).compile();
         let n = self.store.count(&self.collection, scope, Some(&filter)).await.map_err(rag)?;
         if n == 0 {
             return Ok(Vec::new());
         }
+        // Any vector of the space lists a filter's chunks when top_k is their count.
         let mut axis = vec![0.0; self.embedder.dimensions()];
         if let Some(first) = axis.first_mut() {
             *first = 1.0;
@@ -1170,10 +1250,7 @@ impl VideoAnalyst {
             .search(&self.collection, scope, &VectorQuery::new(&axis, top_k).with_filter(&filter))
             .await
             .map_err(rag)?;
-        let mut chunks =
-            found.iter().map(|r| VideoChunk::from_chunk(&r.chunk)).collect::<Result<Vec<_>>>()?;
-        chunks.sort_by_key(|c| (c.start_ms, c.end_ms));
-        Ok(chunks)
+        Ok(found.into_iter().map(|r| r.chunk).collect())
     }
 
     async fn count(&self, scope: &Scope, source: &str) -> Result<u64> {
@@ -1202,9 +1279,17 @@ impl VideoAnalyst {
             return Err(VisionError::Cancelled);
         }
         let filter = AnalystQuery::top(0).source(source).compile();
-        // Owners come from the stored chunks: the captions and keyframes are theirs.
-        let stored = self.chunks(scope, source).await?;
-        let found = self.owners(scope, &filter).await?;
+        let raw = self.stored(scope, source).await?;
+        let stored = raw.iter().map(VideoChunk::from_chunk).collect::<Result<Vec<_>>>()?;
+        // Each chunk's caption belongs to the application and user it was indexed for.
+        let found: BTreeMap<String, (String, String)> = raw
+            .iter()
+            .filter_map(|c| {
+                let app = c.metadata.get(keys::APP)?;
+                let user = c.metadata.get(keys::USER)?;
+                Some((c.id.clone(), (app.clone(), user.clone())))
+            })
+            .collect();
         let chunks =
             self.store.delete_where(&self.collection, scope, &filter).await.map_err(rag)?;
         let mut erasure =
@@ -1273,48 +1358,6 @@ impl VideoAnalyst {
         );
         Ok(erasure)
     }
-
-    /// Each stored chunk's id and the application and user its captions belong to.
-    async fn owners(
-        &self,
-        scope: &Scope,
-        filter: &Filter,
-    ) -> Result<BTreeMap<String, (String, String)>> {
-        let n = self.store.count(&self.collection, scope, Some(filter)).await.map_err(rag)?;
-        if n == 0 {
-            return Ok(BTreeMap::new());
-        }
-        let mut axis = vec![0.0; self.embedder.dimensions()];
-        if let Some(first) = axis.first_mut() {
-            *first = 1.0;
-        }
-        let top_k = usize::try_from(n).unwrap_or(usize::MAX);
-        let found = self
-            .store
-            .search(&self.collection, scope, &VectorQuery::new(&axis, top_k).with_filter(filter))
-            .await
-            .map_err(rag)?;
-        Ok(found
-            .iter()
-            .filter_map(|r| {
-                let app = r.chunk.metadata.get(keys::APP)?;
-                let user = r.chunk.metadata.get(keys::USER)?;
-                Some((r.chunk.id.clone(), (app.clone(), user.clone())))
-            })
-            .collect())
-    }
-}
-
-/// At most `n` of `frames`, evenly spaced, the first and last always among them.
-fn pick<T>(frames: &[T], n: usize) -> Vec<&T> {
-    if frames.len() <= n {
-        return frames.iter().collect();
-    }
-    if n <= 1 {
-        return frames.get(frames.len() / 2).into_iter().collect();
-    }
-    let last = frames.len() - 1;
-    (0..n).map(|i| &frames[(i * last + (n - 1) / 2) / (n - 1)]).collect()
 }
 
 /// Adds one call's usage to a clip's: an unknown cost makes the total unknown.
@@ -1391,7 +1434,5 @@ mod tests {
             (clip.usage.frames, clip.usage.requests, clip.cost_per_hour_micro_usd()),
             (12, 2, None)
         );
-        assert_eq!(pick(&[1, 2, 3, 4, 5, 6, 7, 8], 4), vec![&1, &3, &6, &8]);
-        assert_eq!(pick(&[1, 2, 3], 1), vec![&2]);
     }
 }
