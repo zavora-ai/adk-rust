@@ -243,8 +243,7 @@ async fn s15_live_team_on_an_ambiguous_defect() {
         .await
         .unwrap();
     let approvals = Arc::new(InMemoryApprovalStore::new());
-    let mut config = RunConfig::default();
-    config.approval_store = Some(approvals);
+    let config = RunConfig::builder().approval_store(approvals).build();
     let runner = Runner::builder()
         .app_name(APP)
         .agent(Arc::new(team))
