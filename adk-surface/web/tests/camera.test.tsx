@@ -17,6 +17,7 @@ import quotaExhausted from "../src/fixture/camera/quota-exhausted.json";
 import several from "../src/fixture/camera/several-sources.json";
 import sourceLost from "../src/fixture/camera/source-lost.json";
 import steppedDown from "../src/fixture/camera/stepped-down.json";
+import stopAll from "../src/fixture/camera/stop-all.json";
 import switchedOff from "../src/fixture/camera/switched-off.json";
 import { phoneScreenOf, phonePathOf } from "../src/phone/route";
 
@@ -126,6 +127,14 @@ describe("the live camera surface", () => {
     await userEvent.click(within(aside()).getByRole("button", { name: "Change the daily frame limit" }));
     expect(onMemory).toHaveBeenCalled();
     expect(screen.getByText("No tracks while paused.")).toBeTruthy();
+  });
+
+  it("says Stop all paused the camera and offers nothing to act on (spec 3.7 V-I17)", async () => {
+    open(stopAll as CameraView);
+    expect(await screen.findByText("Paused by Stop all", { selector: ".cam-cover-title" })).toBeTruthy();
+    expect(screen.getByText("Nothing is looked at or sent until someone chooses Resume all.")).toBeTruthy();
+    expect(within(aside()).getByText("Not watching: Stop all")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Raise a card from this frame" })).toHaveProperty("disabled", true);
   });
 
   it("shows a lost source with its credentials hidden and tries again (C6)", async () => {

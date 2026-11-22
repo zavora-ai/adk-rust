@@ -876,3 +876,46 @@ async fn a_frozen_frame_is_held_while_the_card_is_written_and_forgotten_when_off
         .await;
     assert!(matches!(refused, Err(SurfaceError::NotFound { .. })), "{refused:?}");
 }
+
+/// Stop all pauses every camera at the hub's gate (spec 3.7 V-I17): a frame offered from then
+/// on is dropped, the camera reads "Paused by Stop all", and Resume all opens the gate again.
+#[tokio::test]
+async fn stop_all_pauses_every_camera_at_the_gate() {
+    let fixture = fixture(CameraBoard::Live).await;
+    show(&fixture, CameraBoard::Live).await;
+    fixture.engine.execute(&web(), adk_surface::Command::StopAll { reason: None }).await.unwrap();
+    assert!(fixture.cameras.is_frozen());
+    for camera in ["line-2", "line-3", "packing-bench"] {
+        let frame = CameraFrame::new(
+            picture("after stop all"),
+            "image/png",
+            1920,
+            1080,
+            CameraBoard::Live.now(day()),
+        );
+        assert_eq!(
+            fixture.cameras.offer(camera, frame).await,
+            Offered::Dropped(DropReason::Frozen),
+            "{camera}"
+        );
+    }
+    let view = fixture.engine.camera_view(&web(), "line-2").await.unwrap();
+    assert_eq!(view.state, CameraState::Frozen);
+    assert_eq!(view.state_text, "Paused by Stop all");
+    assert_eq!(view.agent.line, "Not watching: Stop all");
+    assert!(view.on, "Stop all pauses the camera; the person's switch stays as they left it");
+    let cover = view.stage.cover.as_ref().unwrap();
+    assert_eq!(cover.title, "Paused by Stop all");
+    assert_eq!(cover.text, "Nothing is looked at or sent until someone chooses Resume all.");
+    matches_fixture("stop-all", &serde_json::to_value(&view).unwrap());
+    let grid = fixture.engine.cameras_view(&web()).await.unwrap();
+    assert_eq!(grid.count_text, "4 sources · 3 on");
+
+    fixture.engine.execute(&web(), adk_surface::Command::ResumeAll).await.unwrap();
+    assert!(!fixture.cameras.is_frozen());
+    let frame =
+        CameraFrame::new(picture("resumed"), "image/png", 1920, 1080, CameraBoard::Live.now(day()));
+    assert!(matches!(fixture.cameras.offer("line-2", frame).await, Offered::Shown { .. }));
+    let view = fixture.engine.camera_view(&web(), "line-2").await.unwrap();
+    assert_eq!(view.state, CameraState::Live);
+}

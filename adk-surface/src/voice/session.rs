@@ -467,11 +467,30 @@ impl State {
                         tracing::debug!(error = %error, "a frame could not be sent");
                     }
                 }
+                // The voice screen's camera is also a camera of the live camera surface (spec
+                // 3.7 §7.13 `SurfaceCameraSource`): its frames pass that camera's gate too.
+                if source == VisualSource::Camera
+                    && let Some(cameras) = self.engine.camera_hub()
+                    && let Some(camera) = cameras.voice_camera()
+                {
+                    cameras.ingest(&camera, jpeg, chrono::Utc::now()).await;
+                }
             }
             VoiceInput::Message(message) => match message {
                 VoiceClientMessage::Switch { source, on } => match source {
                     InputSource::Mic => self.mic_on = on,
-                    InputSource::Camera => self.visual.switch(VisualSource::Camera, on),
+                    InputSource::Camera => {
+                        self.visual.switch(VisualSource::Camera, on);
+                        // The live camera surface's switch for the same camera follows, recorded
+                        // as the person's.
+                        if let Some(camera) =
+                            self.engine.camera_hub().and_then(|cameras| cameras.voice_camera())
+                            && let Err(error) =
+                                self.engine.switch_camera(&self.viewer, &camera, on).await
+                        {
+                            tracing::debug!(error = %error, camera.id = %camera, "the voice screen's camera switch did not reach its camera");
+                        }
+                    }
                     InputSource::Screen => self.visual.switch(VisualSource::Screen, on),
                 },
                 VoiceClientMessage::PlaybackEnded => {

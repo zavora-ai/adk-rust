@@ -59,6 +59,12 @@ voice = ["adk-harness/voice", "dep:adk-realtime", "adk-realtime/integration", "a
 # charter cards, the site view and the weekly review over `adk-website`'s desk, with their own
 # OpenAPI document and generated TypeScript. Implies `web`.
 website = ["web", "dep:adk-website"]
+# The live camera surface on the real frame pipeline (spec 3.7 §7.13, §8.2, S12):
+# `camera::PipelineCameras` runs each camera through adk-vision's `StreamPipeline` — source,
+# frame governor, privacy, detector, tracker — and reports its state, tracks, watch conditions
+# and zones; the voice screen's camera comes in through `SurfaceCameraSource`. Shown frames are
+# JPEG through `image`, already in the tree through adk-vision.
+vision-camera = ["dep:adk-vision", "adk-vision/surface-camera", "dep:image", "dep:tokio-util"]
 # Gemini Live and the OpenAI Realtime API, for the live voice test and the `voice_home`
 # example only: a host builds its own provider models.
 voice-live = ["voice", "adk-realtime/gemini", "adk-realtime/openai"]
@@ -96,6 +102,12 @@ adk-kernel.workspace = true
 adk-harness = { workspace = true, features = ["kernel"] }
 # The realtime session a voice conversation runs on (`voice`).
 adk-realtime = { workspace = true, optional = true }
+# The frame pipeline the live camera surface runs cameras through (`vision-camera`).
+adk-vision = { workspace = true, optional = true }
+# Shown camera frames as JPEG (`vision-camera`).
+image = { version = "0.25", optional = true, default-features = false, features = ["jpeg"] }
+# A camera's stream stopped on its own, apart from the host's run (`vision-camera`).
+tokio-util = { version = "0.7", optional = true, default-features = false }
 # The website's desk: its views and the decisions people make on them (`website`).
 adk-website = { workspace = true, optional = true }
 # Graph agents' checkpoints, records and forks (`workflow`).
@@ -170,8 +182,9 @@ adk-devtools = { path = "../adk-devtools" }
 adk-kernel = { path = "../adk-kernel", features = ["channels", "conformance", "postgres"] }
 # The kernel-hosted harness of the scenario tests; `vision` for the approve-with-image example.
 adk-harness = { path = "../adk-harness", features = ["kernel", "vision"] }
-# The vision pack's runtime, egress gate and redactors of `vision_home` (spec 3.7 §8.2).
-adk-vision = { path = "../adk-vision" }
+# The vision pack's runtime, egress gate and redactors of `vision_home` (spec 3.7 §8.2); the
+# conveyor clip over the in-process RTSP server of `live_camera_home` and the camera tests.
+adk-vision = { path = "../adk-vision", features = ["rtsp", "stream-fixtures"] }
 # Loads the labelled examples the annotated viewer saves, as `cargo adk eval` does.
 adk-eval = { path = "../adk-eval" }
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic", "openai", "gemini"] }
@@ -238,6 +251,14 @@ required-features = ["web"]
 [[example]]
 name = "scripted_camera_home"
 required-features = ["web"]
+
+# The live camera surface on the real frame pipeline (spec 3.7 §8.2, S12): the conveyor clip
+# over RTSP, two cameras through `StreamPipeline`, a zone, a watch and the governor, which
+# `web/e2e/camera.spec.ts` opens.
+[[example]]
+name = "live_camera_home"
+path = "examples/live_camera_home/main.rs"
+required-features = ["web", "vision-camera"]
 
 # The tray panel over a scripted kernel with two agents (spec 3.3 §5.5).
 [[example]]

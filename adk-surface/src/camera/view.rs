@@ -25,6 +25,9 @@ pub enum CameraState {
     Off,
     /// "Stream stopped": a person ended the stream (board choice C2).
     Stopped,
+    /// "Paused by Stop all": every camera is paused until Resume all (spec 3.7 V-I17); nothing
+    /// is looked at.
+    Frozen,
 }
 
 /// The colour a line of words takes.

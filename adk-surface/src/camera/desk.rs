@@ -65,6 +65,7 @@ impl SurfaceEngine {
                 on: camera.on,
                 switched: None,
                 stopped: None,
+                frozen: hub.is_frozen(),
             });
             cameras.push(Camera { facts: camera, gate, recent: hub.recent(&camera.id).await });
         }
@@ -176,6 +177,7 @@ impl SurfaceEngine {
             state,
             state_text: project::state_text(state, shown.facts, ctx.offset),
             tone: project::tone(state),
+            // The person's switch: Stop all pauses a camera without switching it off.
             on: shown.gate.on && shown.gate.stopped.is_none(),
             agent: self.camera_agent(shown),
             stage: project::stage(shown, Place::Main, &ctx),

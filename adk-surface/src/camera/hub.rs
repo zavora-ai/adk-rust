@@ -9,7 +9,9 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use adk_core::GovernanceControl;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use tokio::sync::{RwLock, broadcast};
@@ -112,6 +114,32 @@ pub trait CameraSource: Send + Sync {
         Err(SurfaceError::unsupported("changing a camera's zones"))
     }
 
+    /// Pauses (`true`) or resumes (`false`) every camera at the source: Stop all, or Resume all
+    /// (spec 3.7 V-I17). The hub has already closed or opened its gate. The default does nothing
+    /// more.
+    ///
+    /// # Errors
+    ///
+    /// The source's error.
+    async fn freeze(&self, frozen: bool) -> Result<()> {
+        let _ = frozen;
+        Ok(())
+    }
+
+    /// Where the frames a screen captures for `camera` go once they pass the hub's gate
+    /// ([`Cameras::ingest`]): the frame pipeline's push side. `None`, the default, for a camera
+    /// whose source reads its own frames.
+    fn intake(&self, camera: &str) -> Option<Arc<dyn FrameIntake>> {
+        let _ = camera;
+        None
+    }
+
+    /// The camera the voice screen's camera feeds, when this source serves one: the voice view
+    /// hands that camera's frames to [`Cameras::ingest`] and mirrors its switch.
+    fn voice_camera(&self) -> Option<String> {
+        None
+    }
+
     /// Keeps `frame` of `camera` as evidence: everyone in it blurred first, then written once,
     /// kept [`EVIDENCE_RETENTION_DAYS`](crate::EVIDENCE_RETENTION_DAYS) (board choice C11, spec
     /// 3.7 V-I9). Returns the evidence a card and a held call carry: the kept copy's digest, its
@@ -125,6 +153,30 @@ pub trait CameraSource: Send + Sync {
         camera: &CameraFacts,
         frame: &HeldFrame,
     ) -> Result<adk_core::ImageEvidence>;
+}
+
+/// The push side of a frame pipeline: where [`Cameras::ingest`] hands a screen's frames once
+/// they passed the gate (spec 3.7 §7.13 `SurfaceCameraSource`).
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Mutex;
+/// use adk_surface::camera::FrameIntake;
+///
+/// #[derive(Default)]
+/// struct Count(Mutex<usize>);
+///
+/// impl FrameIntake for Count {
+///     fn push(&self, _bytes: Vec<u8>, _at: chrono::DateTime<chrono::Utc>) -> bool {
+///         *self.0.lock().unwrap() += 1;
+///         true
+///     }
+/// }
+/// ```
+pub trait FrameIntake: Send + Sync {
+    /// Takes one encoded frame captured `at`; `false` when the pipeline dropped it.
+    fn push(&self, bytes: Vec<u8>, at: DateTime<Utc>) -> bool;
 }
 
 /// Who did something to a camera, and when.
@@ -160,6 +212,9 @@ pub enum Offered {
         /// `sha256:` of its bytes.
         digest: String,
     },
+    /// Handed to the camera's frame pipeline ([`Cameras::ingest`]), which shows what it makes
+    /// of it.
+    Forwarded,
     /// Dropped at the gate, and why.
     Dropped(DropReason),
 }
@@ -171,7 +226,9 @@ pub enum DropReason {
     Off,
     /// The stream was stopped.
     Stopped,
-    /// No source serves a camera of that id.
+    /// Stop all paused every camera (spec 3.7 V-I17).
+    Frozen,
+    /// No source serves a camera of that id, or none takes its frames.
     Unknown,
 }
 
@@ -207,6 +264,8 @@ pub(crate) struct Gate {
     pub(crate) on: bool,
     pub(crate) switched: Option<Acted>,
     pub(crate) stopped: Option<Acted>,
+    /// Stop all paused every camera.
+    pub(crate) frozen: bool,
 }
 
 /// The cameras of a home and their gate (spec 3.7 §8.2): every frame passes [`Cameras::offer`],
@@ -246,6 +305,24 @@ struct HubInner {
     source: Arc<dyn CameraSource>,
     feeds: RwLock<HashMap<String, Feed>>,
     updates: broadcast::Sender<CameraUpdate>,
+    /// Stop all: every camera paused until Resume all.
+    frozen: AtomicBool,
+    /// The kill switch the hub follows besides Stop all, when it follows one.
+    governance: std::sync::RwLock<Option<GovernanceControl>>,
+}
+
+/// A [`Cameras`] that does not keep the hub alive: what a frame pipeline holds, so the hub and
+/// its source do not own each other.
+#[cfg(feature = "vision-camera")]
+#[derive(Clone)]
+pub(crate) struct WeakCameras(std::sync::Weak<HubInner>);
+
+#[cfg(feature = "vision-camera")]
+impl WeakCameras {
+    /// The hub, while anything else holds it.
+    pub(crate) fn upgrade(&self) -> Option<Cameras> {
+        self.0.upgrade().map(|inner| Cameras { inner })
+    }
 }
 
 impl std::fmt::Debug for Cameras {
@@ -258,7 +335,124 @@ impl Cameras {
     /// The hub over `source`. Each camera's switch starts as its facts say.
     pub fn new(source: Arc<dyn CameraSource>) -> Self {
         let (updates, _) = broadcast::channel(64);
-        Self { inner: Arc::new(HubInner { source, feeds: RwLock::new(HashMap::new()), updates }) }
+        Self {
+            inner: Arc::new(HubInner {
+                source,
+                feeds: RwLock::new(HashMap::new()),
+                updates,
+                frozen: AtomicBool::new(false),
+                governance: std::sync::RwLock::new(None),
+            }),
+        }
+    }
+
+    /// Follows `control` as well as Stop all: while it is frozen the gate drops every frame of
+    /// every camera, wherever the freeze came from (spec 3.7 V-I17).
+    #[must_use]
+    pub fn with_governance(self, control: GovernanceControl) -> Self {
+        *self.inner.governance.write().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(control);
+        self
+    }
+
+    #[cfg(feature = "vision-camera")]
+    pub(crate) fn downgrade(&self) -> WeakCameras {
+        WeakCameras(Arc::downgrade(&self.inner))
+    }
+
+    /// Whether every camera is paused: by Stop all, or by the kill switch the hub follows.
+    pub fn is_frozen(&self) -> bool {
+        self.inner.frozen.load(Ordering::SeqCst)
+            || self
+                .inner
+                .governance
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .is_some_and(GovernanceControl::is_frozen)
+    }
+
+    /// Stop all (spec 3.7 V-I17): the gate drops every frame of every camera from now on, then
+    /// the source is told to pause its streams. The frames held stay, so a card can still be
+    /// raised from one.
+    ///
+    /// # Errors
+    ///
+    /// The source's error, after the gate closed.
+    pub async fn freeze_all(&self) -> Result<()> {
+        self.inner.frozen.store(true, Ordering::SeqCst);
+        self.changed_all().await;
+        self.inner.source.freeze(true).await
+    }
+
+    /// Resume all: the gate opens again for every camera a person has not switched off or
+    /// stopped, then the source is told.
+    ///
+    /// # Errors
+    ///
+    /// The source's error, after the gate opened.
+    pub async fn thaw_all(&self) -> Result<()> {
+        self.inner.frozen.store(false, Ordering::SeqCst);
+        self.changed_all().await;
+        self.inner.source.freeze(false).await
+    }
+
+    async fn changed_all(&self) {
+        let cameras: Vec<String> = self.inner.feeds.read().await.keys().cloned().collect();
+        for camera in cameras {
+            self.changed(&camera);
+        }
+    }
+
+    /// The camera the voice screen's camera feeds, when the source serves one.
+    pub fn voice_camera(&self) -> Option<String> {
+        self.inner.source.voice_camera()
+    }
+
+    /// Hands a frame a screen captured for `camera` to the camera's frame pipeline, once it
+    /// passes the gate: dropped when the camera is off, stopped, paused by Stop all or unknown,
+    /// or when no pipeline takes its frames. The pipeline offers what it makes of the frame —
+    /// redacted, with what it found — to [`offer`](Self::offer); nothing is held here.
+    pub async fn ingest(&self, camera: &str, bytes: Vec<u8>, at: DateTime<Utc>) -> Offered {
+        if let Err(reason) = self.admit(camera).await {
+            return Offered::Dropped(reason);
+        }
+        match self.inner.source.intake(camera) {
+            Some(intake) if intake.push(bytes, at) => Offered::Forwarded,
+            Some(_) | None => Offered::Dropped(DropReason::Unknown),
+        }
+    }
+
+    /// Whether `camera`'s gate lets a frame through now, counting the frames it drops.
+    async fn admit(&self, camera: &str) -> std::result::Result<(), DropReason> {
+        if !self.inner.feeds.read().await.contains_key(camera) {
+            // A camera seen for the first time: its switch starts as its facts say.
+            if let Err(error) = self.facts().await {
+                tracing::warn!(error = %error, camera.id = %camera, "a frame was dropped: the camera source could not be read");
+                return Err(DropReason::Unknown);
+            }
+        }
+        let frozen = self.is_frozen();
+        let mut feeds = self.inner.feeds.write().await;
+        let Some(feed) = feeds.get_mut(camera) else {
+            return Err(DropReason::Unknown);
+        };
+        let refused = if feed.stopped.is_some() {
+            Some(DropReason::Stopped)
+        } else if !feed.on {
+            Some(DropReason::Off)
+        } else if frozen {
+            Some(DropReason::Frozen)
+        } else {
+            None
+        };
+        match refused {
+            Some(reason) => {
+                feed.dropped += 1;
+                Err(reason)
+            }
+            None => Ok(()),
+        }
     }
 
     /// The source.
@@ -278,28 +472,26 @@ impl Cameras {
         Ok(facts)
     }
 
-    /// Offers `frame` of `camera`: dropped when the camera is off, stopped or unknown, else held
-    /// in memory as its newest frame and shown to whoever watches. Never written anywhere.
+    /// Offers `frame` of `camera`: dropped when the camera is off, stopped, paused by Stop all or
+    /// unknown, else held in memory as its newest frame and shown to whoever watches. Never
+    /// written anywhere.
     pub async fn offer(&self, camera: &str, frame: CameraFrame) -> Offered {
-        if !self.inner.feeds.read().await.contains_key(camera) {
-            // A camera seen for the first time: its switch starts as its facts say.
-            if let Err(error) = self.facts().await {
-                tracing::warn!(error = %error, camera.id = %camera, "a frame was dropped: the camera source could not be read");
-                return Offered::Dropped(DropReason::Unknown);
-            }
+        if let Err(reason) = self.admit(camera).await {
+            return Offered::Dropped(reason);
         }
         let held = {
             let mut feeds = self.inner.feeds.write().await;
             let Some(feed) = feeds.get_mut(camera) else {
                 return Offered::Dropped(DropReason::Unknown);
             };
-            if feed.stopped.is_some() {
+            // The gate may have closed since it was read: a switch or a stop wins the race.
+            if feed.stopped.is_some() || !feed.on {
                 feed.dropped += 1;
-                return Offered::Dropped(DropReason::Stopped);
-            }
-            if !feed.on {
-                feed.dropped += 1;
-                return Offered::Dropped(DropReason::Off);
+                return Offered::Dropped(if feed.stopped.is_some() {
+                    DropReason::Stopped
+                } else {
+                    DropReason::Off
+                });
             }
             let held = HeldFrame { digest: crate::evidence::digest_of(&frame.bytes), frame };
             if feed.recent.len() == HELD_FRAMES {
@@ -436,22 +628,26 @@ impl Cameras {
         self.inner.feeds.read().await.get(camera).map_or(0, |feed| feed.dropped)
     }
 
-    /// Whether `camera` is on: switched on and not stopped.
+    /// Whether `camera` is on: switched on, not stopped and not paused by Stop all.
     pub async fn is_on(&self, camera: &str) -> bool {
-        self.inner
-            .feeds
-            .read()
-            .await
-            .get(camera)
-            .is_some_and(|feed| feed.on && feed.stopped.is_none())
+        !self.is_frozen()
+            && self
+                .inner
+                .feeds
+                .read()
+                .await
+                .get(camera)
+                .is_some_and(|feed| feed.on && feed.stopped.is_none())
     }
 
     /// `camera`'s gate, as the views show it.
     pub(crate) async fn gate(&self, camera: &str) -> Option<Gate> {
+        let frozen = self.is_frozen();
         self.inner.feeds.read().await.get(camera).map(|feed| Gate {
             on: feed.on,
             switched: feed.switched.clone(),
             stopped: feed.stopped.clone(),
+            frozen,
         })
     }
 

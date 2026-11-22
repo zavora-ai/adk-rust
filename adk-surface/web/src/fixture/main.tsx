@@ -101,7 +101,7 @@ const screens: Record<string, () => ReactNode> = {
     return <PhoneApp client={fixture.client} initial={fixture.initial} />;
   },
   // The live camera surface (spec 3.7 §8.2): `&camera=live|stepped-down|quota-exhausted|
-  // source-lost|switched-off|several-sources|zone-and-card`.
+  // source-lost|switched-off|stop-all|several-sources|zone-and-card`.
   camera: () => {
     const state = (params.get("camera") ?? "live") as CameraBoardState;
     if (state === "zone-and-card") return <CameraActionsBoard />;

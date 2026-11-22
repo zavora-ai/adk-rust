@@ -235,6 +235,11 @@ pub struct GovernorFacts {
     pub look_less_at: f64,
     /// The share at which it stops escalating.
     pub stop_asking_at: f64,
+    /// The lowest rate the governor looks at before it stops escalating and pauses, when it
+    /// steps by whether the frames left can last rather than at fixed shares (spec 3.7 §7.9's
+    /// `FrameGovernor`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_rate: Option<f64>,
     /// Today's steps, oldest first.
     #[serde(default)]
     pub steps: Vec<GovernorStep>,
@@ -253,6 +258,7 @@ impl GovernorFacts {
             renews_at,
             look_less_at: 0.9,
             stop_asking_at: 0.95,
+            min_rate: None,
             steps: Vec::new(),
         }
     }
