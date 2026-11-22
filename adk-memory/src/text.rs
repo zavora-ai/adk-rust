@@ -1,12 +1,94 @@
 //! Shared text extraction utilities for memory backends.
+//!
+//! A memory's searchable text is its text parts alone ([`extract_text`]). The artifacts it
+//! refers to — an image a caption describes, a document a note cites — are kept beside the
+//! text as [`ArtifactReference`]s ([`artifact_references`]): a URI and a media type, never
+//! the bytes.
 
 use adk_core::Part;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+
+/// An artifact a memory refers to: its URI and media type, never its bytes.
+///
+/// A memory carries one as a `Part::FileData` beside its text
+/// ([`MemoryEntry::with_artifact`](crate::MemoryEntry::with_artifact)). Every backend that
+/// stores the entry's content keeps the part; a backend that stores text alone, such as
+/// the knowledge graph's episodic log, keeps the references in a column of their own and
+/// returns them as `Part::FileData` again.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::Content;
+/// use adk_memory::text::{ArtifactReference, artifact_references, extract_text};
+///
+/// let reference = ArtifactReference::new("artifact://inspector/u1/s1/frame.png#0", "image/png");
+/// let mut content = Content::new("model").with_text("torn seal on carton 117");
+/// content.parts.push(reference.to_part());
+///
+/// assert_eq!(extract_text(&content), "torn seal on carton 117");
+/// assert_eq!(artifact_references(&content), vec![reference]);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactReference {
+    /// Where the artifact is: an `artifact://` locator, a URL, or a cloud storage path.
+    pub uri: String,
+    /// Its media type, such as `image/png`.
+    pub mime_type: String,
+}
+
+impl ArtifactReference {
+    /// A reference to the artifact at `uri` of media type `mime_type`.
+    pub fn new(uri: impl Into<String>, mime_type: impl Into<String>) -> Self {
+        Self { uri: uri.into(), mime_type: mime_type.into() }
+    }
+
+    /// The `Part::FileData` that carries this reference in a [`Content`](adk_core::Content).
+    pub fn to_part(&self) -> Part {
+        Part::FileData {
+            mime_type: self.mime_type.clone(),
+            file_uri: self.uri.clone(),
+            annotations: None,
+        }
+    }
+}
+
+/// The artifacts a [`Content`](adk_core::Content) refers to, in part order: every
+/// `Part::FileData`, and every `Part::InlineData` or `Part::EmbeddedResource` that names its
+/// source URI. Inline bytes are never part of a reference; inline data without a `uri`
+/// refers to nothing.
+pub fn artifact_references(content: &adk_core::Content) -> Vec<ArtifactReference> {
+    content
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            Part::FileData { mime_type, file_uri, .. } => {
+                Some(ArtifactReference::new(file_uri, mime_type))
+            }
+            Part::InlineData { mime_type, uri: Some(uri), .. } => {
+                Some(ArtifactReference::new(uri, mime_type))
+            }
+            Part::EmbeddedResource { resource } => Some(ArtifactReference::new(
+                resource.uri(),
+                resource.mime_type().unwrap_or("application/octet-stream"),
+            )),
+            Part::InlineData { uri: None, .. }
+            | Part::Thinking { .. }
+            | Part::Text { .. }
+            | Part::FunctionCall { .. }
+            | Part::FunctionResponse { .. }
+            | Part::ServerToolCall { .. }
+            | Part::ServerToolResponse { .. } => None,
+        })
+        .collect()
+}
 
 /// Extract all text parts from a [`Content`](adk_core::Content) into a single string.
 ///
 /// Parts are joined with a single space. Non-text parts (images, function calls,
-/// etc.) are silently skipped.
+/// etc.) are skipped; [`artifact_references`] returns the artifacts among them.
 pub fn extract_text(content: &adk_core::Content) -> String {
     content
         .parts
@@ -101,6 +183,46 @@ pub fn extract_words_from_content(content: &adk_core::Content) -> HashSet<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn artifact_references_keep_uris_and_never_bytes() {
+        let content = adk_core::Content {
+            role: "model".into(),
+            parts: vec![
+                Part::Text { text: "torn seal".into() },
+                Part::FileData {
+                    mime_type: "image/png".into(),
+                    file_uri: "artifact://a/u/s/f.png#0".into(),
+                    annotations: None,
+                },
+                Part::InlineData {
+                    mime_type: "image/jpeg".into(),
+                    data: vec![0xff, 0xd8],
+                    uri: Some("artifact://a/u/s/g.jpg#1".into()),
+                    annotations: None,
+                },
+                Part::InlineData {
+                    mime_type: "image/jpeg".into(),
+                    data: vec![0xff, 0xd8],
+                    uri: None,
+                    annotations: None,
+                },
+            ],
+        };
+        assert_eq!(extract_text(&content), "torn seal");
+        assert_eq!(
+            artifact_references(&content),
+            vec![
+                ArtifactReference::new("artifact://a/u/s/f.png#0", "image/png"),
+                ArtifactReference::new("artifact://a/u/s/g.jpg#1", "image/jpeg"),
+            ]
+        );
+        let reference = ArtifactReference::new("artifact://a/u/s/f.png#0", "image/png");
+        assert_eq!(
+            serde_json::to_value(&reference).unwrap(),
+            serde_json::json!({ "uri": "artifact://a/u/s/f.png#0", "mimeType": "image/png" })
+        );
+    }
 
     #[test]
     fn test_extract_words_english() {

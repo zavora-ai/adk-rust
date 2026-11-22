@@ -41,6 +41,7 @@
 //! | `stream-fixtures` | `stream::fixtures`: the generated conveyor clip and an in-process RTSP test server |
 //! | `track` | `ByteTracker`: ByteTrack through `trackforge`, anonymous tracks with stable identifiers across frames |
 //! | `gemini-video` | `GeminiVideoAnalyzer`: Gemini native video, through the File API above 20 MB, at an explicit frame rate and media resolution (implies `cloud`) |
+//! | `memory` | `memory`: `VisualMemory`, image embeddings as `adk-rag` chunks in any vector store with one embedding space per collection, text and example-image queries, `SiglipTextEmbedding` for `adk-rag` pipelines, captions with artifact references in `adk-memory`, erasure by source; the S16 week corpus |
 //!
 //! [`VisionToolset`] — `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`,
 //! `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure` — is always built: each tool runs on
@@ -119,6 +120,8 @@ mod manifest;
 mod mask_decoder;
 mod measure;
 mod media;
+#[cfg(feature = "memory")]
+pub mod memory;
 #[cfg(feature = "mistralrs")]
 pub mod mistralrs;
 #[cfg(feature = "nim")]

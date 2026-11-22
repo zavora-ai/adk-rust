@@ -247,6 +247,15 @@ adk-memory = { version = "3.0.0", features = ["database-memory"] }
 | Redis | Key segments are percent-encoded (`%` → `%25`, `:` → `%3A`); identifiers without either character keep their keys. `delete_user` deletes only the named user's keys. |
 | Neo4j | Entry ids are scoped by app, user, project and session; `add_session` merges on them, so re-ingesting a session updates it. Vector search over-fetches candidates before filtering to the tenant — see `Neo4jMemoryService::with_vector_candidate_cap`. |
 
+## Artifact References
+
+A memory can refer to an artifact without holding its bytes: `MemoryEntry::with_artifact(uri,
+mime_type)` adds a `Part::FileData` after the text, and `MemoryEntry::artifact_references()`
+returns the references. Search matches the text alone (`text::extract_text` is unchanged).
+Every backend that stores the entry's content keeps the references; the knowledge graph's
+episodic log keeps them in a column of its own (migration 3); Vertex AI Memory Bank stores
+extracted facts as text and keeps none.
+
 ## Expiry and Deletion
 
 Every backend stores an id and an expiry with each entry, never returns an expired entry from
