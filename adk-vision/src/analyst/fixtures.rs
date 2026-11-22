@@ -73,7 +73,7 @@ impl Default for WarehouseSpec {
             width: 480,
             height: 270,
             camera: "warehouse-cam-3".into(),
-            started_at: DateTime::from_timestamp(1_763_445_600, 0).unwrap_or_default(),
+            started_at: DateTime::from_timestamp(1_794_981_600, 0).unwrap_or_default(),
         }
     }
 }
@@ -311,12 +311,16 @@ impl WarehouseClip {
                     let width = 14.0 + k as f32 * 2.0;
                     let height = 18.0 + (k % 3) as f32 * 4.0;
                     let top_shelf_stack = n == 3 && level == 0 && x > x0 + 40.0;
-                    let fallen = self
-                        .during("boxes-fall", t_ms)
-                        .is_some();
+                    let fallen = self.during("boxes-fall", t_ms).is_some();
                     if !(top_shelf_stack && fallen) {
                         c.rect(x, y - height, (x + width).min(x1 - 6.0), y, [176, 126, 74]);
-                        c.rect(x, y - height, (x + width).min(x1 - 6.0), y - height + 2.0, [140, 96, 52]);
+                        c.rect(
+                            x,
+                            y - height,
+                            (x + width).min(x1 - 6.0),
+                            y - height + 2.0,
+                            [140, 96, 52],
+                        );
                     }
                     x += width + 3.0;
                     k = (k + 2) % 5;
@@ -326,7 +330,9 @@ impl WarehouseClip {
         // Cartons fall over 2 s and lie on the floor in front of aisle 3.
         if let Some(d) = self.during("boxes-fall", t_ms) {
             let p = (d as f32 / 2_000.0).min(1.0);
-            for (i, (dx, tilt)) in [(0.0, 0.3), (24.0, -0.5), (46.0, 0.8), (64.0, 0.1)].into_iter().enumerate() {
+            for (i, (dx, tilt)) in
+                [(0.0, 0.3), (24.0, -0.5), (46.0, 0.8), (64.0, 0.1)].into_iter().enumerate()
+            {
                 let x = 356.0 + dx;
                 let y = 50.0 + (205.0 - 50.0 - i as f32 * 3.0) * p;
                 c.box_tilted(x, y, 20.0, 16.0, tilt * p, [176, 126, 74]);
@@ -335,10 +341,13 @@ impl WarehouseClip {
         // Fire on the middle shelf of aisle 2.
         if let Some(d) = self.during("fire", t_ms) {
             let flicker = ((d / 250) % 3) as f32;
-            for (i, (dx, h, colour)) in
-                [(0.0, 26.0, [240, 90, 20]), (8.0, 34.0, [250, 180, 30]), (16.0, 24.0, [230, 50, 20])]
-                    .into_iter()
-                    .enumerate()
+            for (i, (dx, h, colour)) in [
+                (0.0, 26.0, [240, 90, 20]),
+                (8.0, 34.0, [250, 180, 30]),
+                (16.0, 24.0, [230, 50, 20]),
+            ]
+            .into_iter()
+            .enumerate()
             {
                 let x = 250.0 + dx;
                 let top = 105.0 - h - flicker * 2.0 * (i as f32 - 1.0).abs();
@@ -544,7 +553,7 @@ impl Canvas {
     /// A worker standing on `feet_y` at `x`, in a vest or shirt of `colour`, a hard hat when
     /// `hat`, legs swinging with time.
     fn worker(&mut self, x: f32, feet_y: f32, colour: [u8; 3], hat: bool, t_ms: u64) {
-        let swing = if (t_ms / 500) % 2 == 0 { 3.0 } else { -3.0 };
+        let swing = if (t_ms / 500).is_multiple_of(2) { 3.0 } else { -3.0 };
         self.rect(x - 6.0 + swing, feet_y - 24.0, x - 1.0 + swing, feet_y, [40, 50, 80]);
         self.rect(x + 1.0 - swing, feet_y - 24.0, x + 6.0 - swing, feet_y, [40, 50, 80]);
         self.rect(x - 8.0, feet_y - 54.0, x + 8.0, feet_y - 24.0, colour);
@@ -575,7 +584,13 @@ impl Canvas {
         // Mast and forks at the front.
         let front = if left { body0 } else { body1 };
         let mast = (front - dir * 0.0, front + dir * 6.0);
-        self.rect(mast.0.min(mast.1), ground_y - 78.0, mast.0.max(mast.1), ground_y - 6.0, [70, 70, 74]);
+        self.rect(
+            mast.0.min(mast.1),
+            ground_y - 78.0,
+            mast.0.max(mast.1),
+            ground_y - 6.0,
+            [70, 70, 74],
+        );
         let tip = front + dir * 30.0;
         self.rect(front.min(tip), ground_y - 9.0, front.max(tip), ground_y - 6.0, [70, 70, 74]);
         if loaded {

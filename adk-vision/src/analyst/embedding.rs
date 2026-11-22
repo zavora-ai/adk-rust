@@ -8,9 +8,9 @@ const STOP_WORDS: &[&str] = &[
     "a", "about", "an", "and", "any", "are", "as", "at", "be", "been", "by", "can", "do", "does",
     "did", "during", "for", "from", "has", "have", "here", "in", "into", "is", "it", "its", "of",
     "on", "one", "or", "over", "part", "seen", "so", "some", "that", "the", "their", "them",
-    "then", "there", "these", "this", "those", "to", "up", "was", "were", "what", "when",
-    "where", "which", "while", "who", "with", "image", "images", "frame", "frames", "video",
-    "scene", "show", "shows", "shown", "visible",
+    "then", "there", "these", "this", "those", "to", "up", "was", "were", "what", "when", "where",
+    "which", "while", "who", "with", "image", "images", "frame", "frames", "video", "scene",
+    "show", "shows", "shown", "visible",
 ];
 
 /// A text embedding with no model and no network: each word, lower-cased and cut to a crude
@@ -64,9 +64,9 @@ impl WordHashEmbedding {
             .filter(|w| !w.is_empty() && !STOP_WORDS.contains(&w.as_str()))
         {
             // FNV-1a: stable across platforms and releases, unlike the std hasher.
-            let hash = stem(&word)
-                .bytes()
-                .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
+            let hash = stem(&word).bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+                (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
+            });
             vector[(hash % self.dimensions as u64) as usize] += 1.0;
         }
         let norm = vector.iter().map(|v| v * v).sum::<f32>().sqrt();

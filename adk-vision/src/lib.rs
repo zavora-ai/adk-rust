@@ -45,6 +45,7 @@
 //! | `track` | `ByteTracker`: ByteTrack through `trackforge`, anonymous tracks with stable identifiers across frames |
 //! | `gemini-video` | `GeminiVideoAnalyzer`: Gemini native video, through the File API above 20 MB, at an explicit frame rate and media resolution (implies `cloud`) |
 //! | `memory` | `memory`: `VisualMemory`, image embeddings as `adk-rag` chunks in any vector store with one embedding space per collection, text and example-image queries, `SiglipTextEmbedding` for `adk-rag` pipelines, captions with artifact references in `adk-memory`, erasure by source; the S16 week corpus |
+//! | `analyst` | `analyst`: `VideoAnalyst`, the video chunked in fixed windows or at scene cuts, each chunk captioned through the video analyzer, indexed in any vector store with its time range, captions with keyframe and clip references in `adk-memory`, the clip in graph memory; questions answered citing chunks; cost per hour of video; erasure by clip; the S17 warehouse clip (implies `cloud`, `memory`, `stream`) |
 //! | `team` | `team`: the perceiver, reasoner and verifier roles and `VisionTeam`, which escalates a disagreement to a person on one card (implies `guardrail`) |
 //!
 //! [`VisionToolset`] — `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`,
@@ -102,6 +103,8 @@
 
 #![warn(missing_docs)]
 
+#[cfg(feature = "analyst")]
+pub mod analyst;
 pub mod audit;
 mod backend;
 mod budget;

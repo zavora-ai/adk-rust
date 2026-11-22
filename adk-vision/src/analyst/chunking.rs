@@ -172,7 +172,8 @@ impl ChunkCutter {
             Chunking::Fixed { window_ms } => pts / window_ms != open.window,
             Chunking::SceneChange { threshold, min_ms, max_ms } => {
                 let length = pts.saturating_sub(open.start_ms);
-                length >= max_ms || (length >= min_ms && difference(&open.thumb, &thumb) > threshold)
+                length >= max_ms
+                    || (length >= min_ms && difference(&open.thumb, &thumb) > threshold)
             }
         };
         if !cut {
@@ -205,7 +206,9 @@ impl ChunkCutter {
         let end_ms = match (self.chunking, next) {
             (Chunking::Fixed { window_ms }, _) => {
                 let window_end = open.start_ms + window_ms;
-                window_end.min(next.unwrap_or(window_end)).min(last + self.step_ms.max(1))
+                window_end
+                    .min(next.unwrap_or(window_end))
+                    .min(last + self.step_ms.max(1))
                     .max(last + 1)
             }
             (Chunking::SceneChange { .. }, Some(next)) => next,
@@ -229,7 +232,8 @@ fn thumbnail(pixels: &DecodedImage) -> Vec<f32> {
         for x in (0..w).step_by(stride.0 as usize) {
             let [r, g, b, _] = pixels.pixel(x, y);
             let cell = ((y * th / h.max(1)) * tw + x * tw / w.max(1)) as usize;
-            sums[cell] += (0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b)) / 255.0;
+            sums[cell] +=
+                (0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b)) / 255.0;
             counts[cell] += 1;
         }
     }
