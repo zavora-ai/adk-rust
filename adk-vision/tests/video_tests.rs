@@ -723,6 +723,7 @@ enum Asked {
     Target,
     Check(Vec<u64>),
     Question(Vec<u64>),
+    Caption(Vec<u64>),
 }
 
 /// A vision-language model that answers from the frames it is shown, recognising each by its
@@ -766,6 +767,14 @@ impl Judge {
             let visible: Vec<usize> =
                 (1..=frames.len()).filter(|&n| self.looks_visible(frames[n - 1])).collect();
             return (Asked::Check(frames.to_vec()), json!({"visible": visible}));
+        }
+        if prompt.contains("\"caption\"") {
+            let caption = if frames.iter().any(|i| self.seen.contains(i)) {
+                json!({"caption": "An orange forklift drives into aisle 3.", "objects": ["orange forklift", "aisle 3", "orange forklift"]})
+            } else {
+                json!({"caption": "An empty aisle between grey shelves.", "objects": ["shelves"]})
+            };
+            return (Asked::Caption(frames.to_vec()), caption);
         }
         assert!(prompt.contains("Question:"), "an unexpected prompt: {prompt}");
         let inside = |i: &u64| self.seen.contains(i) && *i >= self.enters;
@@ -990,6 +999,62 @@ async fn a_subject_no_frame_shows_names_no_event() {
     assert_eq!(out.value.usage.requests, 8, "six checks and two refines");
 }
 
+#[tokio::test]
+async fn captions_name_each_chunk_from_at_most_frames_per_call_of_its_frames() {
+    // 24 frames 5 s apart in 40-second chunks: 8, 8 and 8 frames, four of each sent, the
+    // forklift in frames 9–12 (the second chunk).
+    let judge = Arc::new(Judge::new(9..=12, 9));
+    let describer = LlmDescriber::local(judge.clone()).unwrap();
+    let (runtime, recorder) =
+        local_runtime(FramesAnalyzer::local(&describer).with_frames_per_call(4));
+    let sampled = numbered_frames(24, 5_000);
+    let (cx, budget, _) = metered();
+    let out = runtime
+        .analyze_video(
+            &cx,
+            VideoSource::frames(&sampled, Sampling::at(0.2)),
+            &VideoRequest::Caption { chunk_ms: 40_000 },
+        )
+        .await
+        .unwrap();
+    let empty = |start, end| {
+        adk_vision::VideoEvent::new(start, end, "An empty aisle between grey shelves.")
+            .with_labels(["shelves"])
+    };
+    assert_eq!(
+        out.value.events,
+        vec![
+            empty(0, 40_000),
+            adk_vision::VideoEvent::new(40_000, 80_000, "An orange forklift drives into aisle 3.")
+                .with_labels(["orange forklift", "aisle 3"]),
+            empty(80_000, 120_000),
+        ]
+    );
+    assert_eq!(
+        *judge.asked.lock().unwrap(),
+        vec![
+            Asked::Caption(vec![0, 2, 5, 7]),
+            Asked::Caption(vec![8, 10, 13, 15]),
+            Asked::Caption(vec![16, 18, 21, 23]),
+        ]
+    );
+    assert_eq!((out.value.usage.requests, out.value.usage.cost_micro_usd), (3, Some(0)));
+    assert_eq!(budget.units().get(UsageUnit::Frames), 24);
+    assert!(recorder.is_empty(), "an on-device captioner sends nothing off the machine");
+    assert!(out.value.answer.is_none(), "a caption request answers no question");
+
+    // A zero-length chunk is refused.
+    let err = runtime
+        .analyze_video(
+            &cx,
+            VideoSource::frames(&sampled, Sampling::at(0.2)),
+            &VideoRequest::Caption { chunk_ms: 0 },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, VisionError::InvalidInput(_)), "{err}");
+}
+
 /// A Gemini analyzer against a local server that answers `generateContent` with the
 /// forklift entering at 0:46, kept alive for the rest of the test process.
 async fn gemini_answering() -> GeminiVideoAnalyzer {
@@ -1026,10 +1091,12 @@ fn judge(locality: DataLocality) -> Arc<dyn Llm> {
     Arc::new(Judge { locality, ..Judge::new(9..=12, 9) })
 }
 
-/// Frames 5 s apart, the forklift entering at 0:45.
+/// Frames 5 s apart, the forklift entering at 0:45; captioned in 30-second chunks.
 fn entering_frames() -> VideoFixture {
     VideoFixture::frames(numbered_frames(24, 5_000), Sampling::at(0.2), ask_when_it_enters())
         .with_expected_event(45_000, 5_000)
+        .with_caption(30_000)
+        .with_refused(track(&["forklift"]))
 }
 
 mod frames_local_conformance {

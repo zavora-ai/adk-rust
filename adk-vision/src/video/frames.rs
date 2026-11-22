@@ -22,6 +22,13 @@ use crate::traits::{
     VideoRequest, VideoUsage,
 };
 
+/// What a `Caption` chunk's description names unless
+/// [`with_caption_instructions`](FramesAnalyzer::with_caption_instructions) says otherwise.
+pub const DEFAULT_CAPTION_INSTRUCTIONS: &str = "Describe what happens in this part of the \
+     video for a log that is searched later: name the people, vehicles and objects seen, what \
+     each one does, and anything unusual, such as something falling, spilling, burning, \
+     blocking a way or nearly colliding. Describe only what the images show.";
+
 /// How [`FramesAnalyzer`] finds when something is first seen, for questions such as "when
 /// does the forklift enter the aisle?" that a small model answers poorly over many frames
 /// at once: it names events in frames without the subject, or misplaces them.
@@ -95,7 +102,8 @@ impl VisibilityPass {
     }
 }
 
-/// Answers `Ask` over frames a frame source sampled, on the model of an [`LlmDescriber`]:
+/// Answers `Ask` and `Caption` over frames a frame source sampled, on the model of an
+/// [`LlmDescriber`]:
 /// Qwen3-VL in this process ([`LlmDescriber::mistralrs`], feature `mistralrs`), a model
 /// on a loopback server, or a remote model whose frames each pass the egress gate.
 ///
@@ -103,7 +111,9 @@ impl VisibilityPass {
 /// numbered and stamped with its time in the prompt; the model names events by image
 /// number, so their times come from the frames' presentation timestamps, never from the
 /// model's arithmetic. A [`VisibilityPass`] first finds the frames that show what the
-/// question is about and asks only over those. Each call's tokens are reported in
+/// question is about and asks only over those. A `Caption` request captions each chunk of
+/// `chunk_ms` in one call over at most `frames_per_call` of its frames, evenly spaced,
+/// naming what the chunk shows as the event's labels. Each call's tokens are reported in
 /// [`VideoUsage`](crate::VideoUsage), at zero cost on the device.
 ///
 /// # Example
@@ -124,6 +134,7 @@ pub struct FramesAnalyzer<I = SentImage> {
     frames_per_call: usize,
     max_output_tokens: u32,
     visibility: Option<VisibilityPass>,
+    caption_instructions: String,
     input: PhantomData<fn() -> I>,
 }
 
@@ -152,6 +163,12 @@ impl FramesAnalyzer<ReleasedImage> {
     }
 }
 
+/// What one call does.
+enum Job<'a> {
+    Ask(&'a str),
+    Caption(u64),
+}
+
 /// One frame as the model receives it.
 struct Shown {
     meta: FrameMeta,
@@ -167,6 +184,7 @@ impl<I> FramesAnalyzer<I> {
             frames_per_call: 8,
             max_output_tokens: 1_024,
             visibility: None,
+            caption_instructions: DEFAULT_CAPTION_INSTRUCTIONS.to_string(),
             input: PhantomData,
         }
     }
@@ -188,6 +206,14 @@ impl<I> FramesAnalyzer<I> {
     /// [`VisibilityPass`].
     pub fn with_visibility_pass(mut self, pass: VisibilityPass) -> Self {
         self.visibility = Some(pass);
+        self
+    }
+
+    /// Asks for captions with `instructions` instead of [`DEFAULT_CAPTION_INSTRUCTIONS`]:
+    /// what a `Caption` chunk's description should name, such as "the forklifts, pallets
+    /// and people, and anything that falls or spills". The answer format stays fixed.
+    pub fn with_caption_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.caption_instructions = instructions.into();
         self
     }
 
@@ -273,10 +299,89 @@ impl<I> FramesAnalyzer<I> {
             let Some(start) = at(event.get("start")) else { continue };
             let end = at(event.get("end")).unwrap_or(start).max(start);
             let text = event.get("text").and_then(Value::as_str).unwrap_or_default();
-            events.push(VideoEvent { start_ms: start, end_ms: end, text: text.into() });
+            events.push(VideoEvent::new(start, end, text));
         }
         let answer = root.get("answer").and_then(Value::as_str).map(str::to_string);
         Ok((answer, events))
+    }
+
+    fn caption_prompt(&self, frames: &[&Shown], start_ms: u64, end_ms: u64) -> String {
+        let stamps: Vec<String> = frames
+            .iter()
+            .enumerate()
+            .map(|(i, f)| format!("image {} at {}", i + 1, timestamp(f.meta.pts_ms)))
+            .collect();
+        format!(
+            "These {} images are frames sampled in order from one part of a video, from {} to \
+             {}: {}.\n\n{}\n\nAnswer with JSON only: {{\"caption\": <one to three sentences>, \
+             \"objects\": [<a short noun phrase for each distinct person, vehicle or object \
+             seen>]}}.",
+            frames.len(),
+            timestamp(start_ms),
+            timestamp(end_ms),
+            stamps.join(", "),
+            self.caption_instructions
+        )
+    }
+
+    /// Captions every chunk of `chunk_ms`, counted from the first frame: one call per chunk
+    /// that holds a frame, over at most `frames_per_call` of its frames, evenly spaced.
+    async fn caption_chunks(
+        &self,
+        cx: &VisionCx,
+        shown: &[Shown],
+        chunk_ms: u64,
+        sampling: Sampling,
+        analysis: &mut VideoAnalysis<RawRegion>,
+    ) -> Result<()> {
+        if chunk_ms == 0 {
+            return Err(VisionError::InvalidInput(
+                "a caption chunk must be at least one millisecond long".into(),
+            ));
+        }
+        let first = shown.first().map_or(0, |f| f.meta.pts_ms);
+        let step = if sampling.fps > 0.0 { (1_000.0 / sampling.fps) as u64 } else { 0 };
+        let video_end = shown.last().map_or(0, |f| f.meta.pts_ms) + step;
+        let chunk_of = |f: &Shown| f.meta.pts_ms.saturating_sub(first) / chunk_ms;
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "caption": {"type": "string"},
+                "objects": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["caption", "objects"]
+        });
+        let mut from = 0;
+        while from < shown.len() {
+            let chunk = chunk_of(&shown[from]);
+            let to = from + shown[from..].iter().take_while(|f| chunk_of(f) == chunk).count();
+            let frames = evenly_spaced(&shown[from..to], self.frames_per_call);
+            let start = first + chunk * chunk_ms;
+            let end = (start + chunk_ms).min(video_end).max(start);
+            let prompt = self.caption_prompt(&frames, start, end);
+            let root = self.call(cx, &frames, prompt, schema.clone(), &mut analysis.usage).await?;
+            let caption = root
+                .get("caption")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|c| !c.is_empty())
+                .ok_or_else(|| VisionError::Parse {
+                    backend: self.descriptor.id.to_string(),
+                    message: format!("the caption answer names no caption: {root}"),
+                })?;
+            let mut labels: Vec<String> = Vec::new();
+            for label in root.get("objects").and_then(Value::as_array).into_iter().flatten() {
+                let Some(label) = label.as_str().map(str::trim).filter(|l| !l.is_empty()) else {
+                    continue;
+                };
+                if !labels.iter().any(|l| l.eq_ignore_ascii_case(label)) {
+                    labels.push(label.to_string());
+                }
+            }
+            analysis.events.push(VideoEvent::new(start, end, caption).with_labels(labels));
+            from = to;
+        }
+        Ok(())
     }
 
     /// The question over every frame, in batches of `frames_per_call`.
@@ -462,11 +567,16 @@ impl<I> FramesAnalyzer<I> {
         request: &VideoRequest,
         part: impl Fn(&T) -> Result<Part>,
     ) -> Result<VideoAnalysis<RawRegion>> {
-        let VideoRequest::Ask { question } = request else {
-            return Err(VisionError::Unsupported(format!(
-                "`{}` answers `Ask` over sampled frames; track with a `Tracker` or `sam-3.1` video",
-                self.descriptor.id
-            )));
+        let job = match request {
+            VideoRequest::Ask { question } => Job::Ask(question),
+            VideoRequest::Caption { chunk_ms } => Job::Caption(*chunk_ms),
+            VideoRequest::Track { .. } => {
+                return Err(VisionError::Unsupported(format!(
+                    "`{}` answers `Ask` and `Caption` over sampled frames; track with a \
+                     `Tracker` or `sam-3.1` video",
+                    self.descriptor.id
+                )));
+            }
         };
         if video.frames.is_empty() {
             return Err(VisionError::Unsupported(format!(
@@ -483,11 +593,14 @@ impl<I> FramesAnalyzer<I> {
             })
             .collect::<Result<Vec<_>>>()?;
         let mut analysis = VideoAnalysis::default();
-        match &self.visibility {
-            None => {
-                self.ask_in_batches(cx, question, &shown, video.sampling, &mut analysis).await?
+        match (job, &self.visibility) {
+            (Job::Caption(chunk_ms), _) => {
+                self.caption_chunks(cx, &shown, chunk_ms, video.sampling, &mut analysis).await?;
             }
-            Some(pass) => {
+            (Job::Ask(question), None) => {
+                self.ask_in_batches(cx, question, &shown, video.sampling, &mut analysis).await?;
+            }
+            (Job::Ask(question), Some(pass)) => {
                 self.ask_after_visibility(
                     cx,
                     question,
@@ -506,11 +619,23 @@ impl<I> FramesAnalyzer<I> {
 
     /// The most the calls on `plan` can cost: every batch, or with a visibility pass, the
     /// target call, a check of every `stride`-th frame and a refine call after each.
-    fn estimate(&self, plan: &VideoPlan) -> Option<u64> {
+    fn estimate(&self, plan: &VideoPlan, request: &VideoRequest) -> Option<u64> {
         let estimate = self.descriptor.token_estimate?;
         let cost = |sizes: &[(u32, u32)]| {
             estimate.estimate_micro_usd(sizes, 1_024, Some(self.max_output_tokens))
         };
+        if let VideoRequest::Caption { chunk_ms } = request {
+            // Every chunk the time covers, each at most `frames_per_call` of the largest frame.
+            let chunks = plan.duration_ms.div_ceil((*chunk_ms).max(1)).max(1);
+            let largest = plan
+                .frame_sizes
+                .iter()
+                .copied()
+                .max_by_key(|(w, h)| u64::from(*w) * u64::from(*h))
+                .unwrap_or_default();
+            let per_chunk = self.frames_per_call.min(plan.frame_sizes.len());
+            return Some(cost(&vec![largest; per_chunk]).saturating_mul(chunks));
+        }
         let Some(pass) = &self.visibility else {
             return Some(
                 plan.frame_sizes
@@ -533,6 +658,18 @@ impl<I> FramesAnalyzer<I> {
     }
 }
 
+/// At most `n` of `frames`, evenly spaced, the first and last always among them.
+fn evenly_spaced(frames: &[Shown], n: usize) -> Vec<&Shown> {
+    if frames.len() <= n {
+        return frames.iter().collect();
+    }
+    if n <= 1 {
+        return frames.get(frames.len() / 2).into_iter().collect();
+    }
+    let last = frames.len() - 1;
+    (0..n).map(|i| &frames[(i * last + (n - 1) / 2) / (n - 1)]).collect()
+}
+
 fn check_inline(len: usize, backend: &str) -> Result<()> {
     if len > adk_core::MAX_INLINE_DATA_SIZE {
         return Err(VisionError::InputTooLarge {
@@ -550,8 +687,8 @@ impl VideoAnalyzer<SentImage> for FramesAnalyzer<SentImage> {
         &self.descriptor
     }
 
-    fn max_cost_micro_usd(&self, plan: &VideoPlan, _request: &VideoRequest) -> Option<u64> {
-        self.estimate(plan)
+    fn max_cost_micro_usd(&self, plan: &VideoPlan, request: &VideoRequest) -> Option<u64> {
+        self.estimate(plan, request)
     }
 
     async fn analyze(
@@ -581,8 +718,8 @@ impl VideoAnalyzer<ReleasedImage> for FramesAnalyzer<ReleasedImage> {
         &self.descriptor
     }
 
-    fn max_cost_micro_usd(&self, plan: &VideoPlan, _request: &VideoRequest) -> Option<u64> {
-        self.estimate(plan)
+    fn max_cost_micro_usd(&self, plan: &VideoPlan, request: &VideoRequest) -> Option<u64> {
+        self.estimate(plan, request)
     }
 
     async fn analyze(
@@ -635,15 +772,16 @@ mod tests {
         let cost = |frames: usize| {
             estimate.estimate_micro_usd(&vec![(448, 252); frames], 1_024, Some(1_024))
         };
+        let ask = VideoRequest::Ask { question: "When?".into() };
         let direct = FramesAnalyzer::<ReleasedImage>::with(Arc::clone(&llm), descriptor.clone());
-        assert_eq!(direct.estimate(&plan), Some(3 * cost(8)));
+        assert_eq!(direct.estimate(&plan, &ask), Some(3 * cost(8)));
         // The target, 24 checks of one frame, and a refine of three frames after each.
         let pass = FramesAnalyzer::<ReleasedImage>::with(Arc::clone(&llm), descriptor.clone())
             .with_visibility_pass(VisibilityPass::new());
-        assert_eq!(pass.estimate(&plan), Some(cost(0) + 24 * cost(1) + 24 * cost(3)));
+        assert_eq!(pass.estimate(&plan, &ask), Some(cost(0) + 24 * cost(1) + 24 * cost(3)));
         // Every fifth frame, four a check, and refines of at most eight frames.
         let strided = FramesAnalyzer::<ReleasedImage>::with(llm, descriptor)
             .with_visibility_pass(VisibilityPass::new().with_stride(5).with_frames_per_check(4));
-        assert_eq!(strided.estimate(&plan), Some(cost(0) + cost(4) + cost(1) + 5 * cost(8)));
+        assert_eq!(strided.estimate(&plan, &ask), Some(cost(0) + cost(4) + cost(1) + 5 * cost(8)));
     }
 }

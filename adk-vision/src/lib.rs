@@ -244,7 +244,7 @@ pub use verify::{
 };
 pub use video::{ClipInfo, MAX_CLIP_BYTES, SentClip, SourceClip, VideoCodec};
 #[cfg(feature = "cloud")]
-pub use video::{FramesAnalyzer, VisibilityPass};
+pub use video::{DEFAULT_CAPTION_INSTRUCTIONS, FramesAnalyzer, VisibilityPass};
 #[cfg(feature = "gemini-video")]
 pub use video::{GEMINI_INLINE_LIMIT, GeminiVideoAnalyzer, MediaResolution};
 pub use watch::{

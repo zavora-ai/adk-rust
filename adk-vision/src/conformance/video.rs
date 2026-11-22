@@ -57,6 +57,9 @@ pub struct VideoFixture {
     /// When the first event of the answer starts, in milliseconds, and how far from it
     /// it may be.
     pub expected_event: Option<(u64, u64)>,
+    /// The chunk length of a `Caption` request the analyzer answers; `None` skips the
+    /// caption case.
+    pub caption_chunk_ms: Option<u64>,
 }
 
 impl VideoFixture {
@@ -69,6 +72,7 @@ impl VideoFixture {
             request,
             refused: VideoRequest::Caption { chunk_ms: 10_000 },
             expected_event: None,
+            caption_chunk_ms: None,
         }
     }
 
@@ -85,12 +89,20 @@ impl VideoFixture {
             request,
             refused: VideoRequest::Caption { chunk_ms: 10_000 },
             expected_event: None,
+            caption_chunk_ms: None,
         }
     }
 
     /// Requires the answer's first event to start within `tolerance_ms` of `start_ms`.
     pub fn with_expected_event(mut self, start_ms: u64, tolerance_ms: u64) -> Self {
         self.expected_event = Some((start_ms, tolerance_ms));
+        self
+    }
+
+    /// Checks that the analyzer captions the video in chunks of `chunk_ms`; set
+    /// [`with_refused`](Self::with_refused) to a request it does refuse.
+    pub fn with_caption(mut self, chunk_ms: u64) -> Self {
+        self.caption_chunk_ms = Some(chunk_ms);
         self
     }
 
@@ -326,6 +338,52 @@ pub async fn video_normalisation(target: VideoAnalyzerTarget, fixture: &VideoFix
             assert!(region.track.is_some(), "`{}`: a track region has no track", descriptor.id);
         }
     }
+}
+
+/// A `Caption` request captions the video chunk by chunk: events in time order, none
+/// overlapping, each inside one chunk counted from the start of the video and inside the
+/// video, each with a caption; from sampled frames, one event for each chunk that holds a
+/// frame. Skipped for a fixture without [`VideoFixture::with_caption`].
+pub async fn video_caption(target: VideoAnalyzerTarget, fixture: &VideoFixture) {
+    let Some(chunk_ms) = fixture.caption_chunk_ms else { return };
+    let descriptor = descriptor(&target);
+    let harness = harness(&target, true, RunBudget::new());
+    let cx = harness.cx();
+    let request = VideoRequest::Caption { chunk_ms };
+    let out = analyze(&harness, &cx, fixture, &request)
+        .await
+        .unwrap_or_else(|err| panic!("`{}` did not caption the fixture: {err}", descriptor.id));
+    let events = &out.value.events;
+    let (from, to) = fixture.span();
+    assert!(!events.is_empty(), "`{}` captioned no chunk", descriptor.id);
+    for event in events {
+        let chunk = (event.start_ms.saturating_sub(from)) / chunk_ms;
+        let (lo, hi) = (from + chunk * chunk_ms, from + (chunk + 1) * chunk_ms);
+        assert!(
+            event.start_ms >= lo && event.end_ms <= hi.min(to) && event.start_ms <= event.end_ms,
+            "`{}`: caption {event:?} is not inside its chunk {lo}–{hi} ms of the video's \
+             {from}–{to} ms",
+            descriptor.id
+        );
+        assert!(!event.text.trim().is_empty(), "`{}`: a chunk has no caption", descriptor.id);
+    }
+    assert!(
+        events.windows(2).all(|w| w[0].end_ms <= w[1].start_ms),
+        "`{}`: captions overlap or are out of order",
+        descriptor.id
+    );
+    if fixture.clip.is_none() {
+        let mut chunks: Vec<u64> =
+            fixture.frames.iter().map(|(f, _)| f.pts_ms.saturating_sub(from) / chunk_ms).collect();
+        chunks.dedup();
+        assert_eq!(
+            events.len(),
+            chunks.len(),
+            "`{}`: one caption for each chunk that holds a frame",
+            descriptor.id
+        );
+    }
+    assert!(out.value.usage.requests > 0, "`{}` reported no request", descriptor.id);
 }
 
 /// A request the analyzer does not answer is refused as `Unsupported`, and its frames go

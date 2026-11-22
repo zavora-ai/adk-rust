@@ -227,7 +227,8 @@ macro_rules! __vision_video_case {
 }
 
 /// Generates the conformance cases for a [`VideoAnalyzer`](crate::VideoAnalyzer): usage,
-/// egress, normalisation of event times and track regions, and the refusals — an
+/// egress, normalisation of event times and track regions, chunk captions when the fixture
+/// asks for them, and the refusals — an
 /// unsupported request, cancellation, the kill switch, a frame cap, and a remote analyzer
 /// without an egress gate.
 ///
@@ -245,6 +246,7 @@ macro_rules! video_analyzer_conformance_tests {
             conformance_video_usage => video_usage,
             conformance_video_egress => video_egress,
             conformance_video_normalisation => video_normalisation,
+            conformance_video_caption => video_caption,
             conformance_video_refuses_unsupported => video_refuses_unsupported,
             conformance_video_cancellation => video_cancellation,
             conformance_video_kill_switch => video_kill_switch,
