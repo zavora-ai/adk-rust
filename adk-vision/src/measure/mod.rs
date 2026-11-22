@@ -153,7 +153,7 @@ pub enum CalibrationSource {
 /// An image's scale in its measured plane: pixels per millimetre with its uncertainty, for
 /// images of one size.
 ///
-/// See the [module documentation](self) for the uncertainty model and an example.
+/// The `measure` module documentation describes the uncertainty model and has an example.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Calibration {

@@ -8,9 +8,9 @@
 //!
 //! | Analyzer | Requests | Input | Feature |
 //! |----------|----------|-------|---------|
-//! | [`FramesAnalyzer`] | `Ask` | sampled frames, on any vision-language model (Qwen3-VL on this machine, or a remote one through the gate) | `cloud` |
-//! | [`GeminiVideoAnalyzer`] | `Ask` | a clip, as Gemini native video: inline up to 20 MB, else uploaded once through the File API and sent as a file part | `gemini-video` |
-//! | [`SamVideoTracker`](crate::sam::SamVideoTracker) | `Track` | a clip, through `sam-3.1` video: masks or boxes with stable object identifiers | `sam` |
+//! | `FramesAnalyzer` | `Ask` | sampled frames, on any vision-language model (Qwen3-VL on this machine, or a remote one through the gate) | `cloud` |
+//! | `GeminiVideoAnalyzer` | `Ask` | a clip, as Gemini native video: inline up to 20 MB, else uploaded once through the File API and sent as a file part | `gemini-video` |
+//! | `sam::SamVideoTracker` | `Track` | a clip, through `sam-3.1` video: masks or boxes with stable object identifiers | `sam` |
 
 #[cfg(feature = "cloud")]
 mod answer;
