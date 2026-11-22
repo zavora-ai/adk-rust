@@ -82,7 +82,20 @@ pub enum Overlay {
         number: u32,
         /// Badge colour; the digits are white.
         color: Rgba,
+        /// Badge size relative to the base size: the device pixel ratio when the marks are
+        /// drawn on a screenshot of a high-density display, so they look the same size in
+        /// points. 1 when unstated.
+        #[serde(default = "unit_scale", skip_serializing_if = "is_unit_scale")]
+        scale: f32,
     },
+}
+
+fn unit_scale() -> f32 {
+    1.0
+}
+
+fn is_unit_scale(scale: &f32) -> bool {
+    (*scale - 1.0).abs() < f32::EPSILON
 }
 
 /// One edit, with coordinates in source pixels.

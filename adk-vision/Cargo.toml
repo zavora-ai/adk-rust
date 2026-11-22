@@ -95,6 +95,9 @@ stream-fixtures = ["stream", "dep:base64", "tokio/net", "tokio/io-util"]
 # `GeminiVideoAnalyzer`: Gemini native video through adk-model's Gemini client, uploading
 # clips above 20 MB through the File API (§7.13, X8, X9).
 gemini-video = ["cloud", "adk-model/gemini"]
+# `GroundedTarget::target_evidence`: a chosen mark as adk-computer-use `TargetEvidence`, bounds
+# in logical points at the screenshot's device pixel ratio (§7.14, V-I14).
+computer-use = ["dep:adk-computer-use"]
 # `ByteTracker`: ByteTrack through `trackforge` (MIT, pure Rust) for anonymous tracks with
 # stable identifiers across frames (§7.13).
 track = ["dep:trackforge"]
@@ -119,6 +122,8 @@ toml.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
+# `computer-use`: the target evidence a grounded mark fills.
+adk-computer-use = { workspace = true, optional = true }
 adk-guardrail = { workspace = true, optional = true }
 # `mistralrs`: Qwen3-VL and the other mistral.rs vision models in process.
 adk-mistralrs = { workspace = true, optional = true }
@@ -177,6 +182,10 @@ proptest = "1.5"
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 wiremock = "0.6"
+
+[[test]]
+name = "screen_live_tests"
+required-features = ["computer-use"]
 
 [[test]]
 name = "fetch_tests"

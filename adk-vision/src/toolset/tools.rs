@@ -244,11 +244,23 @@ impl Tool for VisionTool {
                         "type": "array",
                         "items": {
                             "type": "object",
-                            "properties": { "box": bbox_schema("The box."), "label": { "type": "string" } },
+                            "properties": {
+                                "box": bbox_schema("The box."),
+                                "label": { "type": "string" },
+                                "mark": { "type": "integer", "minimum": 1, "description": "The number drawn on the box; its position in the list, from 1, when absent." }
+                            },
                             "required": ["box"],
                         },
-                        "description": "Boxes to draw.",
+                        "description": "Boxes to draw, each with a numbered mark at its top-left corner (set-of-marks).",
                     }),
+                );
+                properties.insert(
+                    "devicePixelRatio".into(),
+                    json!({ "type": "number", "minimum": 0.5, "maximum": 8, "description": "Screenshot pixels per CSS pixel or point. Marks and outlines are drawn this much larger so they read the same on a high-density screenshot. Default 1." }),
+                );
+                properties.insert(
+                    "units".into(),
+                    json!({ "type": "string", "enum": ["pixels", "css"], "description": "`pixels` (default): boxes are in the image's pixels. `css`: boxes are CSS pixels or points, as browser_elements returns them, and are multiplied by devicePixelRatio." }),
                 );
                 required.push("boxes");
             }
@@ -517,16 +529,50 @@ impl VisionTool {
                     .get("boxes")
                     .and_then(Value::as_array)
                     .ok_or_else(|| VisionError::InvalidInput("`boxes` is required".into()))?;
-                let mut overlays = Vec::with_capacity(boxes.len());
+                let ratio = match args.get("devicePixelRatio") {
+                    None | Some(Value::Null) => 1.0,
+                    Some(value) => {
+                        value.as_f64().filter(|r| (0.5..=8.0).contains(r)).ok_or_else(|| {
+                            VisionError::InvalidInput(
+                                "`devicePixelRatio` must be a number from 0.5 to 8".into(),
+                            )
+                        })? as f32
+                    }
+                };
+                let css = match args.get("units").and_then(Value::as_str) {
+                    None | Some("pixels") => false,
+                    Some("css") => true,
+                    Some(other) => {
+                        return Err(VisionError::InvalidInput(format!(
+                            "`units` is `pixels` or `css`, not `{other}`"
+                        )));
+                    }
+                };
+                let thickness = (3.0 * ratio).round().max(1.0) as u32;
+                let mut overlays = Vec::with_capacity(boxes.len() * 2);
                 for (index, entry) in boxes.iter().enumerate() {
-                    let bbox = entry.get("box").map(bbox_arg).transpose()?.ok_or_else(|| {
-                        VisionError::InvalidInput(format!("box {index} has no `box`"))
-                    })?;
-                    overlays.push(Overlay::Box { bbox, color: Rgba::RED, thickness: 3 });
+                    let mut bbox =
+                        entry.get("box").map(bbox_arg).transpose()?.ok_or_else(|| {
+                            VisionError::InvalidInput(format!("box {index} has no `box`"))
+                        })?;
+                    if css {
+                        bbox = BBox::new(
+                            bbox.x0 * ratio,
+                            bbox.y0 * ratio,
+                            bbox.x1 * ratio,
+                            bbox.y1 * ratio,
+                        );
+                    }
+                    let number = match entry.get("mark").and_then(Value::as_u64) {
+                        Some(mark) => u32::try_from(mark).unwrap_or(u32::MAX),
+                        None => u32::try_from(index + 1).unwrap_or(u32::MAX),
+                    };
+                    overlays.push(Overlay::Box { bbox, color: Rgba::RED, thickness });
                     overlays.push(Overlay::Mark {
                         at: [bbox.x0, bbox.y0],
-                        number: u32::try_from(index + 1).unwrap_or(u32::MAX),
+                        number,
                         color: Rgba::RED,
+                        scale: ratio,
                     });
                 }
                 EditOp::Annotate { overlays }

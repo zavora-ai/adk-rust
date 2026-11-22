@@ -42,6 +42,10 @@ pub struct TargetEvidence {
     /// Hash of the screenshot backing this observation, when captured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub screenshot_hash: Option<String>,
+    /// Pixels per logical point of the screenshot `screenshot_hash` names: 2.0 for a
+    /// 3024×1964 screenshot of a 1512×982-point display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_pixel_ratio: Option<f64>,
     /// Revision of the UI tree backing this observation, when captured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui_tree_revision: Option<String>,
@@ -51,18 +55,194 @@ pub struct TargetEvidence {
     pub captured_at: String,
 }
 
-/// Axis-aligned bounding box in display coordinates.
+impl TargetEvidence {
+    /// Checks that the evidence binds its bounds to its screenshot (spec 3.7 V-I14): a
+    /// target with both bounds and a screenshot hash states the screenshot's device pixel
+    /// ratio, the bounds carry the same ratio, and the box is finite and not inverted.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message naming the violated rule.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_computer_use::{Bounds, TargetEvidence};
+    ///
+    /// let mut target = TargetEvidence {
+    ///     platform: "darwin".into(),
+    ///     app_id: "com.example.crm".into(),
+    ///     pid: None,
+    ///     window_id: None,
+    ///     window_title_digest: None,
+    ///     display_id: Some("built-in".into()),
+    ///     role: None,
+    ///     label_digest: None,
+    ///     bounds: Some(Bounds::points(960.0, 590.0, 90.0, 40.0, 2.0)),
+    ///     observation_id: "observation-1".into(),
+    ///     screenshot_hash: Some("sha256:ab12".into()),
+    ///     device_pixel_ratio: Some(2.0),
+    ///     ui_tree_revision: None,
+    ///     confidence: 0.9,
+    ///     captured_at: "2026-11-22T10:00:00Z".into(),
+    /// };
+    /// assert!(target.check_screen_binding().is_ok());
+    /// target.device_pixel_ratio = None;
+    /// assert!(target.check_screen_binding().is_err());
+    /// ```
+    pub fn check_screen_binding(&self) -> Result<(), String> {
+        let Some(bounds) = &self.bounds else { return Ok(()) };
+        bounds.validate()?;
+        if self.screenshot_hash.is_none() {
+            return Ok(());
+        }
+        let Some(ratio) = self.device_pixel_ratio else {
+            return Err(
+                "target bounds from a screenshot must state the screenshot's devicePixelRatio"
+                    .into(),
+            );
+        };
+        if !(ratio.is_finite() && ratio > 0.0) {
+            return Err(format!("devicePixelRatio must be a positive number, not {ratio}"));
+        }
+        if (ratio - bounds.device_pixel_ratio).abs() > f64::EPSILON {
+            return Err(format!(
+                "target bounds are at device pixel ratio {} but the screenshot is at {ratio}",
+                bounds.device_pixel_ratio
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The coordinate space a [`Bounds`] is in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoordinateSpace {
+    /// Logical display points, the space a desktop runtime acts in. Bounds without a
+    /// stated space are read as points.
+    #[default]
+    LogicalPoints,
+    /// Pixels of the screenshot the evidence's `screenshotHash` names.
+    ScreenshotPixels,
+}
+
+fn unit_ratio() -> f64 {
+    1.0
+}
+
+/// Axis-aligned bounding box, with the coordinate space it is in and the device pixel
+/// ratio that relates screenshot pixels to logical points.
+///
+/// # Example
+///
+/// ```
+/// use adk_computer_use::{Bounds, CoordinateSpace};
+///
+/// // A Save button at (1920, 1180)–(2100, 1260) in a 3024×1964 screenshot of a
+/// // 1512×982-point display.
+/// let pixels = Bounds::pixels(1920.0, 1180.0, 180.0, 80.0, 2.0);
+/// let points = pixels.to_points();
+/// assert_eq!(points.space, CoordinateSpace::LogicalPoints);
+/// assert_eq!((points.x, points.y, points.width, points.height), (960.0, 590.0, 90.0, 40.0));
+/// assert!(points.contains(points.center()));
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bounds {
-    /// Left edge in display coordinates.
+    /// Left edge.
     pub x: f64,
-    /// Top edge in display coordinates.
+    /// Top edge.
     pub y: f64,
-    /// Width in display units.
+    /// Width.
     pub width: f64,
-    /// Height in display units.
+    /// Height.
     pub height: f64,
+    /// The space `x`, `y`, `width` and `height` are in.
+    #[serde(default)]
+    pub space: CoordinateSpace,
+    /// Screenshot pixels per logical point; 1.0 when unstated.
+    #[serde(default = "unit_ratio")]
+    pub device_pixel_ratio: f64,
+}
+
+impl Bounds {
+    /// A box in logical points of a display at `device_pixel_ratio`.
+    pub fn points(x: f64, y: f64, width: f64, height: f64, device_pixel_ratio: f64) -> Self {
+        Self { x, y, width, height, space: CoordinateSpace::LogicalPoints, device_pixel_ratio }
+    }
+
+    /// A box in screenshot pixels of a display at `device_pixel_ratio`.
+    pub fn pixels(x: f64, y: f64, width: f64, height: f64, device_pixel_ratio: f64) -> Self {
+        Self { x, y, width, height, space: CoordinateSpace::ScreenshotPixels, device_pixel_ratio }
+    }
+
+    fn ratio(&self) -> f64 {
+        if self.device_pixel_ratio.is_finite() && self.device_pixel_ratio > 0.0 {
+            self.device_pixel_ratio
+        } else {
+            1.0
+        }
+    }
+
+    fn scaled(&self, factor: f64, space: CoordinateSpace) -> Self {
+        Self {
+            x: self.x * factor,
+            y: self.y * factor,
+            width: self.width * factor,
+            height: self.height * factor,
+            space,
+            device_pixel_ratio: self.device_pixel_ratio,
+        }
+    }
+
+    /// The box in logical points.
+    pub fn to_points(&self) -> Self {
+        match self.space {
+            CoordinateSpace::LogicalPoints => self.clone(),
+            CoordinateSpace::ScreenshotPixels => {
+                self.scaled(1.0 / self.ratio(), CoordinateSpace::LogicalPoints)
+            }
+        }
+    }
+
+    /// The box in screenshot pixels.
+    pub fn to_pixels(&self) -> Self {
+        match self.space {
+            CoordinateSpace::ScreenshotPixels => self.clone(),
+            CoordinateSpace::LogicalPoints => {
+                self.scaled(self.ratio(), CoordinateSpace::ScreenshotPixels)
+            }
+        }
+    }
+
+    /// The centre, in the box's own space.
+    pub fn center(&self) -> [f64; 2] {
+        [self.x + self.width / 2.0, self.y + self.height / 2.0]
+    }
+
+    /// Whether `point`, in the box's own space, lies inside it (right and bottom edges
+    /// exclusive).
+    pub fn contains(&self, point: [f64; 2]) -> bool {
+        point[0] >= self.x
+            && point[1] >= self.y
+            && point[0] < self.x + self.width
+            && point[1] < self.y + self.height
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        let values = [self.x, self.y, self.width, self.height, self.device_pixel_ratio];
+        if values.iter().any(|value| !value.is_finite()) {
+            return Err("target bounds must be finite numbers".into());
+        }
+        if self.width < 0.0 || self.height < 0.0 {
+            return Err("target bounds must not have a negative width or height".into());
+        }
+        if self.device_pixel_ratio <= 0.0 {
+            return Err("target bounds must have a positive devicePixelRatio".into());
+        }
+        Ok(())
+    }
 }
 
 /// Conclusion of an accessibility-based target sensitivity check.
@@ -257,5 +437,55 @@ impl From<TargetSensitivityEvidence> for RawTargetSensitivityEvidence {
             fields_checked: value.fields_checked,
             observed_at: value.observed_at,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn evidence(bounds: Option<Bounds>, hash: Option<&str>, ratio: Option<f64>) -> TargetEvidence {
+        TargetEvidence {
+            platform: "darwin".into(),
+            app_id: "com.example.form".into(),
+            pid: None,
+            window_id: None,
+            window_title_digest: None,
+            display_id: None,
+            role: None,
+            label_digest: None,
+            bounds,
+            observation_id: "observation-1".into(),
+            screenshot_hash: hash.map(str::to_string),
+            device_pixel_ratio: ratio,
+            ui_tree_revision: None,
+            confidence: 1.0,
+            captured_at: "2026-11-22T10:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn screen_binding_requires_a_matching_ratio() {
+        let points = Bounds::points(960.0, 590.0, 90.0, 40.0, 2.0);
+        assert!(evidence(None, None, None).check_screen_binding().is_ok());
+        assert!(evidence(Some(points.clone()), None, None).check_screen_binding().is_ok());
+        assert!(
+            evidence(Some(points.clone()), Some("sha256:1"), Some(2.0))
+                .check_screen_binding()
+                .is_ok()
+        );
+        let missing = evidence(Some(points.clone()), Some("sha256:1"), None);
+        assert!(missing.check_screen_binding().unwrap_err().contains("devicePixelRatio"));
+        let mismatched = evidence(Some(points), Some("sha256:1"), Some(1.0));
+        assert!(mismatched.check_screen_binding().unwrap_err().contains("device pixel ratio 2"));
+        let inverted =
+            evidence(Some(Bounds::points(0.0, 0.0, -1.0, 4.0, 1.0)), Some("sha256:1"), Some(1.0));
+        assert!(inverted.check_screen_binding().is_err());
+    }
+
+    #[test]
+    fn evidence_without_a_ratio_serializes_as_before() {
+        let value = serde_json::to_value(evidence(None, None, None)).unwrap();
+        assert!(value.get("devicePixelRatio").is_none());
     }
 }

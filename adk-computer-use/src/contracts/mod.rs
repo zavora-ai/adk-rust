@@ -40,6 +40,6 @@ pub use session::{
     SessionEvent, SessionFollowUp, SessionFollowUpPage,
 };
 pub use target::{
-    Bounds, TargetEvidence, TargetSensitivityAssessment, TargetSensitivityEvidence,
-    TargetSensitivitySignal, TargetSensitivitySource,
+    Bounds, CoordinateSpace, TargetEvidence, TargetSensitivityAssessment,
+    TargetSensitivityEvidence, TargetSensitivitySignal, TargetSensitivitySource,
 };

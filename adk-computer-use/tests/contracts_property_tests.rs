@@ -268,3 +268,58 @@ proptest! {
         );
     }
 }
+
+mod bounds {
+    //! `Bounds` state their coordinate space and device pixel ratio (spec 3.7 X17, V-I14).
+
+    use adk_computer_use::{Bounds, CoordinateSpace};
+    use proptest::prelude::*;
+    use serde_json::json;
+
+    #[test]
+    fn bounds_without_a_space_are_points_at_ratio_one() {
+        let earlier: Bounds =
+            serde_json::from_value(json!({ "x": 10.0, "y": 20.0, "width": 30.0, "height": 40.0 }))
+                .unwrap();
+        assert_eq!(earlier, Bounds::points(10.0, 20.0, 30.0, 40.0, 1.0));
+    }
+
+    #[test]
+    fn bounds_serialize_their_space_and_ratio() {
+        let bounds = Bounds::pixels(1920.0, 1180.0, 180.0, 80.0, 2.0);
+        assert_eq!(
+            serde_json::to_value(&bounds).unwrap(),
+            json!({
+                "x": 1920.0, "y": 1180.0, "width": 180.0, "height": 80.0,
+                "space": "screenshot_pixels", "devicePixelRatio": 2.0
+            })
+        );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// Pixels to points and back returns the box, and the centre stays inside it in
+        /// both spaces.
+        #[test]
+        fn pixels_and_points_round_trip(
+            x in 0.0f64..6000.0,
+            y in 0.0f64..4000.0,
+            width in 1.0f64..2000.0,
+            height in 1.0f64..2000.0,
+            ratio in prop_oneof![Just(1.0f64), Just(1.5), Just(2.0), Just(3.0), 0.5f64..4.0],
+        ) {
+            let pixels = Bounds::pixels(x, y, width, height, ratio);
+            let points = pixels.to_points();
+            prop_assert_eq!(points.space, CoordinateSpace::LogicalPoints);
+            let back = points.to_pixels();
+            for (a, b) in [(back.x, x), (back.y, y), (back.width, width), (back.height, height)] {
+                prop_assert!((a - b).abs() < 1e-6, "{a} vs {b}");
+            }
+            prop_assert!(points.contains(points.center()));
+            prop_assert!(pixels.contains(pixels.center()));
+            let round: Bounds = serde_json::from_value(serde_json::to_value(&points).unwrap()).unwrap();
+            prop_assert_eq!(round, points);
+        }
+    }
+}

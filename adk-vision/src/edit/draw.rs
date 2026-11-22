@@ -53,7 +53,9 @@ pub(super) fn overlay(
             }
         }
         Overlay::Point { at, color, radius } => disc(out, point(*at), *radius as f32, *color),
-        Overlay::Mark { at, number, color } => mark(out, point(*at), *number, *color),
+        Overlay::Mark { at, number, color, scale } => {
+            mark(out, point(*at), *number, *color, *scale);
+        }
     }
     Ok(())
 }
@@ -90,9 +92,10 @@ fn disc(out: &mut DecodedImage, c: [f32; 2], r: f32, color: Rgba) {
     }
 }
 
-fn mark(out: &mut DecodedImage, c: [f32; 2], number: u32, color: Rgba) {
+fn mark(out: &mut DecodedImage, c: [f32; 2], number: u32, color: Rgba, size: f32) {
     let digits: Vec<usize> = number.to_string().bytes().map(|d| usize::from(d - b'0')).collect();
-    let scale = 3.0f32;
+    // Three pixels per font cell at scale 1; a whole number of pixels keeps the digits crisp.
+    let scale = (3.0 * if size.is_finite() && size > 0.0 { size } else { 1.0 }).round().max(1.0);
     let text_w = (digits.len() as f32 * 4.0 - 1.0) * scale;
     let text_h = 5.0 * scale;
     let radius = text_w.max(text_h) / 2.0 + 2.0 * scale;

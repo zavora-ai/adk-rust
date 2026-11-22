@@ -67,23 +67,11 @@ impl ClaudePixels {
 }
 
 fn tier_for_model(model: &str) -> ClaudeVisionTier {
-    let id = model.to_ascii_lowercase();
-    let Some(start) = id.find("claude-") else {
-        return ClaudeVisionTier::Standard;
-    };
-    let rest = &id[start + "claude-".len()..];
-    let mut parts = rest.split(['-', '@', '.', ':']);
-    let family = parts.next().unwrap_or_default();
-    let major: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-    let minor: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-    let high = match family {
-        "fable" | "mythos" => true,
-        "opus" => major > 4 || (major == 4 && minor >= 7),
-        "sonnet" => major >= 5,
-        "haiku" => major > 5 || (major == 5 && minor >= 5),
-        _ => false,
-    };
-    if high { ClaudeVisionTier::High } else { ClaudeVisionTier::Standard }
+    if crate::screen::claude_high_tier(model) {
+        ClaudeVisionTier::High
+    } else {
+        ClaudeVisionTier::Standard
+    }
 }
 
 impl RegionAdapter for ClaudePixels {

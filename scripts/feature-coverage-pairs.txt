@@ -498,6 +498,9 @@
 6 adk-vision stream doc
 6 adk-vision rtsp,ffmpeg,stream-fixtures,conformance doc
 6 adk-vision screen,browser,surface-camera,conformance doc
+# Set-of-marks target evidence: a grounded mark as adk-computer-use TargetEvidence, and the live
+# computer toolset zoom recording replayed through FittedActuator (spec 3.7 §7.14).
+6 adk-vision computer-use doc
 # `onnx-coreml`, `onnx-cuda` and `ocr-vl-metal` need GPU toolchains a runner does not have, and
 # stay out as adk-mistralrs's `cuda` and `metal` do.
 6 adk-site gen-astro

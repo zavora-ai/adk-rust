@@ -22,7 +22,7 @@ adk-rust = { version = "3.0.0", features = ["browser"] }
 
 ## Overview
 
-This crate provides 46 browser automation tools (44 enabled by default) as ADK `Tool` implementations, allowing LLM agents to interact with web pages. Tools are organized into categories and can be selectively enabled via profiles or builder toggles.
+This crate provides 47 browser automation tools (45 enabled by default) as ADK `Tool` implementations, allowing LLM agents to interact with web pages. Tools are organized into categories and can be selectively enabled via profiles or builder toggles.
 
 `BrowserToolset` implements the `adk_core::Toolset` trait, so it integrates directly with `LlmAgentBuilder::toolset()`.
 
@@ -141,14 +141,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Tool Profiles
 
-Instead of using all 44 default tools (which can overwhelm LLM context windows), use a profile:
+Instead of using all 45 default tools (which can overwhelm LLM context windows), use a profile:
 
 | Profile | Tools | Use Case |
 |---------|-------|----------|
-| `Minimal` | 19 | Navigation + interaction + extraction + wait + screenshot |
-| `FormFilling` | 19 | Same as Minimal — optimized for form-filling agents |
-| `Scraping` | 13 | Navigation + extraction + screenshot + scroll/hover/alert (no interaction) |
-| `Full` | 44 | Every tool except `browser_evaluate_js` and `browser_file_upload` — use only when full browser control is needed |
+| `Minimal` | 20 | Navigation + interaction + extraction + wait + screenshot |
+| `FormFilling` | 20 | Same as Minimal — optimized for form-filling agents |
+| `Scraping` | 14 | Navigation + extraction + screenshot + scroll/hover/alert (no interaction) |
+| `Full` | 45 | Every tool except `browser_evaluate_js` and `browser_file_upload` — use only when full browser control is needed |
 
 `BrowserToolset::new` is the `Full` profile. For even fewer tools, use the helper functions,
 which apply the default URL policy:
@@ -164,7 +164,7 @@ fn main() {
     let browser = Arc::new(BrowserSession::new(BrowserConfig::new()));
 
     let form_filling = BrowserToolset::with_profile(browser.clone(), BrowserProfile::FormFilling);
-    assert_eq!(form_filling.all_tools().len(), 19);
+    assert_eq!(form_filling.all_tools().len(), 20);
 
     // 6 tools: navigate, click, type, extract_text, wait_for_element, screenshot
     assert_eq!(minimal_browser_tools(browser.clone()).len(), 6);
@@ -184,7 +184,7 @@ fn main() {
         .with_windows(false)
         .with_frames(false)
         .with_actions(false);
-    assert_eq!(custom.all_tools().len(), 19);
+    assert_eq!(custom.all_tools().len(), 20);
 }
 ```
 
@@ -343,7 +343,7 @@ fn toolset(session: Arc<BrowserSession>) -> BrowserToolset {
 }
 ```
 
-## Available Tools (46, 44 by default)
+## Available Tools (47, 45 by default)
 
 ### Navigation (4 tools)
 | Tool | Description |
@@ -362,7 +362,7 @@ fn toolset(session: Arc<BrowserSession>) -> BrowserToolset {
 | `browser_clear` | Clear an input field |
 | `browser_select` | Select from dropdown by value, text, or index |
 
-### Extraction (5 tools)
+### Extraction (6 tools)
 | Tool | Description |
 |------|-------------|
 | `browser_extract_text` | Extract text from one or all matching elements |
@@ -370,6 +370,7 @@ fn toolset(session: Arc<BrowserSession>) -> BrowserToolset {
 | `browser_extract_links` | Extract all links from page or container |
 | `browser_page_info` | Get current URL and title |
 | `browser_page_source` | Get HTML source (with max_length truncation) |
+| `browser_elements` | Visible interactive elements with rectangles in CSS pixels, the device pixel ratio and a unique selector each, for set-of-marks grounding: draw them with `vision_annotate`, click the chosen one with `browser_click` by selector |
 
 ### Screenshots (1 tool)
 | Tool | Description |

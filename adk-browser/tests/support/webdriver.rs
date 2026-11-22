@@ -249,6 +249,33 @@ impl Browser {
         let url = self.url();
         match name.as_str() {
             "viewport" => json!([1, 1280, 800]),
+            "elements" => {
+                let elements: Vec<Value> = elements(&url)
+                    .into_iter()
+                    .filter(|element| element.role != "heading")
+                    .enumerate()
+                    .map(|(i, element)| {
+                        json!({
+                            "index": i + 1,
+                            "selector": format!("[data-ref=\"{}\"]", element.reference),
+                            "role": element.role,
+                            "name": element.name,
+                            "tag": if element.role == "link" { "a" } else { "input" },
+                            "rect": {
+                                "x": element.center.0 - 80, "y": element.center.1 - 20,
+                                "width": 160, "height": 40
+                            }
+                        })
+                    })
+                    .collect();
+                json!({
+                    "url": url,
+                    "devicePixelRatio": 1,
+                    "viewport": { "width": 1280, "height": 800 },
+                    "elements": elements,
+                    "truncated": false
+                })
+            }
             "read_page" => {
                 let interactive_only = args.first().and_then(Value::as_str) == Some("interactive");
                 let query = args.get(3).and_then(Value::as_str).map(str::to_lowercase);

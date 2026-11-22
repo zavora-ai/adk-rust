@@ -84,6 +84,7 @@ over explicitly.
 |----------|-------------|
 | `adk_browser::WebDriverComputer` | A browser viewport as the display, over WebDriver; every action, `zoom` included |
 | `adk_computer_use::McpComputerActuator` | A desktop, through a running `computer-use-mcp` server's plain tools; see [A desktop through computer-use-mcp](#a-desktop-through-computer-use-mcp) |
+| `adk_vision::screen::FittedActuator` | Wraps any actuator: screenshots resized to the model's image limits with the scale kept, clicks and `zoom` regions scaled back, `zoom` cropped from a full-resolution capture when the inner actuator has none ([Screen Grounding](../vision/screen.md#claudes-computer-use-toolset)) |
 | Your own `ComputerActuator` | A virtual desktop, a remote desktop session, or a device |
 
 ```rust
