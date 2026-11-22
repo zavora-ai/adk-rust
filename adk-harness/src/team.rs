@@ -13,8 +13,8 @@
 //! | [`MemberKind::Agent`] | the agent supplied | the shared policy; its tools are `External` |
 //! | `MemberKind::Perceiver` (`vision`) | an `LlmAgent` on a model that runs on the device, over the read tools and the vision pack's on-device tools | as a local member; a call that would leave the device is refused |
 //!
-//! With the vision pack, [`MemberSpec::perceiver`], [`MemberSpec::reasoner`] and
-//! [`MemberSpec::verifier`] are the three roles of a multimodal team (spec 3.7 §7.12). The
+//! With the vision pack, `MemberSpec::perceiver`, `MemberSpec::reasoner` and
+//! `MemberSpec::verifier` are the three roles of a multimodal team (spec 3.7 §7.12). The
 //! harness refuses to build a perceiver on a remote model or holding any tool that declares
 //! network use, and puts the pack's privacy guardrail on every local member whose model is
 //! remote, so a reasoner sees only images the egress gate released.
