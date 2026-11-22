@@ -167,5 +167,6 @@ match VerifierLoop::new(screen_observer).run(&cx, &click_save).await? {
 | A perceiver call whose arguments would leave the device is refused when it runs | `team_tests.rs` |
 | The bytes the recording reasoner received are the gate's released crop, 92×52, with the face filled, never the frame | `team_tests.rs` |
 | A seeded disagreement raises exactly one card with both opinions, the frame's digest and the crop's; approval resolves it without a second card | `team_tests.rs` |
+| Under an `ask` rule the crop is held first with the staged redacted image, and after approval the reasoner receives exactly that digest | `team_tests.rs` |
 | A harness perceiver on a remote model or with a remote tool does not build | `adk-harness/tests/pack_vision_team_tests.rs` |
 | Live: `claude-haiku-5-5` reasoner and NVIDIA NIM `nemotron-3.5-super-vl` verifier on a generated part with an ambiguous mark | `adk-vision/tests/team_live_tests.rs` (`#[ignore]`, needs `ANTHROPIC_API_KEY`, `NVIDIA_API_KEY`) |
