@@ -14,6 +14,7 @@
 //! | `EfficientSam` | `efficientsam-ti` | drawn shapes segmented with mask IoU ≥ 0.9 |
 //! | `Sam2` | `sam2.1-hiera-tiny-q4` | the same |
 //! | `SigLip2` | `siglip2-base-patch16-256-quantized` | each caption ranks its photo first, and each photo its caption |
+//! | `YuNet` (feature `stream-fixtures` too) | `yunet-2023mar` | every drawn face found from 60 px to most of a 1280×720 frame, none once blurred |
 //!
 //! Each backend also runs its trait's conformance suite on these models.
 //!
@@ -456,5 +457,137 @@ mod siglip2_conformance {
     adk_vision::embedder_conformance_tests! {
         #[ignore = "needs SigLIP 2 base quantized"]
         backend = EmbedderTarget::Local(siglip()),
+    }
+}
+
+/// YuNet on drawn portraits (`stream::fixtures::draw_portrait`, generated faces, not anyone's
+/// likeness): each face found, centred inside its drawn box, from about 40 px to a face that
+/// fills most of a 1280×720 frame; blurred by the stream's face blur, none is found again.
+#[cfg(feature = "stream-fixtures")]
+mod yunet_faces {
+    use adk_vision::onnx::YuNet;
+    use adk_vision::stream::fixtures::draw_portrait;
+    use adk_vision::stream::{FramePrivacy, RedactionMethod, RedactorPrivacy};
+    use adk_vision::{FaceRedactor, Frame, FramePixels, FrameSourceId};
+
+    use super::*;
+
+    /// Faces scored from 0.3, under the redactor's 0.5, so a face the blur only weakened
+    /// still counts as found.
+    pub(super) fn yunet() -> Arc<YuNet> {
+        static ONCE: OnceLock<Arc<YuNet>> = OnceLock::new();
+        ONCE.get_or_init(|| {
+            Arc::new(YuNet::new(&fetch("yunet-2023mar"), &options()).unwrap().with_threshold(0.3))
+        })
+        .clone()
+    }
+
+    /// A grey frame with one portrait of `height` px, its top `top` px from the frame's top
+    /// (negative crops the head), and the drawn face's box.
+    pub(super) fn portrait_frame(size: (u32, u32), height: f32, top: f32) -> (DecodedImage, BBox) {
+        let mut frame = DecodedImage::filled(size.0, size.1, [118, 120, 126, 255]);
+        let width = height * 180.0 / 228.0;
+        let x0 = size.0 as f32 / 2.0 - width / 2.0;
+        let face = draw_portrait(&mut frame, BBox::new(x0, top, x0 + width, top + height), 1);
+        (frame, face)
+    }
+
+    async fn faces(image: &DecodedImage) -> Vec<(BBox, f32)> {
+        let runtime = VisionRuntime::builder().detector(yunet()).build().unwrap();
+        let source = SourceImage::from_pixels(image.clone()).unwrap();
+        let query = DetectQuery::Classes(vec!["face".into()]);
+        let found = runtime.detect(&VisionCx::new(), &source, &query).await.unwrap().value;
+        found.iter().filter_map(|r| Some((r.shape.bbox()?, r.score.unwrap_or(0.0)))).collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "needs YuNet 2023mar (232 KB)"]
+    async fn live_yunet_finds_drawn_faces_at_every_size_and_none_once_blurred() {
+        let cases: [((u32, u32), f32, f32); 9] = [
+            ((640, 360), 60.0, 150.0),
+            ((640, 360), 140.0, 110.0),
+            ((640, 360), 340.0, 10.0),
+            ((1280, 720), 60.0, 330.0),
+            ((1280, 720), 140.0, 290.0),
+            ((1280, 720), 340.0, 190.0),
+            ((1280, 720), 700.0, -35.0),
+            ((1280, 720), 1100.0, -55.0),
+            ((1280, 720), 1400.0, -70.0),
+        ];
+        let blur = FramePrivacy::new(Arc::new(RedactorPrivacy::new(
+            Arc::new(FaceRedactor::new(yunet())),
+            RedactionMethod::FACE_BLUR,
+        )));
+        for (size, height, top) in cases {
+            let (frame, truth) = portrait_frame(size, height, top);
+            let started = Instant::now();
+            let found = faces(&frame).await;
+            let elapsed = started.elapsed();
+            let hit = found.iter().find(|(b, _)| truth.contains(b.center()));
+            eprintln!(
+                "yunet | {}x{} portrait {height} px | truth [{:.0}, {:.0}, {:.0}, {:.0}] | found {:?} | {elapsed:?}",
+                size.0,
+                size.1,
+                truth.x0,
+                truth.y0,
+                truth.x1,
+                truth.y1,
+                found
+                    .iter()
+                    .map(|(b, s)| format!(
+                        "[{:.0}, {:.0}, {:.0}, {:.0}] {s:.2}",
+                        b.x0, b.y0, b.x1, b.y1
+                    ))
+                    .collect::<Vec<_>>()
+            );
+            let Some((face, score)) = hit else {
+                panic!("no face found for a {height} px portrait")
+            };
+            assert!(*score >= 0.5, "the face scores {score:.2}, under the redactor's 0.5");
+            assert!(face.iou(&truth) >= 0.3, "IoU {:.2} with the drawn face", face.iou(&truth));
+
+            let raw = Frame {
+                source: FrameSourceId("faces".into()),
+                index: 0,
+                pts: Duration::ZERO,
+                captured_at: chrono::Utc::now(),
+                pixels: FramePixels::Ephemeral(Arc::new(frame)),
+            };
+            let redacted = blur.apply(&VisionCx::new(), raw).await.unwrap();
+            let after = faces(redacted.pixels()).await;
+            eprintln!("    blurred {:?}: found {after:?}", redacted.redacted());
+            assert!(
+                after.iter().all(|(b, _)| !truth.contains(b.center())),
+                "YuNet finds the blurred face again: {after:?}"
+            );
+        }
+    }
+}
+
+#[cfg(feature = "stream-fixtures")]
+mod yunet_conformance {
+    use adk_vision::conformance::{DetectorTarget, Expected, Fixture};
+
+    use super::*;
+
+    fn portrait() -> Fixture {
+        let (frame, _) = yunet_faces::portrait_frame((640, 360), 340.0, 10.0);
+        let mut fixture = Fixture::shapes();
+        fixture.image = SourceImage::from_pixels(frame).unwrap();
+        // YuNet's box on this drawing, brow to chin; 8 px leaves room for onnxruntime builds
+        // that round differently.
+        fixture.objects = vec![Expected {
+            label: Some("face".into()),
+            bbox: BBox::new(260.0, 68.0, 374.0, 214.0),
+        }];
+        fixture.tolerance_px = 8.0;
+        fixture.query = DetectQuery::Classes(vec!["face".into()]);
+        fixture
+    }
+
+    adk_vision::detector_conformance_tests! {
+        #[ignore = "needs YuNet 2023mar (232 KB)"]
+        backend = DetectorTarget::Local(yunet_faces::yunet()),
+        fixture = portrait(),
     }
 }
