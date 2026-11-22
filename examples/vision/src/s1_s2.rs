@@ -210,7 +210,8 @@ pub(crate) async fn run_desk(profile: Profile) -> Result<DeskRun> {
     let nim_config = match (&server, recording_proxy("NIM")) {
         (None, _) => NimCvConfig::new(format!("https://{NIM_HOST}/v1/cv")).with_api_key("unused"),
         (Some(_), Some(proxy)) => {
-            let address = proxy.parse().context("VISION_RECORD_NIM is host:port")?;
+            let address: std::net::SocketAddr =
+                proxy.parse().context("VISION_RECORD_NIM is host:port")?;
             NimCvConfig::new(format!("http://{NIM_HOST}:{}/v1/cv", address.port()))
                 .with_api_key(live_key("NVIDIA_API_KEY"))
                 .with_http_client(client_to(&address, NIM_HOST)?)
