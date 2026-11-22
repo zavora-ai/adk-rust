@@ -124,8 +124,8 @@ The example needs `adk-agent`, `adk-core`, `adk-model`, `adk-runner`, `adk-sessi
 | `new(name)` | Create a builder with the agent name |
 | `description(desc)` | Set the agent description |
 | `model(llm)` | Set the model (required) |
-| `instruction(text)` | Set the static instruction, sent as `system` content |
-| `instruction_provider(fn)` | Set a dynamic instruction provider |
+| `instruction(text)` | Set the static instruction, sent as `system` content after `{var}` templating |
+| `instruction_provider(fn)` | Set a dynamic instruction provider; its text is sent as written, without `{var}` templating |
 | `global_instruction(text)` | Set the global instruction shared across agents |
 | `global_instruction_provider(fn)` | Set a dynamic global instruction provider |
 | `generate_content_config(config)` | Set the full `GenerateContentConfig` |

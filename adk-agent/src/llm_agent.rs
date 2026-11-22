@@ -1185,12 +1185,33 @@ impl LlmAgentBuilder {
     }
 
     /// Set the system instruction for this agent.
+    ///
+    /// `{key}` is replaced with the session state value under `key` (an error when it is
+    /// missing), `{key?}` with the value or nothing, `{app:key}`, `{user:key}`, and
+    /// `{temp:key}` with prefixed state, and `{artifact.name}` with the artifact's text. See
+    /// [`adk_core::inject_session_state`]. Text whose braces are not placeholders, such as a
+    /// skill file quoting `set_target {window_id}`, belongs in
+    /// [`instruction_provider`](Self::instruction_provider), which sends it as written.
     pub fn instruction(mut self, instruction: impl Into<String>) -> Self {
         self.instruction = Some(instruction.into());
         self
     }
 
     /// Set a dynamic instruction provider evaluated per invocation.
+    ///
+    /// Takes precedence over [`instruction`](Self::instruction). Its result is sent as
+    /// written, without `{key}` templating.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_agent::LlmAgentBuilder;
+    ///
+    /// let skill = "Call set_target {window_id} before the first click.";
+    /// let builder = LlmAgentBuilder::new("trainer").instruction_provider(Box::new(move |_ctx| {
+    ///     Box::pin(async move { Ok(skill.to_string()) })
+    /// }));
+    /// ```
     pub fn instruction_provider(mut self, provider: InstructionProvider) -> Self {
         self.instruction_provider = Some(Arc::new(provider));
         self

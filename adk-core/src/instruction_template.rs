@@ -1,4 +1,4 @@
-use crate::{AdkError, InvocationContext, Result};
+use crate::{AdkError, ErrorCategory, ErrorComponent, InvocationContext, Result};
 
 /// Checks if a character is valid as the first character of a placeholder identifier.
 fn is_ident_start(c: char) -> bool {
@@ -152,7 +152,19 @@ async fn replace_match(ctx: &dyn InvocationContext, content: &str) -> Result<Str
                 if optional {
                     Ok(String::new())
                 } else {
-                    Err(AdkError::agent(format!("State variable '{var_name}' not found")))
+                    Err(AdkError::new(
+                        ErrorComponent::Agent,
+                        ErrorCategory::InvalidInput,
+                        "agent.instruction.state_missing",
+                        format!(
+                            "State variable '{var_name}' not found. Set it in session state, or \
+                             write {{{var_name}?}} when it may be absent. If the braces are text \
+                             rather than a placeholder, set the instruction with \
+                             `instruction_provider`, which sends it as written, or write \
+                             {{{{{var_name}}}}} or \\{{{var_name}}}, which reach the model \
+                             unchanged"
+                        ),
+                    ))
                 }
             }
         }
