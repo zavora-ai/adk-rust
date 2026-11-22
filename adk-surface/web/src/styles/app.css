@@ -1086,6 +1086,8 @@ pre {
 
 .composer-wrap {
   display: grid;
+  /* Tracks that shrink: a text field's natural width must never widen the column. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   width: 100%;
   max-width: 840px;
@@ -1095,6 +1097,7 @@ pre {
 
 .composer {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   background: var(--card);
@@ -1106,6 +1109,8 @@ pre {
 
 .composer-input {
   flex: 1;
+  /* No natural width: the field takes what the buttons leave, down to a phone. */
+  width: 0;
   min-width: 0;
   border: 0;
   background: transparent;
