@@ -22,11 +22,17 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 | `mistralrs-metal` | The same on Apple GPUs through Metal |
 | `mistralrs-cuda` | The same on NVIDIA GPUs; needs the CUDA toolkit |
 
-## Built-In Model
+## Built-In Models
 
 | Manifest | Model | Files | Licence |
 |----------|-------|-------|---------|
 | `qwen3-vl-2b-instruct` (`mistralrs::QWEN3_VL_2B`) | `Qwen/Qwen3-VL-2B-Instruct` at `89644892` | 10 files, 4.27 GB; `model.safetensors` is 4,255,140,312 bytes | Apache-2.0 |
+| `qwen3-vl-4b-instruct` (`mistralrs::QWEN3_VL_4B`) | `Qwen/Qwen3-VL-4B-Instruct` at `ebb281ec` | 12 files, 8.89 GB; two safetensors shards and their index | Apache-2.0 |
+| `qwen3-vl-8b-instruct` (`mistralrs::QWEN3_VL_8B`) | `Qwen/Qwen3-VL-8B-Instruct` at `0c351dd0` | 14 files, 17.5 GB; four safetensors shards and their index | Apache-2.0 |
+
+The 4B model is the local describer the spec defaults to, and the 8B model the local GUI
+grounding default. The weights load in bf16, so a model needs about its download size in
+memory; `MistralRsConfig::isq` quantises in place at load time to need less.
 
 Every file is pinned by SHA-256 and checked before mistral.rs reads the directory, and a
 `*.safetensors` file in that directory the manifest does not pin refuses the load. A manifest

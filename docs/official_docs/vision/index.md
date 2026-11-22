@@ -281,6 +281,9 @@ mod my_detector {
 | Oversized | Refused with the limit in the message, or downscaled with the resize recorded |
 | Errors | A rate limit maps to `RateLimited` with a retry hint |
 
+A `VideoAnalyzer` runs `video_analyzer_conformance_tests!` instead; see
+[Video and Tracking](video.md#conformance-for-video-analyzers).
+
 `EgressGate::stage` runs the first three steps and stores the copy without releasing it, so
 an approval card can show the exact image; see [Governed Vision Tools](governed-tools.md).
 
