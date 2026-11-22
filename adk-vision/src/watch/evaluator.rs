@@ -24,7 +24,7 @@ use crate::media::FrameSourceId;
 /// index is not past the last one seen for the session is ignored, so a redelivery or a late
 /// frame changes nothing. A track the observation does not list as held is forgotten.
 ///
-/// See the [module documentation](super) for an example.
+/// The `watch` module documentation has an example.
 #[derive(Clone, Debug)]
 pub struct WatchEvaluator {
     conditions: Vec<WatchCondition>,

@@ -1,4 +1,4 @@
-//! A [`ComputerActuator`] over the plain tools of a `computer-use-mcp` server.
+//! A [`adk_core::ComputerActuator`] over the plain tools of a `computer-use-mcp` server.
 
 use std::collections::HashSet;
 use std::sync::Arc;
