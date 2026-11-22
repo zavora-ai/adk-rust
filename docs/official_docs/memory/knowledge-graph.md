@@ -30,7 +30,9 @@ exposes a richer graph API on top.
 
 There's also an **episodic** store (`kg_episodic`) that logs raw turns, separate
 from the curated graph — so you keep both the transcript and the distilled model.
-`add_session` (the `MemoryService` method) writes there; it extracts no facts.
+`add_session` (the `MemoryService` method) writes there; it extracts no facts. A turn keeps
+its text and the artifacts it refers to (`Part::FileData` references, never inline bytes); a
+turn with neither is skipped.
 
 ## Validity intervals
 

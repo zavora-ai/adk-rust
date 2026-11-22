@@ -28,6 +28,38 @@ entries most relevant to a query.
 
 `MemoryEntry` is `#[non_exhaustive]`: build it with `MemoryEntry::new` and the `with_*` methods.
 
+### Artifact references
+
+A memory can refer to an artifact — the frame a caption describes, the page a note cites —
+without holding its bytes. `with_artifact(uri, mime_type)` adds a `Part::FileData` after the
+entry's text, and `artifact_references()` returns the entry's references.
+
+```rust
+use adk_core::Content;
+use adk_memory::MemoryEntry;
+use adk_memory::text::{ArtifactReference, extract_text};
+
+let caption = MemoryEntry::new(Content::new("model").with_text("carton 00117, seal torn"), "inspector")
+    .with_artifact("artifact://inspector/plant-7/week-2026-11-17/vision-ab12.png#0", "image/png");
+assert_eq!(extract_text(&caption.content), "carton 00117, seal torn");
+assert_eq!(
+    caption.artifact_references(),
+    vec![ArtifactReference::new("artifact://inspector/plant-7/week-2026-11-17/vision-ab12.png#0", "image/png")]
+);
+```
+
+The text stays what a search matches: `text::extract_text` returns the text parts alone, and
+`text::artifact_references` the references — file data, and inline data or embedded resources
+that name their source URI, never their bytes.
+
+| Backend | Artifact references |
+|---------|---------------------|
+| In-memory, SQLite, PostgreSQL, MongoDB, Neo4j, Redis | Kept with the entry's whole content |
+| Knowledge graph (episodic log) | Kept in a column of their own and returned as `Part::FileData` |
+| Vertex AI Memory Bank | Not kept: Memory Bank stores the facts it extracts as text |
+
+[Visual memory](../vision/memory.md) stores each image caption this way.
+
 ## Expiry
 
 An entry expires at its `expires_at`. An entry written without one takes the service's default
