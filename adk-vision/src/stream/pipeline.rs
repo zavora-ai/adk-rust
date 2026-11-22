@@ -159,7 +159,8 @@ pub enum SourceEvent {
 /// [`WatchEvaluator`](crate::WatchEvaluator) takes. A sink that holds watch conditions keeps
 /// the frame of each event as its wake payload, so the frame is stored redacted, and hands the
 /// event with the frame's artifact to a [`WatchSink`](crate::WatchSink) such as the kernel's
-/// `VisionWakeSource`:
+/// `VisionWakeSource`. [`StreamWatch`](super::StreamWatch) is that sink, with the
+/// `vision.watch.fired` record; in outline:
 ///
 /// ```
 /// use std::sync::{Arc, Mutex};

@@ -527,10 +527,7 @@ impl FrameSources {
             {
                 running.watch.remove_condition(name);
             }
-            let stopping = match entry.conditions.is_empty() {
-                true => entry.running.take(),
-                false => None,
-            };
+            let stopping = if entry.conditions.is_empty() { entry.running.take() } else { None };
             (removed, stopping)
         };
         if let Some(running) = stopping {

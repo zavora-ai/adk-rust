@@ -36,7 +36,7 @@
 //! | `ocr-vl-metal` | `ocr-vl` on Apple GPUs |
 //! | `mistralrs` | `mistralrs`: `LlmDescriber::mistralrs` loads a verified Qwen3-VL (or another mistral.rs vision model) in this process; regions in Qwen3-VL's own 0–1000 frame (implies `cloud`, `fetch`) |
 //! | `mistralrs-metal`, `mistralrs-cuda` | `mistralrs` on Apple GPUs or CUDA |
-//! | `stream` | `stream`: `FrameSource`, the sampler, the frame governor, frame retention and the stream pipeline |
+//! | `stream` | `stream`: `FrameSource`, the sampler, the frame governor, frame retention and the stream pipeline; `StreamWatch`, which keeps each watch event's frame and wakes a `WatchSink`; `FrameSources`, the named sources `vision_watch` starts and stops watches on |
 //! | `rtsp`, `ffmpeg`, `screen`, `browser`, `surface-camera` | The frame sources: `RtspSource`, `FileSource` (and H.264/H.265 through a user-installed ffmpeg), `ScreenSource`, `BrowserSource`, `SurfaceCameraSource` |
 //! | `device` | `DeviceSource`: a camera on this machine through a user-installed ffmpeg (AVFoundation, v4l2, DirectShow), and `DeviceSource::list` (implies `ffmpeg`) |
 //! | `stream-fixtures` | `stream::fixtures`: the generated conveyor clip and an in-process RTSP test server |

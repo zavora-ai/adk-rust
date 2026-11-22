@@ -40,6 +40,12 @@
 //!   [`Tracker`] gives them anonymous track identifiers that reset with the source session.
 //! - **Observations.** Each processed frame reaches an [`ObservationSink`]: watch
 //!   conditions, wakes and the live camera surface consume the stream there.
+//! - **Watches and wakes.** [`StreamWatch`] is the watch stage: it holds watch conditions
+//!   against every observation, keeps the frame of each event as its wake payload, and
+//!   delivers the event to a [`WatchSink`](crate::WatchSink) such as the kernel's
+//!   `VisionWakeSource`. [`FrameSources`] holds an operator's named sources and streams each
+//!   only while a watch is registered on it; the `vision_watch` tool starts and stops those
+//!   watches (spec 3.7 §7.8, §7.10).
 //!
 //! With the `conformance` feature, [`check_frame_source`] checks any source against the
 //! [`FrameSource`] contract: refused bad rates, rising indices and times, the sampling rate,
