@@ -113,38 +113,62 @@ fn encode_wav(frame: &AudioFrame) -> AudioResult<Bytes> {
 }
 
 /// Decode a RIFF WAV file into an `AudioFrame`.
+///
+/// Walks the RIFF chunks for `fmt ` and `data` rather than reading fixed offsets, so a file
+/// with other chunks first — CoreAudio writes `JUNK` before `fmt ` and `FLLR` before `data`
+/// — decodes like a canonical 44-byte header.
 fn decode_wav(data: &[u8]) -> AudioResult<AudioFrame> {
-    if data.len() < 44 {
+    if data.len() < 12 {
         return Err(AudioError::Codec("WAV data too short for header".into()));
     }
     if &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
         return Err(AudioError::Codec("invalid WAV header".into()));
     }
-    let channels = u16::from_le_bytes([data[22], data[23]]);
-    let sample_rate = u32::from_le_bytes([data[24], data[25], data[26], data[27]]);
-    let bits_per_sample = u16::from_le_bytes([data[34], data[35]]);
-    if bits_per_sample != 16 {
-        return Err(AudioError::Codec(format!(
-            "unsupported bits per sample: {bits_per_sample}, expected 16"
-        )));
-    }
-    // Find the data chunk
-    let mut offset = 12;
-    while offset + 8 <= data.len() {
-        let chunk_id = &data[offset..offset + 4];
-        let chunk_size = u32::from_le_bytes([
-            data[offset + 4],
-            data[offset + 5],
-            data[offset + 6],
-            data[offset + 7],
-        ]) as usize;
-        if chunk_id == b"data" {
-            let start = offset + 8;
-            let end = (start + chunk_size).min(data.len());
-            let pcm = Bytes::copy_from_slice(&data[start..end]);
-            return Ok(AudioFrame::new(pcm, sample_rate, channels as u8));
+    // (sample_rate, channels) from the `fmt ` chunk, which precedes `data`.
+    let mut format = None;
+    let mut offset = 12usize;
+    while let Some(header) = offset.checked_add(8).and_then(|end| data.get(offset..end)) {
+        let chunk_size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
+        let start = offset + 8;
+        // A streamed WAV can declare a placeholder size; the bytes present count.
+        let end = start.saturating_add(chunk_size).min(data.len());
+        let body = &data[start..end];
+        match &header[0..4] {
+            b"fmt " => {
+                if body.len() < 16 {
+                    return Err(AudioError::Codec(format!(
+                        "WAV fmt chunk too short: {} bytes, expected at least 16",
+                        body.len()
+                    )));
+                }
+                let channels = u16::from_le_bytes([body[2], body[3]]);
+                let sample_rate = u32::from_le_bytes([body[4], body[5], body[6], body[7]]);
+                let bits_per_sample = u16::from_le_bytes([body[14], body[15]]);
+                if bits_per_sample != 16 {
+                    return Err(AudioError::Codec(format!(
+                        "unsupported bits per sample: {bits_per_sample}, expected 16"
+                    )));
+                }
+                let channels = u8::try_from(channels).ok().filter(|&c| c > 0).ok_or_else(|| {
+                    AudioError::Codec(format!(
+                        "unsupported channel count: {channels}, expected 1 to 255"
+                    ))
+                })?;
+                format = Some((sample_rate, channels));
+            }
+            b"data" => {
+                let (sample_rate, channels) = format.ok_or_else(|| {
+                    AudioError::Codec("WAV data chunk comes before the fmt chunk".into())
+                })?;
+                return Ok(AudioFrame::new(Bytes::copy_from_slice(body), sample_rate, channels));
+            }
+            _ => {}
         }
-        offset += 8 + chunk_size;
+        // Chunks are padded to an even length.
+        offset = start.saturating_add(chunk_size).saturating_add(chunk_size % 2);
     }
-    Err(AudioError::Codec("WAV data chunk not found".into()))
+    Err(AudioError::Codec(
+        if format.is_some() { "WAV data chunk not found" } else { "WAV fmt chunk not found" }
+            .into(),
+    ))
 }
