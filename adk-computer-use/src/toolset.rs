@@ -1,4 +1,4 @@
-//! Claude's computer use toolset as governed ADK tools over a [`ComputerActuator`].
+//! Claude's computer use toolset as governed ADK tools over a [`adk_core::ComputerActuator`].
 //!
 //! Each member of `computer_toolset_20260801` is one ADK tool, `computer.<member>`, so tool
 //! policy, confirmations, standing approvals, the kill switch, run budgets and the action
