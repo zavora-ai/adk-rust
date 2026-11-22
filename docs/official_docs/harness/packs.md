@@ -121,8 +121,9 @@ fn desktop_harness(
 }
 ```
 
-The runtime is `adk_computer_use::ComputerUseMcpRuntime` over a running `computer-use-mcp`
-server, or any `ComputerUseRuntime`. `Pack::ComputerUse` alone, and `adk-rust --pack
+The runtime is any `ComputerUseRuntime`. `adk_computer_use::ComputerUseMcpRuntime` calls
+governed tools that no released `computer-use-mcp` serves; see
+[Governed Desktop Automation](../computer-use/index.md). `Pack::ComputerUse` alone, and `adk-rust --pack
 computer-use`, refuse at `build`: a runtime is a connection to a server, which only the library
 API takes.
 

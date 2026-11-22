@@ -77,12 +77,13 @@ fn build() -> Result<(adk_agent::LlmAgent, RunConfig), Box<dyn std::error::Error
 `adk_core::ComputerActuator`, the trait an environment implements to perform a
 `ComputerAction` (click, drag, scroll, type, key, screenshot, zoom). The toolset offers only the
 members the actuator supports, bounds coordinates by the display, and returns screenshots as
-images. Every action passes through the governed path, and the crate ships no desktop actuator:
-an application hands one over explicitly.
+images. Every action passes through the governed path, and an application hands the actuator
+over explicitly.
 
 | Actuator | Environment |
 |----------|-------------|
 | `adk_browser::WebDriverComputer` | A browser viewport as the display, over WebDriver; every action, `zoom` included |
+| `adk_computer_use::McpComputerActuator` | A desktop, through a running `computer-use-mcp` server's plain tools; see [A desktop through computer-use-mcp](#a-desktop-through-computer-use-mcp) |
 | Your own `ComputerActuator` | A virtual desktop, a remote desktop session, or a device |
 
 ```rust
@@ -106,6 +107,52 @@ agent has, at the version the model accepts: `computer_toolset_20260801` for Cla
 Opus 5.5, Haiku 5.5 and Fable 5.2, and `computer_20251124` with the display size for Claude
 Opus 4.7. See [Anthropic: Computer Use and Browser Use](../models/anthropic.md#computer-use-and-browser-use).
 
+### A desktop through computer-use-mcp
+
+`McpComputerActuator` performs each action with one of the server's plain tools.
+`McpComputerActuator::builder(toolset).connect()` lists the server's tools and takes one
+screenshot, which fixes the display size the toolset declares.
+
+| Action | Server tool | Profile |
+|--------|-------------|---------|
+| Screenshot | `screenshot` of the whole display, as a PNG at `screenshot_width` pixels (1,280 by default) | every profile |
+| Click, move, scroll, type, key, hold key, cursor position | `click`, `mouse_move`, `scroll`, `type`, `key`, `hold_key`, `cursor_position` | `core` and above |
+| Drag, mouse down, mouse up | `mouse_drag` or `left_click_drag`, `left_mouse_down`, `left_mouse_up` | `ax` and above (`COMPUTER_USE_PROFILE=ax`) |
+| Zoom | None: the server returns the region unscaled, and the toolset withholds `zoom` | — |
+
+The model works in screenshot pixels, and the server takes logical screen points. Each screenshot
+reply states its mapping (`screen_x = 0 + image_x * 2.0000`), and the actuator converts every
+coordinate with the latest one. An action whose tool the server's profile does not list is
+withheld from the model. The server's own guards still apply: input from the person, Pause or
+Stop on its status card, and its policy refuse an action, and the refusal reaches the model as the
+tool's error.
+
+```rust
+use std::sync::Arc;
+
+use adk_agent::LlmAgentBuilder;
+use adk_computer_use::{ComputerUseToolset, McpComputerActuator};
+use adk_core::Llm;
+use adk_tool::McpToolset;
+use adk_tool::mcp::rmcp::{ServiceExt, transport::TokioChildProcess};
+use tokio::process::Command;
+
+async fn build(model: Arc<dyn Llm>) -> Result<adk_agent::LlmAgent, Box<dyn std::error::Error>> {
+    let mut command = Command::new("npx");
+    command.args(["-y", "@zavora-ai/computer-use-mcp"]).env("COMPUTER_USE_PROFILE", "ax");
+    let server = Arc::new(McpToolset::new(().serve(TokioChildProcess::new(command)?).await?));
+
+    let actuator = McpComputerActuator::builder(server).screenshot_width(1280).connect().await?;
+    let computer = ComputerUseToolset::new(Arc::new(actuator));
+    Ok(LlmAgentBuilder::new("operator").model(model).toolset(Arc::new(computer)).build()?)
+}
+```
+
+> **Note:** `ComputerUseMcpRuntime`, which drives the [reference graph](index.md), calls governed
+> tools (`preview_action`, `execute_action`, control leases, target reservations,
+> `emergency_stop`) that no released `computer-use-mcp` serves. Use `McpComputerActuator` to act
+> through the server.
+
 ## Security
 
 Run the browser or desktop in a dedicated container or virtual machine with a fresh profile that
@@ -122,7 +169,10 @@ model. The governed path decides what runs; isolation limits what a mistake can 
 
 ### Remaining work
 
-- A native desktop `ComputerActuator` (X11, macOS, Windows): use the `computer-use-mcp` server
-  through `ComputerUseMcpRuntime` and the reference graph, or supply your own actuator.
+- `ComputerUseMcpRuntime` calls governed tools no released `computer-use-mcp` serves. Whether it
+  becomes an adapter over the plain tools or is retired waits on the server's agent hand-off and
+  control lease design.
+- A desktop `ComputerActuator` that needs no server (X11, macOS, Windows): use
+  `McpComputerActuator`, or supply your own actuator.
 - `read_console` and `read_network` need a browser automation layer that captures console and
   network events, such as the Chrome DevTools Protocol.
