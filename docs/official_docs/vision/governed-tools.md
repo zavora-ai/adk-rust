@@ -14,8 +14,8 @@ adk-vision = { version = "3.0.0", features = ["guardrail"] }
 ```
 
 > **Note:** the spec's open-question defaults are in force: images leave only after
-> redaction and each remote host asks first (Q1), and faces are redacted as the whole box
-> of every detected person until a face detector is chosen (Q3).
+> redaction and each remote host asks first (Q1). Q3 is settled: faces are redacted by the
+> YuNet face detector, and a person it finds no face for as the whole person.
 
 ## The Tools
 
@@ -258,12 +258,15 @@ adk-harness = { version = "3.0.0", features = ["vision-local"] }
 
 | Class | `vision-local` | Without it |
 |-------|----------------|------------|
-| `faces` | `PersonRedactor::rf_detr` — RF-DETR Nano | No redactor: every remote release is refused |
+| `faces` | `FaceRedactor::on_device` — YuNet faces, RF-DETR Nano for people with no face found | No redactor: every remote release is refused |
 | `personal_text` | `PersonalTextRedactor::pp_ocr` — PP-OCRv6 small, with `PERSONAL_FIELD_LABELS` | No redactor: every remote release is refused |
 
 The weights load on the first release through `VisionPack::model_fetcher`, or a fetcher built
 from `HF_HUB_CACHE`, `HF_HUB_OFFLINE` and `HF_TOKEN`, each file checked against the built-in
-manifest. When they cannot load, that release is refused and recorded at the redact step.
+manifest. When they cannot load, that release is refused and recorded at the redact step;
+when only YuNet cannot load, each detected person is covered whole. With `on_device = true`
+in `[egress]` the default fetcher works offline and every release is refused at the
+destination step ([The On-Device Profile](../security/image-privacy.md#the-on-device-profile)).
 Calls that stay on the device never load them. `vision-local` builds ONNX Runtime, downloaded
 at build time as `adk-vision`'s `onnx` feature does.
 

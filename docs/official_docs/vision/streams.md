@@ -188,9 +188,42 @@ async fn escalate(pipeline: &StreamPipeline, cx: &VisionCx, frames: u64) -> adk_
 Every frame passes a `PrivacyHook` before any other stage sees it. The builder requires one:
 there is no default, so a pipeline that redacts nothing says so with `NoRedaction`, and kept
 frames record `none` as their privacy step. `RedactorPrivacy` runs any on-device egress
-`Redactor` and fills, blurs or pixelates what it finds; over `PersonRedactor` it is the
-interim face policy, every detected person's whole box. The face blur of phase C implements
-the same trait.
+`Redactor` and hides what it finds:
+
+| `RedactionMethod` | Hides each box by |
+|-------------------|-------------------|
+| `Fill` | Solid black |
+| `Blur { sigma }` | A Gaussian of `sigma` pixels |
+| `ScaledBlur { fraction }` | A Gaussian whose standard deviation is `fraction` of the box's longer side; `FACE_BLUR` is a quarter |
+| `Pixelate { block }` | Squares of `block` pixels |
+
+`RedactorPrivacy::blur_faces(fetcher)` (feature `onnx`) is the face blur of spec 3.7 S18 and
+the hook a camera that can see people uses: `FaceRedactor::on_device` — YuNet for faces,
+RF-DETR Nano for each person YuNet finds no face for — under `FACE_BLUR`. A face is blurred
+and the rest of its person stays; a person seen from behind is blurred whole. Its name, and
+the privacy step kept frames record, is `redactor:faces`. The models load on the first frame,
+each verified against its SHA-256; see [Image Privacy](../security/image-privacy.md#what-is-redacted)
+for the redactor and the face detector's licence.
+
+```rust
+use std::sync::Arc;
+
+use adk_vision::stream::{RedactorPrivacy, RtspSource, StreamPipeline};
+use adk_vision::{FetchConfig, InMemoryAcceptanceStore, ModelFetcher};
+
+fn blurred(camera: Arc<RtspSource>) -> adk_vision::Result<StreamPipeline> {
+    let fetcher =
+        ModelFetcher::new(FetchConfig::from_env(), Arc::new(InMemoryAcceptanceStore::new()));
+    StreamPipeline::builder(camera, Arc::new(RedactorPrivacy::blur_faces(fetcher))).build()
+}
+```
+
+YuNet finds faces from about 10 px to most of the frame (the hook runs it at the full input
+and at half of it), and on drawn portraits 60 to 1,400 px tall the blur leaves no face that
+YuNet finds again from a score of 0.3. Scenario S18 of `examples/vision` streams two drawn
+passers-by across the conveyor and checks the store: every face was blurred, YuNet finds none
+in any stored frame, each image was written after its frame's blur, and no frame that showed
+a face reached the store as captured.
 
 `FramePrivacy::apply` is the only way to make a `RedactedFrame`, and `FrameKeeper` stores
 only `RedactedFrame`s, so a frame is redacted before any artifact write and an unredacted
@@ -408,6 +441,7 @@ The `stream-fixtures` feature holds what the tests and the phase B scenarios str
 | `ConveyorClip` | 640×360 at 10 fps, about five minutes: 200 printed parts, 12 with cracks of seeded length (4–14 mm), a 24 mm fiducial in the belt's plane, and a wall clock above the line; drawn per frame from a seed, with its ground truth |
 | `RtspTestServer` | An RTSP server on `127.0.0.1` in the test process: MJPEG (RFC 2435) encoded in process, or H.264 (RFC 6184) access units; real-time or faster, looping, Basic credentials |
 | `H264Stream`, `write_mp4` | H.264 and MP4 encodings of any frames, made by a user-installed `ffmpeg` with libx264 |
+| `draw_portrait` | A drawn head and shoulders over any frame, returning its face's box: a generated face for the privacy scenarios, not anyone's likeness |
 
 No clip is committed or downloaded: every frame is drawn at test time.
 

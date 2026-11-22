@@ -46,7 +46,7 @@ are read as `huggingface_hub` reads them.
 exported, beside the built-in one.
 
 ```bash
-adk-rust vision models fetch pp-ocrv6-tiny-det pp-ocrv6-tiny-rec rf-detr-n
+adk-rust vision models fetch pp-ocrv6-tiny-det pp-ocrv6-tiny-rec rf-detr-n yunet-2023mar
 adk-rust vision models verify
 ```
 
@@ -78,7 +78,11 @@ anything left the machine.
 A `run` whose on-device model is not cached fetches it first, as `models fetch` does: by its
 pinned revision, every file's SHA-256 checked, the licence gate first. The first call can
 therefore download the model — `rf-detr-n` is 108 MB. With `HF_HUB_OFFLINE=1` an uncached model
-is refused instead. `models fetch` does the same download ahead of time.
+is refused instead. `models fetch` does the same download ahead of time. The face redactor of
+a remote call runs `yunet-2023mar` (232 KB) for faces and `rf-detr-n` for people it finds no
+face for. Under the on-device profile (`on_device = true` in `[egress]`) `run` loads models
+from the cache only, as `HF_HUB_OFFLINE=1` does, and refuses every remote call at the egress
+gate.
 
 ```bash
 adk-rust vision run read invoice.png --annotate invoice.read.png

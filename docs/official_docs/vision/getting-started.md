@@ -57,7 +57,7 @@ one row per page to `tables/<kind>.csv`. Nothing about these calls leaves the ma
 | Step | Backend | Where |
 |------|---------|-------|
 | Read a page | `pp-ocrv6-tiny` (`PpOcrReader`) | This computer |
-| Find people to cover | `rf-detr-n` (`RfDetr`) behind `PersonRedactor` | This computer |
+| Find people to cover | `rf-detr-n` (`RfDetr`) behind `PersonRedactor`, or `yunet-2023mar` (`YuNet`) for faces behind `FaceRedactor` | This computer |
 | Find personal text to cover | PP-OCRv6 and the PII patterns behind `PersonalTextRedactor` | This computer |
 | Describe a region the reader could not read | The cloud model (`LlmDescriber::remote`) | The provider, after the egress gate |
 
@@ -101,7 +101,7 @@ action = "ask"
 
 | Rule | Effect |
 |------|--------|
-| `redact` | Faces (a detected person's whole box, spec 3.7 Q3) and personal text are filled solid before any decision; the pack adds both even if the file leaves them out |
+| `redact` | Faces (the face, or a detected person's whole box when no face is found; spec 3.7 Q3) and personal text are filled solid before any decision; the pack adds both even if the file leaves them out |
 | `document` → `deny` | A whole page never leaves |
 | `document_crop` → `ask` | A field's crop waits for you: the terminal shows the host, the data class, what was covered and the image's digest, and only that exact image is released |
 

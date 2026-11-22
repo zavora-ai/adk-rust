@@ -139,7 +139,7 @@ Schema in `adk-vision/schema/region-set.json`. Shapes carry a `kind` tag, transf
 | Meter | The budget hold opens before the image is prepared or released, so a call the budget cannot cover sends nothing and leaves no egress record; images (and pages, for reading) are committed as units, at the unit price for a per-unit backend and zero for a local one; a token-billed backend's `TokenEstimate` sizes its hold |
 | Cancel | The `VisionCx` cancellation token ends the call at once; a frozen kill switch refuses it before the backend runs |
 | Normalise | Every answer is mapped to source pixels |
-| Escalate | On a trigger, the uncertain region's crop goes to the escalation backend, whose answer replaces the primary's with `escalatedFrom` |
+| Escalate | On a trigger, the uncertain region's crop goes to the escalation backend, whose answer replaces the primary's with `escalatedFrom`; an escalation the egress gate refuses leaves the primary's answer, and a held one stops the call for approval |
 
 | `Trigger` | Escalates | Sends |
 |-----------|-----------|-------|
@@ -154,7 +154,8 @@ cost, region count, duration — the fields of the `vision.call` audit record.
 
 `EgressGate::release` is the only way an image reaches a remote backend:
 
-1. **Destination.** The adk-core `EgressPolicy` decides each of the backend's hosts.
+1. **Destination.** Under the on-device profile (`on_device = true` in `[egress]`) every
+   host is refused; otherwise the adk-core `EgressPolicy` decides each of the backend's hosts.
 2. **Minimise.** The image is cropped to the request's crop and downscaled to the
    backend's limit.
 3. **Redact.** Each class the configuration requires is found by its `Redactor` and filled
