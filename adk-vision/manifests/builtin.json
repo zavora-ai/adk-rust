@@ -675,6 +675,41 @@
     }
   },
   {
+    "id": "yunet-2023mar",
+    "task": "detect",
+    "source": {
+      "kind": "huggingFace",
+      "repo": "opencv/face_detection_yunet",
+      "revision": "3cc26e7f1014a5ee5d74a42acee58bafc9d0a310"
+    },
+    "files": [
+      {
+        "path": "face_detection_yunet_2023mar.onnx",
+        "sha256": "sha256:8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+        "size": 232589
+      }
+    ],
+    "licence": {
+      "id": "MIT",
+      "url": "https://huggingface.co/opencv/face_detection_yunet/blob/3cc26e7f1014a5ee5d74a42acee58bafc9d0a310/LICENSE",
+      "class": "permissive"
+    },
+    "runtime": {
+      "kind": "ort",
+      "opset": 11
+    },
+    "io": {
+      "input": {
+        "width": 640,
+        "height": 640,
+        "letterbox": "topLeft"
+      },
+      "labels": [
+        "face"
+      ]
+    }
+  },
+  {
     "id": "efficientsam-ti",
     "task": "segment",
     "source": {

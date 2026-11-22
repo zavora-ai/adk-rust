@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use adk_core::egress::EgressTarget;
 use chrono::Utc;
 
-use super::gate::{deny_reason, remote_hosts, split_host_port};
+use super::gate::{deny_reason, on_device_reason, remote_hosts, split_host_port};
 use super::{
     DataClass, EgressAction, EgressDecision, EgressGate, EgressReceipt, EgressRecord, EgressRefusal,
 };
@@ -125,7 +125,8 @@ impl EgressGate {
     /// Releases a video clip to a remote backend, or refuses, in the steps of
     /// [`release`](Self::release):
     ///
-    /// 1. **Destination.** The adk-core egress policy decides each of the backend's hosts.
+    /// 1. **Destination.** The on-device profile refuses every host; otherwise the adk-core
+    ///    egress policy decides each of the backend's hosts.
     /// 2. **Minimise and redact.** A clip is not re-encoded on the device, so a
     ///    configuration that requires any redaction class refuses every clip (V-I2): send
     ///    sampled frames instead, which the gate redacts one by one.
@@ -149,6 +150,11 @@ impl EgressGate {
         if let Err(err) = cx.check() {
             self.refuse_clip(cx, &request, &hosts, None, "destination", &err.to_string()).await?;
             return Err(err);
+        }
+        if self.config.on_device {
+            let reason = on_device_reason(&hosts);
+            self.refuse_clip(cx, &request, &hosts, None, "destination", &reason).await?;
+            return Err(VisionError::EgressRefused { host: hosts.join(", "), reason });
         }
         for host in &hosts {
             let (name, port) = split_host_port(host);

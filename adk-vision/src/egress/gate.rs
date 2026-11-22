@@ -116,12 +116,14 @@ impl EgressPreview {
         self.image.chain()
     }
 
-    /// Boxes filled, by redaction class.
+    /// Boxes filled, by the redaction class the rules require: a face covered as the whole
+    /// person counts under `faces`.
     pub fn redactions(&self) -> &BTreeMap<RedactionClass, u32> {
         &self.redactions
     }
 
-    /// The boxes filled, in the egress image's pixels, by redaction class.
+    /// The boxes filled, in the egress image's pixels, each with the class it is drawn as:
+    /// `people` for a face covered as the whole person.
     pub fn filled(&self) -> &[(RedactionClass, BBox)] {
         &self.filled
     }
@@ -217,16 +219,28 @@ impl StagedEgress {
     }
 
     /// A one-line caption: destination, data class and what was covered, in the board's
-    /// wording ("1 face · the whole person is covered").
+    /// wording: "1 face covered" for a face the face detector placed, "1 face · the whole
+    /// person is covered" for a person covered whole.
     pub fn caption(&self) -> String {
+        let mut drawn: BTreeMap<&str, u32> = BTreeMap::new();
+        for (class, _) in &self.preview.filled {
+            *drawn.entry(class.as_str()).or_default() += 1;
+        }
+        let plural = |count: u32| if count == 1 { "" } else { "s" };
         let mut covered = Vec::new();
-        for (class, count) in &self.preview.redactions {
-            if *count == 0 {
-                continue;
-            }
-            let plural = if *count == 1 { "" } else { "s" };
-            covered.push(match class.as_str() {
-                "faces" => format!("{count} face{plural} · the whole person is covered"),
+        let faces = drawn.remove("faces").unwrap_or(0);
+        let people = drawn.remove("people").unwrap_or(0);
+        match (faces, people) {
+            (0, 0) => {}
+            (faces, 0) => covered.push(format!("{faces} face{} covered", plural(faces))),
+            (0, people) => covered
+                .push(format!("{people} face{} · the whole person is covered", plural(people))),
+            (faces, people) => covered
+                .push(format!("{} faces covered, {people} as the whole person", faces + people)),
+        }
+        for (class, count) in drawn {
+            let plural = plural(count);
+            covered.push(match class {
                 "personal_text" => format!("{count} personal detail{plural} covered"),
                 "schema_personal_fields" => format!("{count} personal field{plural} covered"),
                 "marked" => format!("{count} marked region{plural} covered"),
@@ -264,8 +278,9 @@ impl StagedEgress {
 ///
 /// [`release`](Self::release) runs six steps:
 ///
-/// 1. **Destination.** The adk-core [`EgressPolicy`] decides each of the backend's hosts;
-///    an unlisted host is refused here.
+/// 1. **Destination.** Under the on-device profile ([`EgressConfig::on_device`]) every host
+///    is refused here; otherwise the adk-core [`EgressPolicy`] decides each of the backend's
+///    hosts, and an unlisted host is refused here.
 /// 2. **Minimise.** The image is cropped to the request's crop and downscaled to the
 ///    backend's limit; both are recorded in the transform chain.
 /// 3. **Redact.** Every class the configuration requires is found by its [`Redactor`] and
@@ -514,6 +529,11 @@ impl EgressGate {
             self.refuse(cx, request, hosts, None, "destination", &err.to_string()).await?;
             return Err(err);
         }
+        if self.config.on_device {
+            let reason = on_device_reason(hosts);
+            self.refuse(cx, request, hosts, None, "destination", &reason).await?;
+            return Err(VisionError::EgressRefused { host: hosts.join(", "), reason });
+        }
         for host in hosts {
             let (name, port) = split_host_port(host);
             if let Err(denial) = self.policy.decide(&EgressTarget::Name { host: name, port }) {
@@ -554,7 +574,8 @@ impl EgressGate {
         }
 
         let minimised = SentImage::new(source.digest(), Arc::clone(&pixels), chain.clone());
-        let mut boxes: Vec<(RedactionClass, Vec<BBox>)> = Vec::new();
+        // Each required class with the boxes found for it, each box with the class it is drawn as.
+        let mut boxes: Vec<(RedactionClass, Vec<(RedactionClass, BBox)>)> = Vec::new();
         let mut required: Vec<&RedactionClass> = Vec::new();
         for class in &self.config.redact {
             if !required.contains(&class) {
@@ -571,7 +592,7 @@ impl EgressGate {
             }
             let mut found = Vec::new();
             for redactor in redactors {
-                match redactor.find(cx, &minimised).await {
+                match redactor.find_classified(cx, &minimised).await {
                     Ok(regions) => found.extend(regions),
                     Err(err) => {
                         let reason = format!("the `{class}` redactor failed: {err}");
@@ -583,7 +604,11 @@ impl EgressGate {
             boxes.push((class.clone(), found));
         }
         if !request.marked.is_empty() {
-            let marked = request.marked.iter().map(|b| chain.bbox_to_target(b)).collect();
+            let marked = request
+                .marked
+                .iter()
+                .map(|b| (RedactionClass::marked(), chain.bbox_to_target(b)))
+                .collect();
             boxes.push((RedactionClass::marked(), marked));
         }
 
@@ -592,10 +617,10 @@ impl EgressGate {
         let mut filled = Vec::new();
         for (class, regions) in boxes {
             let mut count = 0u32;
-            for region in &regions {
-                if ops::fill(&mut redacted, region, Rgba::BLACK) {
+            for (drawn, region) in regions {
+                if ops::fill(&mut redacted, &region, Rgba::BLACK) {
                     count += 1;
-                    filled.push((class.clone(), *region));
+                    filled.push((drawn, region));
                 }
             }
             redactions.insert(class, count);
@@ -642,6 +667,15 @@ impl EgressGate {
         self.recorder.record(record.clone()).await?;
         cx.audit(crate::audit::egress_draft(&record)).await
     }
+}
+
+/// Why the on-device profile refuses a release to `hosts`.
+pub(super) fn on_device_reason(hosts: &[String]) -> String {
+    format!(
+        "the on-device profile keeps every image on this machine, and `{}` is off it \
+         (`on_device = true` in the [egress] table of .adk/vision.toml)",
+        hosts.join(", ")
+    )
 }
 
 pub(super) fn deny_reason(rule: Option<usize>, class: &DataClass) -> String {

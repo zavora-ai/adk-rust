@@ -211,7 +211,10 @@ pub use nim_cv::{
 pub use ocr::{PpOcrReader, PpOcrV6Size};
 #[cfg(feature = "ocr-vl")]
 pub use ocr_vl::{PADDLEOCR_VL_MANIFEST, PP_DOCLAYOUT_MANIFEST, PaddleOcrVlReader, VlDevice};
-pub use redact::{DEFAULT_PERSON_DETECTOR, PersonRedactor, REDACTION_MARGIN};
+pub use redact::{
+    DEFAULT_FACE_DETECTOR, DEFAULT_PERSON_DETECTOR, FACE_MARGIN, FaceRedactor, PersonRedactor,
+    REDACTION_MARGIN,
+};
 pub use runtime::{
     CallOptions, CallRecord, Edited, Escalation, Route, Trigger, VideoSource, VisionOutput,
     VisionRuntime, VisionRuntimeBuilder,

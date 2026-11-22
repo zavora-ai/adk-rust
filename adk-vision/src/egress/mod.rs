@@ -72,10 +72,18 @@ impl RedactionClass {
         Self(class.into())
     }
 
-    /// Faces. Until a face detector is chosen, a redactor redacts every detected person's
-    /// whole box (spec 3.7 Q3).
+    /// Faces: the class an egress rule requires. `FaceRedactor` covers each face a face
+    /// detector finds, and each person it finds no face for as the whole person;
+    /// `PersonRedactor` covers every detected person's whole box (spec 3.7 Q3).
     pub fn faces() -> Self {
         Self::new("faces")
+    }
+
+    /// A person's whole box, covering a face that a redactor of [`faces`](Self::faces) could
+    /// not place: no face detector runs, or the person shows no face it can find. Boxes are
+    /// drawn and counted on captions as this class; receipts count them under `faces`.
+    pub fn people() -> Self {
+        Self::new("people")
     }
 
     /// Personal text found by local OCR and the PII patterns.
@@ -117,6 +125,24 @@ pub trait Redactor: Send + Sync {
 
     /// The boxes to fill, in `image`'s pixels.
     async fn find(&self, cx: &VisionCx, image: &SentImage) -> Result<Vec<BBox>>;
+
+    /// The boxes to fill, each with the class it is drawn as on an approval card's overlay
+    /// and named as on its caption: by default every box of [`find`](Self::find) as
+    /// [`class`](Self::class). A faces redactor names the whole-person boxes it falls back to
+    /// [`RedactionClass::people`], so a card says which faces were covered as the whole
+    /// person. The receipt counts every box under [`class`](Self::class).
+    ///
+    /// # Errors
+    ///
+    /// As [`find`](Self::find).
+    async fn find_classified(
+        &self,
+        cx: &VisionCx,
+        image: &SentImage,
+    ) -> Result<Vec<(RedactionClass, BBox)>> {
+        let class = self.class();
+        Ok(self.find(cx, image).await?.into_iter().map(|bbox| (class.clone(), bbox)).collect())
+    }
 }
 
 /// How a release was decided.

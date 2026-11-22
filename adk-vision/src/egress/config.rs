@@ -84,6 +84,10 @@ pub struct EgressConfig {
     /// The rules, first match wins.
     #[serde(default, rename = "rule")]
     pub rules: Vec<EgressRuleConfig>,
+    /// The on-device profile: every remote destination is refused at the gate's first step,
+    /// whatever the rules say, so no image leaves the machine. `false` by default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub on_device: bool,
 }
 
 fn ask() -> EgressAction {
@@ -92,11 +96,27 @@ fn ask() -> EgressAction {
 
 impl Default for EgressConfig {
     fn default() -> Self {
-        Self { default: EgressAction::Ask, redact: Vec::new(), rules: Vec::new() }
+        Self { default: EgressAction::Ask, redact: Vec::new(), rules: Vec::new(), on_device: false }
     }
 }
 
 impl EgressConfig {
+    /// The on-device profile: every release is refused at the destination step with its
+    /// reason, before anything is minimised, redacted or sent.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_vision::{EgressConfig, VisionConfig};
+    ///
+    /// let config = VisionConfig::from_toml_str("[egress]\non_device = true").unwrap();
+    /// assert_eq!(config.egress, EgressConfig::default().on_device());
+    /// ```
+    pub fn on_device(mut self) -> Self {
+        self.on_device = true;
+        self
+    }
+
     /// Sets the default action.
     pub fn with_default(mut self, action: EgressAction) -> Self {
         self.default = action;
