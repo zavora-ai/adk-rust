@@ -11,7 +11,7 @@
 //! | `RtspSource` | `rtsp` | RTSP through `retina`: H.264, H.265, MJPEG | MJPEG in process; H.264 and H.265 through `ffmpeg` |
 //! | `FileSource` | `ffmpeg` | MP4 and MOV files | a user-installed `ffmpeg` binary |
 //! | `DeviceSource` | `device` | a camera on this machine: AVFoundation (macOS), v4l2 (Linux), DirectShow (Windows) | a user-installed `ffmpeg` binary |
-//! | `ScreenSource` | `screen` | a `ComputerActuator` screenshot or a computer-use-mcp observation, at an interval | PNG, JPEG |
+//! | `ScreenSource` | `screen` | a `ComputerActuator` screenshot or a computer-use-mcp observation, at an interval; with `computer-use`, `RuntimeObserver` and `screen_source` over any `ComputerUseRuntime` | PNG, JPEG |
 //! | `BrowserSource` | `browser` | the `browser_screenshot` tool, at an interval | PNG |
 //! | `SurfaceCameraSource` | `surface-camera` | frames the web home pushes through a `CameraFeed` | JPEG |
 //!
@@ -82,6 +82,8 @@ mod browser;
 mod camera;
 #[cfg(any(feature = "screen", feature = "browser"))]
 mod capture;
+#[cfg(all(feature = "screen", feature = "computer-use"))]
+mod computer_use;
 #[cfg(feature = "conformance")]
 mod conformance;
 #[cfg(feature = "device")]
@@ -110,6 +112,8 @@ pub use browser::BrowserSource;
 pub use camera::{CameraFeed, SurfaceCameraSource};
 #[cfg(any(feature = "screen", feature = "browser"))]
 pub use capture::observation_image;
+#[cfg(all(feature = "screen", feature = "computer-use"))]
+pub use computer_use::{RuntimeObserver, screen_source};
 #[cfg(feature = "conformance")]
 pub use conformance::{FrameSourceReport, check_frame_source};
 #[cfg(feature = "device")]

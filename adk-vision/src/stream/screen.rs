@@ -17,18 +17,8 @@ use crate::traits::Sampling;
 /// `adk_computer_use::ComputerUseRuntime`, which a computer-use-mcp runtime answers with a
 /// `snapshot`.
 ///
-/// `adk-vision` does not depend on `adk-computer-use`; wrap its runtime in a newtype:
-///
-/// ```ignore
-/// struct Observations(Arc<dyn adk_computer_use::ComputerUseRuntime>);
-///
-/// #[async_trait::async_trait]
-/// impl adk_vision::stream::VisualObserver for Observations {
-///     async fn observe_visual(&self) -> adk_core::Result<serde_json::Value> {
-///         self.0.observe_visual().await.map_err(|e| adk_core::AdkError::tool(e.to_string()))
-///     }
-/// }
-/// ```
+/// With feature `computer-use`, `RuntimeObserver` implements it over any
+/// `adk_computer_use::ComputerUseRuntime`, and `screen_source` builds the [`ScreenSource`].
 #[async_trait]
 pub trait VisualObserver: Send + Sync {
     /// One fresh visual observation, as JSON holding a screenshot.

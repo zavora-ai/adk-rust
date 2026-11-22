@@ -253,7 +253,6 @@ dependencies = [
  "adk-eval",
  "adk-graph",
  "adk-tool",
- "adk-vision",
  "async-trait",
  "chrono",
  "rmcp",

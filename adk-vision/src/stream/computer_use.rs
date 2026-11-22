@@ -1,11 +1,11 @@
-//! Computer-use observations as a vision frame source (spec 3.7 §7.13, feature `vision`).
+//! Computer-use observations as a frame source (spec 3.7 §7.13, features `computer-use` and
+//! `screen`).
 //!
-//! `adk-vision`'s `ScreenSource` reads screenshots through its `VisualObserver` trait, and
-//! `adk-vision` does not depend on this crate. [`RuntimeObserver`] is the adapter: each
-//! frame is one [`ComputerUseRuntime::observe_visual`] call, whose snapshot carries the
-//! screenshot. Observing changes nothing on the desktop, so the source calls the runtime
-//! directly; the stream pipeline around it is what the kill switch and the frame budget
-//! govern.
+//! [`ScreenSource`] reads screenshots through the [`VisualObserver`] trait;
+//! [`RuntimeObserver`] is that trait over any `adk_computer_use::ComputerUseRuntime`: each
+//! frame is one `observe_visual` call, whose snapshot carries the screenshot. Observing
+//! changes nothing on the desktop, so the source calls the runtime directly; the stream
+//! pipeline around it is what the kill switch and the frame budget govern.
 //!
 //! | Piece | What it does |
 //! |-------|--------------|
@@ -16,34 +16,34 @@
 //!
 //! ```rust,ignore
 //! use std::sync::Arc;
-//! use adk_computer_use::{ComputerUseMcpRuntime, vision::screen_source};
 //! use adk_vision::FrameSourceId;
+//! use adk_vision::stream::screen_source;
 //!
 //! let runtime: Arc<dyn adk_computer_use::ComputerUseRuntime> = Arc::new(mcp_runtime);
 //! let desk = screen_source(FrameSourceId("desk".into()), runtime)
 //!     .with_interval(std::time::Duration::from_secs(2));
-//! // Register `desk` with `adk_vision::stream::FrameSources` to watch it.
+//! // Register `desk` with `FrameSources` to watch it.
 //! ```
 
 use std::sync::Arc;
 
+use adk_computer_use::ComputerUseRuntime;
 use adk_core::AdkError;
-use adk_vision::FrameSourceId;
-use adk_vision::stream::{ScreenSource, VisualObserver};
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::runtime::ComputerUseRuntime;
+use super::screen::{ScreenSource, VisualObserver};
+use crate::media::FrameSourceId;
 
-/// `adk-vision`'s [`VisualObserver`] over a [`ComputerUseRuntime`]: each observation is one
+/// The [`VisualObserver`] over a [`ComputerUseRuntime`]: each observation is one
 /// `observe_visual` snapshot.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use std::sync::Arc;
-/// use adk_computer_use::vision::RuntimeObserver;
-/// use adk_vision::{FrameSourceId, stream::ScreenSource};
+/// use adk_vision::FrameSourceId;
+/// use adk_vision::stream::{RuntimeObserver, ScreenSource};
 ///
 /// let observer = Arc::new(RuntimeObserver::new(runtime));
 /// let desk = ScreenSource::from_observer(FrameSourceId("desk".into()), observer);
@@ -84,16 +84,17 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
-    use adk_vision::stream::FrameSource;
-    use adk_vision::{DecodedImage, FramePixels, Sampling};
+    use adk_computer_use::{
+        ActionEnvelope, ActionPostcondition, ActionPreview, ComputerUseError, ControlLease,
+        ExecutionReceipt, VerificationOutcome,
+    };
     use futures::StreamExt;
     use serde_json::json;
 
     use super::*;
-    use crate::{
-        ActionEnvelope, ActionPostcondition, ActionPreview, ComputerUseError, ControlLease,
-        ExecutionReceipt, VerificationOutcome,
-    };
+    use crate::media::{DecodedImage, FramePixels};
+    use crate::stream::FrameSource;
+    use crate::traits::Sampling;
 
     /// A desktop whose `snapshot` carries a PNG through adk-tool's MCP envelope, as
     /// computer-use-mcp answers it.

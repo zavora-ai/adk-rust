@@ -18,7 +18,7 @@ adk-vision = { version = "3.0.0", features = ["stream", "rtsp", "ffmpeg", "devic
 | `RtspSource` | `rtsp` | RTSP cameras through `retina` (MIT OR Apache-2.0): H.264, H.265, MJPEG | MJPEG in process; H.264 and H.265 through a user-installed `ffmpeg` (`ffmpeg` feature) |
 | `FileSource` | `ffmpeg` | MP4 and MOV files | A user-installed `ffmpeg`, spawned through `ffmpeg-sidecar` |
 | `DeviceSource` | `device` | A camera on this machine: AVFoundation (macOS), v4l2 (Linux), DirectShow (Windows) | The same user-installed `ffmpeg` |
-| `ScreenSource` | `screen` | A `ComputerActuator` screenshot, or a computer-use-mcp observation through a `VisualObserver` — `adk-computer-use`'s `vision::RuntimeObserver` (feature `vision`) over any `ComputerUseRuntime` — at an interval | PNG, JPEG |
+| `ScreenSource` | `screen` | A `ComputerActuator` screenshot, or a computer-use-mcp observation through a `VisualObserver` — `RuntimeObserver` and `screen_source` (with feature `computer-use`) over any `adk-computer-use` `ComputerUseRuntime` — at an interval | PNG, JPEG |
 | `BrowserSource` | `browser` | `adk-browser`'s `browser_screenshot` tool at an interval | PNG |
 | `SurfaceCameraSource` | `surface-camera` | Frames the web home pushes through a `CameraFeed` | JPEG |
 

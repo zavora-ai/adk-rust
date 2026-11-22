@@ -23,7 +23,7 @@
 # | 3  | adk-server, adk-durability-gates, adk-graph, adk-managed, adk-code |
 # | 4  | adk-tool, adk-agent, adk-runner, adk-model, adk-skill |
 # | 5  | adk-cli: voice, website and phone |
-# | 6  | small opt-in surfaces, adk-sandbox, adk-awp, adk-site, adk-vision, adk-computer-use |
+# | 6  | small opt-in surfaces, adk-sandbox, adk-awp, adk-site, adk-vision |
 # | 7  | adk-harness |
 # | 8  | adk-cli: registries, stores, providers, agent-drawn UI |
 # | 9  | adk-surface |
@@ -523,7 +523,7 @@
 6 adk-vision device,conformance doc
 # Computer-use observations as a screen frame source (spec 3.7 §7.13): the adapter over a
 # scripted `ComputerUseRuntime`.
-6 adk-computer-use vision
+6 adk-vision computer-use,screen
 # `onnx-coreml`, `onnx-cuda` and `ocr-vl-metal` need GPU toolchains a runner does not have, and
 # stay out as adk-mistralrs's `cuda` and `metal` do.
 6 adk-site gen-astro

@@ -67,8 +67,6 @@ mod graph;
 pub mod runtime;
 /// Claude's computer use toolset as governed tools over a [`adk_core::ComputerActuator`].
 pub mod toolset;
-#[cfg(feature = "vision")]
-pub mod vision;
 
 pub use actuator::{McpComputerActuator, McpComputerActuatorBuilder};
 pub use auth::{AuthorizationError, ComputerUseAuthContext, ScopeAuthorizer};
