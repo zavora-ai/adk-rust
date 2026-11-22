@@ -690,7 +690,7 @@ export interface CameraRegion {
 }
 
 /** A camera's state, as its pill and its picture show it. */
-export type CameraState = "live" | "savingFrames" | "paused" | "lost" | "off" | "stopped";
+export type CameraState = "live" | "savingFrames" | "paused" | "lost" | "off" | "stopped" | "frozen";
 
 /** One camera of the grid. */
 export interface CameraTile {

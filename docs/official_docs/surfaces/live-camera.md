@@ -41,11 +41,12 @@ The back link, **‹ Inspector**, returns to the agent's thread.
 | Paused until midnight | The last frame frozen and dimmed under "Paused until midnight"; "Parts on line 2 are passing without inspection"; every step on record; **Change the daily frame limit** |
 | Can't reach the camera | The last frame grey under "Can't reach the line 2 camera", the retry countdown and attempt, the error with credentials hidden, **Try again now** |
 | Camera off | A black panel: "Nothing is captured or sent. You switched line 2 off at 11:05"; the watch paused, tracks cleared |
+| Paused by Stop all | The last frame dimmed under "Paused by Stop all": nothing is looked at or sent until someone chooses **Resume all** (spec 3.7 V-I17) |
 | Several sources | A grid of every camera with its state, a switch list with each camera's rate and share of its frames, a budget per camera; people blurred |
 
-People appear blurred in the picture when the pipeline covers them before a frame reaches the
-surface (spec 3.7 §7.13); a kept frame is covered by its source before it is written, whatever
-the picture showed.
+Everyone in a frame is covered before the frame reaches the surface: what the camera's privacy
+hook hides, and every region its detector labels `person` or `face` (spec 3.7 §7.13, Q3). A kept
+frame is covered again before it is written, whatever the picture showed (V-I9).
 
 ## Acting on a Camera
 
@@ -53,7 +54,8 @@ the picture showed.
 |---|---|
 | **Off** | The server closes the camera's gate first: every frame that arrives from then on is dropped, and the frames it held are forgotten. Then the act is recorded (`surface.camera.switch`) and the source is told to stop capturing. A source switched off sends nothing, as on the voice screen |
 | **Camera on** | Recorded first, then the gate opens |
-| **Stop the stream** | The gate closes for good and the stream ends (`surface.camera.stop`); the agent's pipeline starts it again |
+| **Stop the stream** | The gate closes for good and the camera's pipeline stops (`surface.camera.stop`) |
+| **Stop all** | Every camera's gate closes before the agents are stopped, and each camera's pipeline drops its frames before looking at them; **Resume all** opens them again (spec 3.7 V-I17) |
 | **Try again now** | The source is tried again (`surface.camera.retry`) |
 | **Draw a zone** / **Edit the zone** | Corner handles over the picture, the old outline dashed, the watch that uses the zone, its corners in the camera's pixels. Saving changes the watch from its next frame and is recorded (`surface.camera.zone`, with the old and new corners). A zone changed since the person started is refused, never overwritten |
 | **Raise a card from this frame** | The frame on screen is frozen: the server holds it in memory while the person writes what the agent should look at. **Raise the card** keeps that one frame as evidence for 30 days, everyone in it covered first, and sends the card to the agent as the person's message naming the frame by digest and artifact, with the regions on it. It is recorded (`surface.camera.card`) before the frame is kept |
@@ -109,10 +111,84 @@ fn main() -> adk_surface::Result<()> {
 | Part | What |
 |---|---|
 | `CameraFacts` | What a source reports: the stream's state (`Live`, `Paused`, `Lost`), the governor's numbers (`GovernorFacts`, its steps and escalation), tracks, watches and zones. Numbers and times, never sentences: the surface says them |
-| `Cameras::offer` | Every frame, with what was found on it (`Overlay`): dropped when the camera is off or stopped (`Offered::Dropped`), else held in memory and shown |
+| `Cameras::offer` | Every frame, with what was found on it (`Overlay`): dropped when the camera is off, stopped or paused by Stop all (`Offered::Dropped`), else held in memory and shown |
+| `Cameras::ingest` | A frame a screen captured, such as the voice screen's camera, handed to the camera's pipeline once it passes the same gate (`CameraSource::intake`) |
+| `Cameras::freeze_all`, `thaw_all`, `with_governance` | Stop all and Resume all, which the engine calls; and a kill switch the gate also follows |
 | `CameraSource::keep_frame` | Keeps a card's frame: everyone in it covered first, written once, returned as the `ImageEvidence` a card and a held call carry |
-| `ScriptedCameras` (`web`) | A source over the boards' fixture content, every board state reachable, for examples and tests |
+| `PipelineCameras` (`vision-camera`) | Each camera on adk-vision's frame pipeline, below |
+| `ScriptedCameras` (`web`) | A source over the boards' fixture content, every board state reachable, for tests and screenshots |
 | `camera::bridge` (`voice`) | `feed_realtime` sends a camera's frames to a realtime session under the voice screen's `FramePolicy`: one a second for Gemini Live, changed frames at most every five seconds for the OpenAI Realtime API; `with_camera` turns on Gemini Live's context window compression |
+
+## On the Frame Pipeline
+
+With the `vision-camera` feature, `PipelineCameras` runs each camera through adk-vision's
+`StreamPipeline` — sampler, frame governor, privacy hook, detector, tracker — and is the
+`CameraSource` the hub reads. What the surface shows is what the pipeline measured:
+
+| The surface shows | From |
+|---|---|
+| The picture and its overlays | Each observation's redacted frame as a JPEG, with its tracked regions in the camera's pixels and how long after capture they were ready |
+| **Looking**, **Frames today**, the steps | The pipeline's frame governor: its rate, its count against the period's quota, and each `vision.governor.step` it took |
+| **Asking sam-3.1 about unclear tracks** | Escalations the governor granted through `PipelineCameras::escalate` |
+| **Tracks now** | The tracker's anonymous identifiers on the newest frame, and where each is |
+| **Watching for**, the zones | Each camera's `WatchCondition`s, held against every frame; a zone saved on the surface becomes the conditions' zone from the next frame, recorded as `vision.watch.registered`; each firing is `vision.watch.fired` |
+| **Can't reach the camera** | The source failing to open or ending: retried after 2 s, then twice as long each time up to 30 s, or at once from **Try again now**; the pipeline, and its governor's count, carry on through the reconnection |
+
+A camera switched off, or every camera under Stop all, has its frames dropped as they arrive,
+before the governor counts them or the detector sees them. A camera's frames are kept only as
+a card's evidence or, with `PipelineCamerasBuilder::wakes`, as a watch event's wake payload,
+through adk-vision's `FrameKeeper` (`vision.evidence.kept`).
+
+```rust
+use std::sync::Arc;
+
+use adk_surface::camera::{CameraFacts, Ingest, LiveCamera, LiveWatch, PipelineCameras, ZoneFacts};
+use adk_vision::stream::{FrameBudget, NoRedaction, RtspSource};
+use adk_vision::{DetectQuery, FrameSourceId, GreedyIouTracker, VisionCx, VisionRuntime, WatchCondition};
+
+fn cameras(
+    detector: Arc<VisionRuntime>,
+    artifacts: Arc<dyn adk_artifact::ArtifactService>,
+) -> Result<adk_surface::camera::Cameras, Box<dyn std::error::Error>> {
+    let line_2 = LiveCamera::stream(
+        CameraFacts::new("line-2", "Line 2 camera", "inspector", "s-line")
+            .with_place("line 2")
+            .with_ingest(Ingest::rtsp(1920, 1080, "the line 2 server")),
+        Arc::new(RtspSource::new(FrameSourceId("line-2".into()), "rtsp://10.0.4.21:554/stream1")?),
+        Arc::new(NoRedaction),
+    )
+    .detector(detector, DetectQuery::Classes(vec!["part".into(), "crack".into()]))
+    .tracker(|| Box::new(GreedyIouTracker::new(0.3, 3)))
+    .budget(FrameBudget::new(5.0).with_min_local_fps(1.0).with_local_quota(300_000))
+    .zone(ZoneFacts {
+        id: "inspection-window".into(),
+        name: "Inspection window".into(),
+        corners: [760.0, 170.0, 1560.0, 910.0],
+    })
+    .watch(
+        LiveWatch::new("crack", "Crack", WatchCondition::new("crack", ["crack"]).with_min_frames(3))
+            .in_zone("inspection-window")
+            .wakes_for("a defect"),
+    );
+    let this_computer = LiveCamera::surface(
+        CameraFacts::new("this-computer", "This computer's camera", "inspector", "s-line")
+            .with_ingest(Ingest::this_computer(1280, 720)),
+        Arc::new(NoRedaction),
+    );
+    let live = PipelineCameras::builder("inspector", "ana")
+        .artifacts(artifacts)
+        .cx(VisionCx::new())
+        .camera(line_2)
+        .camera(this_computer)
+        .build()?;
+    Ok(live.start())
+}
+```
+
+The hub `start` returns goes to `SurfaceEngineBuilder::cameras`. `LiveCamera::surface` is the
+voice screen's camera (spec 3.7 §7.13 `SurfaceCameraSource`): it starts off, its frames come from
+the voice view through `Cameras::ingest`, and switching the camera on the voice screen switches it
+here too, recorded as the person's act.
 
 ## The Web API
 
@@ -138,14 +214,25 @@ home, and **Stop the stream** below. `/ui/cameras` lists every camera with its s
 
 ## Try It
 
-`scripted_camera_home` serves the web home over the boards' four cameras, line 2 live with a
-seal tear and the Inspector's line stop held with the frame:
+`live_camera_home` serves adk-vision's generated conveyor clip over its in-process RTSP server to
+two cameras on the frame pipeline. Line 2 watches for a crack inside its inspection window at five
+frames a second; line 3 is held to 2,000 frames a day, so its governor steps down at once. Raising
+a card from line 2's frame sends it to the Inspector, which asks to stop the line with that frame
+as the call's evidence, held for you beside the camera:
+
+```bash
+cargo run -p adk-surface --features web,vision-camera --example live_camera_home -- 8814
+```
+
+Open `http://127.0.0.1:8814/ui/cameras/line-2`. Its detector is a few lines of colour
+segmentation that find the clip's parts and cracks, so it needs no model weights; any adk-vision
+`Detector`, such as RF-DETR, drops in the same way.
+
+`scripted_camera_home` serves the boards' four cameras from fixtures, every board state reachable:
 
 ```bash
 cargo run -p adk-surface --features web --example scripted_camera_home -- 8794
 ```
-
-Open `http://127.0.0.1:8794/ui/cameras/line-2`.
 
 ## Related
 

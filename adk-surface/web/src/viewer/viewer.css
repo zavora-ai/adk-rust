@@ -1,29 +1,12 @@
 /* The annotated viewer (spec 3.7 §8.2, X12), drawn to the signed-off boards `viewer-*`. */
 
 :root {
-  --vw-line: #d3d7de;
-  --vw-canvas: #e4e8ee;
-  --vw-red-soft: #fef0ef;
-  --vw-red: #b42318;
-  --vw-scrim: rgba(15, 23, 42, 0.42);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --vw-line: #3a5075;
-    --vw-canvas: #050d1a;
-    --vw-red-soft: rgba(255, 138, 128, 0.12);
-    --vw-red: #ff8a80;
-    --vw-scrim: rgba(2, 6, 15, 0.66);
-  }
-}
-
-:root[data-theme="dark"] {
-  --vw-line: #3a5075;
-  --vw-canvas: #050d1a;
-  --vw-red-soft: rgba(255, 138, 128, 0.12);
-  --vw-red: #ff8a80;
-  --vw-scrim: rgba(2, 6, 15, 0.66);
+  /* The viewer's colours are the home's tokens (spec 3.3 §9). */
+  --vw-line: var(--border-strong);
+  --vw-canvas: var(--sunken);
+  --vw-red-soft: var(--pill-failed-bg);
+  --vw-red: var(--failed);
+  --vw-scrim: var(--scrim);
 }
 
 .vw {
@@ -44,7 +27,7 @@
 
 .vw-mono {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--fs-xs);
 }
 
 .vw-muted {
@@ -56,18 +39,18 @@
 }
 
 .vw-small {
-  font-size: 12.5px;
+  font-size: var(--fs-xs);
 }
 
 .vw-small2 {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
   margin: 0;
 }
 
 .vw-text {
   margin: 0;
-  font-size: 13.5px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--text-2);
 }
@@ -79,7 +62,7 @@
   color: var(--accent);
   font: inherit;
   font-weight: 600;
-  font-size: 13.5px;
+  font-size: var(--fs-sm);
   text-decoration: underline;
   text-underline-offset: 2px;
   cursor: pointer;
@@ -87,7 +70,7 @@
 }
 
 .vw-small .vw-link {
-  font-size: 12.5px;
+  font-size: var(--fs-xs);
 }
 
 /* ------------------------------------------------------------ the bar under the header */
@@ -110,7 +93,7 @@
   background: none;
   color: var(--text-2);
   font: inherit;
-  font-size: 14px;
+  font-size: var(--fs-md);
   font-weight: 600;
   cursor: pointer;
 }
@@ -123,13 +106,13 @@
 
 .vw-title {
   margin: 0;
-  font-size: 20px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  letter-spacing: var(--tracking-display);
 }
 
 .vw-meta {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   color: var(--label);
 }
 
@@ -141,7 +124,7 @@
 }
 
 .vw-digest .vw-mono {
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .vw-icon-button {
@@ -167,11 +150,11 @@
   height: 44px;
   padding: 0 16px;
   border: 1px solid var(--vw-line);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 15px;
+  font-size: var(--fs-lg);
   white-space: nowrap;
   cursor: pointer;
 }
@@ -184,15 +167,15 @@
 .vw-btn-sm {
   height: 34px;
   padding: 0 12px;
-  border-radius: 9px;
-  font-size: 14px;
+  border-radius: var(--radius);
+  font-size: var(--fs-md);
 }
 
 .vw-btn-xs {
   height: 30px;
   padding: 0 10px;
-  border-radius: 8px;
-  font-size: 13px;
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
   background: var(--card);
 }
 
@@ -225,7 +208,7 @@
   padding: 3px;
   border-radius: 11px;
   background: var(--raised);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .vw-seg button {
@@ -234,7 +217,7 @@
   gap: 4px;
   padding: 6px 12px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--text-2);
   font: inherit;
@@ -274,9 +257,9 @@
   height: 36px;
   padding: 0 12px;
   border: 1px solid var(--vw-line);
-  border-radius: 9px;
+  border-radius: var(--radius);
   background: var(--card);
-  font-size: 14px;
+  font-size: var(--fs-md);
   color: var(--label);
 }
 
@@ -299,16 +282,16 @@
   height: 38px;
   padding: 0 12px;
   border: 1px solid var(--vw-line);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: var(--card);
   color: var(--text);
   font: inherit;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .vw-input.vw-mono {
   font-family: var(--mono);
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 .vw-field {
@@ -318,19 +301,19 @@
 }
 
 .vw-lbl {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--text-2);
 }
 
 .vw-note {
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--fs-xs);
   color: var(--label);
 }
 
 .vw-box-text {
-  font-size: 12.5px;
+  font-size: var(--fs-xs);
 }
 
 .vw-radios {
@@ -344,7 +327,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 14px;
+  font-size: var(--fs-md);
   cursor: pointer;
 }
 
@@ -358,7 +341,7 @@
   width: 18px;
   height: 18px;
   border: 1.5px solid var(--vw-line);
-  border-radius: 9px;
+  border-radius: var(--radius);
   background: var(--card);
 }
 
@@ -376,9 +359,9 @@
   align-items: flex-start;
   gap: 10px;
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--raised);
-  font-size: 13.5px;
+  font-size: var(--fs-sm);
   line-height: 1.45;
   color: var(--text-2);
 }
@@ -459,8 +442,8 @@
 
 .vw-sec h3 {
   margin: 0;
-  font-size: 14px;
-  font-weight: 700;
+  font-size: var(--fs-md);
+  font-weight: 600;
   color: var(--text);
 }
 
@@ -475,7 +458,7 @@
   grid-template-columns: auto 1fr;
   gap: 7px 16px;
   margin: 0;
-  font-size: 13.5px;
+  font-size: var(--fs-sm);
   align-items: baseline;
 }
 
@@ -504,11 +487,11 @@
   gap: 7px;
   padding: 4px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--card);
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   white-space: nowrap;
   cursor: pointer;
 }
@@ -520,7 +503,7 @@
 .vw-chip-n {
   color: var(--label);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .vw-dot {
@@ -539,7 +522,7 @@
 .vw-slider-head {
   display: flex;
   justify-content: space-between;
-  font-size: 13.5px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
 }
 
@@ -597,7 +580,7 @@
   width: 18px;
   height: 18px;
   border: 2px solid var(--button);
-  border-radius: 9px;
+  border-radius: var(--radius);
   background: var(--card);
   appearance: none;
 }
@@ -606,7 +589,7 @@
   width: 14px;
   height: 14px;
   border: 2px solid var(--button);
-  border-radius: 9px;
+  border-radius: var(--radius);
   background: var(--card);
 }
 
@@ -626,11 +609,11 @@
   gap: 10px;
   padding: 7px 10px;
   border: 0;
-  border-radius: 9px;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 13.5px;
+  font-size: var(--fs-sm);
   text-align: left;
   cursor: pointer;
 }
@@ -640,13 +623,22 @@
   box-shadow: inset 0 0 0 1px var(--vw-line);
 }
 
-.vw-row-dim {
-  opacity: 0.45;
+/* A region the filters hide: quieter words, still legible (WCAG AA), and no swatch fill. */
+.vw-row-dim .vw-row-label,
+.vw-row-dim .vw-row-n,
+.vw-row-dim .vw-row-detail,
+.vw-row-dim .vw-row-score {
+  color: var(--label);
+  font-weight: 400;
+}
+
+.vw-row-dim .vw-dot {
+  opacity: 0.35;
 }
 
 .vw-row-n {
   min-width: 18px;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--label);
 }
 
@@ -665,7 +657,7 @@
 
 .vw-row-score {
   margin-left: auto;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--text-2);
 }
 
@@ -675,7 +667,7 @@
   margin: 0;
   padding: 0;
   list-style: none;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .vw-chain li {
@@ -706,12 +698,12 @@
   flex-direction: column;
   gap: 2px;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: var(--raised);
 }
 
 .vw-tile-label {
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   color: var(--label);
 }
@@ -722,13 +714,13 @@
 }
 
 .vw-tile-value {
-  font-size: 22px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-size: var(--fs-2xl);
+  font-weight: 600;
+  letter-spacing: var(--tracking-display);
 }
 
 .vw-tile-note {
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--label);
 }
 
@@ -744,7 +736,7 @@
   position: relative;
   flex: 0 0 auto;
   overflow: hidden;
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: #111111;
   touch-action: none;
 }
@@ -774,8 +766,8 @@
   display: grid;
   place-items: center;
   margin: 0;
-  color: #f1f5f9;
-  font-size: 13px;
+  color: #ededef;
+  font-size: var(--fs-sm);
 }
 
 .vw-box {
@@ -825,7 +817,7 @@ div.vw-box {
   border-radius: 5px 5px 5px 0;
   font-family: var(--font);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 17px;
   white-space: nowrap;
   pointer-events: none;
@@ -867,12 +859,12 @@ div.vw-box {
   width: 20px;
   height: 20px;
   border: 2px solid #ffffff;
-  border-radius: 10px;
-  background: #0f172a;
+  border-radius: var(--radius);
+  background: #18181b;
   color: #ffffff;
   font-family: var(--font);
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 600;
   pointer-events: none;
 }
 
@@ -891,7 +883,7 @@ div.vw-box {
   align-self: flex-start;
   max-width: 640px;
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--text-2);
 }
@@ -915,7 +907,7 @@ div.vw-box {
 }
 
 .vw-inset figcaption {
-  font-size: 12.5px;
+  font-size: var(--fs-xs);
   color: var(--label);
 }
 
@@ -927,7 +919,7 @@ div.vw-box {
   gap: 8px;
   padding: 12px 14px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--card);
   box-sizing: border-box;
 }
@@ -936,7 +928,7 @@ div.vw-box {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .vw-lanes-body {
@@ -953,7 +945,7 @@ div.vw-box {
 
 .vw-lane-name {
   flex: 0 0 150px;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--text-2);
 }
 
@@ -1002,26 +994,26 @@ div.vw-box {
 }
 
 .vw-pane-name {
-  font-size: 15px;
-  font-weight: 700;
+  font-size: var(--fs-lg);
+  font-weight: 600;
 }
 
 .vw-pane-name .vw-muted {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 400;
 }
 
 .vw-pane-stats {
   display: flex;
   gap: 12px;
-  font-size: 12.5px;
+  font-size: var(--fs-xs);
   color: var(--text-2);
 }
 
 .vw-legend {
   display: flex;
   gap: 14px;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
 }
 
@@ -1042,7 +1034,7 @@ div.vw-box {
   gap: 8px;
   padding: 12px 14px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--card);
 }
 
@@ -1053,11 +1045,11 @@ div.vw-box {
 }
 
 .vw-diff-head .vw-mono {
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .vw-diff-title {
-  font-size: 14px;
+  font-size: var(--fs-md);
   font-weight: 600;
 }
 
@@ -1065,7 +1057,7 @@ div.vw-box {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 4px 12px;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 /* ------------------------------------------------------------ no result */
@@ -1080,14 +1072,14 @@ div.vw-box {
 
 .vw-empty h2 {
   margin: 0;
-  font-size: 20px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  letter-spacing: var(--tracking-display);
 }
 
 .vw-empty-text {
   margin: 0;
-  font-size: 14.5px;
+  font-size: var(--fs-md);
   line-height: 1.5;
   color: var(--text-2);
 }
@@ -1145,13 +1137,13 @@ div.vw-box {
 
 .vw-phone-title {
   margin: 0;
-  font-size: 22px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-size: var(--fs-2xl);
+  font-weight: 600;
+  letter-spacing: var(--tracking-display);
 }
 
 .vw-phone-sub {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   color: var(--label);
 }
 
@@ -1181,7 +1173,7 @@ div.vw-box {
 
 .vw-phone-rows .vw-notice {
   margin: 12px 6px 4px;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   padding: 10px 12px;
 }
 
@@ -1212,7 +1204,7 @@ div.vw-box {
   border-top: 1px solid var(--border);
   border-radius: 22px 22px 0 0;
   background: var(--card);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-pop);
 }
 
 .vw-phone-grip {
@@ -1231,18 +1223,18 @@ div.vw-box {
 
 .vw-phone-sheet-head h2 {
   margin: 0;
-  font-size: 19px;
-  font-weight: 800;
+  font-size: var(--fs-xl);
+  font-weight: 600;
 }
 
 .vw-phone-sheet-head .vw-mono {
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .vw-phone-sheet .vw-tile-value {
-  font-size: 20px;
+  font-size: var(--fs-xl);
 }
 
 .vw-phone-sheet .vw-kv {
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }

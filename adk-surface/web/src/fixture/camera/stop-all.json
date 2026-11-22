@@ -1,0 +1,209 @@
+{
+  "actions": {
+    "raiseCard": false,
+    "retry": false,
+    "stop": true,
+    "switch": true,
+    "zone": false
+  },
+  "agent": {
+    "agent": {
+      "avatar": {
+        "color": "#0E7490",
+        "monogram": "I"
+      },
+      "displayName": "Inspector",
+      "name": "inspector"
+    },
+    "line": "Not watching: Stop all",
+    "sessionId": "s-line",
+    "tone": "fail"
+  },
+  "budget": {
+    "meters": [
+      {
+        "label": "Looking",
+        "note": "Stop all paused every camera",
+        "percent": 0,
+        "tone": "fail",
+        "value": "Paused"
+      },
+      {
+        "label": "Asking sam-3.1 about unclear tracks",
+        "percent": 0,
+        "tone": "ok",
+        "value": "0"
+      },
+      {
+        "label": "Frames today",
+        "percent": 20,
+        "tone": "ok",
+        "value": "61,240 of 300,000"
+      }
+    ],
+    "rows": [
+      {
+        "label": "Looking",
+        "tone": "fail",
+        "value": "Paused by Stop all"
+      },
+      {
+        "label": "Frames today",
+        "tone": "plain",
+        "value": "61,240 of 300,000"
+      }
+    ],
+    "scope": "for line 2",
+    "steps": []
+  },
+  "decisions": [],
+  "id": "line-2",
+  "ingest": "RTSP · 1920 × 1080 · on the line 2 server",
+  "name": "Line 2 camera",
+  "nothingWaiting": "Nothing is waiting for you.",
+  "on": true,
+  "sources": [
+    {
+      "id": "line-2",
+      "name": "Line 2 camera",
+      "selected": true,
+      "stage": {
+        "frame": {
+          "at": "2026-11-18T10:41:09Z",
+          "atText": "10:41:09",
+          "digest": "sha256:5b1bafa1becfcec35e2adab2564f631a9c83c7d9d0725d20016761a8ed9da993",
+          "href": "/api/surface/cameras/line-2/frames/sha256%3A5b1bafa1becfcec35e2adab2564f631a9c83c7d9d0725d20016761a8ed9da993"
+        },
+        "height": 1080,
+        "look": "dimmed",
+        "regions": [],
+        "trails": [],
+        "width": 1920,
+        "zones": []
+      },
+      "state": "frozen",
+      "stateText": "Paused",
+      "tone": "fail"
+    },
+    {
+      "id": "line-3",
+      "name": "Line 3 camera",
+      "selected": false,
+      "stage": {
+        "frame": {
+          "at": "2026-11-18T10:41:11Z",
+          "atText": "10:41:11",
+          "digest": "sha256:aeabde37525b6d416f73c42fb07488dd51b6804a8886d64699217ded3f6eff2f",
+          "href": "/api/surface/cameras/line-3/frames/sha256%3Aaeabde37525b6d416f73c42fb07488dd51b6804a8886d64699217ded3f6eff2f"
+        },
+        "height": 1080,
+        "look": "dimmed",
+        "regions": [],
+        "trails": [],
+        "width": 1920,
+        "zones": []
+      },
+      "state": "frozen",
+      "stateText": "Paused",
+      "tone": "fail"
+    },
+    {
+      "id": "packing-bench",
+      "name": "Packing bench",
+      "selected": false,
+      "stage": {
+        "frame": {
+          "at": "2026-11-18T10:41:11Z",
+          "atText": "10:41:11",
+          "digest": "sha256:bc878ffe74159d0b7c7a8b01897601fb653e51b876b89e2ffe126a7e7c641dd6",
+          "href": "/api/surface/cameras/packing-bench/frames/sha256%3Abc878ffe74159d0b7c7a8b01897601fb653e51b876b89e2ffe126a7e7c641dd6"
+        },
+        "height": 1080,
+        "look": "dimmed",
+        "regions": [],
+        "trails": [],
+        "width": 1920,
+        "zones": []
+      },
+      "state": "frozen",
+      "stateText": "Paused",
+      "tone": "fail"
+    },
+    {
+      "id": "this-computer",
+      "name": "This computer's camera",
+      "selected": false,
+      "stage": {
+        "height": 720,
+        "look": "dark",
+        "regions": [],
+        "trails": [],
+        "width": 1280,
+        "zones": []
+      },
+      "state": "off",
+      "stateText": "Off",
+      "tone": "muted"
+    }
+  ],
+  "stage": {
+    "badge": {
+      "text": "Last frame · 10:41:09",
+      "tone": "fail"
+    },
+    "cover": {
+      "off": false,
+      "retrying": false,
+      "text": "Nothing is looked at or sent until someone chooses Resume all.",
+      "title": "Paused by Stop all"
+    },
+    "frame": {
+      "at": "2026-11-18T10:41:09Z",
+      "atText": "10:41:09",
+      "digest": "sha256:5b1bafa1becfcec35e2adab2564f631a9c83c7d9d0725d20016761a8ed9da993",
+      "href": "/api/surface/cameras/line-2/frames/sha256%3A5b1bafa1becfcec35e2adab2564f631a9c83c7d9d0725d20016761a8ed9da993"
+    },
+    "height": 1080,
+    "look": "dimmed",
+    "regions": [],
+    "trails": [],
+    "width": 1920,
+    "zones": []
+  },
+  "state": "frozen",
+  "stateText": "Paused by Stop all",
+  "tone": "fail",
+  "tracks": [],
+  "tracksNote": "None while Stop all is in force.",
+  "watches": [
+    {
+      "active": false,
+      "after": ". Then wait 30 s before waking again for the same track.",
+      "before": "Score 0.80 or more, 3 frames in a row, inside",
+      "id": "seal-tear",
+      "label": "seal tear",
+      "name": "Seal tear",
+      "pill": "Paused",
+      "shortAfter": " · not watching",
+      "shortBefore": "Seal tear, 0.80+, 3 frames in",
+      "woke": "Woke the Inspector 3 times today",
+      "zone": "Inspection window"
+    }
+  ],
+  "zones": [
+    {
+      "corners": [
+        760.0,
+        170.0,
+        1560.0,
+        910.0
+      ],
+      "cornersText": "760, 170 → 1560, 910",
+      "id": "inspection-window",
+      "name": "Inspection window",
+      "usedBy": [
+        "Seal tear watch"
+      ]
+    }
+  ]
+}

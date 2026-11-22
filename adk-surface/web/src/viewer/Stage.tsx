@@ -158,7 +158,8 @@ export function Stage({
     <div
       className={`vw-stage${className ? ` ${className}` : ""}`}
       style={{ width: `${displayWidth}px`, height: `${displayHeight}px` }}
-      role="img"
+      // A picture whose boxes can be picked is a group of controls, not an image.
+      role={boxes.some((entry) => entry.onSelect) ? "group" : "img"}
       aria-label={label}
       onPointerDown={pointer(onPointerDown)}
       onPointerMove={pointer(onPointerMove)}
@@ -231,7 +232,8 @@ export function Stage({
             type="button"
             className={classes}
             style={style}
-            aria-label={entry.label}
+            // A box with a tag is named by its tag's words, as a person reads them.
+            aria-label={entry.tag ? undefined : entry.label}
             aria-pressed={entry.selected ?? false}
             onClick={entry.onSelect}
           >

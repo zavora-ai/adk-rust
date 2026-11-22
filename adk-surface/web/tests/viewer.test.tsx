@@ -84,7 +84,7 @@ describe("the annotated viewer", () => {
     expect(within(detail as HTMLElement).getByText("Model-input pixels, 960 × 960, letterboxed")).toBeTruthy();
     expect(within(detail as HTMLElement).getByText("Padded 140 left, 141 right · 960 × 960")).toBeTruthy();
     // Numbered badges in reading order (V7) and the tag of the selected block only.
-    const stage = screen.getByRole("img", { name: "INV-2291 · page 1" });
+    const stage = screen.getByRole("group", { name: "INV-2291 · page 1" });
     expect(within(stage).getAllByText(/^\d+$/).map((badge) => badge.textContent)).toEqual(
       ["1", "2", "3", "4", "5", "6", "7", "8", "9", "11"],
     );
@@ -95,7 +95,7 @@ describe("the annotated viewer", () => {
   it("filters by label and score (V3)", async () => {
     open(views.document);
     await screen.findByRole("heading", { name: "INV-2291 · page 1" });
-    const stage = screen.getByRole("img", { name: "INV-2291 · page 1" });
+    const stage = screen.getByRole("group", { name: "INV-2291 · page 1" });
     const regions = () => within(stage).getAllByRole("button").length;
     expect(regions()).toBe(10);
     await userEvent.click(within(panel()).getByRole("button", { name: /^text\s*5$/ }));
@@ -137,7 +137,7 @@ describe("the annotated viewer", () => {
     const side = panel();
     expect(within(side).getByText("Tracks are anonymous and start again when the video is opened again. People are blurred in every kept frame.")).toBeTruthy();
     expect(screen.getByText("10:34.1 / 20:00")).toBeTruthy();
-    const stage = screen.getByRole("img", { name: "Warehouse aisle 3 · 10:34.1" });
+    const stage = screen.getByRole("group", { name: "Warehouse aisle 3 · 10:34.1" });
     expect(within(stage).getByText("person · blurred · T2 · 0.90")).toBeTruthy();
     const show = within(side).getByRole("heading", { name: "Show" }).closest("section") as HTMLElement;
     await userEvent.click(within(show).getByRole("button", { name: /^T2 person/ }));

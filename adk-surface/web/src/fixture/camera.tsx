@@ -33,6 +33,7 @@ import steppedDown from "./camera/stepped-down.json";
 import quotaExhausted from "./camera/quota-exhausted.json";
 import sourceLost from "./camera/source-lost.json";
 import switchedOff from "./camera/switched-off.json";
+import stopAll from "./camera/stop-all.json";
 import several from "./camera/several-sources.json";
 import later from "./camera/later-stage.json";
 import pictures from "./camera/pictures.json";
@@ -50,6 +51,7 @@ export type CameraBoardState =
   | "quota-exhausted"
   | "source-lost"
   | "switched-off"
+  | "stop-all"
   | "several-sources"
   | "zone-and-card";
 
@@ -59,6 +61,7 @@ const VIEWS: Record<Exclude<CameraBoardState, "several-sources" | "zone-and-card
   "quota-exhausted": quotaExhausted as CameraView,
   "source-lost": sourceLost as CameraView,
   "switched-off": switchedOff as CameraView,
+  "stop-all": stopAll as CameraView,
 };
 
 const DRAWINGS: Record<string, string> = {

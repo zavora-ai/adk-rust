@@ -64,6 +64,9 @@ impl Camera<'_> {
         if !self.gate.on {
             return CameraState::Off;
         }
+        if self.gate.frozen {
+            return CameraState::Frozen;
+        }
         match self.facts.state {
             StreamState::Paused { .. } => CameraState::Paused,
             StreamState::Lost { .. } => CameraState::Lost,
@@ -147,6 +150,7 @@ pub(crate) fn state_text(state: CameraState, facts: &CameraFacts, offset: FixedO
         CameraState::Lost => "Can't reach the camera".into(),
         CameraState::Off => "Camera off".into(),
         CameraState::Stopped => "Stream stopped".into(),
+        CameraState::Frozen => "Paused by Stop all".into(),
     }
 }
 
@@ -159,6 +163,7 @@ fn short_state(state: CameraState) -> &'static str {
         CameraState::Lost => "Lost",
         CameraState::Off => "Off",
         CameraState::Stopped => "Stopped",
+        CameraState::Frozen => "Paused",
     }
 }
 
@@ -166,7 +171,7 @@ pub(crate) fn tone(state: CameraState) -> Tone {
     match state {
         CameraState::Live => Tone::Ok,
         CameraState::SavingFrames => Tone::Warn,
-        CameraState::Paused | CameraState::Lost => Tone::Fail,
+        CameraState::Paused | CameraState::Lost | CameraState::Frozen => Tone::Fail,
         CameraState::Off | CameraState::Stopped => Tone::Muted,
     }
 }
@@ -194,6 +199,7 @@ pub(crate) fn agent_line(camera: &Camera<'_>) -> (String, Tone) {
         CameraState::Lost => ("Not watching: no frames".into(), Tone::Fail),
         CameraState::Off => ("Not watching: camera off".into(), Tone::Muted),
         CameraState::Stopped => ("Not watching: stream stopped".into(), Tone::Muted),
+        CameraState::Frozen => ("Not watching: Stop all".into(), Tone::Fail),
     }
 }
 
@@ -226,6 +232,7 @@ pub(crate) fn stage(camera: &Camera<'_>, place: Place, ctx: &Ctx<'_>) -> StageVi
         CameraState::Paused => StageLook::Dimmed,
         CameraState::Lost => StageLook::Grey,
         CameraState::Off | CameraState::Stopped => StageLook::Dark,
+        CameraState::Frozen => StageLook::Dimmed,
     };
     let held = match look {
         StageLook::Dark => None,
@@ -254,7 +261,7 @@ pub(crate) fn stage(camera: &Camera<'_>, place: Place, ctx: &Ctx<'_>) -> StageVi
             CameraState::Paused => {
                 BadgeView { text: format!("Last frame · {}", frame.at_text), tone: Tone::Warn }
             }
-            CameraState::Lost | CameraState::Off | CameraState::Stopped => {
+            CameraState::Lost | CameraState::Off | CameraState::Stopped | CameraState::Frozen => {
                 BadgeView { text: format!("Last frame · {}", frame.at_text), tone: Tone::Fail }
             }
         }),
@@ -360,6 +367,16 @@ fn cover(camera: &Camera<'_>, place: Place, ctx: &Ctx<'_>) -> Option<CoverView> 
                 off: true,
             })
         }
+        CameraState::Frozen => Some(CoverView {
+            title: "Paused by Stop all".into(),
+            text: if tile {
+                "Nothing is looked at".into()
+            } else {
+                "Nothing is looked at or sent until someone chooses Resume all.".into()
+            },
+            retrying: false,
+            off: false,
+        }),
         CameraState::Stopped => {
             let who = camera.gate.stopped.as_ref().map(|acted| {
                 let by = if acted.by == ctx.user { "You".to_string() } else { acted.by.clone() };
@@ -512,9 +529,13 @@ pub(crate) fn notice(camera: &Camera<'_>, ctx: &Ctx<'_>) -> Option<NoticeView> {
             let mut text = Vec::new();
             let mut short = Vec::new();
             if lowered {
+                let often = if (governor.rate - 1.0).abs() < 1e-6 {
+                    "once".to_string()
+                } else {
+                    format!("{} times", rate(governor.rate))
+                };
                 text.push(format!(
-                    "Looking {} times a second instead of {}",
-                    rate(governor.rate),
+                    "Looking {often} a second instead of {}",
                     rate(governor.set_rate)
                 ));
                 short.push(format!("Looking {} a second", rate(governor.rate)));
@@ -579,7 +600,7 @@ pub(crate) fn notice(camera: &Camera<'_>, ctx: &Ctx<'_>) -> Option<NoticeView> {
                 }),
             })
         }
-        CameraState::Live | CameraState::Off | CameraState::Stopped => None,
+        CameraState::Live | CameraState::Off | CameraState::Stopped | CameraState::Frozen => None,
     }
 }
 
@@ -597,6 +618,7 @@ pub(crate) fn watches(camera: &Camera<'_>, ctx: &Ctx<'_>) -> Vec<WatchView> {
         CameraState::Lost => "No frames",
         CameraState::Off => "Camera off",
         CameraState::Stopped => "Stopped",
+        CameraState::Frozen => "Paused",
     };
     facts
         .watches
@@ -616,10 +638,11 @@ pub(crate) fn watches(camera: &Camera<'_>, ctx: &Ctx<'_>) -> Vec<WatchView> {
                 pill: pill.into(),
                 active,
                 before: if zone.is_some() { format!("{rule}, inside") } else { rule },
-                after: format!(
-                    ". Then wait {} s before waking again for the same track.",
-                    watch.cooldown_secs
-                ),
+                after: match watch.cooldown_secs {
+                    // No wait: each track wakes the agent once.
+                    0 => ". It wakes once for each track.".into(),
+                    secs => format!(". Then wait {secs} s before waking again for the same track."),
+                },
                 short_before: format!(
                     "{}, {:.2}+, {} frames{}",
                     watch.name,
@@ -734,6 +757,16 @@ pub(crate) fn budget(camera: &Camera<'_>, ctx: &Ctx<'_>) -> BudgetView {
                 ),
             )
         }
+        CameraState::Frozen => (
+            MeterView {
+                label: "Looking".into(),
+                value: "Paused".into(),
+                percent: 0,
+                tone: Tone::Fail,
+                note: Some("Stop all paused every camera".into()),
+            },
+            row("Looking", "Paused by Stop all".into(), Tone::Fail),
+        ),
         CameraState::Stopped => (
             MeterView {
                 label: "Looking".into(),
@@ -809,7 +842,8 @@ pub(crate) fn budget(camera: &Camera<'_>, ctx: &Ctx<'_>) -> BudgetView {
                 },
                 None,
             ),
-            (CameraState::Paused, None) | (CameraState::Off | CameraState::Stopped, _) => (
+            (CameraState::Paused, None)
+            | (CameraState::Off | CameraState::Stopped | CameraState::Frozen, _) => (
                 MeterView { label, value: "0".into(), percent: 0, tone: Tone::Ok, note: None },
                 None,
             ),
@@ -835,7 +869,7 @@ pub(crate) fn budget(camera: &Camera<'_>, ctx: &Ctx<'_>) -> BudgetView {
             Some(format!("{}% · at 100% the camera pauses until {until}", percent(used)))
         }
         CameraState::Paused => Some(format!("Renews at {until}")),
-        CameraState::Lost | CameraState::Off | CameraState::Stopped => None,
+        CameraState::Lost | CameraState::Off | CameraState::Stopped | CameraState::Frozen => None,
     };
     meters.push(MeterView {
         label: "Frames today".into(),
@@ -881,14 +915,22 @@ pub(crate) fn budget(camera: &Camera<'_>, ctx: &Ctx<'_>) -> BudgetView {
                 StepView { at: hh_mm(step.at, offset), text, next: false }
             })
             .collect(),
-        CameraState::Live | CameraState::Lost | CameraState::Off | CameraState::Stopped => {
-            Vec::new()
-        }
+        CameraState::Live
+        | CameraState::Lost
+        | CameraState::Off
+        | CameraState::Stopped
+        | CameraState::Frozen => Vec::new(),
     };
     if state == CameraState::SavingFrames {
         let asked = governor.steps.iter().any(|step| step.kind == GovernorStepKind::StopAsking);
-        let next = match backend {
-            Some(backend) if !asked => {
+        let next = match (governor.min_rate, backend) {
+            // A governor that steps by what the frames left can last: lower to its floor, then
+            // stop asking, then pause.
+            (Some(floor), _) if governor.rate > floor + 1e-6 => {
+                format!("Look less often, down to {} a second", rate(floor))
+            }
+            (Some(_), Some(backend)) if !asked => format!("Stop asking {backend}"),
+            (None, Some(backend)) if !asked => {
                 format!("At {}%: stop asking {backend}", percent(governor.stop_asking_at))
             }
             _ => format!("At 100%: pause the camera until {until}"),
@@ -923,6 +965,7 @@ pub(crate) fn tracks(camera: &Camera<'_>) -> (Vec<TrackRow>, String, Option<Stri
         CameraState::Lost => "Lost with the camera. Tracks start again when it is back.",
         CameraState::Off => "None while the camera is off. Tracks start again when it is back.",
         CameraState::Stopped => "None since the stream stopped.",
+        CameraState::Frozen => "None while Stop all is in force.",
     };
     let short = (camera.state() == CameraState::Off)
         .then(|| "Tracks start again when the camera is back on.".to_string());
@@ -1011,6 +1054,7 @@ pub(crate) fn camera_tile(camera: &Camera<'_>, selected: bool, ctx: &Ctx<'_>) ->
         CameraState::Lost => "can't reach it".into(),
         CameraState::Off => "nothing captured".into(),
         CameraState::Stopped => "stream stopped".into(),
+        CameraState::Frozen => "paused by Stop all".into(),
     };
     let short_line = match state {
         CameraState::Live if watched => "watching".into(),
@@ -1019,6 +1063,7 @@ pub(crate) fn camera_tile(camera: &Camera<'_>, selected: bool, ctx: &Ctx<'_>) ->
         CameraState::Paused => "paused".into(),
         CameraState::Lost => "can't reach it".into(),
         CameraState::Off | CameraState::Stopped => String::new(),
+        CameraState::Frozen => "paused".into(),
     };
     CameraTile {
         id: facts.id.clone(),

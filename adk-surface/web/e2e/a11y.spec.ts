@@ -61,6 +61,24 @@ const SCREENS: Array<{ name: string; query: string; size?: { width: number; heig
   { name: "voice", query: "screen=voice" },
   { name: "phone", query: "screen=phone", size: { width: 390, height: 844 } },
   { name: "tray", query: "screen=tray", size: { width: 420, height: 700 } },
+  // The vision screens (spec 3.7 §8.2), each with its picture drawn.
+  ...(["live", "stepped-down", "quota-exhausted", "source-lost", "switched-off", "stop-all", "several-sources"] as const).map((state) => ({
+    name: `live camera, ${state}`,
+    query: `screen=camera&camera=${state}`,
+    then: async (page: Page) => void (await page.locator(".cam-stage-wrap").first().waitFor()),
+  })),
+  { name: "live camera, zone and card", query: "screen=camera&camera=zone-and-card" },
+  { name: "live camera on a phone", query: "screen=cameraPhone&camera=live", size: { width: 390, height: 844 } },
+  ...(["document", "photo", "video", "compare", "empty", "correct"] as const).map((state) => ({
+    name: `annotated viewer, ${state}`,
+    query: `screen=viewer&viewer=${state}`,
+  })),
+  { name: "annotated viewer on a phone", query: "screen=viewerPhone", size: { width: 390, height: 844 } },
+  ...(["pending", "parked", "purged", "several", "allRedacted", "decided", "changed"] as const).map((state) => ({
+    name: `approve with the image, ${state}`,
+    query: `screen=vision&vision=${state}`,
+  })),
+  { name: "approve with the image on a phone", query: "screen=visionPhone&vision=pending", size: { width: 390, height: 844 } },
 ];
 
 for (const scheme of ["light", "dark"] as const) {

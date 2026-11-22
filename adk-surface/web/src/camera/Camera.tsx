@@ -17,6 +17,8 @@ import "./camera.css";
 const READ_AGAIN_MS = 3_000;
 /** The largest the picture is drawn (board choice C1). */
 const STAGE_MAX = 940;
+/** The gap between the grid's tiles, as `.cam-grid` sets it. */
+const TILE_GAP = 14;
 
 /** What opens over the camera. */
 export type Opened =
@@ -67,8 +69,8 @@ export function Camera({
   );
 }
 
-/** The width the picture may take in its column. */
-function useStageWidth(max: number) {
+/** The width the picture may take in its column, measured once `shown` puts the column on screen. */
+function useStageWidth(max: number, shown: boolean) {
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(max);
   useLayoutEffect(() => {
@@ -79,7 +81,7 @@ function useStageWidth(max: number) {
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [max]);
+  }, [max, shown]);
   return { ref, width };
 }
 
@@ -108,7 +110,7 @@ function One({
   const [layers, setLayers] = useState<Layers>({ boxes: true, masks: true, tracks: true, zones: true });
   const [opened, setOpened] = useState<Opened | undefined>(initialOpened);
   const [busy, setBusy] = useState(false);
-  const { ref, width } = useStageWidth(STAGE_MAX);
+  const { ref, width } = useStageWidth(STAGE_MAX, view !== undefined);
 
   const read = useCallback(async () => {
     try {
@@ -360,6 +362,9 @@ function Grid({
 }) {
   const [view, setView] = useState<CamerasView>();
   const [problem, setProblem] = useState("");
+  // Two tiles a row, each as wide as its half of the canvas allows.
+  const { ref, width } = useStageWidth(STAGE_MAX, view !== undefined);
+  const tileWidth = Math.max(220, Math.min(452, Math.floor((width - TILE_GAP) / 2) - 16));
   const read = useCallback(async () => {
     try {
       setView(await client.cameras());
@@ -404,7 +409,7 @@ function Grid({
         </button>
       </div>
       <div className="cam-body">
-        <div className="cam-canvas cam-canvas-grid">
+        <div className="cam-canvas cam-canvas-grid" ref={ref}>
           <div className="cam-grid">
             {view.tiles.map((tile) => (
               <button
@@ -413,7 +418,7 @@ function Grid({
                 className={`cam-tile${tile.id === view.selected ? " cam-tile-selected" : ""}`}
                 onClick={() => onNavigate({ camera: tile.id })}
               >
-                <CameraStage stage={tile.stage} width={452} name={tile.name} size="small" />
+                <CameraStage stage={tile.stage} width={tileWidth} name={tile.name} size="small" />
                 <span className="cam-tile-foot">
                   <b>{tile.name}</b>
                   <StatePill tone={tile.tone} state={tile.state} small>

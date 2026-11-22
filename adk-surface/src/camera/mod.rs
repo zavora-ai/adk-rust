@@ -6,7 +6,8 @@
 //! | [`CameraSource`] | The seam to a frame pipeline: each camera's [`CameraFacts`] — the stream's state, the frame governor's numbers, tracks, watch conditions, zones — and the acts a person may ask of it |
 //! | [`Cameras`] | The hub every frame passes ([`Cameras::offer`]): a camera switched off or stopped has its frames dropped on the server, whatever arrives; the rest are held in memory only, the latest [`HELD_FRAMES`], never written |
 //! | The view model ([`CameraView`], [`CamerasView`], ...) | What the screens show, in the boards' words, in the OpenAPI document of every `web` build |
-//! | `ScriptedCameras` (`web`) | A fixture-driven source with every board state, for the examples, the tests and the screenshots; a real pipeline implements [`CameraSource`] itself |
+//! | `PipelineCameras` (`vision-camera`) | Each camera on adk-vision's frame pipeline — source, frame governor, privacy, detector, tracker, watch conditions — reporting what the pipeline measured; the voice screen's camera through `SurfaceCameraSource` |
+//! | `ScriptedCameras` (`web`) | A fixture-driven source with every board state, for the tests and the screenshots |
 //! | `bridge` (`voice`) | A camera's frames fed to a realtime session under the voice screen's `FramePolicy` |
 //!
 //! # Rules
@@ -24,6 +25,8 @@
 mod desk;
 mod facts;
 mod hub;
+#[cfg(feature = "vision-camera")]
+mod live;
 mod project;
 #[cfg(feature = "web")]
 mod scripted;
@@ -39,8 +42,10 @@ pub use facts::{
 };
 pub use hub::{
     Acted, CameraSource, CameraUpdate, Cameras, DropReason, FROZEN_FRAMES, FROZEN_MINUTES,
-    HELD_FRAMES, Offered,
+    FrameIntake, HELD_FRAMES, Offered,
 };
+#[cfg(feature = "vision-camera")]
+pub use live::{FrameCounts, LiveCamera, LiveWatch, PipelineCameras, PipelineCamerasBuilder};
 #[cfg(feature = "web")]
 pub use scripted::{CameraBoard, ScriptedCameras};
 pub use view::{
