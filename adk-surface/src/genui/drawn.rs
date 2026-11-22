@@ -168,6 +168,30 @@ pub struct DrawnNode {
     /// renderer; every other surface draws its one child, what the home shows for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extension: Option<DrawnExtension>,
+    /// What assistive technology reads for it (A2UI 1.0 `@accessibility`), resolved and
+    /// checked by rule 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accessibility: Option<DrawnAccessibility>,
+}
+
+/// What assistive technology reads for a drawn node (A2UI 1.0 `AccessibilityAttributes`): its
+/// label and description resolved and checked like any shown text, how its changes are
+/// announced, and whether it is hidden from screen readers (never a field or a button).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DrawnAccessibility {
+    /// A short name, read instead of its visible text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// More it reads after the name: instructions, a format, a result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// How its changes are announced: `polite` or `assertive`; absent is `off`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<String>,
+    /// Hidden from screen readers.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 /// A component of an extension catalog as a host renderer reads it (spec 3.3 §6.1 `genui`,

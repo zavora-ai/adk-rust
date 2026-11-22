@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AppView, DecisionCard as Card, DrawnSent, DrawnSurface, FeedEntry, RefusedDrawing, ThreadItem } from "../generated/api";
+import type { AppView, DecisionCard as Card, DrawnSent, DrawnSurface, FeedEntry, ImageData, RefusedDrawing, ShellView, ThreadItem } from "../generated/api";
 import type { HomeClient } from "../client";
 import { AppFrame } from "../genui/AppFrame";
 import type { AppsSeam } from "../genui/apps";
@@ -8,21 +8,25 @@ import { useFormState } from "../genui/forms";
 import { RefusedNotice } from "../genui/Refused";
 import { labels } from "../labels";
 import { MarkdownResponse } from "../MarkdownResponse";
-import { visible } from "../safe";
+import { visible, visibleJson } from "../safe";
 import { DecisionCard } from "./DecisionCard";
 import type { Send, TakeOverSeam } from "./DecisionCard";
 import { Icon } from "./Icon";
+import { MessageImages, RunCard } from "./RunCard";
+import { canvasWindowPath } from "../screens/CanvasWindow";
 import { viewerLabels } from "../viewer/labels";
 import { viewerPath } from "../viewer/route";
 
 type Activity = Extract<ThreadItem, { kind: "activity" }>;
 type Result = Extract<ThreadItem, { kind: "result" }>;
+type Run = Extract<ThreadItem, { kind: "run" }>;
 
 /** One line of a thread, ready to draw. */
 type Line =
-  | { kind: "message"; key: string; from: "you" | "agent"; text: string }
-  | { kind: "activity"; key: string; text: string; result?: Result }
+  | { kind: "message"; key: string; from: "you" | "agent"; text: string; images?: ImageData[] }
+  | { kind: "activity"; key: string; text: string; result?: Result; run?: Run; at?: string; endAt?: string }
   | { kind: "decision"; key: string; id?: string; tool: string; text: string }
+  | { kind: "suggestions"; key: string; replies: string[] }
   | {
       kind: "drawn";
       key: string;
@@ -31,6 +35,11 @@ type Line =
       superseded: boolean;
       /** An earlier version of the surface precedes it. */
       changed: boolean;
+      /**
+       * The earlier versions folded into this, the latest one, oldest first: the versions no
+       * form was sent from, which would otherwise each take a line of the thread.
+       */
+      earlier?: DrawnSurface[];
       /** Its latest send, and that call's result. */
       sent?: DrawnSent;
       result?: Result;
@@ -87,16 +96,17 @@ export function lines(entries: FeedEntry[]): Line[] {
   }
   const claimed = new Set([...sends.values()].map((one) => one.callId));
   const decisions = new Set(sent.flatMap((one) => (one.decisionId ? [one.decisionId] : [])));
+  const folded = new Map<string, DrawnSurface[]>();
   for (const entry of entries) {
     entry.items.forEach((item, index) => {
       const key = `${entry.seq}:${index}`;
       switch (item.kind) {
         case "message":
-          out.push({ kind: "message", key, from: item.from, text: item.text });
+          out.push({ kind: "message", key, from: item.from, text: item.text, images: item.images ?? undefined });
           break;
         case "activity": {
           if (item.callId && drawing.has(item.callId)) break;
-          const line = { kind: "activity" as const, key, text: (item as Activity).text };
+          const line: Extract<Line, { kind: "activity" }> = { kind: "activity", key, text: (item as Activity).text, at: entry.at };
           out.push(line);
           if (item.callId) byCall.set(item.callId, line);
           break;
@@ -105,8 +115,20 @@ export function lines(entries: FeedEntry[]): Line[] {
           // A form's call ends on its form.
           if (item.callId && claimed.has(item.callId)) break;
           const activity = item.callId ? byCall.get(item.callId) : undefined;
-          if (activity) activity.result = item;
-          else out.push({ kind: "activity", key, text: item.tool, result: item });
+          if (activity) {
+            activity.result = item;
+            activity.endAt = entry.at;
+          } else out.push({ kind: "activity", key, text: item.tool, result: item, at: entry.at, endAt: entry.at });
+          break;
+        }
+        case "suggestions":
+          out.push({ kind: "suggestions", key, replies: item.replies });
+          break;
+        case "run": {
+          // A command's run ends on its activity, as a result does (spec 3.3 §5.1).
+          const activity = item.callId ? byCall.get(item.callId) : undefined;
+          if (activity) activity.run = item;
+          else out.push({ kind: "activity", key, text: item.run.command ?? item.tool, run: item });
           break;
         }
         case "decision":
@@ -117,12 +139,20 @@ export function lines(entries: FeedEntry[]): Line[] {
         case "drawn": {
           const { surfaceId, version } = item.surface;
           const sent = sends.get(`${surfaceId}@${version}`);
+          const superseded = (latest.get(surfaceId) ?? version) > version;
+          // An earlier version a form was sent from keeps its place, with its decision; the
+          // rest fold into the latest version as one "earlier versions" control.
+          if (superseded && !sent) {
+            folded.set(surfaceId, [...(folded.get(surfaceId) ?? []), item.surface]);
+            break;
+          }
           out.push({
             kind: "drawn",
             key,
             surface: item.surface,
-            superseded: (latest.get(surfaceId) ?? version) > version,
+            superseded,
             changed: (first.get(surfaceId) ?? version) < version,
+            earlier: superseded ? undefined : folded.get(surfaceId),
             sent,
             result: sent ? results.get(sent.callId) : undefined,
           });
@@ -157,6 +187,10 @@ export function Thread({
   focusDecision,
   takeOver,
   session,
+  shell,
+  pinned,
+  onPin,
+  onSuggest,
 }: {
   entries: FeedEntry[];
   open: Card[];
@@ -167,6 +201,14 @@ export function Thread({
   takeOver?: TakeOverSeam;
   /** The session shown: what a drawn form is sent in (spec 3.3 §7.4 rule 5). */
   session?: string;
+  /** Where the thread's agent runs commands, for each run's badge (spec 3.3 §5.7). */
+  shell?: ShellView;
+  /** The drawing shown beside the thread, by its surface. */
+  pinned?: string;
+  /** Shows a drawing beside the thread, or brings it back (`undefined`). */
+  onPin?: (surfaceId: string | undefined) => void;
+  /** Puts a suggested reply in the message box; the person still sends it. */
+  onSuggest?: (text: string) => void;
 }) {
   const [settled, setSettled] = useState<Card[]>([]);
   const settle = (card: Card) => {
@@ -174,6 +216,10 @@ export function Thread({
     onSettled(card);
   };
   const shown = lines(entries);
+  // Suggested replies stand only under the agent's latest message, until the person writes.
+  const lastYou = shown.map((line) => line.kind === "message" && line.from === "you").lastIndexOf(true);
+  const lastSuggestions = shown.map((line) => line.kind === "suggestions").lastIndexOf(true);
+  const offered = lastSuggestions > lastYou ? lastSuggestions : -1;
   const apps = useMemo(() => client.apps?.(), [client]);
   const named = new Set(
     shown.flatMap((line) =>
@@ -193,13 +239,30 @@ export function Thread({
   ].filter((card) => !named.has(card.id));
   return (
     <div className="thread" aria-live="polite">
-      {shown.map((line) => {
+      {worklog(shown).map((unit) => {
+        if (unit.kind === "log") return <WorkLog key={unit.key} steps={unit.steps} />;
+        const line = unit.line;
         switch (line.kind) {
+          case "suggestions":
+            return shown[offered] === line && onSuggest ? (
+              <div key={line.key} className="suggestions" role="group" aria-label={labels.suggestedReplies}>
+                {line.replies.map((reply) => (
+                  <button key={reply} type="button" className="suggestion" onClick={() => onSuggest(reply)}>
+                    {visible(reply)}
+                  </button>
+                ))}
+              </div>
+            ) : null;
           case "message":
             return line.from === "you" ? (
-              <div key={line.key} className="message message-you">
-                <span className="visually-hidden">{labels.you}: </span>
-                {line.text}
+              <div key={line.key} className="message-you-group">
+                {line.images && line.images.length > 0 && <MessageImages images={line.images} />}
+                {line.text && (
+                  <div className="message message-you">
+                    <span className="visually-hidden">{labels.you}: </span>
+                    {line.text}
+                  </div>
+                )}
               </div>
             ) : (
               <div key={line.key} className="message message-agent">
@@ -207,7 +270,11 @@ export function Thread({
               </div>
             );
           case "activity":
-            return <ActivityChip key={line.key} line={line} session={session} />;
+            return line.run ? (
+              <RunCard key={line.key} tool={line.run.tool} what={line.text} ok={line.run.ok} run={line.run.run} shell={shell} />
+            ) : (
+              <ActivityChip key={line.key} line={line} session={session} />
+            );
           case "refused":
             return <RefusedNotice key={line.key} refusal={line.refusal} />;
           case "app":
@@ -225,20 +292,45 @@ export function Thread({
                 takeOver={takeOver}
               />
             );
-          case "drawn":
+          case "drawn": {
+            const beside = !line.superseded && onPin !== undefined;
+            // A drawing shown beside the thread is drawn there only; here it leaves a line.
+            if (beside && pinned === line.surface.surfaceId) {
+              return (
+                <p key={line.key} className="drawn-beside">
+                  <span>
+                    <strong>{visible(line.surface.title ?? labels.drawing)}</strong> · {labels.shownBeside}
+                  </span>
+                  <button type="button" className="link" onClick={() => onPin?.(undefined)}>
+                    {labels.bringBack}
+                  </button>
+                </p>
+              );
+            }
             return (
-              <DrawnLine
-                key={line.key}
-                line={line}
-                open={open}
-                client={client}
-                send={send}
-                session={session}
-                onSettled={settle}
-                focusDecision={focusDecision}
-                takeOver={takeOver}
-              />
+              <div key={line.key} className="drawn-line">
+                {beside && (
+                  <button type="button" className="pin-beside" onClick={() => onPin?.(line.surface.surfaceId)}>
+                    <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+                      <path d="M13.5 4.5v15" />
+                    </svg>
+                    {labels.showBeside}
+                  </button>
+                )}
+                <DrawnLine
+                  line={line}
+                  open={open}
+                  client={client}
+                  send={send}
+                  session={session}
+                  onSettled={settle}
+                  focusDecision={focusDecision}
+                  takeOver={takeOver}
+                />
+              </div>
             );
+          }
           case "decision": {
             const card = line.id ? open.find((candidate) => candidate.id === line.id) : undefined;
             return line.id ? (
@@ -279,6 +371,114 @@ export function Thread({
  * decision's own background (spec 3.3 §7.4 rule 5). The form's state is read from the server
  * as the decision and the call's result change.
  */
+/**
+ * The canvas beside a thread (spec 3.3 §5.1): one drawing kept in view while the conversation
+ * goes on, at its latest version as the agent patches it, with its earlier versions and the
+ * A2UI it arrived as. Its form sends and its decisions work here as in the thread.
+ */
+export function CanvasPane({
+  entries,
+  pinned,
+  open,
+  client,
+  send,
+  session,
+  onSettled,
+  focusDecision,
+  takeOver,
+  onClose,
+  popOut = true,
+}: {
+  entries: FeedEntry[];
+  pinned: string;
+  open: Card[];
+  client: HomeClient;
+  send: Send;
+  session?: string;
+  onSettled: (card: Card) => void;
+  focusDecision?: string;
+  takeOver?: TakeOverSeam;
+  onClose: () => void;
+  /** Offers to open the drawing in its own window. */
+  popOut?: boolean;
+}) {
+  const [tab, setTab] = useState<"drawing" | "versions" | "wire">("drawing");
+  const line = lines(entries).find(
+    (candidate): candidate is Extract<Line, { kind: "drawn" }> =>
+      candidate.kind === "drawn" && candidate.surface.surfaceId === pinned && !candidate.superseded,
+  );
+  const earlier = line?.earlier ?? [];
+  return (
+    <aside className="canvas" aria-label={labels.canvas}>
+      <header className="canvas-head">
+        <h2 className="canvas-title">{line ? visible(line.surface.title ?? labels.drawing) : labels.drawing}</h2>
+        {line && <span className="canvas-version">v{line.surface.version}</span>}
+        {popOut && line && session && (
+          <button
+            type="button"
+            className="icon-button canvas-popout"
+            aria-label={labels.openOwnWindow}
+            title={labels.openOwnWindow}
+            onClick={() => window.open(canvasWindowPath(session, pinned), "_blank", "popup,width=760,height=900")}
+          >
+            <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M14 4.5h5.5V10M19.5 4.5 11 13M10 6H6.5A2 2 0 0 0 4.5 8v9.5a2 2 0 0 0 2 2H16a2 2 0 0 0 2-2V14" />
+            </svg>
+          </button>
+        )}
+        <button type="button" className="icon-button canvas-close" aria-label={labels.closeCanvas} onClick={onClose}>
+          <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </header>
+      {line ? (
+        <>
+          <div className="canvas-tabs" role="tablist" aria-label={labels.canvas}>
+            {(
+              [
+                ["drawing", labels.drawing],
+                ["versions", labels.earlierVersions(earlier.length)],
+                ["wire", "A2UI"],
+              ] as const
+            ).map(([key, label]) => (
+              <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="canvas-body" role="tabpanel">
+            {tab === "drawing" && (
+              <DrawnLine
+                line={{ ...line, earlier: undefined }}
+                open={open}
+                client={client}
+                send={send}
+                session={session}
+                onSettled={onSettled}
+                focusDecision={focusDecision}
+                takeOver={takeOver}
+              />
+            )}
+            {tab === "versions" &&
+              (earlier.length === 0 ? (
+                <p className="canvas-empty">{labels.noEarlierVersions}</p>
+              ) : (
+                earlier
+                  .slice()
+                  .reverse()
+                  .map((surface) => <DrawnView key={surface.version} surface={surface} superseded />)
+              ))}
+            {tab === "wire" && <pre className="canvas-wire">{visibleJson(JSON.stringify(line.surface, null, 2))}</pre>}
+          </div>
+        </>
+      ) : (
+        <p className="canvas-empty">{labels.canvasGone}</p>
+      )}
+    </aside>
+  );
+}
+
 function DrawnLine({
   line,
   open,
@@ -324,6 +524,7 @@ function DrawnLine({
       surface={line.surface}
       superseded={line.superseded}
       changed={line.changed}
+      earlier={line.earlier}
       state={line.sent ? state : undefined}
       onSend={line.superseded ? undefined : onSend}
       sent={
@@ -402,6 +603,67 @@ function AppLine({
         ),
       )}
     />
+  );
+}
+
+/** The fewest steps in a row that fold into one work-log line. */
+export const WORKLOG_FOLD = 3;
+
+type ActivityLine = Extract<Line, { kind: "activity" }>;
+type Unit = { kind: "line"; line: Line } | { kind: "log"; key: string; steps: ActivityLine[] };
+
+/**
+ * The thread's lines with each run of `WORKLOG_FOLD` or more plain tool steps in a row folded
+ * into one work-log line. A run of a command keeps its own card; the last step of a thread
+ * still working stays in view, outside the fold.
+ */
+export function worklog(shown: Line[]): Unit[] {
+  const units: Unit[] = [];
+  let steps: ActivityLine[] = [];
+  const flush = () => {
+    if (steps.length >= WORKLOG_FOLD) {
+      const open = steps[steps.length - 1]?.result === undefined ? steps.pop() : undefined;
+      units.push({ kind: "log", key: `log-${steps[0]!.key}`, steps });
+      if (open) units.push({ kind: "line", line: open });
+    } else {
+      units.push(...steps.map((line) => ({ kind: "line" as const, line })));
+    }
+    steps = [];
+  };
+  for (const line of shown) {
+    if (line.kind === "activity" && !line.run) {
+      steps.push(line);
+      continue;
+    }
+    flush();
+    units.push({ kind: "line", line });
+  }
+  flush();
+  return units;
+}
+
+/** Steps folded into one line: how many, how many failed, the last one; open for the rest. */
+function WorkLog({ steps }: { steps: ActivityLine[] }) {
+  const failed = steps.filter((step) => step.result && !step.result.ok).length;
+  const last = steps[steps.length - 1]!;
+  // How long the folded work took: from the first step to the last step's result.
+  const from = Date.parse(steps[0]?.at ?? "");
+  const to = Date.parse(last.endAt ?? last.at ?? "");
+  const seconds = Number.isFinite(from) && Number.isFinite(to) && to >= from ? Math.round((to - from) / 1000) : undefined;
+  return (
+    <details className={`work-log${failed ? " work-log-failed" : ""}`}>
+      <summary>
+        {seconds !== undefined && seconds > 0 && <span className="work-log-time">{labels.workedFor(seconds)}</span>}
+        <span className="work-log-count">{labels.workSteps(steps.length)}</span>
+        {failed > 0 && <span className="work-log-failed-count">{labels.workFailed(failed)}</span>}
+        <span className="work-log-last">{visible(last.text)}</span>
+      </summary>
+      <div className="work-log-steps">
+        {steps.map((step) => (
+          <ActivityChip key={step.key} line={step} />
+        ))}
+      </div>
+    </details>
   );
 }
 

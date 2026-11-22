@@ -377,7 +377,10 @@ async fn typing_while_a_decision_is_open_is_queued_never_an_answer() {
     let request = hold(&home, "ana", "s1", &invoice(), ApprovalRisk::Medium).await;
     let outcome = home
         .engine
-        .execute(&web(), Command::Send { session_id: "s1".into(), text: "yes".into() })
+        .execute(
+            &web(),
+            Command::Send { session_id: "s1".into(), text: "yes".into(), images: Vec::new() },
+        )
         .await
         .unwrap();
     let CommandOutcome::Queued { position, text, .. } = outcome else {
@@ -457,7 +460,8 @@ async fn the_thread_links_a_held_call_to_its_card() {
         [ThreadItem::Message {
             from: adk_surface::Speaker::You,
             author: "You".into(),
-            text: "Invoice the client".into()
+            text: "Invoice the client".into(),
+            images: Vec::new()
         }]
     );
     assert_eq!(
@@ -620,4 +624,130 @@ async fn an_answer_to_a_kernel_decision_is_recorded_by_what_it_is_about() {
             (json!("send_email"), None, None),
         ]
     );
+}
+
+/// An MCP server's elicitation as a harness parks it: `mcp:{server}/elicitation`, shown as
+/// its message and schema (or URL), answered as `actions` allow.
+async fn elicit(
+    home: &Home,
+    shown: Value,
+    actions: Vec<adk_core::ApprovalAction>,
+) -> ApprovalRequest {
+    let mut args = shown.clone();
+    args["metadata"] = Value::Null;
+    let call = call("mcp:billing/elicitation", args);
+    let mut request = ApprovalRequest::new(
+        format!("apr-elicit-{}", shown.get("url").map_or("form", |_| "url")),
+        ApprovalScope::new(APP, "ana", "s1"),
+        &call,
+        ApprovalPolicy::new([ApproverSelector::group("owner")]).allow_self_approval(),
+    )
+    .with_summary(format!(
+        "MCP server billing asks: {}",
+        shown["message"].as_str().unwrap_or_default()
+    ))
+    .with_risk(ApprovalRisk::Medium)
+    .with_redacted_args(shown)
+    .with_allowed_actions(actions);
+    request.created_at = at(18, 0, 23);
+    home.service.submit(request).await.unwrap()
+}
+
+#[tokio::test]
+async fn an_mcp_servers_form_is_drawn_in_the_homes_fields_and_its_answer_checked() {
+    use adk_core::ApprovalAction;
+    use adk_surface::{ElicitationView, ElicitedKind};
+    let home = home().await;
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "account": { "type": "string", "title": "Account", "minLength": 3 },
+            "env": { "type": "string", "enum": ["staging", "prod"], "enumNames": ["Staging", "Production"] },
+            "notify": { "type": "boolean", "default": true }
+        },
+        "required": ["account", "env"]
+    });
+    let request = elicit(
+        &home,
+        json!({ "message": "Which account should the invoice go to?", "schema": schema }),
+        vec![ApprovalAction::Edit, ApprovalAction::Reject],
+    )
+    .await;
+
+    let card = home.engine.decision(&web(), &request.id).await.unwrap();
+    assert_eq!(card.heading, "MCP server billing asks: Which account should the invoice go to?");
+    let Some(ElicitationView::Form { server, message, fields }) = &card.elicitation else {
+        panic!("a form: {:?}", card.elicitation)
+    };
+    assert_eq!(
+        (server.as_str(), message.as_str()),
+        ("billing", "Which account should the invoice go to?")
+    );
+    let kinds: Vec<(&str, ElicitedKind, bool)> =
+        fields.iter().map(|f| (f.label.as_str(), f.kind, f.required)).collect();
+    assert_eq!(
+        kinds,
+        [
+            ("Account", ElicitedKind::Text, true),
+            ("env", ElicitedKind::Choice, true),
+            ("notify", ElicitedKind::Boolean, false)
+        ]
+    );
+    assert_eq!(fields[1].options[1].label, "Production");
+    let labels: Vec<&str> = card.allowed.options.iter().map(|o| o.label.as_str()).collect();
+    assert_eq!(labels, ["Answer", "Deny"], "the form is answered, never allowed as written");
+    // Chat never carries it (S-I5).
+    assert!(home.engine.decision(&telegram(), &request.id).await.unwrap().elicitation.is_none());
+
+    let answer = |content: Value| Command::Decide {
+        decision_id: request.id.clone(),
+        version: request.version,
+        answer: Answer::Edit,
+        edited_args: Some(content),
+        reason: None,
+        expanded: false,
+        evidence: Vec::new(),
+    };
+    let error = home.engine.execute(&web(), answer(json!({ "account": "ab" }))).await.unwrap_err();
+    assert!(error.to_string().contains("does not fit the form"), "{error}");
+    let content = json!({ "account": "acme", "env": "prod", "notify": false });
+    assert!(matches!(
+        home.engine.execute(&web(), answer(content.clone())).await.unwrap(),
+        CommandOutcome::Answered { .. }
+    ));
+    let decided = home.service.get(&request.id).await.unwrap().unwrap();
+    assert_eq!(decided.decisions.last().unwrap().edited_args, Some(content));
+}
+
+#[tokio::test]
+async fn an_mcp_servers_address_is_shown_whole_with_why_to_look_twice() {
+    use adk_core::ApprovalAction;
+    use adk_surface::ElicitationView;
+    for (url, host, warning) in [
+        ("https://billing.example.com/connect?x=1", "billing.example.com", None),
+        ("https://xn--pple-43d.com/login", "xn--pple-43d.com", Some("look-alike")),
+        ("https://billing.example.com@evil.test/login", "evil.test", Some("before an @")),
+        ("http://billing.example.com/", "billing.example.com", Some("not encrypted")),
+    ] {
+        let home = home().await;
+        let request = elicit(
+            &home,
+            json!({ "message": "Connect your billing account", "url": url }),
+            vec![ApprovalAction::Approve, ApprovalAction::Reject],
+        )
+        .await;
+        let card = home.engine.decision(&web(), &request.id).await.unwrap();
+        let Some(ElicitationView::Url { url: shown, host: shown_host, warning: said, .. }) =
+            &card.elicitation
+        else {
+            panic!("an address: {:?}", card.elicitation)
+        };
+        assert_eq!((shown.as_str(), shown_host.as_str()), (url, host));
+        match warning {
+            Some(words) => {
+                assert!(said.as_deref().unwrap_or_default().contains(words), "{url}: {said:?}")
+            }
+            None => assert_eq!(said, &None, "{url}"),
+        }
+    }
 }

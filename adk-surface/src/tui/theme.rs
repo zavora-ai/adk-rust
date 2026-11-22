@@ -119,42 +119,42 @@ const fn rgb(hex: u32) -> (u8, u8, u8) {
 /// Spec 3.3 §9, light.
 const LIGHT: Palette = Palette {
     background: rgb(0xFFFFFF),
-    raised: rgb(0xF6F7F9),
-    border: rgb(0xE6E8EC),
-    text: rgb(0x0F172A),
-    secondary: rgb(0x475569),
-    label: rgb(0x64748B),
+    raised: rgb(0xF4F4F1),
+    border: rgb(0xE7E6E2),
+    text: rgb(0x18181B),
+    secondary: rgb(0x4B4B53),
+    label: rgb(0x6B6B74),
     brand: rgb(0xF74C00),
-    accent: rgb(0xC03A00),
-    button: rgb(0xC03A00),
+    accent: rgb(0xC2410C),
+    button: rgb(0xC2410C),
     button_text: rgb(0xFFFFFF),
-    decision: rgb(0xFFF8F3),
-    decision_strong: rgb(0xFFF1EA),
-    stop: rgb(0x0A1628),
-    stop_text: rgb(0xF1F5F9),
+    decision: rgb(0xFFF7F1),
+    decision_strong: rgb(0xFFEDE1),
+    stop: rgb(0x18181B),
+    stop_text: rgb(0xFFFFFF),
     working: rgb(0x15803D),
     done: rgb(0x1D4ED8),
     failed: rgb(0xB91C1C),
 };
 
-/// Spec 3.3 §9, dark: the light screen with the dark set.
+/// Spec 3.3 §9, dark: the light screen with the dark set, layered from near black.
 const DARK: Palette = Palette {
-    background: rgb(0x0A1628),
-    raised: rgb(0x1C2B45),
-    border: rgb(0x2A3D5C),
-    text: rgb(0xF1F5F9),
-    secondary: rgb(0xD5DEE8),
-    label: rgb(0xA7B4C6),
-    brand: rgb(0xF74C00),
-    accent: rgb(0xFF9C78),
-    button: rgb(0xF74C00),
-    button_text: rgb(0x0A1628),
-    decision: rgb(0x2A2432),
-    decision_strong: rgb(0x352B3F),
-    stop: rgb(0xF1F5F9),
-    stop_text: rgb(0x0A1628),
+    background: rgb(0x0E0F11),
+    raised: rgb(0x1E1F23),
+    border: rgb(0x2C2D32),
+    text: rgb(0xEDEDEF),
+    secondary: rgb(0xB5B5BD),
+    label: rgb(0x8E8E97),
+    brand: rgb(0xFF6A1F),
+    accent: rgb(0xFF8A4C),
+    button: rgb(0xFF8A4C),
+    button_text: rgb(0x1A0D05),
+    decision: rgb(0x1F1610),
+    decision_strong: rgb(0x2A1D13),
+    stop: rgb(0xEDEDEF),
+    stop_text: rgb(0x0E0F11),
     working: rgb(0x4ADE80),
-    done: rgb(0x93C5FD),
+    done: rgb(0x93B4FF),
     failed: rgb(0xFCA5A5),
 };
 
@@ -302,11 +302,14 @@ mod tests {
     #[test]
     fn the_tokens_of_section_9() {
         assert_eq!(LIGHT.background, (0xFF, 0xFF, 0xFF));
-        assert_eq!(LIGHT.decision, (0xFF, 0xF8, 0xF3));
-        assert_eq!(DARK.background, (0x0A, 0x16, 0x28));
-        assert_eq!(DARK.decision, (0x2A, 0x24, 0x32));
-        assert_eq!(DARK.accent, (0xFF, 0x9C, 0x78));
-        assert_eq!(LIGHT.brand, DARK.brand);
+        assert_eq!(LIGHT.decision, (0xFF, 0xF7, 0xF1));
+        assert_eq!(LIGHT.accent, (0xC2, 0x41, 0x0C));
+        assert_eq!(DARK.background, (0x0E, 0x0F, 0x11));
+        assert_eq!(DARK.decision, (0x1F, 0x16, 0x10));
+        assert_eq!(DARK.accent, (0xFF, 0x8A, 0x4C));
+        // The brand is the one orange, brightened for the dark set.
+        assert_eq!(LIGHT.brand, (0xF7, 0x4C, 0x00));
+        assert_eq!(DARK.brand, (0xFF, 0x6A, 0x1F));
     }
 
     #[test]
@@ -318,7 +321,7 @@ mod tests {
         assert!(matches!(theme.color(LIGHT.accent), Color::Indexed(_)));
         assert_eq!(
             Theme::new(Appearance::Dark, true).color(DARK.text),
-            Color::Rgb(0xF1, 0xF5, 0xF9)
+            Color::Rgb(0xED, 0xED, 0xEF)
         );
     }
 }

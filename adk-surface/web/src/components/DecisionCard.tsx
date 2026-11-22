@@ -24,6 +24,7 @@ import type { AgentCardView } from "../agents/types";
 import { Avatar } from "./Avatar";
 import { CallView } from "./CallView";
 import { DECIDED_CLASS, DecidedLine } from "./DecidedLine";
+import { AnswerForm, ElicitedAddress } from "./Elicitation";
 import { Pill } from "./Pill";
 
 /** The reserved tool name of a take-over entry (spec 3.3 §10 H2). */
@@ -192,11 +193,23 @@ export function DecisionCard({
   const summary = card.summary ? <p className="decision-note">{visible(card.summary)}</p> : null;
   // A suggested agent shows its definition in place of the call (spec 3.3 §5.7).
   const addsAgent = (card as Card & { addsAgent?: AgentCardView | null }).addsAgent;
-  const call = addsAgent ? (
+  const callView = addsAgent ? (
     <AgentCard view={addsAgent} decisionId={card.id} expanded={expanded} onExpand={() => setExpanded(true)} decided={decided} />
   ) : (
     <CallView call={card.call} expanded={expanded} onExpand={() => setExpanded(true)} />
   );
+  // What an MCP server asks: an address shown whole above the call; a form answered in the
+  // home's own fields (spec 3.3 §7.2).
+  const elicitation = card.elicitation;
+  const call =
+    elicitation?.mode === "url" ? (
+      <>
+        <ElicitedAddress view={elicitation} />
+        {callView}
+      </>
+    ) : (
+      callView
+    );
   const timeline = (
     <ol className="timeline" aria-label={labels.howItGotHere}>
       {card.timeline.map((step, index) => (
@@ -283,11 +296,20 @@ export function DecisionCard({
   }
 
   return (
-    <article ref={root} tabIndex={-1} className="decision" aria-labelledby={heading} data-decision="waiting">
-      {who}
+    // Question first: what the person is asked and what it costs, then who asks and the exact
+    // call (spec 3.3 §7.1), then the answers. The question mark is drawn, not spoken: the card
+    // is named by its heading on every surface.
+    <article ref={root} tabIndex={-1} className="decision decision-ask" aria-labelledby={heading} data-decision="waiting">
       <h3 id={heading} className="decision-heading">
         {visible(card.heading)}
+        {!/[?.!]$/.test(card.heading.trim()) && (
+          <span className="decision-qmark" aria-hidden="true">
+            ?
+          </span>
+        )}
       </h3>
+      {details}
+      {who}
       {summary}
       {evidence}
       {call}
@@ -329,7 +351,18 @@ export function DecisionCard({
           ))}
         </div>
       )}
-      {editing && (
+      {editing && elicitation?.mode === "form" && (
+        <AnswerForm
+          view={elicitation}
+          busy={busy}
+          onCancel={() => setEditing(false)}
+          onSend={(content, origin) => {
+            const option = card.allowed.options.find((candidate) => candidate.answer === "edit");
+            if (option) void answer(option, origin, content);
+          }}
+        />
+      )}
+      {editing && elicitation?.mode !== "form" && (
         <EditCall
           card={card}
           busy={busy}
@@ -345,7 +378,6 @@ export function DecisionCard({
           {problem}
         </p>
       )}
-      {details}
       {detail}
       {fixedLine}
       {changing && (

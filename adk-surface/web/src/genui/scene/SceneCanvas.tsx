@@ -41,6 +41,14 @@ export interface SceneCanvasProps {
   onTouch?: () => void;
 }
 
+/** Which labels win a crowded spot: the scene's own text, then objects', then the axes'. */
+function rank(key: string): number {
+  if (key.startsWith("shape:")) return 0;
+  if (key.startsWith("object:")) return 1;
+  if (key.startsWith("axis:")) return 2;
+  return 3;
+}
+
 /** A label drawn as page text, anchored in the scene. */
 interface Tag {
   key: string;
@@ -671,29 +679,57 @@ export default function SceneCanvas(props: SceneCanvasProps) {
     const eased = performance.now();
     const project = new THREE.Vector3();
 
+    // A label's size, measured once: reading it every frame would force a layout each time.
+    const labelSizes = new WeakMap<HTMLElement, { w: number; h: number }>();
+    const sizeOf = (element: HTMLElement) => {
+      let size = labelSizes.get(element);
+      if (!size || size.w === 0) {
+        size = { w: element.offsetWidth, h: element.offsetHeight };
+        labelSizes.set(element, size);
+      }
+      return size;
+    };
     const place = () => {
       const width = container.clientWidth;
       const tall = container.clientHeight;
+      // Labels that are drawn this frame, so a later one that would cover one is left out; the
+      // text view still lists every label.
+      const taken: { left: number; top: number; right: number; bottom: number }[] = [];
       const position = (key: string, element: HTMLElement | undefined, below: boolean) => {
         const anchor = world.anchors.get(key);
         if (!element || !anchor) return;
         project.copy(anchor()).project(world.camera);
         const inside = project.z < 1 && Math.abs(project.x) <= 1.05 && Math.abs(project.y) <= 1.05;
-        element.style.visibility = inside ? "visible" : "hidden";
-        if (!inside) return;
+        if (!inside) {
+          element.style.visibility = "hidden";
+          return;
+        }
         const x = ((project.x + 1) / 2) * width;
         const y = ((1 - project.y) / 2) * tall;
-        // A label sits above its object and a panel under it, so neither hides the other; a
-        // panel is held inside the stage.
-        if (below) {
-          const left = Math.min(Math.max(4, x - element.offsetWidth / 2), Math.max(4, width - element.offsetWidth - 4));
-          const top = Math.min(y + 8, Math.max(4, tall - element.offsetHeight - 4));
-          element.style.transform = `translate(${left.toFixed(1)}px, ${top.toFixed(1)}px)`;
-        } else {
-          element.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`;
+        const { w, h } = sizeOf(element);
+        // A label sits above its object and a panel under it, so neither hides the other; both
+        // are held inside the stage, so none is cut at its edge.
+        const left = Math.min(Math.max(4, x - w / 2), Math.max(4, width - w - 4));
+        const top = below
+          ? Math.min(y + 8, Math.max(4, tall - h - 4))
+          : Math.min(Math.max(4, y - h - 2), Math.max(4, tall - h - 4));
+        if (!below) {
+          const rect = { left, top, right: left + w, bottom: top + h };
+          const covers = taken.some(
+            (other) => rect.left < other.right && rect.right > other.left && rect.top < other.bottom && rect.bottom > other.top,
+          );
+          if (covers) {
+            element.style.visibility = "hidden";
+            return;
+          }
+          taken.push(rect);
         }
+        element.style.visibility = "visible";
+        element.style.transform = `translate(${left.toFixed(1)}px, ${top.toFixed(1)}px)`;
       };
-      for (const [key, element] of tagElements.current) position(key, element, false);
+      // Text the scene draws as a label comes first, then objects' labels, then the axes'.
+      const ranked = [...tagElements.current].sort(([a], [b]) => rank(a) - rank(b));
+      for (const [key, element] of ranked) position(key, element, false);
       for (const [key, element] of panelElements.current) position(`panel:${key}`, element, true);
     };
 

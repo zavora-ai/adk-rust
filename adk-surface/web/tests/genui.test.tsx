@@ -56,6 +56,21 @@ describe("a drawing", () => {
     expect(note?.querySelector("code")?.textContent).toBe("send_invoice");
   });
 
+  it("gives assistive technology what the drawing names, and says each drawing once", () => {
+    const surface = invoiceForm();
+    const labelled = (node: DrawnNode): DrawnNode =>
+      node.key === "body"
+        ? { ...node, accessibility: { label: "Invoice number", description: "Due in 30 days", live: "polite" } }
+        : { ...node, children: node.children?.map(labelled) };
+    const { container } = render(<DrawnView surface={{ ...surface, root: surface.root && labelled(surface.root) }} onSend={async () => undefined} />);
+    const named = container.querySelector('[aria-label="Invoice number"]');
+    expect(named?.getAttribute("aria-description")).toBe("Due in 30 days");
+    expect(named?.getAttribute("aria-live")).toBe("polite");
+    expect(named?.getAttribute("role")).toBe("group");
+    const announced = container.querySelector('.drawn > p[aria-live="polite"]');
+    expect(announced?.textContent).toContain("Invoice INV-10");
+  });
+
   it("shows agent text as text: no markup, no control characters", () => {
     const surface = { ...timesheetCard(), title: "<b>Total</b>‮\u001b[31m" };
     const { container } = render(<DrawnView surface={surface} />);
@@ -81,6 +96,27 @@ describe("a drawing", () => {
     );
     expect(screen.getByText("Earlier version · 10:02")).toBeTruthy();
     expect(screen.getByText("Finance changed this form at 10:05")).toBeTruthy();
+  });
+
+  it("folds the earlier versions no form was sent from into one control on the latest", () => {
+    const shown = lines([drawn(1, 1), drawn(2, 2), drawn(3, 3)]);
+    expect(shown.map((line) => line.kind)).toEqual(["drawn"]);
+    const latest = shown[0] as Extract<(typeof shown)[number], { kind: "drawn" }>;
+    expect(latest.surface.version).toBe(3);
+    expect(latest.earlier?.map((surface) => surface.version)).toEqual([1, 2]);
+    render(<DrawnView surface={latest.surface} earlier={latest.earlier} />);
+    expect(screen.getByText("Earlier versions · 2")).toBeTruthy();
+  });
+
+  it("shows its title once when its first words already say it", () => {
+    const surface = { ...invoiceForm(), title: "Invoice INV-10" };
+    const heading = { key: "h", component: "Text", text: "Invoice inv-10", variant: "h2" };
+    const { container, rerender } = render(
+      <DrawnView surface={{ ...surface, root: { key: "root", component: "Column", children: [heading] } }} />,
+    );
+    expect(container.querySelector(".drawn-title")).toBeNull();
+    rerender(<DrawnView surface={surface} />);
+    expect(container.querySelector(".drawn-title")?.textContent).toBe("Invoice INV-10");
   });
 });
 
@@ -281,6 +317,35 @@ describe("the ported A2UI parts", () => {
     expect(getPath(setPath({ rows: [{ a: 1 }] }, "/rows/0/a", 2), "/rows/0/a")).toBe(2);
   });
 
+  it("reads A2UI 1.0 into the same surfaces, one createSurface carrying the drawing", () => {
+    const store = new SurfaceStore();
+    applyMessages(
+      store,
+      parseJsonl(
+        [
+          JSON.stringify({
+            version: "1.0",
+            createSurface: {
+              surfaceId: "s",
+              catalogId: "https://adk-rust.com/a2ui/catalogs/forms/1.0/catalog.json",
+              components: [
+                { id: "root", component: "Text", text: { "@path": "/to" }, "@accessibility": { label: "To" }, extra: { "@@type": "x" } },
+              ],
+              dataModel: { to: "ana" },
+            },
+          }),
+          JSON.stringify({ version: "1.0", updateDataModel: { surfaceId: "s", path: "/to", value: null } }),
+        ].join("\n"),
+      ),
+    );
+    const surface = store.get("s");
+    expect(surface?.components.get("root")).toEqual({ id: "root", component: "Text", text: { path: "/to" }, accessibility: { label: "To" }, extra: { "@type": "x" } });
+    expect(surface?.dataModel).toEqual({});
+    expect(() => parseJsonl('{"version":"1.0","updateDataModel":{"surfaceId":"s","path":"/a"}}')).toThrow(/requires value/);
+    expect(() => parseJsonl('{"version":"1.0","updateComponents":{"surfaceId":"s","components":[{"id":"r","component":"Text","text":{"@x":1}}]}}')).toThrow(/reserved key/);
+    expect(() => parseJsonl('{"version":"2.0","deleteSurface":{"surfaceId":"s"}}')).toThrow(/line 1/);
+  });
+
   it("never follows a link to this computer or a script", () => {
     expect(sanitizeUrl("https://example.com/a", "anchor")).toBe("https://example.com/a");
     expect(sanitizeUrl("http://127.0.0.1:8080/", "anchor")).toBeNull();
@@ -305,6 +370,33 @@ function bridge(answer: (request: AppRequest) => Promise<AppAnswer>) {
   };
   return { bridge: new AppBridge(host), posted, prompts, heights };
 }
+
+describe("an app's bridge", () => {
+  it("tells the app the page's scheme, styles and width, and when they change or the frame goes", async () => {
+    const posted: JsonRpc[] = [];
+    const host: BridgeHost = {
+      post: (message) => posted.push(message),
+      ask: async () => ({ result: { hostContext: { displayMode: "inline", containerDimensions: { maxHeight: 640 } } } }),
+      resize: () => undefined,
+      prompt: () => undefined,
+      theme: () => "dark",
+      styles: () => ({ "--color-text-primary": "#111" }),
+      width: () => 480,
+      toolInput: {},
+      toolResult: {},
+    };
+    const bridge = new AppBridge(host);
+    await bridge.receive({ jsonrpc: "2.0", id: 1, method: "ui/initialize", params: {} });
+    const context = (posted[0] as { result: { hostContext: Record<string, unknown> } }).result.hostContext;
+    expect(context.theme).toBe("dark");
+    expect(context.styles).toEqual({ variables: { "--color-text-primary": "#111" } });
+    expect(context.containerDimensions).toEqual({ maxHeight: 640, width: 480 });
+    bridge.contextChanged();
+    expect((posted[1] as { method: string }).method).toBe("ui/notifications/host-context-changed");
+    bridge.teardown();
+    expect((posted[2] as { method: string }).method).toBe("ui/resource-teardown");
+  });
+});
 
 /** The app's frame in `container`, once opened. */
 function framed(container: HTMLElement): Promise<HTMLIFrameElement> {
@@ -479,6 +571,22 @@ describe("an app from an MCP server", () => {
     opened.mockRestore();
   });
 
+  it("saves a file an app offers only when the person presses Save", async () => {
+    const created = vi.fn(() => "blob:forecast");
+    const revoked = vi.fn();
+    Object.assign(URL, { createObjectURL: created, revokeObjectURL: revoked });
+    const clicked = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const { container } = render(<AppFrame app={weatherApp()} seam={new AppsFixture()} session="s-chief" />);
+    const frame = await framed(container);
+    fromFrame(frame, { jsonrpc: "2.0", id: 3, method: "ui/download-file", params: { contents: [] } });
+    const ask = await screen.findByRole("group", { name: "The Weather app wants to save forecast.csv (14 bytes)" });
+    expect(created).not.toHaveBeenCalled();
+    await userEvent.click(within(ask).getByRole("button", { name: "Save" }));
+    expect(created).toHaveBeenCalledTimes(1);
+    expect(clicked).toHaveBeenCalledTimes(1);
+    clicked.mockRestore();
+  });
+
   it("stands in the thread for its tool call, with the decision of a call it asked for under it", () => {
     const at = new Date().toISOString();
     const entries: FeedEntry[] = [
@@ -537,6 +645,16 @@ describe("a chart an extension component drew", () => {
       expect(container.querySelector('[class*="decision"], [class*="pill"]')).toBeNull();
       unmount();
     }
+  });
+
+  it("offers its numbers as a table a screen reader can walk", () => {
+    const { container } = render(<ChartView chart={chart("bar")} />);
+    const details = container.querySelector("details.drawn-chart-data");
+    expect(details?.querySelector("summary")?.textContent).toBe("Show the data");
+    const rows = [...(details?.querySelectorAll("tbody tr") ?? [])].map((row) => [...row.children].map((cell) => cell.textContent));
+    expect(rows.length).toBe(3);
+    expect(rows.every((row) => row.length === 2)).toBe(true);
+    expect(details?.querySelector("caption")?.textContent).toBe("bar chart of Revenue, 3 points, from 4 to 7");
   });
 
   it("writes its words as text and names each point's value", () => {

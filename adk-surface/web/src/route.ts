@@ -1,5 +1,5 @@
 /** The web home's sections, each its own address under `/ui/` (spec 3.3 §5.1). */
-export type Section = "threads" | "today" | "memory" | "developer" | "voice" | "agents" | "website";
+export type Section = "threads" | "decisions" | "today" | "memory" | "developer" | "voice" | "agents" | "website" | "canvas";
 
 const BASE = "/ui/";
 
@@ -9,6 +9,11 @@ const DECISIONS = `${BASE}decisions/`;
 export function sectionOf(pathname: string): Section {
   const rest = pathname.startsWith(BASE) ? pathname.slice(BASE.length) : "";
   const first = rest.split("/")[0];
+  // `/ui/decisions` is the inbox; `/ui/decisions/<id>` is one decision's deep link, opened in
+  // its thread.
+  if (rest === "decisions" || rest === "decisions/") return "decisions";
+  // A drawing in its own window (`/ui/canvas?session=…&surface=…`).
+  if (rest === "canvas") return "canvas";
   return first === "today" ||
     first === "memory" ||
     first === "developer" ||

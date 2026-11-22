@@ -221,6 +221,7 @@ fn delegated_run_config(parent: RunConfig) -> RunConfig {
         tool_confirmation_fingerprints: _,
         tool_confirmation_handler,
         tool_reviewer,
+        requested_call_seal,
         runtime_toolsets: _,
         cached_content: _,
         transfer_targets: _,
@@ -272,6 +273,7 @@ fn delegated_run_config(parent: RunConfig) -> RunConfig {
         // Limits, governance, approvals, ledgers and identity span the whole invocation.
         tool_confirmation_handler,
         tool_reviewer,
+        requested_call_seal,
         auto_cache,
         history_max_events,
         tool_concurrency,

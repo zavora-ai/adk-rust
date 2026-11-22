@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import type {
   Command,
   CommandOutcome,
@@ -145,6 +146,9 @@ export function Voice({
     onEnd(conversation.current);
   }
 
+  const live = state.phase === "listening" || state.phase === "speaking";
+  const sharing = state.inputs.screen ? "screen" : state.inputs.camera ? "camera" : undefined;
+  const captions = state.captions;
   return (
     <div className="voice">
       <header className="voice-header">
@@ -154,6 +158,10 @@ export function Voice({
         </span>
         <span className="voice-with">
           {voiceLabels.talkingWith} <strong>{agent}</strong>
+        </span>
+        <span className={`voice-link voice-link-${live ? "on" : state.phase}`}>
+          <span className="voice-link-dot" aria-hidden="true" />
+          {live ? voiceLabels.connected : state.phase === "connecting" ? voiceLabels.connecting : voiceLabels.endedShort}
         </span>
         <span className="voice-spacer" />
         <label className="voice-model">
@@ -166,14 +174,11 @@ export function Voice({
             ))}
           </select>
         </label>
-        <button type="button" className="button button-stop voice-end" onClick={end}>
-          {voiceLabels.end}
-        </button>
       </header>
       <main className="voice-main" id="content">
         <section className="voice-talk" aria-live="polite">
+          <Presence phase={state.phase} session={session.current} />
           <h1 className="voice-state">
-            <Waveform />
             {state.phase === "speaking"
               ? voiceLabels.speaking
               : state.phase === "connecting"
@@ -182,31 +187,47 @@ export function Voice({
                   ? voiceLabels.ended
                   : voiceLabels.listening}
           </h1>
+          <p className="voice-hint">
+            {state.phase === "speaking" ? voiceLabels.speakingHint : state.phase === "listening" ? voiceLabels.listeningHint : ""}
+          </p>
+          {captions.length > 0 && (
+            <ol className="voice-captions" aria-label={voiceLabels.captions}>
+              {captions.map((line, index) => (
+                <li key={`${line.at}-${index}`} className={index === captions.length - 1 ? "voice-caption-latest" : undefined}>
+                  <time className="voice-caption-time" dateTime={new Date(line.at).toISOString()}>
+                    {clock(line.at)}
+                  </time>
+                  {line.kind === "heard" ? (
+                    <span>
+                      <strong>{voiceLabels.you}</strong> · <span>{line.text}</span>
+                    </span>
+                  ) : (
+                    <span className="voice-caption-note">{voiceLabels.spokeOver}</span>
+                  )}
+                </li>
+              ))}
+            </ol>
+          )}
           {stopped ? (
             <p className="voice-prompt">{voiceLabels.stopped}</p>
           ) : (
             prompted && <Prompt card={prompted} />
           )}
-          {state.heard && <p className="voice-said">{state.heard}</p>}
           {state.pending && (
             <article className="voice-pending" aria-label={pending?.heading ?? state.pending.text}>
               <div className="voice-pending-top">
-                <span className="voice-heard">{heard(state.heard ?? "")}</span>
-                <span className="voice-pill">
-                  <span className="voice-pill-dot" aria-hidden="true" />
-                  {allowingIn(seconds)}
-                </span>
-              </div>
-              <h2 className="voice-pending-heading">{pending?.heading}</h2>
-              {pending && <Call card={pending} />}
-              <div className="voice-pending-bottom">
-                <span className="voice-pending-meta">
-                  {pending ? `${pending.agent.displayName} · ${pending.riskText}` : ""}
-                </span>
-                <button type="button" className="button voice-cancel" onClick={() => void cancel(state.pending!.id)}>
+                <Countdown until={state.pending.cancelUntil} now={now} id={state.pending.id} />
+                <div className="voice-pending-text">
+                  <span className="voice-pill">{allowingIn(seconds)}</span>
+                  <h2 className="voice-pending-heading">{pending?.heading}</h2>
+                  <span className="voice-heard">{heard(state.heard ?? "")}</span>
+                </div>
+                <button type="button" className="button button-secondary voice-cancel" onClick={() => void cancel(state.pending!.id)}>
                   {voiceLabels.cancel}
                 </button>
               </div>
+              {pending && <Call card={pending} />}
+              <span className="voice-pending-meta">{pending ? `${pending.agent.displayName} · ${pending.riskText}` : ""}</span>
             </article>
           )}
           {state.outcome?.text && !state.pending && <p className="voice-outcome">{state.outcome.text}</p>}
@@ -230,38 +251,136 @@ export function Voice({
             </p>
           )}
           {state.phase === "ended" && (
-            <button type="button" className="button" onClick={() => setAttempt((count) => count + 1)}>
+            <button type="button" className="button button-secondary" onClick={() => setAttempt((count) => count + 1)}>
               {voiceLabels.startAgain}
             </button>
           )}
         </section>
         <aside className="voice-side">
-          <section className="voice-see">
-            <h2>{voiceLabels.whatItCanSee}</h2>
-            <Preview stream={state.preview} />
-            <div className="voice-switches" role="group" aria-label={voiceLabels.inputs}>
-              {(["mic", "camera", "screen"] as InputSource[]).map((source) => {
-                const on = state.inputs[source];
-                const label = voiceLabels[source](on);
-                return (
-                  <button
-                    key={source}
-                    type="button"
-                    className={`voice-switch${on ? " voice-switch-on" : ""}`}
-                    aria-pressed={on}
-                    disabled={state.phase === "connecting" || state.phase === "ended"}
-                    onClick={() => void session.current?.switch(source, !on)}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
+          <section className="voice-see" aria-labelledby="voice-see-title">
+            <div className="voice-see-head">
+              <h2 id="voice-see-title">{voiceLabels.whatItCanSee}</h2>
+              {sharing && (
+                <span className="voice-live">
+                  <span className="voice-live-dot" aria-hidden="true" />
+                  {voiceLabels.sharingLive(sharing)}
+                </span>
+              )}
             </div>
+            <Preview stream={state.preview} />
+            {sharing && state.sent.length > 0 && (
+              <div className="voice-sent">
+                <div className="voice-sent-head">
+                  <h3>{voiceLabels.sentToModel}</h3>
+                  <span>{voiceLabels.lastFrames(state.sent.length)}</span>
+                </div>
+                <ol aria-label={voiceLabels.sentToModel}>
+                  {state.sent.map((frame) => (
+                    <li key={frame.url}>
+                      <img src={frame.url} alt={voiceLabels.frameAlt(frame.source, clock(frame.at, true))} />
+                      <time dateTime={new Date(frame.at).toISOString()}>{clock(frame.at, true)}</time>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
           </section>
           <p className="voice-note">{screenActions ? verbLabels.voicePrivacyNote : voiceLabels.privacyNote}</p>
         </aside>
       </main>
+      <nav className="voice-dock" aria-label={voiceLabels.inputs}>
+        <div className="voice-dock-bar">
+          {(["mic", "camera", "screen"] as InputSource[]).map((source) => {
+            const on = state.inputs[source];
+            return (
+              <button
+                key={source}
+                type="button"
+                className={`voice-switch${on ? " voice-switch-on" : ""}`}
+                aria-pressed={on}
+                disabled={state.phase === "connecting" || state.phase === "ended"}
+                onClick={() => void session.current?.switch(source, !on)}
+              >
+                <SourceIcon source={source} on={on} />
+                <span className="voice-switch-text">{voiceLabels[source](on)}</span>
+                {source === "mic" && on && <span className="voice-meter" aria-hidden="true"><i /><i /><i /></span>}
+              </button>
+            );
+          })}
+          <span className="voice-dock-rule" aria-hidden="true" />
+          <button type="button" className="button button-stop voice-end" onClick={end}>
+            {voiceLabels.end}
+          </button>
+        </div>
+      </nav>
     </div>
+  );
+}
+
+/** A time for captions and frames: 10:04, or 10:04:14 to the second. */
+function clock(at: number, seconds = false): string {
+  return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}), hour12: false });
+}
+
+/**
+ * The conversation's presence: rings that follow the person's voice while it listens, bars that
+ * follow the model's voice while it speaks. The loudness arrives outside React's renders and
+ * moves CSS variables, so the page does not re-render with the audio.
+ */
+function Presence({ phase, session }: { phase: VoiceState["phase"]; session?: VoiceSession }) {
+  const orb = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!session) return;
+    // On the view itself, so the dock's mic meter follows the same voice.
+    session.onLevels = (levels) => {
+      const host = orb.current?.closest<HTMLElement>(".voice") ?? orb.current;
+      host?.style.setProperty("--in", levels.input.toFixed(3));
+      host?.style.setProperty("--out", levels.output.toFixed(3));
+    };
+    return () => {
+      if (session.onLevels) session.onLevels = undefined;
+    };
+  }, [session]);
+  return (
+    <div ref={orb} className="voice-orb" data-phase={phase} aria-hidden="true">
+      <span className="voice-orb-glow" />
+      <span className="voice-orb-ring" />
+      <span className="voice-orb-ring voice-orb-ring-late" />
+      <span className="voice-orb-core">
+        {[0.35, 0.6, 0.85, 1, 0.85, 0.6, 0.35].map((k, index) => (
+          <i key={index} style={{ "--k": k, "--d": `${index * 90}ms` } as CSSProperties} />
+        ))}
+      </span>
+    </div>
+  );
+}
+
+/** The ring of a spoken "allow once" running out, from when it was heard. */
+function Countdown({ until, now, id }: { until: number; now: number; id: string }) {
+  const [start, setStart] = useState(() => ({ id, at: Date.now() }));
+  if (start.id !== id) setStart({ id, at: Date.now() });
+  const span = Math.max(1, until - start.at);
+  const left = Math.min(1, Math.max(0, (until - now) / span));
+  const circumference = 2 * Math.PI * 18;
+  return (
+    <svg className="voice-count" viewBox="0 0 40 40" aria-hidden="true">
+      <circle cx="20" cy="20" r="18" className="voice-count-track" />
+      <circle cx="20" cy="20" r="18" className="voice-count-left" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - left)} />
+    </svg>
+  );
+}
+
+function SourceIcon({ source, on }: { source: InputSource; on: boolean }) {
+  const path = {
+    mic: "M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3",
+    camera: "M3 7h4l2-2h6l2 2h4v12H3zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+    screen: "M3 4h18v12H3zM8 20h8M12 16v4",
+  }[source];
+  return (
+    <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d={path} />
+      {!on && <path d="M4 4l16 16" />}
+    </svg>
   );
 }
 
@@ -335,16 +454,5 @@ function Preview({ stream }: { stream?: MediaStream }) {
         <span className="voice-preview-empty">{voiceLabels.nothingShared}</span>
       )}
     </div>
-  );
-}
-
-function Waveform() {
-  const bars = [10, 22, 30, 16, 26, 12, 20];
-  return (
-    <svg className="voice-wave" viewBox="0 0 50 36" aria-hidden="true">
-      {bars.map((height, index) => (
-        <rect key={index} x={index * 7 + 1} y={(36 - height) / 2} width="4" height={height} rx="2" />
-      ))}
-    </svg>
   );
 }

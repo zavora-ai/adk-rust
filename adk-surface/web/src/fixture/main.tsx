@@ -10,6 +10,7 @@ import { Voice } from "../screens/Voice";
 import { TrayPanel } from "../tray/TrayPanel";
 import { Website } from "../website/Website";
 import { agentsFixture } from "./agents";
+import { DeveloperFixture } from "./developer";
 import { FixtureClient, fixtureSeams, releaseCard, takeOverCard } from "./fixture";
 import { genuiFixture } from "./genui";
 import { phoneFixture } from "./phone";
@@ -65,6 +66,15 @@ const screens: Record<string, () => ReactNode> = {
   workflow: () => (
     <App client={client} seams={fixtureSeams()} initialSection="developer" workflow={workflowFixture(params, client)} />
   ),
+  // The developer view of a run (spec 3.3 §12): three agents, one call held for the person.
+  developer: () => {
+    try {
+      window.localStorage.setItem("adk.home.developer.user", "you");
+    } catch {
+      // Without storage the view reads the trace alone.
+    }
+    return <App client={new DeveloperFixture()} seams={fixtureSeams()} initialSection="developer" />;
+  },
   // Agent-drawn UI (spec 3.3 §6.1 `genui`): `&genui=form|sent|display|refused|states|…`.
   genui: () => genuiFixture(params),
   // Approve with the image (spec 3.7 §8.2):

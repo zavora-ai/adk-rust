@@ -1711,6 +1711,11 @@ pub struct RunConfig {
     /// denies, or escalates the call to a person. `None` (the default) asks a person about
     /// every held call. See [`ToolReviewer`](crate::ToolReviewer).
     pub tool_reviewer: Option<Arc<dyn crate::ToolReviewer>>,
+    /// Checks each requested call (one a person asked for through something an agent drew)
+    /// against the seal made when the person approved it, right before it runs; `None`
+    /// checks nothing beyond the approval itself. See
+    /// [`RequestedCallSeal`](crate::RequestedCallSeal).
+    pub requested_call_seal: Option<Arc<dyn crate::RequestedCallSeal>>,
     /// Toolsets made available only for this invocation.
     pub runtime_toolsets: Vec<RuntimeToolset>,
     /// Optional cached content name for automatic prompt caching.
@@ -1948,6 +1953,7 @@ impl Default for RunConfig {
             tool_confirmation_fingerprints: HashMap::new(),
             tool_confirmation_handler: None,
             tool_reviewer: None,
+            requested_call_seal: None,
             runtime_toolsets: Vec::new(),
             cached_content: None,
             transfer_targets: Vec::new(),

@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::drawn::DrawnChart;
 use super::scene::{DrawnDepth, DrawnScene};
@@ -274,6 +274,17 @@ pub trait ExtensionComponent: Send + Sync + 'static {
     /// One line the render tools tell the model about it: what it shows and its shape.
     fn usage(&self) -> &'static str;
 
+    /// The component types that may hold it (A2UI 1.0 `allowedParents`, `"Surface"` for the
+    /// top level); empty for any.
+    fn allowed_parents(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// The component types it may hold (A2UI 1.0 `allowedChildren`); empty for any.
+    fn allowed_children(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// What the home and the terminal show for it, from its resolved properties. It must be
     /// pure: the same component always projects the same way.
     ///
@@ -322,6 +333,14 @@ const COMMON_TYPES_ID: &str = "https://a2ui.org/specification/v0_9/common_types.
 const COMMON_TYPES_CATALOG: &str = "https://a2ui.org/specification/v0_9/catalog.json";
 
 const FORMS_DOCUMENT: &str = include_str!("catalogs/forms-1.0.json");
+/// The `forms` 1.0 catalog as an A2UI 1.0 catalog document, derived from the 1.0 basic catalog.
+const FORMS_DOCUMENT_V1_0: &str = include_str!("catalogs/forms-1.0.a2ui-1.0.json");
+/// The A2UI 1.0 common types and catalog meta-schema, for checking 1.0 catalog documents.
+#[cfg(test)]
+pub(crate) const COMMON_TYPES_V1_0: &str = include_str!("catalogs/common_types-1.0.json");
+#[cfg(test)]
+pub(crate) const CATALOG_DEFINITION_V1_0: &str =
+    include_str!("catalogs/catalog_definition-1.0.json");
 const COMMON_TYPES_DOCUMENT: &str = include_str!("catalogs/common_types-0.9.1.json");
 
 /// An A2UI catalog this home renders: the components and functions a drawing may use, each
@@ -343,6 +362,7 @@ pub struct Catalog {
     id: &'static str,
     name: &'static str,
     version: &'static str,
+    instructions: Option<String>,
     document: Value,
     components: BTreeMap<String, jsonschema::Validator>,
     extensions: BTreeMap<String, Arc<dyn ExtensionComponent>>,
@@ -475,7 +495,15 @@ impl Catalog {
                 .map_err(|error| format!("{component}: {error}"))?;
             components.insert(component, validator);
         }
-        Ok(Self { id, name, version, document, components, extensions: BTreeMap::new() })
+        Ok(Self {
+            id,
+            name,
+            version,
+            instructions: None,
+            document,
+            components,
+            extensions: BTreeMap::new(),
+        })
     }
 
     /// The catalog's id.
@@ -488,9 +516,76 @@ impl Catalog {
         format!("{} {}", self.name, self.version)
     }
 
-    /// The catalog's JSON Schema document.
+    /// The catalog's JSON Schema document, in the internal (A2UI v0.9.1) form: `forms` and
+    /// every component an extension adds, under the catalog's id.
     pub fn document(&self) -> &Value {
         &self.document
+    }
+
+    /// Design guidance for a model drawing in this catalog, carried in its A2UI 1.0 document
+    /// (`instructions`) after each extension component's usage line.
+    #[must_use]
+    pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = Some(instructions.into());
+        self
+    }
+
+    /// The catalog as a document of A2UI `version` (spec 3.3 §6.1 `genui`). For v0.9.1, the
+    /// internal document. For 1.0: `forms` as an A2UI 1.0 catalog (derived from the 1.0 basic
+    /// catalog); an extension catalog as a 1.0 catalog of only the components it adds, which a
+    /// surface mixes with `forms` (each one names its catalog with `@catalogId`), with
+    /// `protocolVersion`, `instructions` and each component's `allowedParents` and
+    /// `allowedChildren`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_surface::genui::{A2uiVersion, Catalog, FORMS_CATALOG_ID};
+    ///
+    /// let forms = Catalog::forms().document_for(A2uiVersion::V1_0);
+    /// assert_eq!(forms["protocolVersion"], "1.0");
+    /// assert_eq!(forms["catalogId"], FORMS_CATALOG_ID);
+    /// assert!(forms["components"]["TextField"].is_object());
+    /// ```
+    pub fn document_for(&self, version: super::wire::A2uiVersion) -> Value {
+        if version == super::wire::A2uiVersion::V0_9_1 {
+            return self.document.clone();
+        }
+        if !self.is_extension() {
+            return serde_json::from_str(FORMS_DOCUMENT_V1_0).unwrap_or_default();
+        }
+        let mut components = Map::new();
+        for (name, extension) in &self.extensions {
+            let mut schema = schema_v1_0(&extension.schema());
+            if let Value::Object(map) = &mut schema {
+                let parents = extension.allowed_parents();
+                if !parents.is_empty() {
+                    map.insert("allowedParents".to_string(), json!(parents));
+                }
+                let children = extension.allowed_children();
+                if !children.is_empty() {
+                    map.insert("allowedChildren".to_string(), json!(children));
+                }
+            }
+            components.insert(name.clone(), schema);
+        }
+        let mut instructions: Vec<String> = self.usage().into_iter().map(str::to_string).collect();
+        if let Some(extra) = &self.instructions {
+            instructions.push(extra.clone());
+        }
+        json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": self.id,
+            "protocolVersion": "1.0",
+            "title": self.label(),
+            "description": format!(
+                "The components {} adds to {FORMS_CATALOG_ID}, which a surface mixes with it",
+                self.label()
+            ),
+            "catalogId": self.id,
+            "instructions": instructions.join("\n"),
+            "components": components,
+        })
     }
 
     /// The component types it renders.
@@ -544,6 +639,57 @@ impl Catalog {
             if at.is_empty() { why } else { format!("{at}: {why}") }
         })
     }
+}
+
+/// An extension component's schema as an A2UI 1.0 catalog component: references to the
+/// v0.9 common types become the relative `common_types.json`, the component envelope (`id`,
+/// `ComponentCommon`, `CatalogComponentCommon`) is left to the 1.0 envelope, which composes it,
+/// and so is closing the object (`additionalProperties: false`; the envelope's
+/// `unevaluatedProperties` closes it with its `@` keys).
+fn schema_v1_0(schema: &Value) -> Value {
+    fn refs(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => Value::Object(
+                map.iter()
+                    .map(|(key, value)| match (key.as_str(), value) {
+                        ("$ref", Value::String(target)) => {
+                            let relative = target
+                                .split_once("common_types.json#")
+                                .map(|(_, pointer)| format!("common_types.json#{pointer}"))
+                                .unwrap_or_else(|| target.clone());
+                            (key.clone(), Value::String(relative))
+                        }
+                        _ => (key.clone(), refs(value)),
+                    })
+                    .collect(),
+            ),
+            Value::Array(items) => Value::Array(items.iter().map(refs).collect()),
+            other => other.clone(),
+        }
+    }
+    let mut out = refs(schema);
+    if let Value::Object(map) = &mut out {
+        if let Some(Value::Object(properties)) = map.get_mut("properties") {
+            properties.remove("id");
+        }
+        if let Some(Value::Array(required)) = map.get_mut("required") {
+            required.retain(|name| name != "id");
+        }
+        if map.get("additionalProperties") == Some(&Value::Bool(false)) {
+            map.remove("additionalProperties");
+        }
+        if let Some(Value::Array(all)) = map.get_mut("allOf") {
+            all.retain(|part| {
+                let target = part.get("$ref").and_then(Value::as_str).unwrap_or_default();
+                !target.ends_with("/ComponentCommon")
+                    && !target.ends_with("/CatalogComponentCommon")
+            });
+            if all.is_empty() {
+                map.remove("allOf");
+            }
+        }
+    }
+    out
 }
 
 /// The most specific cause of `error`. A `oneOf` or `anyOf` that no branch matched, such as a
@@ -669,6 +815,96 @@ impl std::fmt::Debug for Catalogs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::genui::A2uiVersion;
+
+    /// A validator of A2UI 1.0 catalog documents: the pinned 1.0 meta-schema, with the 1.0
+    /// common types it and the documents refer to.
+    fn v1_0_meta() -> jsonschema::Validator {
+        let meta: Value = serde_json::from_str(CATALOG_DEFINITION_V1_0).unwrap();
+        let common: Value = serde_json::from_str(COMMON_TYPES_V1_0).unwrap();
+        // The common types refer to `catalog.json` for the components a surface may hold;
+        // checking a catalog document needs only that it exists.
+        let catalog = json!({ "$defs": { "anyComponent": {}, "anyFunction": {} } });
+        let registry = jsonschema::Registry::new()
+            .add("https://a2ui.org/specification/v1_0/common_types.json", common)
+            .and_then(|registry| {
+                registry.add("https://a2ui.org/specification/v1_0/catalog.json", catalog)
+            })
+            .and_then(jsonschema::RegistryBuilder::prepare)
+            .unwrap();
+        jsonschema::options().with_registry(&registry).build(&meta).unwrap()
+    }
+
+    struct Gauge;
+
+    impl ExtensionComponent for Gauge {
+        fn name(&self) -> &'static str {
+            "Gauge"
+        }
+        fn schema(&self) -> Value {
+            json!({
+                "type": "object",
+                "allOf": [{ "$ref": "#/$defs/CatalogComponentCommon" }],
+                "properties": {
+                    "id": { "$ref": "https://a2ui.org/specification/v0_9/common_types.json#/$defs/ComponentId" },
+                    "component": { "const": "Gauge" },
+                    "label": { "$ref": "https://a2ui.org/specification/v0_9/common_types.json#/$defs/DynamicString" },
+                    "value": { "type": "number" }
+                },
+                "required": ["id", "component", "label", "value"],
+                "additionalProperties": false
+            })
+        }
+        fn usage(&self) -> &'static str {
+            "Gauge: {label, value} one number on a dial"
+        }
+        fn allowed_parents(&self) -> &'static [&'static str] {
+            &["Card", "Column"]
+        }
+        fn home(&self, _gauge: &ResolvedComponent<'_>) -> Result<HomeNode, String> {
+            Ok(HomeNode::text("gauge"))
+        }
+    }
+
+    #[test]
+    fn catalogs_are_published_as_a2ui_1_0_documents_that_pass_the_1_0_meta_schema() {
+        let meta = v1_0_meta();
+        let forms = Catalog::forms().document_for(A2uiVersion::V1_0);
+        if let Some(error) = meta.iter_errors(&forms).next() {
+            panic!("forms 1.0 document: {error} at {}", error.instance_path());
+        }
+        assert_eq!(forms["functions"].as_object().unwrap().len(), 10);
+        assert!(forms["components"].get("Image").is_none());
+        assert!(forms["functions"].get("openUrl").is_none());
+        assert_eq!(forms["components"]["Text"]["properties"]["variant"]["enum"][2], "h3");
+        assert!(!forms["components"]["TextField"].to_string().contains("obscured"));
+
+        let gauges = Catalog::extend(ExtensionSpec {
+            id: "https://example.com/a2ui/catalogs/gauges/1.0/catalog.json",
+            name: "gauges",
+            version: "1.0",
+            components: vec![Arc::new(Gauge) as Arc<dyn ExtensionComponent>],
+        })
+        .unwrap()
+        .with_instructions("Use a gauge for one number against a known range.");
+        let document = gauges.document_for(A2uiVersion::V1_0);
+        if let Some(error) = meta.iter_errors(&document).next() {
+            panic!("extension 1.0 document: {error} at {}", error.instance_path());
+        }
+        assert_eq!(document["protocolVersion"], "1.0");
+        let gauge = &document["components"]["Gauge"];
+        assert!(document["components"].get("Text").is_none(), "only what the extension adds");
+        assert!(gauge["properties"].get("id").is_none());
+        assert_eq!(gauge["required"], json!(["component", "label", "value"]));
+        assert!(gauge.get("additionalProperties").is_none());
+        assert_eq!(gauge["properties"]["label"]["$ref"], "common_types.json#/$defs/DynamicString");
+        assert!(gauge.get("allOf").is_none(), "the envelope composes ComponentCommon");
+        assert_eq!(gauge["allowedParents"], json!(["Card", "Column"]));
+        assert!(document["instructions"].as_str().unwrap().contains("Gauge: {label, value}"));
+        assert!(document["instructions"].as_str().unwrap().contains("known range"));
+        // v0.9.1 keeps the superset document.
+        assert!(gauges.document_for(A2uiVersion::V0_9_1)["components"]["Text"].is_object());
+    }
 
     #[test]
     fn the_forms_catalog_is_the_basic_catalog_without_what_can_fake_a_decision() {

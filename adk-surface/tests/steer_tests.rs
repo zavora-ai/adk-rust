@@ -204,7 +204,7 @@ fn ana() -> Caller {
 }
 
 fn send(text: &str) -> Command {
-    Command::Send { session_id: SESSION.into(), text: text.into() }
+    Command::Send { session_id: SESSION.into(), text: text.into(), images: Vec::new() }
 }
 
 fn steer(text: &str) -> Command {

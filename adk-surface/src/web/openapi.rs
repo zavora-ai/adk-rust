@@ -151,10 +151,13 @@ pub fn openapi() -> Value {
     let voice_ticket = schema_ref::<VoiceTicket>(&mut out);
     let voice_update = schema_ref::<VoiceUpdate>(&mut out);
     let agent_detail = schema_ref::<crate::agents::AgentDetail>(&mut out);
+    let agent_threads = schema_ref::<crate::agents::AgentThreads>(&mut out);
+    let answer_summary = schema_ref::<crate::answers::AnswerSummary>(&mut out);
     let agent_choices = schema_ref::<crate::agents::AgentChoices>(&mut out);
     let agent_preview = schema_ref::<crate::agents::AgentPreview>(&mut out);
     let genui_capabilities = schema_ref::<super::genui::GenuiCapabilities>(&mut out);
     let genui_forms = schema_ref::<super::genui::FormsResponse>(&mut out);
+    let genui_catalogs = schema_ref::<super::genui::CatalogDocuments>(&mut out);
     let app_open = schema_ref::<super::genui::AppOpen>(&mut out);
     let app_answer = schema_ref::<super::genui::AppAnswer>(&mut out);
     let viewer = schema_ref::<crate::viewer::ViewerView>(&mut out);
@@ -465,6 +468,26 @@ pub fn openapi() -> Value {
         ),
     );
     routes.insert(
+        with(paths::ANSWERS),
+        read(
+            "How the caller answered since a time (spec 3.3 §5.1 \"How you answered\")",
+            json!([query(
+                "since",
+                "Since when; default the last 7 days",
+                json!({ "type": "string", "format": "date-time" })
+            )]),
+            answer("Each answer counted", answer_summary),
+        ),
+    );
+    routes.insert(
+        with(paths::AGENT_THREADS),
+        read(
+            "The caller's threads with one agent, newest first (spec 3.3 §5.1 \"Thread history\")",
+            json!([path_param("id")]),
+            answer("The threads", agent_threads),
+        ),
+    );
+    routes.insert(
         with(paths::AGENT_CHOICES),
         read(
             "What the caller may choose for an agent: the models whose key the kernel has, the packs, the areas and the colours",
@@ -722,6 +745,14 @@ pub fn openapi() -> Value {
             "What this home claims of A2UI, AG-UI and MCP Apps, and the catalogs it renders; served with the `genui` feature",
             json!([]),
             answer("The claims", genui_capabilities),
+        ),
+    );
+    routes.insert(
+        with(super::genui::paths::CATALOGS),
+        read(
+            "Every catalog this home renders, forms first, as A2UI catalog documents of one version (1.0 unless `version` names v0.9.1); served with the `genui` feature",
+            json!([query("version", "The A2UI version of the documents: 1.0 (the default) or v0.9.1", json!({ "type": "string" }))]),
+            answer("The catalog documents", genui_catalogs),
         ),
     );
     routes.insert(

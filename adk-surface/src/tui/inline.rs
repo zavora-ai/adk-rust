@@ -573,8 +573,11 @@ where
             let baseline = engine.thread(caller, &app.session).await.map_or(0, |t| t.len());
             let mut settler = Settler::new(baseline as u64);
             settler.sent();
-            let command =
-                crate::engine::Command::Send { session_id: app.session.clone(), text: line };
+            let command = crate::engine::Command::Send {
+                session_id: app.session.clone(),
+                text: line,
+                images: Vec::new(),
+            };
             match engine.execute(caller, command).await {
                 Ok(outcome) => app.update(Update::Outcome(Box::new(Ok(outcome))), Instant::now()),
                 Err(error) => break End::error(error.to_string()),

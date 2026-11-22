@@ -54,11 +54,11 @@ mobile = ["web", "dep:web-push-native", "dep:p256", "dep:qrcode", "dep:base64ct"
 # cancel window, the camera and the screen as input only while their switches are on. The
 # runtime drives the harness's realtime session (`adk-realtime`); hosts pass the provider
 # models, so no provider is compiled in here. With `web`, the voice view's socket.
-voice = ["adk-harness/voice", "dep:adk-realtime", "adk-realtime/integration", "dep:base64", "axum?/ws"]
+voice = ["adk-harness/voice", "dep:adk-realtime", "adk-realtime/integration", "axum?/ws"]
 # The website's views on the web home (spec 3.5 §7.1, §8.2): the web editor, onboarding, the
 # charter cards, the site view and the weekly review over `adk-website`'s desk, with their own
 # OpenAPI document and generated TypeScript. Implies `web`.
-website = ["web", "dep:adk-website", "dep:base64"]
+website = ["web", "dep:adk-website"]
 # Gemini Live and the OpenAI Realtime API, for the live voice test and the `voice_home`
 # example only: a host builds its own provider models.
 voice-live = ["voice", "adk-realtime/gemini", "adk-realtime/openai"]
@@ -76,7 +76,7 @@ workflow = ["dep:adk-graph", "adk-graph/time-travel", "adk-harness/web"]
 # Agent-drawn UI (spec 3.3 §6.1, §7.4 rule 5): the A2UI v0.9.1 model, the embedded `forms` 1.0
 # catalog, the validator that keeps approval controls and secrets out of drawings, and the
 # render tools agents draw with (`genui::DrawToolset`).
-genui = ["dep:jsonschema", "dep:regex"]
+genui = ["dep:jsonschema", "dep:regex", "dep:hmac"]
 # Apps from MCP servers in a thread (spec 3.3 §6.1 `genui-apps`, wave 4 decision 16): an MCP
 # server's `_meta.ui` app shown sandboxed on a second origin, whose tool calls a person decides
 # and which can never approve anything. Pulls in rmcp through `adk-tool/mcp-apps`.
@@ -108,7 +108,7 @@ adk-tool = { workspace = true, optional = true }
 async-trait.workspace = true
 axum = { version = "0.8", optional = true }
 # Camera and screen frames go to the realtime provider base64-encoded (`voice`).
-base64 = { version = "0.22", optional = true }
+base64 = "0.22"
 chrono.workspace = true
 crossterm = { version = "0.29", optional = true, features = ["event-stream"] }
 futures.workspace = true

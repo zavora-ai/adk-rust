@@ -1,7 +1,7 @@
 //! AG-UI decisions (spec 3.3 §10 S2): a call held for approval ends the run with an AG-UI
 //! interrupt, and an AG-UI resume becomes [`ApprovalService::decide`] on the inbox entry.
 //!
-//! The shapes follow the AG-UI interrupt-aware run lifecycle (AG-UI 1.1 draft,
+//! The shapes follow the AG-UI interrupt-aware run lifecycle (AG-UI 1.0,
 //! <https://docs.ag-ui.com/concepts/interrupts>): `RUN_FINISHED` carries
 //! `outcome: {"type": "interrupt", "interrupts": [...]}`, each interrupt bound to its tool
 //! call with `reason: "tool_call"` and `toolCallId`, and the next run's input answers them in
@@ -36,6 +36,10 @@ pub(crate) const TOOL_CALL_REASON: &str = "tool_call";
 
 /// The refusal code of a resume sent while another resume of the session is in progress.
 pub(crate) const RESUME_IN_PROGRESS: &str = "approval.resume_in_progress";
+/// The code of an AG-UI 1.0 resume that does not answer exactly the open interrupts.
+pub(crate) const INVALID_RESUME: &str = "approval.invalid_resume";
+/// The code of new AG-UI 1.0 input on a thread whose interrupts are still open.
+pub(crate) const INTERRUPTS_OPEN: &str = "approval.interrupts_open";
 
 /// The audit action of an answer to a decision given through a surface, as adk-surface
 /// records one (spec 3.3 §11).
@@ -527,6 +531,25 @@ async fn refusal(
 /// # Errors
 ///
 /// Returns the reason when a payload is not an answer or an interrupt is answered twice.
+/// The interrupts still open on `scope`'s thread: the inbox entries of its held calls that
+/// wait for a decision (AG-UI 1.0: a resume answers every one, and no new input comes first).
+pub(crate) async fn open_interrupt_ids(
+    service: &dyn ApprovalService,
+    scope: &ApprovalScope,
+) -> Result<Vec<String>, AdkError> {
+    let Some(store) = service.approval_store() else {
+        return Ok(Vec::new());
+    };
+    let mut open = Vec::new();
+    for held in store.pending(scope).await? {
+        let id = ApprovalRequest::id_for_call(scope, &held.fingerprint, held.requested_at);
+        if service.get(&id).await?.is_some_and(|entry| entry.state == ApprovalState::Pending) {
+            open.push(id);
+        }
+    }
+    Ok(open)
+}
+
 pub(crate) async fn plan_resume(
     service: &dyn ApprovalService,
     scope: &ApprovalScope,

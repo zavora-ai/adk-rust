@@ -137,6 +137,8 @@ pub struct HarnessRuntime {
     pub(crate) approval_service: Option<Arc<dyn ApprovalService>>,
     /// The reviewer of calls Auto mode holds, when auto review is on.
     pub(crate) auto_review: Option<Arc<dyn adk_core::ToolReviewer>>,
+    /// Checks requested calls against their approval seals, when set.
+    pub(crate) requested_call_seal: Option<Arc<dyn adk_core::RequestedCallSeal>>,
     pub(crate) ledgers: crate::ledger::HarnessLedgers,
     pub(crate) handler: Option<Arc<dyn ToolConfirmationHandler>>,
     pub(crate) confirmation_timeout: Duration,
@@ -543,6 +545,9 @@ impl HarnessLayer<'_> {
                 runtime.non_waivable_prefixes.clone(),
                 runtime.workspace.root().to_path_buf(),
             )));
+        }
+        if config.requested_call_seal.is_none() {
+            config.requested_call_seal = runtime.requested_call_seal.clone();
         }
         match (&config.approval_service, &runtime.approval_service) {
             (None, Some(service)) => config.approval_service = Some(service.clone()),

@@ -38,14 +38,23 @@ pub const SURFACE_AUDIT_SEND: &str = "surface.send";
 /// The audit action of a message sent to a running turn (spec 3.3 §6 "steer", §11): what
 /// "Steer" was refused or offered, and how a message a turn held ended.
 pub const SURFACE_AUDIT_STEER: &str = "surface.steer";
+
+/// The audit action of **Stop the turn** (spec 3.3 §5.1), recorded before the turn stops.
+pub const SURFACE_AUDIT_STOP_TURN: &str = "surface.stop_turn";
 /// The audit action of "Stop all" (spec 3.3 §11).
 pub const SURFACE_AUDIT_STOP_ALL: &str = "surface.stop_all";
 /// The audit action of "Resume all" (spec 3.3 §11).
 pub const SURFACE_AUDIT_RESUME_ALL: &str = "surface.resume_all";
 /// The audit action of a mode change (spec 3.3 §11).
 pub const SURFACE_AUDIT_SET_MODE: &str = "surface.set_mode";
+/// The audit action of an app's call approved by the home's opt-in consent policy instead of
+/// a person (spec 3.3 §6.1 `genui-apps`).
+pub const SURFACE_AUDIT_APP_CALL_AUTO_APPROVED: &str = "surface.app.call_auto_approved";
 /// The audit action of a drawn form's Send (spec 3.3 §7.4 rule 5, §11).
 pub const SURFACE_AUDIT_DRAWN_SUBMITTED: &str = "surface.drawn.submitted";
+/// The audit action of a person's approval of a form's call, sealed to the drawing they saw
+/// (spec 3.3 §7.4 rule 5).
+pub const SURFACE_AUDIT_DRAWN_SEALED: &str = "surface.drawn.sealed";
 /// The audit action of an answer as it is given, written before it takes effect; its
 /// `surface.decide` record says how it ended (spec 3.3 §11).
 pub const SURFACE_AUDIT_ANSWER: &str = "surface.answer";
@@ -177,6 +186,11 @@ pub enum Command {
         session_id: String,
         /// The message.
         text: String,
+        /// The images the person sent with it (spec 3.3 §5.1): at most
+        /// [`MAX_IMAGES`](crate::MAX_IMAGES). A message with images is never offered to a
+        /// running turn; it goes as the session's next.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<crate::model::ImageData>,
     },
     /// Sends a message to the running turn of the caller's own session and waits for what
     /// became of it (§6 "steer"): [`Steered`](CommandOutcome::Steered) when the turn took it,
@@ -189,6 +203,13 @@ pub enum Command {
         /// The message.
         text: String,
     },
+    /// Stops the running turn of the caller's own session (spec 3.3 §5.1): a person only; the
+    /// agent waits for the next message, and nothing held for a decision is answered.
+    #[serde(rename_all = "camelCase")]
+    StopTurn {
+        /// The session.
+        session_id: String,
+    },
     /// Queues a message as the session's next, after its open decisions (S-I4): never offered
     /// to a running turn.
     #[serde(rename_all = "camelCase")]
@@ -197,6 +218,11 @@ pub enum Command {
         session_id: String,
         /// The message.
         text: String,
+        /// The images the person sent with it (spec 3.3 §5.1): at most
+        /// [`MAX_IMAGES`](crate::MAX_IMAGES). A message with images is never offered to a
+        /// running turn; it goes as the session's next.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<crate::model::ImageData>,
     },
     /// Stops every agent (S-I10).
     #[serde(rename_all = "camelCase")]
@@ -225,6 +251,11 @@ pub enum Command {
         session_id: String,
         /// The first message.
         text: String,
+        /// The images the person sent with it (spec 3.3 §5.1): at most
+        /// [`MAX_IMAGES`](crate::MAX_IMAGES). A message with images is never offered to a
+        /// running turn; it goes as the session's next.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<crate::model::ImageData>,
     },
     /// Adds an agent by hand, previewed with `digest` (spec 3.3 §5.7).
     #[serde(rename_all = "camelCase")]
@@ -365,6 +396,16 @@ pub enum CommandOutcome {
         /// The session.
         session_id: String,
     },
+    /// The session's running turn was stopped, or none was running (spec 3.3 §5.1).
+    #[serde(rename_all = "camelCase")]
+    TurnStopped {
+        /// The session.
+        session_id: String,
+        /// A turn was running and stopped.
+        stopped: bool,
+        /// "Stopped. Your agent waits for your next message."
+        text: String,
+    },
     /// The session's running turn took the message at its agent's next safe point (§6
     /// "steer"): the session holds it as event `event_id`, and the turn's next model call
     /// carries it.
@@ -502,6 +543,8 @@ pub struct SurfaceEngineBuilder {
     stops_need: Option<String>,
     card_hints: Vec<Arc<dyn CardHints>>,
     granted: Vec<GrantedUse>,
+    #[cfg(feature = "genui")]
+    seals: Option<crate::genui::ApprovalSeals>,
     cameras: Option<crate::camera::Cameras>,
 }
 
@@ -652,6 +695,17 @@ impl SurfaceEngineBuilder {
         self
     }
 
+    /// Seals each approval of a drawn form's call to the drawing the person saw, with
+    /// `seals` (spec 3.3 §7.4 rule 5); give the same seals to the harness that runs the
+    /// drawing agent (`HarnessAgentBuilder::requested_call_seal`), which checks them right
+    /// before the call runs.
+    #[cfg(feature = "genui")]
+    #[must_use]
+    pub fn approval_seals(mut self, seals: crate::genui::ApprovalSeals) -> Self {
+        self.seals = Some(seals);
+        self
+    }
+
     /// Shows drawings in the extension catalog `catalog` too (spec 3.3 §6.1 `genui`,
     /// extension catalogs): register every catalog the agents' render tools draw in
     /// (`DrawToolset::catalog`). A drawing in a catalog not registered here is refused
@@ -780,6 +834,8 @@ impl SurfaceEngineBuilder {
                 cameras: self.cameras,
                 #[cfg(feature = "genui")]
                 drawn,
+                #[cfg(feature = "genui")]
+                seals: self.seals,
                 queues: Mutex::new(HashMap::new()),
                 next_input: AtomicU64::new(1),
                 draining: Mutex::new(HashSet::new()),
@@ -842,6 +898,9 @@ struct Inner {
     /// The cards of drawn forms this engine sent (spec 3.3 §7.4 rule 5).
     #[cfg(feature = "genui")]
     drawn: Arc<crate::genui::DrawnHints>,
+    /// The seals of approvals of drawn forms' calls, when set.
+    #[cfg(feature = "genui")]
+    seals: Option<crate::genui::ApprovalSeals>,
     /// Input queued behind an open decision or a running turn, per (user, session), oldest
     /// first.
     queues: Mutex<HashMap<(String, String), VecDeque<QueuedInput>>>,
@@ -859,11 +918,21 @@ struct Inner {
     changed_images: Mutex<HashMap<String, String>>,
 }
 
+/// A send's audit fields, with how many images the message carries when it carries any.
+fn with_images(mut fields: Value, images: usize) -> Value {
+    if images > 0 {
+        fields["images"] = json!(images);
+    }
+    fields
+}
+
 /// One message of a session's queue.
 struct QueuedInput {
     /// Names the message while it waits, whatever joins or leaves the queue.
     id: u64,
     text: String,
+    /// The images the person sent with it.
+    images: Vec<crate::images::MessageImage>,
     /// The session's running turn holds it (spec 3.3 §6 "steer"): it is sent as the next
     /// message only once the turn hands it back.
     offered: bool,
@@ -908,6 +977,8 @@ impl SurfaceEngine {
             stops_need: None,
             card_hints: Vec::new(),
             granted: Vec::new(),
+            #[cfg(feature = "genui")]
+            seals: None,
             cameras: None,
         }
     }
@@ -949,7 +1020,7 @@ impl SurfaceEngine {
         session: &str,
         text: String,
     ) -> Result<CommandOutcome> {
-        self.send(caller, session.to_string(), text, false, true).await
+        self.send(caller, session.to_string(), text, Vec::new(), false, true).await
     }
 
     /// What every agent the home runs may also do, as the host granted it (spec 3.3 §5.7).
@@ -1723,6 +1794,56 @@ impl SurfaceEngine {
         Ok(crate::agents::roster(rows, &definitions, can_change))
     }
 
+    /// How `caller` answered since `since` (spec 3.3 §5.1 "How you answered"): each answer
+    /// counted, and on which surfaces.
+    ///
+    /// # Errors
+    ///
+    /// Returns the answer log's error.
+    pub async fn answers_since(
+        &self,
+        caller: &Caller,
+        since: DateTime<Utc>,
+    ) -> Result<crate::answers::AnswerSummary> {
+        let mine: Vec<AnswerRecord> = self
+            .inner
+            .answers
+            .since(since)
+            .await?
+            .into_iter()
+            .filter(|record| record.by.id == caller.user_id())
+            .collect();
+        Ok(crate::answers::AnswerSummary::of(since, &mine))
+    }
+
+    /// The threads `caller` has with `agent`, newest first (spec 3.3 §5.1 "Thread history"):
+    /// each session and when it last changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns the source's error.
+    pub async fn agent_threads(
+        &self,
+        caller: &Caller,
+        agent: &str,
+    ) -> Result<crate::agents::AgentThreads> {
+        let offset = self.inner.projector.offset;
+        let mut threads: Vec<crate::agents::ThreadSummary> = self
+            .inner
+            .source
+            .agent_threads(caller.user_id(), agent)
+            .await?
+            .into_iter()
+            .map(|(session_id, at)| crate::agents::ThreadSummary {
+                session_id,
+                at,
+                when: at.with_timezone(&offset).format("%-d %b %H:%M").to_string(),
+            })
+            .collect();
+        threads.sort_by_key(|thread| std::cmp::Reverse(thread.at));
+        Ok(crate::agents::AgentThreads { agent: agent.to_string(), threads })
+    }
+
     /// The agents `caller` removed, each with its threads, which stay readable (spec 3.3
     /// §5.7, §13 decision 18): what "Removed agents" at the roster's foot lists.
     ///
@@ -1873,12 +1994,15 @@ impl SurfaceEngine {
                 self.change_image(caller, &decision_id, version, &from, change, preview).await
             }
             Command::CancelAnswer { decision_id } => self.cancel_answer(caller, &decision_id).await,
-            Command::Send { session_id, text } => {
-                self.send(caller, session_id, text, false, true).await
+            Command::Send { session_id, text, images } => {
+                let images = crate::images::decode(&images)?;
+                self.send(caller, session_id, text, images, false, true).await
             }
             Command::Steer { session_id, text } => self.steer(caller, session_id, text).await,
-            Command::Queue { session_id, text } => {
-                self.send(caller, session_id, text, true, false).await
+            Command::StopTurn { session_id } => self.stop_turn(caller, session_id).await,
+            Command::Queue { session_id, text, images } => {
+                let images = crate::images::decode(&images)?;
+                self.send(caller, session_id, text, images, true, false).await
             }
             Command::StopAll { reason } => {
                 self.may_stop(caller)?;
@@ -1889,8 +2013,9 @@ impl SurfaceEngine {
                 self.resume_all(caller).await
             }
             Command::SetMode { session_id, mode } => self.set_mode(caller, &session_id, mode).await,
-            Command::NewThread { agent, session_id, text } => {
-                self.new_thread(caller, &agent, session_id, text).await
+            Command::NewThread { agent, session_id, text, images } => {
+                let images = crate::images::decode(&images)?;
+                self.new_thread(caller, &agent, session_id, text, images).await
             }
             command @ (Command::AddAgent { .. }
             | Command::ChangeAgent { .. }
@@ -1949,7 +2074,8 @@ impl SurfaceEngine {
             sent.tool.clone(),
             sent.args.clone(),
             caller.subject.clone(),
-            adk_core::RequestedVia::form(surface.clone(), version, action),
+            adk_core::RequestedVia::form(surface.clone(), version, action)
+                .with_digest(sent.digest.clone()),
         );
         let call_id = call.function_call_id.clone();
         if !self.inner.drawn.begin_send(
@@ -1979,6 +2105,7 @@ impl SurfaceEngine {
                     "valuesDigest": sent.values_digest,
                     "callId": call_id,
                     "drawnBy": sent.drawn_by,
+                    "drawingDigest": sent.digest,
                 }),
             )
             .await?;
@@ -1999,6 +2126,38 @@ impl SurfaceEngine {
         session: &str,
     ) -> Result<Vec<adk_core::Event>> {
         self.transcript(caller, session).await
+    }
+
+    /// Approves the waiting decision `decision_id` by the home's policy `policy` (spec 3.3
+    /// §6.1 `genui-apps`, opt-in tiered consent the person set): decided as the person, the
+    /// rule recorded as `surface.app.call_auto_approved` and on the decision, then resumed like
+    /// their answer.
+    #[cfg(feature = "genui-apps")]
+    pub(crate) async fn approve_by_policy(
+        &self,
+        caller: &Caller,
+        decision_id: &str,
+        version: u64,
+        policy: &str,
+        ext: Value,
+    ) -> Result<()> {
+        let mut fields = json!({ "approvalId": decision_id, "policy": policy, "initiator": "app" });
+        if let (Some(fields), Value::Object(ext)) = (fields.as_object_mut(), ext) {
+            fields.extend(ext);
+        }
+        self.record(caller, SURFACE_AUDIT_APP_CALL_AUTO_APPROVED, fields).await?;
+        // The person's own standing consent: decided as them, the rule on the record.
+        let mut decision =
+            ApprovalDecision::approve(caller.subject.clone()).with_groups(caller.groups.clone());
+        decision.reason = Some(format!("approved by the home's {policy} consent"));
+        let updated = self.inner.source.decide(decision_id, version, decision).await?;
+        if updated.state != ApprovalState::Pending {
+            if let Err(error) = self.inner.source.resolved_by(caller, &updated).await {
+                tracing::warn!(error = %error, decision.id = %updated.id, "the approved call could not be resumed");
+            }
+            self.spawn_drain(caller.clone(), updated.scope.session_id.clone());
+        }
+        Ok(())
     }
 
     /// Asks for `call`, a tool call the app from `app` asked for in `session` (spec 3.3 §6.1
@@ -2135,6 +2294,18 @@ impl SurfaceEngine {
         }
         if answer == Answer::Edit && edited_args.is_none() {
             return Err(SurfaceError::Invalid("an edit needs the changed arguments".into()));
+        }
+        // An answer to an MCP server's form is checked against its schema before it is on
+        // record, so the person hears what to fix instead of the server declining it later.
+        if answer == Answer::Edit
+            && let Some(crate::model::ElicitationView::Form { fields, .. }) =
+                crate::project::elicitation_of(&request)
+            && let Some(content) = edited_args.as_ref()
+            && let Err(reason) = crate::project::check_answer(&fields, content)
+        {
+            return Err(SurfaceError::Invalid(format!(
+                "the answer does not fit the form: {reason}"
+            )));
         }
         // An answer that lets a call with images run names the images the person saw: the
         // decision binds to those digests, and to no other image (spec 3.7 V-I5).
@@ -2413,6 +2584,43 @@ impl SurfaceEngine {
             given["transcriptDigest"] = json!(digest);
         }
         self.record(caller, SURFACE_AUDIT_ANSWER, given).await?;
+        // A yes to a form's call is sealed to the drawing the person saw before it takes
+        // effect, so the call that runs is the one they approved (spec 3.3 §7.4 rule 5).
+        #[cfg(feature = "genui")]
+        if matches!(answer, Answer::AllowOnce | Answer::Edit)
+            && let Some(seals) = &self.inner.seals
+            && let Some(sent) = self.inner.drawn.sent_call(request)
+        {
+            let args = decision.edited_args.clone().unwrap_or_else(|| sent.args.clone());
+            let card_text = format!(
+                "{} {}",
+                request.tool_name,
+                serde_json::to_string(&args).unwrap_or_default()
+            );
+            let seal = seals.seal(crate::genui::SealInput {
+                function_call_id: sent.call_id.clone(),
+                tool_name: request.tool_name.clone(),
+                args,
+                card_text,
+                drawing_digest: sent.digest.clone(),
+                surface_id: sent.form.0.clone(),
+                version: sent.form.1,
+                approver: caller.user_id().to_string(),
+            });
+            self.record(
+                caller,
+                SURFACE_AUDIT_DRAWN_SEALED,
+                json!({
+                    "approvalId": request.id,
+                    "callId": sent.call_id,
+                    "surfaceId": sent.form.0,
+                    "version": sent.form.1,
+                    "drawingDigest": sent.digest,
+                    "seal": seal,
+                }),
+            )
+            .await?;
+        }
         match self.inner.source.decide(&request.id, version, decision).await {
             Ok(updated) => {
                 // The decision is recorded and cannot be taken back: nothing after this point
@@ -2642,6 +2850,27 @@ impl SurfaceEngine {
         Ok(CommandOutcome::AnswerCancelled { decision_id: id.to_string() })
     }
 
+    /// **Stop the turn**: a person stops the running turn of their own session; recorded
+    /// before it takes effect.
+    async fn stop_turn(&self, caller: &Caller, session: String) -> Result<CommandOutcome> {
+        if let Origin::Agent { agent } = &caller.origin {
+            return Err(SurfaceError::NotHere(format!(
+                "an agent ({agent}) never stops a person's turn; a person does (spec 3.3 §7.4)"
+            )));
+        }
+        if self.inner.source.transcript(caller.user_id(), &session).await?.is_none() {
+            return Err(SurfaceError::not_found(format!("session '{session}'")));
+        }
+        self.audit_command(caller, SURFACE_AUDIT_STOP_TURN, json!({ "sessionId": session }))
+            .await?;
+        let stopped = self.inner.source.stop_turn(caller, &session).await?;
+        Ok(CommandOutcome::TurnStopped {
+            session_id: session,
+            stopped,
+            text: words::TURN_STOPPED.to_string(),
+        })
+    }
+
     /// Sends `text` as a message of the session: a turn at once when the session is free,
     /// queued otherwise, or always when `queue`. With `offer`, a message that waits behind a
     /// running turn is offered to that turn (spec 3.3 §6 "steer").
@@ -2650,12 +2879,16 @@ impl SurfaceEngine {
         caller: &Caller,
         session: String,
         text: String,
+        images: Vec<crate::images::MessageImage>,
         queue: bool,
         offer: bool,
     ) -> Result<CommandOutcome> {
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && images.is_empty() {
             return Err(SurfaceError::Invalid("the message is empty".into()));
         }
+        // A running turn takes text at its next safe point; images wait for the next turn.
+        let offer = offer && images.is_empty();
+        let pictures = images.len();
         let key = (caller.user_id().to_string(), session.clone());
         let open = self.session_open(caller, &session).await?;
         // Earlier queued input goes first, including a message the delivery loop is starting
@@ -2677,14 +2910,14 @@ impl SurfaceEngine {
             self.audit_command(
                 caller,
                 SURFACE_AUDIT_SEND,
-                json!({ "sessionId": session, "queued": true }),
+                with_images(json!({ "sessionId": session, "queued": true }), pictures),
             )
             .await?;
             let held = match busy && offer && !queue {
                 true => self.offer(caller, &session, &text).await?,
                 false => None,
             };
-            let (id, position) = self.enqueue(&key, text, held.is_some());
+            let (id, position) = self.enqueue(&key, text.clone(), images, held.is_some());
             if let Some(held) = held {
                 self.settle_offer(caller.clone(), session.clone(), id, held, None);
             }
@@ -2703,19 +2936,25 @@ impl SurfaceEngine {
         self.audit_command(
             caller,
             SURFACE_AUDIT_SEND,
-            json!({ "sessionId": session, "queued": false }),
+            with_images(json!({ "sessionId": session, "queued": false }), pictures),
         )
         .await?;
-        self.inner.source.start_turn(caller, &session, &text).await?;
+        self.inner.source.start_turn_images(caller, &session, &text, &images).await?;
         Ok(CommandOutcome::Sent { session_id: session })
     }
 
     /// Adds `text` to the end of the session's queue; returns its id and its place, from 1.
-    fn enqueue(&self, key: &(String, String), text: String, offered: bool) -> (u64, u32) {
+    fn enqueue(
+        &self,
+        key: &(String, String),
+        text: String,
+        images: Vec<crate::images::MessageImage>,
+        offered: bool,
+    ) -> (u64, u32) {
         let id = self.inner.next_input.fetch_add(1, Ordering::Relaxed);
         let mut queues = self.inner.queues.lock().unwrap_or_else(|e| e.into_inner());
         let queued = queues.entry(key.clone()).or_default();
-        queued.push_back(QueuedInput { id, text, offered });
+        queued.push_back(QueuedInput { id, text, images, offered });
         (id, u32::try_from(queued.len()).unwrap_or(u32::MAX))
     }
 
@@ -2853,7 +3092,7 @@ impl SurfaceEngine {
             .get(&key)
             .is_some_and(|queued| queued.iter().any(|input| !input.offered));
         if waiting || self.session_open(caller, &session).await? {
-            return self.send(caller, session, text, false, false).await;
+            return self.send(caller, session, text, Vec::new(), false, false).await;
         }
         // Recorded before the turn holds it: a message whose record failed is never sent.
         self.audit_command(
@@ -2864,9 +3103,9 @@ impl SurfaceEngine {
         .await?;
         let Some(held) = self.offer(caller, &session, &text).await? else {
             // No turn takes it here.
-            return self.send(caller, session, text, false, false).await;
+            return self.send(caller, session, text, Vec::new(), false, false).await;
         };
-        let (id, _) = self.enqueue(&key, text, true);
+        let (id, _) = self.enqueue(&key, text, Vec::new(), true);
         let (done, settled) = oneshot::channel();
         self.settle_offer(caller.clone(), session, id, held, Some(done));
         settled.await.unwrap_or_else(|_| {
@@ -2974,7 +3213,12 @@ impl SurfaceEngine {
                     }
                 };
                 let Some(input) = next else { continue };
-                match engine.inner.source.start_turn(&caller, &session, &input.text).await {
+                match engine
+                    .inner
+                    .source
+                    .start_turn_images(&caller, &session, &input.text, &input.images)
+                    .await
+                {
                     Ok(()) => {
                         wait = poll;
                         // Let the turn begin before looking again.
@@ -3213,8 +3457,9 @@ impl SurfaceEngine {
         agent: &str,
         session: String,
         text: String,
+        images: Vec<crate::images::MessageImage>,
     ) -> Result<CommandOutcome> {
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && images.is_empty() {
             return Err(SurfaceError::Invalid("the message is empty".into()));
         }
         if let Origin::Agent { agent } = &caller.origin {
@@ -3225,10 +3470,13 @@ impl SurfaceEngine {
         self.audit_command(
             caller,
             SURFACE_AUDIT_SEND,
-            json!({ "sessionId": session, "queued": false, "agent": agent }),
+            with_images(
+                json!({ "sessionId": session, "queued": false, "agent": agent }),
+                images.len(),
+            ),
         )
         .await?;
-        self.inner.source.start_turn_with(caller, agent, &session, &text).await?;
+        self.inner.source.start_turn_with_images(caller, agent, &session, &text, &images).await?;
         Ok(CommandOutcome::Sent { session_id: session })
     }
 

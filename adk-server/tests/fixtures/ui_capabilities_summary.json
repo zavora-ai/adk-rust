@@ -26,7 +26,7 @@
     },
     {
       "protocol": "ag_ui",
-      "versions": ["0.1"],
+      "versions": ["0.1", "1.0"],
       "implementationTier": "hybrid_subset",
       "specTrack": "stable",
       "features": [
@@ -39,7 +39,8 @@
         "messages_snapshot",
         "stable_text_events",
         "stable_tool_events",
-        "tool_call_interrupts"
+        "tool_call_interrupts",
+        "protocol_version_negotiation"
       ],
       "limitations": [
         "Protocol-native AG-UI transport is opt-in and currently scoped to `adk-server`; the default runtime stream remains the generic ADK wrapper for compatibility.",

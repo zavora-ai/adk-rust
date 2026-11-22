@@ -807,6 +807,7 @@ fn app_requested(args: Value) -> RequestedCall {
             surface_id: "call-1".into(),
             version: 1,
             action_id: "send_invoice".into(),
+            digest: None,
         },
     )
 }
