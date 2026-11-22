@@ -1,9 +1,10 @@
 //! The render tools (spec 3.3 §6.1 `genui`, §7.4 rule 5): what an agent draws with, each
 //! drawing checked whole by the [`Validator`] and recorded under [`DRAWN_STATE_KEY`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use adk_core::{
     AdkError, DRAW_TOOL_NAMES, ErrorCategory, ErrorComponent, ReadonlyContext, Result,
@@ -36,6 +37,14 @@ pub const REFUSED_STATE_KEY: &str = "adk.surface.refused";
 /// session drew, `adk.surface.versions.<surface id>`, so versions keep rising after a
 /// restart or a compaction.
 const VERSIONS_STATE_KEY: &str = "adk.surface.versions";
+
+/// How many times `patch_surface` may change one surface in a minute. A live view updated
+/// every two seconds fits; a model patching in a loop is told to batch its changes, so the
+/// person's view (and every approval card over it) is not redrawn faster than it can be read.
+pub const MAX_PATCHES_PER_MINUTE: usize = 30;
+
+/// A surface in one session: app, user, session and surface ids.
+type SurfaceKey = (String, String, String, String);
 
 /// What [`DRAWN_STATE_KEY`] holds: the latest drawing of the session.
 ///
@@ -176,6 +185,69 @@ impl DrawnEnvelope {
         serde_json::from_value(response.get("drawn")?.clone()).ok()
     }
 
+    /// The A2UI messages that turn a renderer showing `previous` into one showing this
+    /// version: one `updateComponents` with the components that are new or changed, then an
+    /// `updateDataModel` for each data path that changed (no value where one was removed).
+    /// Empty when nothing changed. An envelope keeps the whole drawing, so its digest and
+    /// what a person approves stay whole; a transport that knows which version a renderer
+    /// holds (a socket, an A2A task) sends this instead of the whole drawing.
+    ///
+    /// A2UI has no message that removes a component: a component dropped from the drawing is
+    /// no longer referenced by its changed parent, so the renderer stops drawing it.
+    ///
+    /// `None` when there is no sound base: either is a removal, they are different surfaces
+    /// or catalogs, or `previous` is not older.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_surface::genui::{A2uiBody, A2uiMessage, DrawnEnvelope, DrawnKind, FORMS_CATALOG_ID};
+    /// use serde_json::json;
+    ///
+    /// let version = |n: u64, total: i64| DrawnEnvelope {
+    ///     surface_id: "s".into(), version: n, kind: DrawnKind::Screen,
+    ///     catalog_id: FORMS_CATALOG_ID.into(), title: None,
+    ///     messages: vec![
+    ///         A2uiMessage::create_surface("s"),
+    ///         A2uiMessage::update_components("s", vec![
+    ///             json!({ "id": "root", "component": "Text", "text": { "path": "/total" } })]),
+    ///         A2uiMessage::update_data_model("s", None, Some(json!({ "total": total, "currency": "USD" }))),
+    ///     ],
+    ///     actions: Vec::new(), deleted: false,
+    /// };
+    /// let delta = version(2, 12).delta_from(&version(1, 10)).unwrap();
+    /// assert_eq!(delta.len(), 1);
+    /// let A2uiBody::UpdateDataModel(update) = &delta[0].body else { panic!() };
+    /// assert_eq!(update.path.as_deref(), Some("/total"));
+    /// assert_eq!(update.value, Some(json!(12)));
+    /// ```
+    pub fn delta_from(&self, previous: &DrawnEnvelope) -> Option<Vec<A2uiMessage>> {
+        if self.surface_id != previous.surface_id
+            || self.catalog_id != previous.catalog_id
+            || self.version <= previous.version
+        {
+            return None;
+        }
+        let (now, before) = (self.draft()?, previous.draft()?);
+        let mut messages = Vec::new();
+        let changed: Vec<Value> = now
+            .components
+            .iter()
+            .filter(|component| !before.components.contains(component))
+            .cloned()
+            .collect();
+        if !changed.is_empty() {
+            messages.push(A2uiMessage::update_components(self.surface_id.clone(), changed));
+        }
+        let mut paths = Vec::new();
+        data_delta(&before.data_model, &now.data_model, String::new(), &mut paths);
+        for (path, value) in paths {
+            let path = if path.is_empty() { None } else { Some(path) };
+            messages.push(A2uiMessage::update_data_model(self.surface_id.clone(), path, value));
+        }
+        Some(messages)
+    }
+
     /// The envelope of `draft`, at `version`.
     fn of(draft: &SurfaceDraft, version: u64, catalog_id: &str) -> Self {
         let surface = draft.surface_id.clone();
@@ -198,6 +270,32 @@ impl DrawnEnvelope {
             actions: draft.actions.clone(),
             deleted: false,
         }
+    }
+}
+
+/// The data changes that turn `before` into `now`, as (JSON pointer, new value) in order: an
+/// object is compared key by key, anything else is replaced whole, and a removed key has no
+/// value. The empty pointer is the whole model.
+fn data_delta(before: &Value, now: &Value, at: String, out: &mut Vec<(String, Option<Value>)>) {
+    if before == now {
+        return;
+    }
+    match (before, now) {
+        (Value::Object(before), Value::Object(now)) => {
+            for (key, old) in before {
+                let path = format!("{at}/{}", key.replace('~', "~0").replace('/', "~1"));
+                match now.get(key) {
+                    Some(new) => data_delta(old, new, path, out),
+                    None => out.push((path, None)),
+                }
+            }
+            for (key, new) in now.iter().filter(|(key, _)| !before.contains_key(*key)) {
+                let path = format!("{at}/{}", key.replace('~', "~0").replace('/', "~1"));
+                out.push((path, Some(new.clone())));
+            }
+        }
+        (_, Value::Null) => out.push((at, None)),
+        _ => out.push((at, Some(now.clone()))),
     }
 }
 
@@ -262,7 +360,9 @@ struct Shared {
     validator: Validator,
     /// Versions given out in this process, by app, user, session and surface, so drawings
     /// made side by side in one turn get their own.
-    issued: Mutex<HashMap<(String, String, String, String), u64>>,
+    issued: Mutex<HashMap<SurfaceKey, u64>>,
+    /// When each surface was patched in the last minute, by app, user, session and surface.
+    patched: Mutex<HashMap<SurfaceKey, VecDeque<Instant>>>,
     /// What `render_screen` tells the model: the catalog's components, and each extension
     /// component's usage.
     screen_description: String,
@@ -283,6 +383,7 @@ impl DrawToolset {
                 screen_schema: screen_schema(catalog),
                 validator,
                 issued: Mutex::new(HashMap::new()),
+                patched: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -461,7 +562,8 @@ struct ScreenParams {
     /// The title above it.
     #[serde(default)]
     title: Option<String>,
-    /// A2UI v0.9.1 components of the forms catalog, one with id `root`.
+    /// A2UI components of the forms catalog, one with id `root`, in 1.0's syntax
+    /// (`{"@path": "/x"}`) or v0.9.1's (`{"path": "/x"}`).
     components: Vec<Value>,
     /// The data model the components bind to.
     #[serde(default)]
@@ -508,7 +610,7 @@ struct DeleteParams {
 }
 
 /// The forms catalog's `render_screen` description, unchanged for a `forms` toolset.
-const FORMS_SCREEN_DESCRIPTION: &str = "Show the person a screen of A2UI v0.9.1 components from \
+const FORMS_SCREEN_DESCRIPTION: &str = "Show the person a screen of A2UI 1.0 (or v0.9.1) components from \
      the forms catalog (Text, Row, Column, List, Card, Tabs, Divider, Button, TextField, \
      CheckBox, ChoicePicker, Slider, DateTimeInput), one with id root. Buttons dispatch only \
      declared actions, which ask the person before a tool runs.";
@@ -520,10 +622,10 @@ fn screen_description(catalog: &Catalog) -> String {
     }
     let added: Vec<&str> = catalog.extensions().collect();
     let mut out = format!(
-        "Show the person a screen of A2UI v0.9.1 components from the {} catalog, one with id \
+        "Show the person a screen of A2UI 1.0 (or v0.9.1) components from the {} catalog, one with id \
          root: the forms components (Text, Row, Column, List, Card, Tabs, Divider, Button, \
          TextField, CheckBox, ChoicePicker, Slider, DateTimeInput) and {}. Bind data with \
-         {{\"path\": \"/...\"}} into dataModel.",
+         {{\"@path\": \"/...\"}} (or v0.9.1's {{\"path\": \"/...\"}}) into dataModel.",
         catalog.label(),
         added.join(", ")
     );
@@ -544,7 +646,7 @@ fn screen_schema(catalog: &Catalog) -> Value {
         && let Some(components) = schema.pointer_mut("/properties/components")
     {
         components["description"] = json!(format!(
-            "A2UI v0.9.1 components of the {} catalog, one with id `root`.",
+            "A2UI components of the {} catalog, one with id `root`, in 1.0's syntax or v0.9.1's.",
             catalog.label()
         ));
     }
@@ -569,8 +671,16 @@ fn invalid(tool: &str, error: impl std::fmt::Display) -> AdkError {
     )
 }
 
+/// A refusal as the tool's error: its message, then the same in A2UI 1.0's `ValidationResult`
+/// shape so an agent can act on its code.
 fn refused(refusal: &DrawRefusal) -> AdkError {
-    AdkError::new(ErrorComponent::Tool, ErrorCategory::Forbidden, refusal.code(), refusal.message())
+    let result = serde_json::to_string(&refusal.validation_result()).unwrap_or_default();
+    AdkError::new(
+        ErrorComponent::Tool,
+        ErrorCategory::Forbidden,
+        refusal.code(),
+        format!("{}\nvalidationResult: {result}", refusal.message()),
+    )
 }
 
 fn params<T: DeserializeOwned>(tool: &str, args: Value) -> Result<T> {
@@ -923,21 +1033,40 @@ impl DrawTool {
             .agent_tool_names()
             .map(|tools| self.shared.validator.clone().with_bindable_tools(tools));
         let validator = own_tools.as_ref().unwrap_or(&self.shared.validator);
-        if let Err(refusal) = validator.validate(&draft) {
-            tracing::info!(
-                surface.id = %draft.surface_id,
-                refusal.code = refusal.code(),
-                refusal.reason = %refusal.technical(),
-                "drawing refused"
-            );
-            let mut actions = ctx.actions();
-            actions.state_delta.insert(REFUSED_STATE_KEY.to_string(), json!(refusal));
-            ctx.set_actions(actions);
-            return Err(refused(&refusal));
-        }
+        let validated = match validator.validate(&draft) {
+            Ok(validated) => validated,
+            Err(refusal) => {
+                tracing::info!(
+                    surface.id = %draft.surface_id,
+                    refusal.code = refusal.code(),
+                    refusal.reason = %refusal.technical(),
+                    "drawing refused"
+                );
+                let mut actions = ctx.actions();
+                actions.state_delta.insert(REFUSED_STATE_KEY.to_string(), json!(refusal));
+                ctx.set_actions(actions);
+                return Err(refused(&refusal));
+            }
+        };
         let latest = self.latest(ctx, &draft.surface_id);
         let version = self.next_version(ctx, &draft.surface_id, latest.as_ref());
-        Ok(self.shown(ctx, DrawnEnvelope::of(&draft, version, validator.catalog().id())))
+        let mut result =
+            self.shown(ctx, DrawnEnvelope::of(&draft, version, validator.catalog().id()));
+        // Shown, and the agent is told what pressures the person, to draw it plainly next time.
+        if !validated.warnings.is_empty() {
+            tracing::info!(
+                surface.id = %draft.surface_id,
+                warnings = validated.warnings.len(),
+                "drawing shown with warnings"
+            );
+            let said: Vec<String> =
+                validated.warnings.iter().filter_map(|warning| warning.message.clone()).collect();
+            if let Some(message) = result.get("message").and_then(Value::as_str) {
+                result["message"] = json!(format!("{message} Change it: {}", said.join(" ")));
+            }
+            result["warnings"] = json!(validated.warnings);
+        }
+        Ok(result)
     }
 
     fn patch(&self, ctx: &dyn ToolContext, params: PatchParams) -> Result<Value> {
@@ -968,6 +1097,7 @@ impl DrawTool {
                 ),
             ));
         };
+        self.within_patch_budget(ctx, &params.surface_id)?;
         let mut model = DataModel::new(draft.data_model.clone());
         for change in params.data {
             model.apply(Some(&change.path), change.value).map_err(|error| invalid(tool, error))?;
@@ -977,7 +1107,10 @@ impl DrawTool {
             let id = component.get("id").and_then(Value::as_str).unwrap_or_default();
             !params.remove.iter().any(|removed| removed == id)
         });
-        for component in params.components {
+        let components =
+            super::wire::components_in(params.components, self.shared.validator.catalog())
+                .map_err(|error| invalid(tool, format!("components{error}")))?;
+        for component in components {
             let id = component.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
             match draft
                 .components
@@ -988,7 +1121,56 @@ impl DrawTool {
                 None => draft.components.push(component),
             }
         }
-        self.draw(ctx, draft)
+        let mut result = self.draw(ctx, draft)?;
+        // What changed, so the agent can tell an empty patch from a real one.
+        if let (Some(previous), Some(now)) =
+            (latest.as_ref(), DrawnEnvelope::from_response(&result))
+            && let Some(delta) = now.delta_from(previous)
+        {
+            let mut components = Vec::new();
+            let mut data = Vec::new();
+            for message in &delta {
+                match &message.body {
+                    A2uiBody::UpdateComponents(update) => components
+                        .extend(update.components.iter().filter_map(|c| c.get("id").cloned())),
+                    A2uiBody::UpdateDataModel(update) => {
+                        data.push(json!(update.path.as_deref().unwrap_or("/")));
+                    }
+                    _ => {}
+                }
+            }
+            result["changed"] = json!({ "components": components, "data": data });
+        }
+        Ok(result)
+    }
+
+    /// Refuses a patch past [`MAX_PATCHES_PER_MINUTE`] for `surface_id` in this session.
+    fn within_patch_budget(&self, ctx: &dyn ToolContext, surface_id: &str) -> Result<()> {
+        let key = (
+            ctx.app_name().to_string(),
+            ctx.user_id().to_string(),
+            ctx.session_id().to_string(),
+            surface_id.to_string(),
+        );
+        let now = Instant::now();
+        let mut patched =
+            self.shared.patched.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let times = patched.entry(key).or_default();
+        while times.front().is_some_and(|at| now.duration_since(*at) >= Duration::from_secs(60)) {
+            times.pop_front();
+        }
+        if times.len() >= MAX_PATCHES_PER_MINUTE {
+            return Err(invalid(
+                Op::Patch.name(),
+                format!(
+                    "surface '{surface_id}' was changed {MAX_PATCHES_PER_MINUTE} times in the last \
+                     minute; put changes together in one patch (it takes many data changes and \
+                     components) and patch less often"
+                ),
+            ));
+        }
+        times.push_back(now);
+        Ok(())
     }
 
     fn delete(&self, ctx: &dyn ToolContext, params: DeleteParams) -> Result<Value> {
@@ -1056,13 +1238,17 @@ impl Tool for DrawTool {
             Op::Table => self.draw(ctx, table(params(tool, args)?)),
             Op::Screen => {
                 let screen: ScreenParams = params(tool, args)?;
+                // Components in A2UI 1.0's syntax are read into the internal form first.
+                let components =
+                    super::wire::components_in(screen.components, self.shared.validator.catalog())
+                        .map_err(|error| invalid(tool, format!("components{error}")))?;
                 self.draw(
                     ctx,
                     SurfaceDraft {
                         surface_id: screen.surface_id,
                         kind: DrawnKind::Screen,
                         title: screen.title,
-                        components: screen.components,
+                        components,
                         data_model: screen.data_model.unwrap_or_else(|| json!({})),
                         actions: screen.actions,
                     },
@@ -1071,5 +1257,30 @@ impl Tool for DrawTool {
             Op::Patch => self.patch(ctx, params(tool, args)?),
             Op::Delete => self.delete(ctx, params(tool, args)?),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_data_delta_names_each_changed_path() {
+        let before = json!({ "a": 1, "b": { "c": 2, "d": 3 }, "rows": [1, 2], "gone": true });
+        let now = json!({ "a": 1, "b": { "c": 5, "d": 3 }, "rows": [1, 2, 3], "x/y": "new" });
+        let mut out = Vec::new();
+        data_delta(&before, &now, String::new(), &mut out);
+        assert_eq!(
+            out,
+            vec![
+                ("/b/c".to_string(), Some(json!(5))),
+                ("/gone".to_string(), None),
+                ("/rows".to_string(), Some(json!([1, 2, 3]))),
+                ("/x~1y".to_string(), Some(json!("new"))),
+            ]
+        );
+        let mut whole = Vec::new();
+        data_delta(&Value::Null, &json!({ "a": 1 }), String::new(), &mut whole);
+        assert_eq!(whole, vec![(String::new(), Some(json!({ "a": 1 })))]);
     }
 }

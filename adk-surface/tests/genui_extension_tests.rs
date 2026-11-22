@@ -670,7 +670,7 @@ fn the_render_tools_draw_in_the_extension_catalog_under_their_usual_names() {
     let forms_screen =
         forms.tools().into_iter().find(|tool| tool.name() == "render_screen").unwrap();
     assert!(forms_screen.description().starts_with(
-        "Show the person a screen of A2UI v0.9.1 components from the forms catalog (Text,"
+        "Show the person a screen of A2UI 1.0 (or v0.9.1) components from the forms catalog (Text,"
     ));
 }
 

@@ -629,3 +629,52 @@ fn a_pattern_the_server_cannot_read_is_refused_when_drawn() {
     assert!(refusal.detail.contains("can't be read here"), "{}", refusal.detail);
     assert!(Validator::forms().validate(&field("[A-Z0-9]{6}")).is_ok());
 }
+
+/// A2UI 1.0 adds ways for a drawing to speak as the person and to hide what a send carries;
+/// rule 5 refuses both (spec 3.3 §7.4 rule 5).
+#[test]
+fn a_drawing_never_speaks_as_the_person_nor_hides_a_field_from_screen_readers() {
+    use adk_surface::genui::{
+        Catalog, DrawnAction, DrawnKind, SurfaceDraft, Validator, components_in,
+    };
+    let form = |extra: serde_json::Value| {
+        let mut components = vec![
+            serde_json::json!({ "id": "root", "component": "Column", "children": ["to", "send"] }),
+            serde_json::json!({ "id": "to", "component": "TextField", "label": "To", "value": { "@path": "/to" } }),
+            serde_json::json!({ "id": "send-label", "component": "Text", "text": "Send" }),
+            serde_json::json!({ "id": "send", "component": "Button", "child": "send-label",
+                "action": { "event": { "name": "send" } } }),
+        ];
+        for (index, patch) in extra.as_object().unwrap() {
+            let index: usize = index.parse().unwrap();
+            for (key, value) in patch.as_object().unwrap() {
+                components[index][key] = value.clone();
+            }
+        }
+        SurfaceDraft {
+            surface_id: "s".into(),
+            kind: DrawnKind::Form,
+            title: None,
+            components: components_in(components, Catalog::forms()).unwrap(),
+            data_model: serde_json::json!({ "to": "" }),
+            actions: vec![serde_json::from_value::<DrawnAction>(serde_json::json!({
+                "id": "send", "label": "Send", "tool": "send_invoice", "args": { "to": { "path": "/to" } }
+            })).unwrap()],
+        }
+    };
+    let validator = Validator::forms();
+    assert!(validator.validate(&form(serde_json::json!({}))).is_ok());
+    let refused = |extra: serde_json::Value| validator.validate(&form(extra)).unwrap_err().detail;
+    assert!(
+        refused(serde_json::json!({ "3": { "action": { "event": { "name": "send", "userMessage": "Yes, send it" } } } }))
+            .contains("never speaks as the person")
+    );
+    assert!(
+        refused(serde_json::json!({ "1": { "@accessibility": { "hidden": true } } }))
+            .contains("never hidden from screen readers")
+    );
+    assert!(
+        refused(serde_json::json!({ "3": { "@accessibility": { "hidden": { "@path": "/h" } } } }))
+            .contains("never hidden from screen readers")
+    );
+}

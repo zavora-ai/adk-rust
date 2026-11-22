@@ -131,6 +131,7 @@ pub struct HarnessAgentBuilder {
     approval_store: Option<Arc<dyn ApprovalStore>>,
     approval_service: Option<Arc<dyn ApprovalService>>,
     auto_review: Option<Arc<dyn adk_core::ToolReviewer>>,
+    requested_call_seal: Option<Arc<dyn adk_core::RequestedCallSeal>>,
     #[cfg(feature = "kernel")]
     kernel_approvals: Arc<crate::kernel::LateApprovalNotifier>,
     #[cfg(feature = "kernel")]
@@ -273,6 +274,7 @@ impl HarnessAgentBuilder {
             approval_store: None,
             approval_service: None,
             auto_review: None,
+            requested_call_seal: None,
             #[cfg(feature = "kernel")]
             kernel_approvals: Arc::default(),
             #[cfg(feature = "kernel")]
@@ -956,6 +958,15 @@ impl HarnessAgentBuilder {
         #[cfg(feature = "kernel")]
         let service = crate::kernel::NotifyingApprovals::wrap(service, &self.kernel_approvals);
         self.approval_service = Some(service);
+        self
+    }
+
+    /// Checks each requested call (one a person asked for through a form an agent drew)
+    /// against the seal made when the person approved it, right before it runs: a call that
+    /// changed since is refused (spec 3.3 §7.4 rule 5). `adk-surface`'s `ApprovalSeals` makes
+    /// and checks them; give it to the surface engine too.
+    pub fn requested_call_seal(mut self, seal: Arc<dyn adk_core::RequestedCallSeal>) -> Self {
+        self.requested_call_seal = Some(seal);
         self
     }
 
@@ -3043,6 +3054,7 @@ impl HarnessAgentBuilder {
                 approval_store,
                 approval_service: self.approval_service,
                 auto_review: self.auto_review,
+                requested_call_seal: self.requested_call_seal,
                 ledgers: crate::ledger::HarnessLedgers::new(
                     self.action_ledger.unwrap_or_else(|| Arc::new(InMemoryActionLedger::new())),
                 ),

@@ -45,6 +45,10 @@ export interface BridgeHost {
   prompt(prompt: AppPrompt): void;
   /** The light or dark scheme the page is drawn in. */
   theme(): "light" | "dark";
+  /** The home's style variables an app may draw with (MCP Apps `hostContext.styles`). */
+  styles?(): Record<string, string>;
+  /** The frame's width in CSS pixels. */
+  width?(): number;
   /** The arguments of the call that showed the app. */
   toolInput: unknown;
   /** Its result, as an MCP `CallToolResult`. */
@@ -100,12 +104,33 @@ export class AppBridge {
       return;
     }
     let result: unknown = answer.result ?? {};
-    // The page knows the scheme it is drawn in; the server does not.
+    // The page knows the scheme it is drawn in, its styles and its width; the server does not.
     if (data.method === "ui/initialize" && isObject(result)) {
       const context = isObject(result.hostContext) ? result.hostContext : {};
-      result = { ...result, hostContext: { ...context, theme: this.host.theme() } };
+      result = { ...result, hostContext: { ...context, ...this.context(context) } };
     }
     this.host.post({ jsonrpc: "2.0", id, result });
+  }
+
+  /** What the page adds to the host context: its scheme, its style variables and its width. */
+  private context(base: Record<string, unknown> = {}): Record<string, unknown> {
+    const dimensions = isObject(base.containerDimensions) ? base.containerDimensions : {};
+    const width = this.host.width?.();
+    return {
+      theme: this.host.theme(),
+      ...(this.host.styles ? { styles: { variables: this.host.styles() } } : {}),
+      ...(width ? { containerDimensions: { ...dimensions, width } } : {}),
+    };
+  }
+
+  /** Tells the app the page's scheme or styles changed (`ui/notifications/host-context-changed`). */
+  contextChanged(): void {
+    this.host.post({ jsonrpc: "2.0", method: "ui/notifications/host-context-changed", params: this.context() });
+  }
+
+  /** Tells the app its frame is about to go (`ui/resource-teardown`), so it can save its work. */
+  teardown(): void {
+    this.host.post({ jsonrpc: "2.0", id: "teardown", method: "ui/resource-teardown", params: {} });
   }
 
   private notified(method: string, params: unknown) {
@@ -205,6 +230,33 @@ export function frameable(frameUrl: string, frameOrigin: string, pageHost: strin
 }
 
 /** The scheme the page is drawn in: the person's choice, else the device's. */
+/**
+ * The home's style variables an app may draw with (MCP Apps `hostContext.styles.variables`):
+ * its surface, text, border and accent colours, fonts and radius, read from the page's own
+ * tokens. Never a decision's colours.
+ */
+export function hostStyles(): Record<string, string> {
+  if (typeof window === "undefined" || !document.documentElement) return {};
+  const read = window.getComputedStyle(document.documentElement);
+  const out: Record<string, string> = {};
+  const map: [string, string][] = [
+    ["--color-background-primary", "--card"],
+    ["--color-background-secondary", "--bg"],
+    ["--color-text-primary", "--text"],
+    ["--color-text-secondary", "--text-2"],
+    ["--color-border-primary", "--border"],
+    ["--color-accent", "--accent"],
+    ["--font-sans", "--font"],
+    ["--font-mono", "--mono"],
+    ["--border-radius-md", "--radius"],
+  ];
+  for (const [standard, ours] of map) {
+    const value = read.getPropertyValue(ours).trim();
+    if (value) out[standard] = value;
+  }
+  return out;
+}
+
 export function pageTheme(): "light" | "dark" {
   const chosen = document.documentElement.dataset.theme;
   if (chosen === "light" || chosen === "dark") return chosen;

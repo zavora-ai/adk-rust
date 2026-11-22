@@ -100,6 +100,39 @@ The system of record. Three sections share one header with the status line and *
 |---|---|
 | ![Web home, threads and decisions](images/spec-3.3/web-home-light.png) | ![Web home, threads and decisions, dark](images/spec-3.3/web-home-dark.png) |
 
+**Images in a message.** The message box takes images, picked, pasted or dropped: at most four PNG, JPEG, WebP or GIF images of up to 3 MB each. The page shrinks a larger still picture before sending it, and never sends SVG. `send`, `queue` and `newThread` carry them as `images`; the engine checks each image's bytes against the type it claims and refuses anything else before the message reaches an agent. The images reach the agent as parts of the person's message, so a model that sees images reads them with the text. A message with images is never offered to a running turn; it waits for the next one. The thread shows the images the person sent beside their words, and opens one large when pressed. The terminal says `[2 images]`. A send's audit record counts the images; it never holds them.
+
+**Decisions.** `/ui/decisions` lists everything waiting for the person in one place. Each entry shows its question, who asks, since when and its risk; a high-risk one is marked in the accent. The list can be narrowed to who asks. The selected decision's own card sits beside the list and is answered there as in its thread; Enter on the list only opens a decision. **Open in its thread** shows it in place. The Decisions mark carries the count of what waits. A decision's deep link (`/ui/decisions/<id>`) still opens in its thread.
+
+**Stop the turn.** While an agent works in the thread shown, **Stop the turn** sits beside **Send**. `stopTurn` stops that session's running turn, and the agent waits for the next message. The person gives it, never an agent, and only for their own session. It is recorded (`surface.stop_turn`) before it takes effect. Nothing held for a decision is answered by it, and a run waiting on a decision keeps waiting. A kernel kills the session's running and queued runs; a harness or a runner cancels its run in flight.
+
+**Suggested replies.** An agent given `adk_surface::suggest::SuggestReplies` may offer up to four short replies the person might send next (`suggest_replies`; each one line of at most 80 characters, repeats dropped). The tool only shows; it changes nothing. The thread shows the latest offer under the agent's message (`ThreadItem::Suggestions`) until the person writes. Tapping one fills the message box, and the person still sends it. Once sent it is their own message, never an answer to a decision (§7.4, S-I4). The terminal lists them.
+
+**Ask for a drawing.** **Ask for a drawing** in the message box puts "Show this as a drawing I can look at:" in front of what is typed. It is sent only with **Send**, so the person sees exactly what goes.
+
+**How you answered this week.** Today shows how the person answered over the last seven days: each answer counted (allowed once, always allowed, edited, denied) and on which surfaces, from `GET /surface/answers`. The engine reads its answer log (`AnswerLog::since`), and the card is left out where the server keeps no such count.
+
+**Thread history.** **Thread history** in a thread's header lists the person's earlier threads with the agent, newest first, from `GET /surface/agents/{id}/threads`. Choosing one shows it in place of the conversation, with the way back.
+
+**The icon rail.** On a wide screen the sections stand in a rail down the left edge: a mark for each of Threads, Today, Memory & rules and Developer (and Website where the server serves one). Hovering a mark shows its name, assistive technology reads it, and the Threads mark carries the Decisions count. On narrower screens the sections stay in the header.
+
+**The canvas.** **Show beside** on a drawing keeps it in a canvas next to the thread while the conversation goes on. The canvas shows the drawing's latest version as the agent patches it, with tabs for its earlier versions and for the A2UI it arrived as. Its form sends and its decisions work there as in the thread. The thread keeps a line saying the drawing is shown beside it, with **Bring back**. On a narrower screen the canvas slides over the page from the right. **Open in its own window** shows the canvas alone at `/ui/canvas?session=…&surface=…`. That window follows the session, so the drawing can stay on another screen.
+
+**Question first.** A waiting decision leads with what the person is asked, drawn as a question. Under it come what the call costs (its risk, whether it can be undone, where else it is shown), then who asks and since when, then the exact call in full, then the answers. The question mark is drawn but not spoken, so the card is named by its heading on every surface.
+
+**Search and jump.** ⌘K or Ctrl+K, or **Search** in the header, opens a palette that finds a section, an agent's thread, a decision waiting for the person, or an action: **Stop all**, the theme, voice, adding an agent. Typing narrows the list, the arrow keys move through it, Enter goes and Esc closes. A decision found there opens on its card; nothing in the palette answers one (§7.4).
+
+**The work log.** Three or more plain tool steps in a row fold into one line of the thread. The line says how long they took ("Worked for 38 s"), how many steps there were, how many failed and what the last one was, and it opens to show them all. A command's run keeps its own card, and a step still working stays in view.
+
+**What an agent ran.** A command an agent ran (`bash`) or code it ran in the sandbox (`sandbox_exec`) reads as a run, not a line that says "Done":
+- what ran;
+- how it exited, or why it stopped short (timed out, out of memory, refused by the sandbox, could not run);
+- how long it took;
+- its last 40 lines, with standard error marked;
+- whether the tool cut its output, which the agent can still read in full.
+
+A failed run opens on its output. Each run says where it ran: **Sandbox** for the sandbox's own tool, and for a command, where the agent's commands run.
+
 **Today.** "While you were away": what was spent, whether quiet time was respected, how many things wait, then one line per event since the person left, each with a status pill and a link to its details. Questions from the kernel's `/proc` observations ([`control/mod.rs:136-140`](../../adk-kernel/src/control/mod.rs)) are answered here or on the phone, never assumed.
 
 | Light | Dark |
@@ -157,6 +190,15 @@ Voice through `adk-realtime` (Gemini Live or OpenAI Realtime). A spoken "allow o
 | ![Voice and video](images/spec-3.3/voice-light.png) | ![Voice and video, dark](images/spec-3.3/voice-dark.png) |
 
 ### 5.7 Your agents
+
+**Where commands run.** Each roster row says where the agent's commands run, as its harness reports it:
+- in the OS sandbox, with its enforcer;
+- in a container;
+- in a remote sandbox;
+- on this computer;
+- on this computer because a sandbox was asked for and is unavailable, with the reason.
+
+The thread's header shows it as a badge. It is green when commands are kept apart from this computer, amber when a sandbox was asked for and is unavailable, and quiet when commands run on this computer by choice.
 
 A person adds agents of their own beside the primary agent, by asking or by hand. Each one is kept by the kernel, appears in the roster on the left of the web home and the terminal, keeps working across restarts, and is changed, paused or removed from either surface. An agent may suggest a new agent; only a person adds one.
 
@@ -447,21 +489,23 @@ Surfaces a person uses speak plainly. The terminal and developer panels may use 
 
 ## 9. Visual language
 
-The look follows [adk-rust.com](https://adk-rust.com): Inter and JetBrains Mono, rust orange as the one accent, two-tone display headings, a soft rust glow in one corner. Light and dark come from one set of tokens, and every dark screen is the light screen rendered with the dark set.
+Calm mission control. The look keeps [adk-rust.com](https://adk-rust.com)'s rust orange and soft corner glow, set in Geist and Geist Mono over warm neutrals. One accent is kept for what waits on the person and for the primary action; data takes blues, teals and violets, never the accent. Light and dark come from one set of tokens, and every dark screen is the light screen rendered with the dark set. Dark is layered from near black, so depth reads without extra borders. The tokens live in `adk-surface/web/src/styles/tokens.css`, and a script checks their contrast when it writes them.
 
 | Token | Light | Dark |
 |---|---|---|
-| Background | `#FFFFFF` | `#0A1628` |
-| Card | `#FFFFFF` | `#15233B` |
-| Raised (chips, switchers) | `#F6F7F9` | `#1C2B45` |
-| Border | `#E6E8EC` | `#2A3D5C` |
-| Text / secondary / labels | `#0F172A` / `#475569` / `#64748B` | `#F1F5F9` / `#D5DEE8` / `#A7B4C6` |
-| Brand (display, dots) | `#F74C00` | `#F74C00` |
-| Accent text and primary button | `#C03A00` with white text | `#FF9C78` text; `#F74C00` button with navy text |
-| Decision background | `#FFF8F3` | `#2A2432` |
-| Stop control | navy `#0A1628` | light `#F1F5F9` |
+| Background / sidebar | `#FAFAF9` / `#F4F4F2` | `#0E0F11` / `#0B0C0E` |
+| Card | `#FFFFFF` | `#16171A` |
+| Raised (chips, switchers) | `#F4F4F1` | `#1E1F23` |
+| Border / strong border | `#E7E6E2` / `#D6D4CF` | `#26272C` / `#36373D` |
+| Text / secondary / labels | `#18181B` / `#4B4B53` / `#6B6B74` | `#EDEDEF` / `#B5B5BD` / `#8E8E97` |
+| Brand (display, dots) | `#F74C00` | `#FF6A1F` |
+| Accent text and primary button | `#C2410C` with white text | `#FF8A4C` with near-black text |
+| Decision background / border | `#FFF7F1` / `#F6CDB4` | `#1F1610` / `#5C3119` |
+| Stop control | `#18181B` | `#EDEDEF` |
 
-Text colours target WCAG AA contrast (4.5:1) against their background; the bright brand orange appears only on large type and dots. Agents have rounded monogram avatars in their own colour. Status uses a word and a colour, never colour alone.
+Type is a seven-step scale: 12/16, 13/18, 14/20, 16/24, 20/28, 24/32 and 32/40. Radii are 6, 10 and 14 px, plus round pills. Shadows have two layers, a contact shadow and a soft lift. Motion uses 120, 160 and 240 ms on one ease-out curve, and none of it runs when the person asks for reduced motion.
+
+Text colours meet WCAG AA contrast (4.5:1) against their background; the bright brand orange appears only on large type and dots. What waits on the person carries one accent edge. Agents have rounded monogram avatars in their own colour. Status uses a word and a colour, never colour alone. On a phone, touch targets are at least 44 px.
 
 ## 10. Changes outside the new crate
 

@@ -114,6 +114,29 @@ async fn items_of(events: Vec<Event>) -> Vec<ThreadItem> {
     engine.thread(&ana(), "s1").await.unwrap().into_iter().flat_map(|entry| entry.items).collect()
 }
 
+/// A newer version says what changed in words that fit it: a screen that only shows is
+/// "this", a screen with a field is "this form".
+#[tokio::test]
+async fn a_changed_screen_is_a_form_only_when_it_asks_something() {
+    let changed_text = |components: Vec<Value>| async move {
+        let shown = envelope("board", DrawnKind::Screen, components, json!({}));
+        let items = items_of(vec![result("render_screen", &shown, Some(record_of(&shown)))]).await;
+        match items.as_slice() {
+            [ThreadItem::Drawn { surface }] => surface.changed_text.clone(),
+            other => panic!("not a drawing: {other:?}"),
+        }
+    };
+    let board =
+        changed_text(vec![json!({ "id": "root", "component": "Text", "text": "p95 790 ms" })])
+            .await;
+    assert!(board.starts_with("Finance changed this at "), "{board}");
+    let form = changed_text(vec![
+        json!({ "id": "root", "component": "TextField", "label": "Why", "value": { "path": "/why" } }),
+    ])
+    .await;
+    assert!(form.starts_with("Finance changed this form at "), "{form}");
+}
+
 /// Provenance: the same envelope is a drawing only with the reserved key and its digest; an
 /// MCP server's `render_form`, or a forged digest, is an ordinary result.
 #[tokio::test]
@@ -188,6 +211,34 @@ async fn strings_come_resolved_and_templates_expanded() {
         (input.path.as_str(), input.input, &input.value, input.checks[0].message.as_str()),
         ("/to", DrawnInput::ShortText, &json!("ana@example.com"), "Enter an email address")
     );
+}
+
+/// What assistive technology reads (A2UI 1.0 `@accessibility`) reaches every surface resolved:
+/// a bound label, a live setting, and a hidden flag read from the data model.
+#[tokio::test]
+async fn accessibility_reaches_the_drawn_node_resolved() {
+    let screen = envelope(
+        "status",
+        DrawnKind::Screen,
+        vec![
+            json!({ "id": "root", "component": "Column", "children": ["total", "note"],
+                    "accessibility": { "label": "Invoice summary" } }),
+            json!({ "id": "total", "component": "Text", "text": { "path": "/total" },
+                    "accessibility": { "label": { "path": "/label" }, "description": "In US dollars", "live": "polite" } }),
+            json!({ "id": "note", "component": "Text", "text": "decoration",
+                    "accessibility": { "hidden": { "path": "/quiet" } } }),
+        ],
+        json!({ "total": "4,200", "label": "Invoice total", "quiet": true }),
+    );
+    let items = items_of(vec![result("render_screen", &screen, Some(record_of(&screen)))]).await;
+    let [ThreadItem::Drawn { surface }] = items.as_slice() else { panic!("{items:?}") };
+    let root = surface.root.as_ref().unwrap();
+    assert_eq!(root.accessibility.as_ref().unwrap().label.as_deref(), Some("Invoice summary"));
+    let total = root.children[0].accessibility.as_ref().unwrap();
+    assert_eq!(total.label.as_deref(), Some("Invoice total"));
+    assert_eq!(total.description.as_deref(), Some("In US dollars"));
+    assert_eq!(total.live.as_deref(), Some("polite"));
+    assert!(root.children[1].accessibility.as_ref().unwrap().hidden);
 }
 
 /// A drawing whose record checks out but which rule 5 refuses — written before a stricter

@@ -150,6 +150,78 @@ export function takeOverCard(): DecisionCard {
   };
 }
 
+/** A screenshot of a failing build, as a person pastes one (spec 3.3 §5.1). */
+export const CI_SCREENSHOT = "iVBORw0KGgoAAAANSUhEUgAAAUAAAADICAIAAAAWZq/8AAACx0lEQVR42u3ascnyQADHYSdQXEALt7GxsRdbu9vACa7NNHbO4QbRSrDUMkRDJMcFEx94yo/7g9yPF+7LZLFcAQM18RPAaAO+HnatR9xPm9Z/sz9v/dbQX8CvdKua0q1qSrfKLw4CBpoDrtX7seFavR8brtWrYfAXGBAweIX2Cg3+HxjoFPB0NgcGSsAgYEDAgIBBwICAAQEDaQGX5S1RjjOtd1tHwBISMAIWsIARsHUBC1jAAsYrNCBgQMAgYEDAgIABAYOAAQEDAgYBA2MLOMYiUY4zrf/zuoAFbF3AAnaJrQtYwC6xdQEL2LqABQwIGBAwIGAQMCBgQMAgYEDAgIABAYOAfQtt3RfLAnaJrSNg6wJGwNYFLGCX2LqAvUIDAgYBAwIGBAwIGAQMCBgQMCBgEDAwhIDXl2OiHGeOb92lRMACRsACFjACFrCAEbCAwSs0CBgQMCBgEDAgYEDAgIBBwICAAQEDAgYBAwIGBAwCBgQMCBgQMAg4xiJRjjOtW++2LmDXyLqABewSWxewgK1bF7CArQvYKzQgYEDAIGBAwICAAQGDgAEBAwIGAQNjC/gRQqIcZ1q33v+6gF0j6wIWsHXrAhawdesCdo2sC9grNCBgEDAgYEDAgIBBwICAAQGDgAEBA76F9kXuv6yLUMDWBSxgAVsXsIBdYusCFrCEBIxXaBAwIGBAwICAQcCAgAEBg4ABAQMCBgQMAgYEDAgYEDAIGBAwIGAQ8LsYi0Q5zrTez7pUBCwhASNg6wJGwNYFLGAJCRiv0ICAQcCAgAEBAwIGAQMCBgQMCBgEDPx6wI8QEuU407r173cF7BpZF7CAXWLrAhawdesCFrB1AXuFBgQMCBgEDAgYEDAgYBAwIGBAwCBgQMCAgAEBg4ABAQMCBgQMAgYEDAgYBAwIGBAwIGAQMCBgQMCAgEHAgIABAYOAgQF4AoF+wKH3cbOrAAAAAElFTkSuQmCC";
+
+/** Code's thread: the person's screenshot, and two runs, one in the sandbox it could not leave. */
+export function codeThread(): FeedEntry[] {
+  const lines = ["running 42 tests", "test parser::tests::reads_header ... ok", "test parser::tests::reads_unicode_escape ... FAILED", "", "failures:", "---- parser::tests::reads_unicode_escape stdout ----"];
+  return [
+    {
+      seq: 1,
+      at: at(7, 20, 0),
+      atText: "07:20",
+      items: [{ kind: "message", from: "you", author: "You", text: "The build fails like this on CI. Can you find why?", images: [{ mimeType: "image/png", data: CI_SCREENSHOT }] }],
+    },
+    {
+      seq: 2,
+      at: at(7, 20, 0),
+      atText: "07:20",
+      items: [
+        { kind: "message", from: "agent", author: "Code", text: "The screenshot shows `cargo test` failing in `parser::tests`. Let me run it here." },
+        { kind: "activity", tool: "bash", text: "Ran cargo test -p parser", callId: "r1" },
+      ],
+    },
+    {
+      seq: 3,
+      at: at(7, 21, 0),
+      atText: "07:21",
+      items: [
+        {
+          kind: "run",
+          tool: "bash",
+          callId: "r1",
+          ok: false,
+          text: "Failed",
+          run: {
+            command: "cargo test -p parser",
+            exitCode: 101,
+            durationMs: 14200,
+            output: [
+              ...lines.map((text) => ({ text })),
+              { text: "thread 'main' panicked at src/lex.rs:88:21: index out of bounds", stderr: true },
+              { text: "test result: FAILED. 41 passed; 1 failed", stderr: true },
+            ],
+            lines: 214,
+            truncated: true,
+          },
+        },
+        { kind: "activity", tool: "sandbox_exec", text: "Ran python: import urllib.request", callId: "r2" },
+      ],
+    },
+    {
+      seq: 4,
+      at: at(7, 21, 0),
+      atText: "07:21",
+      items: [
+        {
+          kind: "run",
+          tool: "sandbox_exec",
+          callId: "r2",
+          ok: false,
+          text: "Failed",
+          run: {
+            language: "python",
+            output: [{ text: "policy violation: network access to registry.example.com is not allowed", stderr: true }],
+            lines: 1,
+            stopped: "policyViolation",
+          },
+        },
+      ],
+    },
+  ];
+}
+
 function financeThread(): FeedEntry[] {
   return [
     {
@@ -338,8 +410,20 @@ export class FixtureClient implements HomeClient {
       waiting("apr_invoice")
         ? { agent: agents.finance, status: "waitingForYou", statusText: "Waiting for you", sessionId: "s-finance" }
         : { agent: agents.finance, status: "working", statusText: "Working", sessionId: "s-finance" },
-      { agent: agents.code, status: "waitingForYou", statusText: "Waiting for you", sessionId: "s-code" },
-      { agent: agents.research, status: "done", statusText: "Done", sessionId: "s-research" },
+      {
+        agent: agents.code,
+        status: "waitingForYou",
+        statusText: "Waiting for you",
+        sessionId: "s-code",
+        shell: { place: { kind: "sandbox", enforcer: "seatbelt" }, text: "Commands run in the sandbox (Seatbelt)" },
+      },
+      {
+        agent: agents.research,
+        status: "done",
+        statusText: "Done",
+        sessionId: "s-research",
+        shell: { place: { kind: "remote", provider: "e2b", offHost: true }, text: "Commands run in a remote sandbox (e2b)" },
+      },
       { agent: agents.household, status: "asleep", statusText: "Asleep until 07:00", sessionId: "s-household", wakeAt: at(7, 0, 1) },
     ];
     return rows.map((row) => (row.agent.name in this.sessionOf ? { ...row, sessionId: this.sessionOf[row.agent.name] } : row));
@@ -355,6 +439,31 @@ export class FixtureClient implements HomeClient {
 
   async agents() {
     return this.rows();
+  }
+
+  /** How the person answered this week, on the web home and the phone. */
+  async answers() {
+    return {
+      since: at(9, 0, -7),
+      total: 12,
+      allowedOnce: 9,
+      alwaysAllowed: 2,
+      edited: 0,
+      denied: 1,
+      surfaces: [
+        { surface: "web" as const, count: 8 },
+        { surface: "phone" as const, count: 4 },
+      ],
+      text: "12 answers: 9 allowed once, 2 always allowed, 1 denied",
+    };
+  }
+
+  /** Each agent's thread, and for Finance an earlier one from October. */
+  async agentThreads(agent: string) {
+    const row = this.rows().find((candidate) => candidate.agent.name === agent);
+    const threads = row?.sessionId ? [{ sessionId: row.sessionId, at: at(18, 0, -1), when: "Yesterday 18:00" }] : [];
+    if (agent === "finance") threads.push({ sessionId: "s-finance-october", at: "2026-10-31T16:40:00Z", when: "31 Oct 16:40" });
+    return { agent, threads };
   }
 
   async decisions() {
@@ -417,7 +526,7 @@ export class FixtureClient implements HomeClient {
   }
 
   async *feed(session: string, after: number | undefined, signal: AbortSignal): AsyncIterable<FeedMessage> {
-    const entries = session === "s-finance" ? financeThread() : [];
+    const entries = session === "s-finance" ? financeThread() : session === "s-code" ? codeThread() : [];
     for (const entry of entries) if (entry.seq > (after ?? 0)) yield { type: "entry", entry };
     let shown = "";
     while (!signal.aborted) {

@@ -16,9 +16,9 @@
 
 .agents-title {
   margin: 0;
-  font-size: 30px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-size: var(--fs-3xl);
+  font-weight: 650;
+  letter-spacing: var(--tracking-display);
 }
 
 .agent-tabs {
@@ -35,7 +35,7 @@
   background: var(--tab-active);
   box-shadow: var(--tab-shadow);
   color: var(--text);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .agent-describe {
@@ -80,21 +80,21 @@
 
 .agent-label {
   color: var(--text-2);
-  font-size: 14px;
+  font-size: var(--fs-md);
   font-weight: 600;
 }
 
 .agent-subhead {
   margin: 6px 0 0;
   color: var(--text);
-  font-size: 16px;
-  font-weight: 700;
+  font-size: var(--fs-lg);
+  font-weight: 600;
 }
 
 .agent-hint {
   margin: 0;
   color: var(--label);
-  font-size: 13.5px;
+  font-size: var(--fs-sm);
 }
 
 .agent-input {
@@ -182,8 +182,8 @@
 
 .agent-can-do-heading {
   margin: 0;
-  font-size: 17px;
-  font-weight: 800;
+  font-size: var(--fs-lg);
+  font-weight: 650;
 }
 
 .agent-abilities {
@@ -210,8 +210,8 @@
 
 .agent-granted-heading {
   margin: 0;
-  font-size: 14px;
-  font-weight: 700;
+  font-size: var(--fs-md);
+  font-weight: 600;
 }
 
 .agent-granted ul {
@@ -220,7 +220,7 @@
   margin: 0;
   padding-left: 18px;
   list-style: disc;
-  font-size: 14px;
+  font-size: var(--fs-md);
   color: var(--text);
 }
 
@@ -264,7 +264,7 @@
 
 .agent-was-now dt {
   color: var(--text-2);
-  font-size: 13.5px;
+  font-size: var(--fs-sm);
 }
 
 .agent-was-now dd {
@@ -372,7 +372,7 @@ li:has(> .roster-settings) {
   top: 50%;
   right: 10px;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   text-decoration: none;
   transform: translateY(-50%);
   visibility: hidden;
@@ -422,7 +422,7 @@ li:has(> .roster-settings) .roster-text > span {
 .roster-removed-toggle {
   justify-self: start;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .roster-removed-list,
@@ -446,7 +446,7 @@ li:has(> .roster-settings) .roster-text > span {
 
 .roster-removed-threads .link {
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .roster-removed-threads [aria-current="true"] {
@@ -458,7 +458,7 @@ li:has(> .roster-settings) .roster-text > span {
 .roster-area {
   margin: 10px 0 2px;
   color: var(--label);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 /* A removed agent's thread is read only: a line where the message box was. */

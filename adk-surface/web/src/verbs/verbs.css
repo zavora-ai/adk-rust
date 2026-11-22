@@ -45,7 +45,7 @@
   background: var(--card);
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   cursor: pointer;
   opacity: 0;
@@ -75,7 +75,7 @@
   min-width: 220px;
   padding: 6px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: var(--card);
   box-shadow: var(--shadow);
 }
@@ -92,7 +92,7 @@
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 14px;
+  font-size: var(--fs-md);
   text-align: left;
   cursor: pointer;
 }
@@ -107,13 +107,13 @@
 
 .snoozing {
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .coming-up-note {
   margin-top: 2px;
   color: var(--label);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 /* "On your screens" in Memory & rules. */
@@ -124,7 +124,7 @@
 
 .screens-sub {
   color: var(--label);
-  font-size: 13.5px;
+  font-size: var(--fs-sm);
 }
 
 /* A spoken action, on the decision background. */
@@ -155,26 +155,26 @@
 
 .voice-action-heard {
   color: var(--text-2);
-  font-size: 14.5px;
+  font-size: var(--fs-md);
 }
 
 .voice-action-heading {
-  font-size: 21px;
-  font-weight: 700;
+  font-size: var(--fs-xl);
+  font-weight: 600;
 }
 
 .voice-action-sub {
   color: var(--label);
-  font-size: 13.5px;
+  font-size: var(--fs-sm);
 }
 
 .voice-action-pill {
   padding: 2px 10px;
   border: 1px solid var(--pill-neutral-border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--pill-neutral-bg);
   color: var(--pill-neutral);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 600;
 }
 

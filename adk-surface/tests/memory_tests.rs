@@ -263,7 +263,14 @@ async fn every_process_carries_its_spend_today_and_its_area() {
     let s = scenario(model).await;
     let router = api(&s.kernel, &s.engine);
     s.engine
-        .execute(&web(), adk_surface::Command::Send { session_id: "s1".into(), text: "Hi".into() })
+        .execute(
+            &web(),
+            adk_surface::Command::Send {
+                session_id: "s1".into(),
+                text: "Hi".into(),
+                images: Vec::new(),
+            },
+        )
         .await
         .unwrap();
     let processes = eventually("the turn's process", std::time::Duration::from_secs(20), || {

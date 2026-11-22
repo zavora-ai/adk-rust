@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from "react";
-import type { AgentRow, Briefing, BriefingLine, Pill as PillKindApi, StatusLine } from "../generated/api";
+import type { AgentRow, AnswerSummary, Briefing, BriefingLine, Pill as PillKindApi, StatusLine } from "../generated/api";
 import type { HomeClient } from "../client";
 import { problemText } from "../client";
 import { agentOf as agentName, endToday, inOrder, itemSentence, lineWords, quietWindows } from "../away";
@@ -319,6 +319,7 @@ export function Today({
         {away?.more && <p className="muted briefing-more">{labels.moreToRead}</p>}
       </div>
       <aside className="today-side">
+        <AnsweredCard client={client} />
         <section className="card routines" aria-labelledby="routines-heading">
           <h2 id="routines-heading" className="card-heading">
             {labels.routinesToday}
@@ -512,5 +513,51 @@ function AddRoutine({
         </button>
       </div>
     </form>
+  );
+}
+
+/**
+ * How you answered this week (spec 3.3 §5.1): every answer you gave through a surface, counted,
+ * and where you gave them. Left out where the server keeps no such count.
+ */
+function AnsweredCard({ client }: { client: HomeClient }) {
+  const [summary, setSummary] = useState<AnswerSummary>();
+  useEffect(() => {
+    let live = true;
+    client
+      .answers?.()
+      .then((found) => live && setSummary(found))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [client]);
+  if (!summary) return null;
+  return (
+    <section className="card answered" aria-labelledby="answered-heading">
+      <h2 id="answered-heading" className="card-heading">
+        {labels.howYouAnswered}
+      </h2>
+      <p className="answered-text">{summary.text}</p>
+      {summary.total > 0 && (
+        <div className="answered-bar" aria-hidden="true">
+          {(
+            [
+              ["allowed", summary.allowedOnce + summary.alwaysAllowed + summary.edited],
+              ["denied", summary.denied],
+            ] as const
+          ).map(([kind, count]) =>
+            count > 0 ? <span key={kind} className={`answered-${kind}`} style={{ flexGrow: count }} /> : null,
+          )}
+        </div>
+      )}
+      {summary.surfaces.length > 0 && (
+        <ul className="answered-surfaces">
+          {summary.surfaces.map((entry) => (
+            <li key={entry.surface}>{labels.onSurface(labels.surfaceNames[entry.surface] ?? entry.surface, entry.count)}</li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

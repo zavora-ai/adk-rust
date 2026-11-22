@@ -65,7 +65,7 @@ pub mod workflow;
 use std::time::Duration;
 
 use adk_core::{AdkError, RequestContext};
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -94,6 +94,11 @@ use crate::engine::{Command, CommandOutcome, FeedFrame, SurfaceEngine};
 use crate::error::SurfaceError;
 use crate::model::{AgentRef, AgentRow, Briefing, DecisionCard, FeedEntry, StatusLine};
 use crate::origin::{Caller, Origin, SurfaceKind};
+
+/// The largest command body: a message's images, each at its largest in base64, and room for
+/// the rest of the command.
+const COMMAND_BODY_MAX: usize =
+    crate::images::MAX_IMAGES * (crate::images::MAX_IMAGE_BYTES / 3 * 4 + 4) + 256 * 1024;
 
 /// The route paths, relative to the `/api` prefix (spec 3.3 §6).
 pub mod paths {
@@ -151,6 +156,10 @@ pub mod paths {
     pub const AGENTS: &str = "/surface/agents";
     /// `GET`: one agent a person added (spec 3.3 §5.7).
     pub const AGENT: &str = "/surface/agents/{id}";
+    /// `GET`: how the caller answered since a time (spec 3.3 §5.1 "How you answered").
+    pub const ANSWERS: &str = "/surface/answers";
+    /// `GET`: an agent's threads, newest first (spec 3.3 §5.1 "Thread history").
+    pub const AGENT_THREADS: &str = "/surface/agents/{id}/threads";
     /// `GET`: what a person may choose for an agent (spec 3.3 §5.7).
     pub const AGENT_CHOICES: &str = "/surface/agents/choices";
     /// `POST`: **Here is what Finance can do** — the preview of a change (spec 3.3 §5.7).
@@ -249,9 +258,12 @@ pub fn router(engine: SurfaceEngine) -> Router {
         .route(paths::AGENT_CHOICES, get(agent_choices))
         .route(paths::AGENT_PREVIEW, post(agent_preview))
         .route(paths::AGENT, get(agent))
+        .route(paths::AGENT_THREADS, get(agent_threads))
+        .route(paths::ANSWERS, get(answers))
         .route(paths::STATUS, get(status))
         .route(paths::BRIEFING, get(briefing))
-        .route(paths::COMMANDS, post(command))
+        // A message may carry images (spec 3.3 §5.1): room for each at its largest, base64.
+        .route(paths::COMMANDS, post(command).layer(DefaultBodyLimit::max(COMMAND_BODY_MAX)))
         .route(paths::OPENAPI, get(openapi_document))
         .with_state(engine)
 }
@@ -348,7 +360,7 @@ pub struct SurfaceQuery {
     /// that session's decisions.
     #[serde(default)]
     pub session: Option<String>,
-    /// `GET /surface/briefing`: since when.
+    /// `GET /surface/briefing` and `GET /surface/answers`: since when.
     #[serde(default)]
     pub since: Option<DateTime<Utc>>,
     /// `GET .../feed`: resume after this `seq` when no `Last-Event-ID` is sent.
@@ -946,6 +958,19 @@ async fn agent(
     }
 }
 
+async fn agent_threads(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path(id): Path<String>,
+    Query(query): Query<SurfaceQuery>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine.agent_threads(&caller, &id).await {
+        Ok(threads) => Json::<crate::agents::AgentThreads>(threads).into_response(),
+        Err(error) => failed(error),
+    }
+}
+
 async fn agent_choices(
     State(engine): State<SurfaceEngine>,
     context: Context,
@@ -979,6 +1004,19 @@ async fn status(
     let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
     match engine.status(&caller, query.session.as_deref()).await {
         Ok(line) => Json::<StatusLine>(line).into_response(),
+        Err(error) => failed(error),
+    }
+}
+
+async fn answers(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Query(query): Query<SurfaceQuery>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    let since = query.since.unwrap_or_else(|| Utc::now() - chrono::Duration::days(7));
+    match engine.answers_since(&caller, since).await {
+        Ok(summary) => Json::<crate::answers::AnswerSummary>(summary).into_response(),
         Err(error) => failed(error),
     }
 }

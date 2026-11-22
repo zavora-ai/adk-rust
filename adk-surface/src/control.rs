@@ -506,6 +506,8 @@ impl Source for ControlSource {
             latest.insert(
                 run.target.clone(),
                 AgentState {
+                    // The control plane does not say where an agent's commands run.
+                    shell: None,
                     name: run.target.clone(),
                     session_id: run.session_id.clone(),
                     state: run.state,
@@ -619,6 +621,30 @@ impl Source for ControlSource {
 
     async fn start_turn(&self, _caller: &Caller, session: &str, text: &str) -> Result<()> {
         let request = SpawnRequest::new(self.target.clone(), json!({ "text": text }))
+            .with_session_id(session);
+        self.client.spawn(&request).await?;
+        Ok(())
+    }
+
+    /// A message with images goes as the run's `content` (spec 3.3 §5.1).
+    async fn start_turn_images(
+        &self,
+        caller: &Caller,
+        session: &str,
+        text: &str,
+        images: &[crate::images::MessageImage],
+    ) -> Result<()> {
+        if images.is_empty() {
+            return self.start_turn(caller, session, text).await;
+        }
+        let mut content = adk_core::Content::new("user");
+        if !text.trim().is_empty() {
+            content = content.with_text(text);
+        }
+        for image in images {
+            content = content.with_inline_data(image.mime_type.clone(), image.data.clone());
+        }
+        let request = SpawnRequest::new(self.target.clone(), json!({ "content": content }))
             .with_session_id(session);
         self.client.spawn(&request).await?;
         Ok(())

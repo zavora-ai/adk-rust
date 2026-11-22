@@ -283,6 +283,16 @@ pub fn always_allow_covering(
 }
 /// Changes the arguments, then allows.
 pub const EDIT: &str = "Edit";
+/// Sends the person's answer to what an MCP server asks (an elicitation form).
+pub const ANSWER: &str = "Answer";
+/// Over an elicitation address whose host has look-alike characters.
+pub const LOOK_ALIKE_ADDRESS: &str =
+    "This address uses look-alike characters. Check the host letter by letter before you open it.";
+/// Over an elicitation address that hides a name before an `@`.
+pub const HIDDEN_HOST_ADDRESS: &str =
+    "This address puts a name before an @, so the real host is the part after it.";
+/// Over an elicitation address that is not encrypted.
+pub const UNENCRYPTED_ADDRESS: &str = "This address is not encrypted (http).";
 /// Refuses.
 pub const DENY: &str = "Deny";
 /// Approves a high-risk call.
@@ -924,8 +934,40 @@ pub fn agent_change(kind: &str, name: &str, place: &str) -> String {
 
 /// A drawn form edited and not yet sent.
 pub const NOT_SENT_YET: &str = "Not sent yet";
+/// The folded earlier versions of a drawing, before their count: "Earlier versions · 3".
+pub const EARLIER_VERSIONS: &str = "Earlier versions";
 /// A drawn form's button while its send is on the way.
 pub const SENDING: &str = "Sending…";
+/// The message box's button that picks images to send (spec 3.3 §5.1).
+pub const ATTACH_IMAGES: &str = "Attach images";
+/// The images waiting in the message box.
+pub const IMAGES_TO_SEND: &str = "Images to send";
+/// The button on an image in the message box that takes it out.
+pub const REMOVE_IMAGE: &str = "Remove image";
+/// An image of a message, opened large.
+pub const OPEN_IMAGE: &str = "Open image";
+/// A run's badge when it ran in the sandbox (spec 3.3 §5.1).
+pub const SANDBOX: &str = "Sandbox";
+/// A run's badge when it ran on this computer, with no sandbox.
+pub const ON_THIS_COMPUTER: &str = "On this computer";
+/// Under a run whose output the tool cut: the whole of it is kept for the agent.
+pub const THE_AGENT_CAN_READ_ALL_OF_IT: &str = "The agent can read all of it.";
+/// A run that ran out of time.
+pub const TIMED_OUT: &str = "Timed out";
+/// A run that ran out of memory.
+pub const OUT_OF_MEMORY: &str = "Out of memory";
+/// A run the sandbox stopped.
+pub const REFUSED_BY_THE_SANDBOX: &str = "Refused by the sandbox";
+/// A run that could not start.
+pub const COULD_NOT_RUN: &str = "Could not run";
+/// The message box's control that stops the session's running turn (spec 3.3 §5.1).
+pub const STOP_THE_TURN: &str = "Stop the turn";
+/// After a turn was stopped: the agent waits for the next message.
+pub const TURN_STOPPED: &str = "Stopped. Your agent waits for your next message.";
+/// The replies an agent suggests, under its message (spec 3.3 §5.1).
+pub const SUGGESTED_REPLIES: &str = "Suggested replies";
+/// Today's section that counts the person's answers (spec 3.3 §5.1).
+pub const HOW_YOU_ANSWERED: &str = "How you answered this week";
 /// A drawn form sent and denied.
 pub const SENT_YOU_SAID_NO: &str = "Sent · you said no";
 /// A drawn form sent, allowed, and its call failed.
@@ -950,6 +992,8 @@ pub const FORM_BEING_SENT: &str = "Couldn't send: this form is being sent alread
 
 /// A 3D scene's toggle: its words instead of the scene.
 pub const SHOW_AS_TEXT: &str = "Show as text";
+/// Opens a chart's numbers as a table, for a screen reader or a closer look.
+pub const SHOW_THE_DATA: &str = "Show the data";
 /// A 3D scene's toggle back from its words.
 pub const SHOW_IN_3D: &str = "Show in 3D";
 /// Stops a scene's motion until it is played again.
@@ -1159,6 +1203,8 @@ pub const SEND_IT: &str = "Send it";
 pub const MARKED_AS_SUGGESTED_BY_THE_APP: &str = "It will be marked as suggested by the app";
 /// Opens a link an app asked to open.
 pub const OPEN: &str = "Open";
+/// Saves a file an app offered.
+pub const SAVE: &str = "Save";
 /// What an app's tool call answers the app once it is held: it ran nothing.
 pub const APP_CALL_WAITS_FOR_YOU: &str = "Sent to the person. It runs only once they decide.";
 /// What an app's tool call answers the app when the agent has not yet held or refused it.
@@ -1192,6 +1238,18 @@ pub fn open_site(host: &str) -> String {
     format!("Open {host}?")
 }
 
+/// An app offers a file: "The Weather app wants to save forecast.csv (2 KB)".
+pub fn app_wants_to_save(app: &str, name: &str, bytes: usize) -> String {
+    let size = if bytes < 1024 {
+        format!("{bytes} bytes")
+    } else if bytes < 1024 * 1024 {
+        format!("{} KB", bytes.div_ceil(1024))
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    };
+    format!("The {app} app wants to save {name} ({size})")
+}
+
 /// An app that already has `count` calls waiting asks for another: "The app already asked for 3
 /// things. Answer those first."
 pub fn app_asked_enough(count: usize) -> String {
@@ -1217,6 +1275,73 @@ pub fn from_the_app(app: &str) -> String {
 /// app".
 pub fn suggested_by_the_app(app: &str) -> String {
     format!("Suggested by the {app} app")
+}
+
+/// Where an agent's commands run (spec 3.3 §5.7): "Commands run in the sandbox (Seatbelt)".
+pub fn commands_run(place: &crate::model::ShellPlace) -> String {
+    use crate::model::ShellPlace;
+    match place {
+        ShellPlace::Host => "Commands run on this computer".to_string(),
+        ShellPlace::Sandbox { enforcer: Some(enforcer) } => {
+            format!("Commands run in the sandbox ({})", enforcer_name(enforcer))
+        }
+        ShellPlace::Sandbox { enforcer: None } => "Commands run in the sandbox".to_string(),
+        ShellPlace::Container { image } => format!("Commands run in a container ({image})"),
+        ShellPlace::Remote { provider, off_host: true } => {
+            format!("Commands run in a remote sandbox ({provider})")
+        }
+        ShellPlace::Remote { provider, off_host: false } => {
+            format!("Commands run in a sandbox ({provider})")
+        }
+        ShellPlace::Degraded { reason, .. } => {
+            format!("The sandbox is unavailable, so commands run on this computer: {reason}")
+        }
+    }
+}
+
+/// An OS sandbox enforcer's name as people know it.
+fn enforcer_name(enforcer: &str) -> &str {
+    match enforcer {
+        "seatbelt" => "Seatbelt",
+        "bubblewrap" => "bubblewrap",
+        "landlock" => "Landlock",
+        other => other,
+    }
+}
+
+/// How many images a message carries: "1 image", "3 images".
+pub fn images_attached(count: usize) -> String {
+    if count == 1 { "1 image".to_string() } else { format!("{count} images") }
+}
+
+/// Under a run's output: "Showing the last 40 lines of 214."
+pub fn last_lines(shown: usize, total: usize) -> String {
+    format!("Showing the last {shown} lines of {total}.")
+}
+
+/// How a person answered: "12 answers: 9 allowed once, 2 always allowed, 1 denied".
+pub fn answers_line(
+    total: u32,
+    allowed_once: u32,
+    always_allowed: u32,
+    edited: u32,
+    denied: u32,
+) -> String {
+    if total == 0 {
+        return "No answers this week.".to_string();
+    }
+    let parts: Vec<String> = [
+        (allowed_once, "allowed once"),
+        (always_allowed, "always allowed"),
+        (edited, "edited"),
+        (denied, "denied"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, what)| format!("{count} {what}"))
+    .collect();
+    let noun = if total == 1 { "answer" } else { "answers" };
+    format!("{total} {noun}: {}", parts.join(", "))
 }
 
 // ---------------------------------------------------------------------------
@@ -1653,6 +1778,10 @@ mod tests {
         ALWAYS_ALLOW_FOR_THIS_COMMAND,
         ALWAYS_ALLOW_FOR_THIS_SITE,
         EDIT,
+        ANSWER,
+        LOOK_ALIKE_ADDRESS,
+        HIDDEN_HOST_ADDRESS,
+        UNENCRYPTED_ADDRESS,
         DENY,
         CONFIRM_ITS_YOU_AND_APPROVE,
         TAKE_OVER,

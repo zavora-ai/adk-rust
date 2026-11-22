@@ -416,6 +416,47 @@ impl Harness {
         self.turn(user, session, Content::new("user").with_text(text.into()), Some(context)).await
     }
 
+    /// [`send_as`](Self::send_as) with a whole message: text and images the person sent
+    /// with it (spec 3.3 §5.1), such as a screenshot. `content` is a `user` turn; any other
+    /// role is refused.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_core::{Content, RequestContext, SessionId, UserId};
+    /// use adk_harness::Harness;
+    ///
+    /// # async fn example(harness: Harness, user: UserId, session: SessionId, png: Vec<u8>) -> adk_core::Result<()> {
+    /// let context = RequestContext { user_id: user.to_string(), scopes: Vec::new(), metadata: Default::default() };
+    /// let message = Content::new("user").with_text("Why does CI fail like this?").with_inline_data("image/png", png);
+    /// let events = harness.send_content_as(&user, &session, message, context).await?;
+    /// # let _ = events;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// As [`send_as`](Self::send_as), and an invalid-input error for a turn whose role is not
+    /// `user`.
+    pub async fn send_content_as(
+        &self,
+        user: &UserId,
+        session: &SessionId,
+        content: Content,
+        context: RequestContext,
+    ) -> Result<EventStream> {
+        if content.role != "user" {
+            return Err(AdkError::new(
+                ErrorComponent::Agent,
+                ErrorCategory::InvalidInput,
+                "harness.send.role",
+                "a person's message is a user turn",
+            ));
+        }
+        self.turn(user, session, content, Some(context)).await
+    }
+
     /// Sends `call`, a call the person `context` authenticates asked for through something
     /// the agent drew, such as a form's Send, with `text` as their message (spec 3.3 §7.4
     /// rule 5, wave 4 decision 13). It serves hosts without a kernel; a kernel host sends the

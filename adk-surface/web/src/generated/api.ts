@@ -212,6 +212,8 @@ export interface AgentRow {
   mode?: ModeView | null;
   /** The session of its latest work, to open its thread. */
   sessionId?: string | null;
+  /** Where its commands run, when it has a shell and its source says (spec 3.3 §5.7). */
+  shell?: ShellView | null;
   /** What it is doing. */
   status: AgentStatus;
   /** The status word: "Working", "Waiting for you", "Asleep until 07:00", "Done", "Failed". */
@@ -222,6 +224,14 @@ export interface AgentRow {
 
 /** What an agent is doing (spec 3.3 §8.1). */
 export type AgentStatus = "working" | "waitingForYou" | "asleep" | "done" | "failed" | "ready" | "paused" | "cantStart";
+
+/** An agent's threads, newest first: `GET /surface/agents/{id}/threads`. */
+export interface AgentThreads {
+  /** The agent, by its roster name. */
+  agent: string;
+  /** Its threads, newest first. */
+  threads: ThreadSummary[];
+}
 
 /** `GET /surface/agents` answer. */
 export interface AgentsResponse {
@@ -303,6 +313,29 @@ export interface AnswerRequest {
   reason?: string | null;
   /** The card's `version`. */
   version: number;
+}
+
+/**
+ * How a person answered since a time (spec 3.3 §5.1 "How you answered"): how many of each
+ * answer, and on which surfaces. `GET /surface/answers`.
+ */
+export interface AnswerSummary {
+  /** "Allow once". */
+  allowedOnce: number;
+  /** "Always allow". */
+  alwaysAllowed: number;
+  /** "Deny". */
+  denied: number;
+  /** Edited, then allowed. */
+  edited: number;
+  /** Counted from. */
+  since: string;
+  /** How many were given on each surface, most first. */
+  surfaces: SurfaceCount[];
+  /** "12 answers: 9 allowed once, 2 always allowed, 1 denied". */
+  text: string;
+  /** Every answer. */
+  total: number;
 }
 
 /** One answer, in full. */
@@ -436,6 +469,22 @@ export type AppPrompt = {
   text: string;
   /** The link, an `https` or `http` URL. */
   url: string;
+} | {
+  /** Its contents in base64, when the app sent bytes. */
+  blob?: string | null;
+  /** "Cancel". */
+  dismissLabel: string;
+  kind: "download";
+  /** Its media type; never one a browser opens as a page. */
+  mimeType: string;
+  /** The file's name, sanitized. */
+  name: string;
+  /** "Save". */
+  saveLabel: string;
+  /** "The Weather app wants to save forecast.csv (2 KB)" */
+  text: string;
+  /** Its contents as text, when the app sent text. */
+  textContent?: string | null;
 };
 
 /**
@@ -848,6 +897,18 @@ export interface CardRaised {
 /** Where a decision is in its life. */
 export type CardStatus = "waiting" | "decided";
 
+/**
+ * `GET /surface/genui/catalogs` answer (spec 3.3 §6.1 `genui`): the catalogs this home
+ * renders, `forms` first, as documents of one A2UI version. In 1.0 an extension catalog's
+ * document holds only the components it adds, which a surface mixes with `forms`.
+ */
+export interface CatalogDocuments {
+  /** Each catalog's document, by the A2UI catalog meta-schema of that version. */
+  catalogs: unknown[];
+  /** The A2UI version of the documents: `1.0` or `v0.9.1`. */
+  version: string;
+}
+
 /** A catalog this home renders. */
 export interface CatalogView {
   /** The components it renders. */
@@ -980,6 +1041,12 @@ export type Command = {
   decisionId: string;
   type: "cancelAnswer";
 } | {
+  /**
+   * The images the person sent with it (spec 3.3 §5.1): at most
+   * `MAX_IMAGES`. A message with images is never offered to a
+   * running turn; it goes as the session's next.
+   */
+  images?: ImageData[];
   /** The session. */
   sessionId: string;
   /** The message. */
@@ -992,6 +1059,16 @@ export type Command = {
   text: string;
   type: "steer";
 } | {
+  /** The session. */
+  sessionId: string;
+  type: "stopTurn";
+} | {
+  /**
+   * The images the person sent with it (spec 3.3 §5.1): at most
+   * `MAX_IMAGES`. A message with images is never offered to a
+   * running turn; it goes as the session's next.
+   */
+  images?: ImageData[];
   /** The session. */
   sessionId: string;
   /** The message. */
@@ -1012,6 +1089,12 @@ export type Command = {
 } | {
   /** The agent: a roster row's name. */
   agent: string;
+  /**
+   * The images the person sent with it (spec 3.3 §5.1): at most
+   * `MAX_IMAGES`. A message with images is never offered to a
+   * running turn; it goes as the session's next.
+   */
+  images?: ImageData[];
   /** The new session. */
   sessionId: string;
   /** The first message. */
@@ -1113,6 +1196,14 @@ export type CommandOutcome = {
   sessionId: string;
   type: "sent";
 } | {
+  /** The session. */
+  sessionId: string;
+  /** A turn was running and stopped. */
+  stopped: boolean;
+  /** "Stopped. Your agent waits for your next message." */
+  text: string;
+  type: "turnStopped";
+} | {
   /** The id of the session event that carries the message. */
   eventId: string;
   /** The session. */
@@ -1188,6 +1279,32 @@ export interface CommandRequest {
   origin: Origin;
   /** The surface; defaults to the web home. */
   surface?: SurfaceKind;
+}
+
+/**
+ * A command or code an agent ran (spec 3.3 §5.1), from its tool's result: the last lines it
+ * wrote, how it exited and for how long. Every string is data.
+ */
+export interface CommandRun {
+  /**
+   * The command line, when the tool's result repeats it; otherwise the call's own
+   * activity line says what ran.
+   */
+  command?: string | null;
+  /** How long it ran, when the tool says. */
+  durationMs?: number | null;
+  /** How it exited, when it did. */
+  exitCode?: number | null;
+  /** The language of code the sandbox ran: `python`, `javascript`, `command`, …. */
+  language?: string | null;
+  /** How many lines the result holds in all. */
+  lines: number;
+  /** The last lines it wrote, at most `RUN_LINES`. */
+  output: OutputLine[];
+  /** Why it stopped short, when it did. */
+  stopped?: RunStop | null;
+  /** The tool cut what it wrote; the agent can read the whole of it. */
+  truncated?: boolean;
 }
 
 /** A region's standing in a comparison. */
@@ -1358,6 +1475,11 @@ export interface DecisionCard {
    * (S-I5).
    */
   detail?: CardDetail | null;
+  /**
+   * What an MCP server asks the person, drawn in the home's own controls in place of the
+   * call's arguments (MCP elicitation; spec 3.3 §7.2). Never on a chat card (S-I5).
+   */
+  elicitation?: ElicitationView | null;
   /** What will happen, in plain words. */
   heading: string;
   /** The inbox entry: what a command answers. Never shown. */
@@ -1449,6 +1571,22 @@ export interface Difference {
   number: number;
   /** "handwriting · read differently", "text · only B found it". */
   title: string;
+}
+
+/**
+ * What assistive technology reads for a drawn node (A2UI 1.0 `AccessibilityAttributes`): its
+ * label and description resolved and checked like any shown text, how its changes are
+ * announced, and whether it is hidden from screen readers (never a field or a button).
+ */
+export interface DrawnAccessibility {
+  /** More it reads after the name: instructions, a format, a result. */
+  description?: string | null;
+  /** Hidden from screen readers. */
+  hidden?: boolean;
+  /** A short name, read instead of its visible text. */
+  label?: string | null;
+  /** How its changes are announced: `polite` or `assertive`; absent is `off`. */
+  live?: string | null;
 }
 
 /** A declared action of a drawing, as its button shows it. */
@@ -1588,6 +1726,11 @@ export type DrawnKind = "form" | "card" | "table" | "screen";
  * | An extension component, such as `Metric` | — | — | `extension`, and one child: what the home shows for it |
  */
 export interface DrawnNode {
+  /**
+   * What assistive technology reads for it (A2UI 1.0 `@accessibility`), resolved and
+   * checked by rule 5.
+   */
+  accessibility?: DrawnAccessibility | null;
   /** The declared action a button asks for. */
   action?: string | null;
   /** A chart the home draws natively, from an extension component's home view. */
@@ -1743,6 +1886,74 @@ export interface DrawnSurface {
   title?: string | null;
   /** This version. Only the latest version of a surface is live. */
   version: number;
+}
+
+/**
+ * What an MCP server asks the person while the agent's call waits (MCP elicitation), drawn
+ * by the home in its own controls, never by the server: a form whose answer is sent as the
+ * decision's edit and checked against the server's schema, or a page the person opens
+ * themselves, shown in full and never opened by the home (spec 3.3 §7.2).
+ */
+export type ElicitationView = {
+  /** The fields, in the schema's order. */
+  fields: ElicitedField[];
+  /** What it asks, in its words. */
+  message: string;
+  mode: "form";
+  /** The server that asks. */
+  server: string;
+} | {
+  /** Its host, shown on its own so a look-alike stands out. */
+  host: string;
+  /** Why, in its words. */
+  message: string;
+  mode: "url";
+  /** The server that asks. */
+  server: string;
+  /** The whole address, as sent. */
+  url: string;
+  /**
+   * Why to look twice, when there is a reason: look-alike characters, a name hidden
+   * before an `@`, no encryption.
+   */
+  warning?: string | null;
+};
+
+/** One field of an elicitation form. */
+export interface ElicitedField {
+  /** The value it starts with. */
+  default?: unknown;
+  /** The schema's description. */
+  description?: string | null;
+  /** What it takes. */
+  kind: ElicitedKind;
+  /** What the field is called: the schema's `title`, else its key. */
+  label: string;
+  /** A text's length bounds, in characters. */
+  maxLength?: number | null;
+  /** A number's bounds. */
+  maximum?: number | null;
+  /** A text's length bounds, in characters. */
+  minLength?: number | null;
+  /** A number's bounds. */
+  minimum?: number | null;
+  /** Its key in the answer. */
+  name: string;
+  /** A choice's options. */
+  options?: ElicitedOption[];
+  /** The answer is refused without it. */
+  required: boolean;
+}
+
+/** What an elicitation field takes. */
+export type ElicitedKind = "text" | "email" | "url" | "date" | "dateTime" | "number" | "integer" | "boolean" | "choice";
+
+/** One option of a choice. */
+export interface ElicitedOption {
+  /** What the person reads. */
+  label: string;
+  /** What the answer carries. */
+  value: string;
 }
 
 /** An answer with nothing in it (board choice V12): an answer, not an error. */
@@ -2036,6 +2247,19 @@ export interface ImageChanged {
   width: number;
 }
 
+/**
+ * An image of a person's message (spec 3.3 §5.1): PNG, JPEG, WebP or GIF, base64. A
+ * command carries at most `MAX_IMAGES`, each at most
+ * `MAX_IMAGE_BYTES` once decoded; the engine checks each image's
+ * bytes, not only its declared type.
+ */
+export interface ImageData {
+  /** The image, base64 (standard alphabet, padded). */
+  data: string;
+  /** `image/png`, `image/jpeg`, `image/webp` or `image/gif`. */
+  mimeType: string;
+}
+
 /** One of the three switches of "What it can see" (spec 3.3 §5.6). */
 export type InputSource = "mic" | "camera" | "screen";
 
@@ -2227,6 +2451,14 @@ export type Origin = {
   agent: string;
   kind: "agent";
 };
+
+/** A line a run wrote. */
+export interface OutputLine {
+  /** It went to standard error. Absent when false. */
+  stderr?: boolean;
+  /** The line, as data. */
+  text: string;
+}
 
 /** A decision whose run stopped waiting for it (spec 3.7 §8.2, board choice A12). */
 export interface ParkedView {
@@ -2518,6 +2750,9 @@ export type Reversibility = "cantBeUnsent" | "cantBeUndone" | "canBeRemoved" | "
 /** How much harm a call can do, as approvers see it (spec 3.3 §7.1). */
 export type Risk = "low" | "medium" | "high";
 
+/** Why a run stopped short. */
+export type RunStop = "timeout" | "memoryExceeded" | "policyViolation" | "error";
+
 /** The run and the call that produced an answer. */
 export interface RunView {
   /** The agent, by its name in the runtime. */
@@ -2797,8 +3032,41 @@ export type SentVia = "form" | "app";
 /** The kind of a region's shape. */
 export type ShapeKind = "point" | "box" | "polygon" | "mask" | "keypoints";
 
+/** Where an agent's commands run (spec 3.3 §5.7), as its harness reports it. */
+export type ShellPlace = {
+  kind: "host";
+} | {
+  /** The enforcer: `seatbelt`, `bubblewrap`; absent when the source does not say. */
+  enforcer?: string | null;
+  kind: "sandbox";
+} | {
+  /** The image. */
+  image: string;
+  kind: "container";
+} | {
+  kind: "remote";
+  /** It runs off this computer, so commands cannot reach its files. */
+  offHost: boolean;
+  /** The provider: `e2b`, `daytona`, `modal`, …. */
+  provider: string;
+} | {
+  kind: "degraded";
+  /** Why it is unavailable. */
+  reason: string;
+  /** The sandbox asked for. */
+  requested: string;
+};
+
 /** Where an agent's commands run: nowhere, in the sandbox, or on this computer. */
 export type ShellUse = "none" | "sandboxed" | "host";
+
+/** Where an agent's commands run, and the words that say so. */
+export interface ShellView {
+  /** Where. */
+  place: ShellPlace;
+  /** "Commands run in the sandbox (Seatbelt)". */
+  text: string;
+}
 
 /** One camera in "Sources", the strip under a single camera (board choice C15). */
 export interface SourceTile {
@@ -2899,6 +3167,14 @@ export interface StopRequest {
   reason?: string | null;
 }
 
+/** How many answers were given on one surface. */
+export interface SurfaceCount {
+  /** How many. */
+  count: number;
+  /** The surface. */
+  surface: SurfaceKind;
+}
+
 /**
  * The surface a person uses (spec 3.3 §5, §7.2).
  * 
@@ -2922,7 +3198,7 @@ export interface SurfaceQuery {
    * that session's decisions.
    */
   session?: string | null;
-  /** `GET /surface/briefing`: since when. */
+  /** `GET /surface/briefing` and `GET /surface/answers`: since when. */
   since?: string | null;
   /** The surface; defaults to the web home. */
   surface?: SurfaceKind | null;
@@ -2953,6 +3229,8 @@ export type ThreadItem = {
   author: string;
   /** The person or an agent. */
   from: Speaker;
+  /** The images the person sent with it (spec 3.3 §5.1). Absent when none. */
+  images?: ImageData[];
   kind: "message";
   /** The text, as data. */
   text: string;
@@ -2979,6 +3257,24 @@ export type ThreadItem = {
   text: string;
   /** The tool. */
   tool: string;
+} | {
+  /** The call it answers. */
+  callId?: string | null;
+  kind: "run";
+  /** It succeeded: it exited with 0. */
+  ok: boolean;
+  /** The run. */
+  run: CommandRun;
+  /** "Done" or "Failed". */
+  text: string;
+  /** The tool. */
+  tool: string;
+} | {
+  /** The call that offered them. */
+  callId?: string | null;
+  kind: "suggestions";
+  /** The replies, checked: one to four short lines, as data. */
+  replies: string[];
 } | {
   /** The inbox entry, when the call reached the inbox. */
   decisionId?: string | null;
@@ -3011,6 +3307,19 @@ export interface ThreadResponse {
   entries: FeedEntry[];
   /** The session. */
   sessionId: string;
+}
+
+/**
+ * One of an agent's threads (spec 3.3 §5.1 "Thread history"): its session and when it last
+ * changed.
+ */
+export interface ThreadSummary {
+  /** When it last changed. */
+  at: string;
+  /** The session to open. */
+  sessionId: string;
+  /** "25 Oct 10:02". */
+  when: string;
 }
 
 /** One step of how a decision got here (spec 3.3 §7.1). */

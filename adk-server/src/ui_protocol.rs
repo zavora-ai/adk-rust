@@ -98,7 +98,7 @@ pub const UI_PROTOCOL_CAPABILITIES: &[UiProtocolCapabilitySpec] = &[
     },
     UiProtocolCapabilitySpec {
         protocol: "ag_ui",
-        versions: &["0.1"],
+        versions: &["0.1", "1.0"],
         implementation_tier: UiProtocolImplementationTier::HybridSubset,
         spec_track: UiProtocolSpecTrack::Stable,
         summary: "Hybrid AG-UI subset with additive protocol-native runtime transport, dual-path AG-UI run input support, and compatibility wrappers for existing SSE consumers.",
@@ -112,9 +112,13 @@ pub const UI_PROTOCOL_CAPABILITIES: &[UiProtocolCapabilitySpec] = &[
             "messages_snapshot",
             "stable_text_events",
             "stable_tool_events",
-            // Spec 3.3 §10 S2: held calls end the run as `tool_call` interrupts (AG-UI 1.1
-            // draft lifecycle). `interrupt_resume` is added by a server that can decide them.
+            // Spec 3.3 §10 S2: held calls end the run as `tool_call` interrupts (AG-UI 1.0
+            // lifecycle). `interrupt_resume` is added by a server that can decide them.
             "tool_call_interrupts",
+            // A client that sends `protocolVersion: "1.0"` gets AG-UI 1.0's run shape: a
+            // success outcome, snapshots before an interrupt, server-executed tool calls
+            // marked, strict event fields, and resumes that answer every open interrupt.
+            "protocol_version_negotiation",
         ],
         limitations: &[
             "Protocol-native AG-UI transport is opt-in and currently scoped to `adk-server`; the default runtime stream remains the generic ADK wrapper for compatibility.",

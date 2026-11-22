@@ -20,6 +20,16 @@ adk-surface = { version = "3.0.0", features = ["web", "voice"] }
 |---|---|
 | ![The voice view](../images/surfaces/voice-light.png) | ![The voice view, dark](../images/surfaces/voice-dark.png) |
 
+## The voice view
+
+| Part | What it shows |
+|---|---|
+| The presence | A ring that follows the real loudness of the microphone while you speak and of the model's voice while it answers, with the state in words: listening or speaking |
+| Captions | What it heard and what it said, in order, and where you spoke over it |
+| A spoken answer | The decision it applies to, with a ring counting down the cancel window and **Cancel** |
+| What it can see | The live camera or shared screen while its switch is on, and the last frames sent to the model; a frame's thumbnail goes when its source turns off |
+| The call dock | The microphone, camera, screen and **End**, as round buttons on a phone |
+
 ## What voice may decide
 
 Voice follows the voice row of spec 3.3 §7.2, whichever surface the words reach:

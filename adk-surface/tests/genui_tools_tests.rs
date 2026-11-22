@@ -14,8 +14,8 @@ use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_runner::Runner;
 use adk_session::{InMemorySessionService, SessionService};
 use adk_surface::genui::{
-    ActionArg, DRAWN_STATE_KEY, DrawToolset, DrawnAction, DrawnEnvelope, DrawnKind, DrawnRecord,
-    FieldArg, Validator,
+    A2uiBody, ActionArg, DRAWN_STATE_KEY, DrawToolset, DrawnAction, DrawnEnvelope, DrawnKind,
+    DrawnRecord, FieldArg, MAX_PATCHES_PER_MINUTE, Validator,
 };
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -363,4 +363,118 @@ async fn a_form_bound_to_a_tool_the_agent_lacks_is_refused() {
             .contains("action 'send' runs 'transfer_funds', which is not one of the agent's tools"),
         "{error}"
     );
+}
+
+/// A screen written in A2UI 1.0's syntax is drawn and stored in the internal form; a
+/// refusal carries A2UI 1.0's `ValidationResult` (spec 3.3 §6.1 `genui`).
+#[tokio::test]
+async fn a_screen_in_a2ui_1_0_syntax_is_drawn_and_a_refusal_says_so_as_a_validation_result() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let screen = |label: &str| {
+        json!({
+            "surfaceId": "status",
+            "components": [
+                { "id": "root", "component": "Column", "children": ["t"] },
+                { "id": "t", "component": "Text", "text": { "@path": "/status" },
+                  "@accessibility": { "label": label } }
+            ],
+            "dataModel": { "status": "Paid" }
+        })
+    };
+    let script = vec![
+        ScriptedResponse::function_call("render_screen", screen("Invoice status")),
+        ScriptedResponse::function_call("render_screen", screen("Approve")),
+        ScriptedResponse::text("done"),
+    ];
+    let harness = harness(script, sessions, &dir).await;
+
+    let events = send(&harness, "Show the invoice status").await;
+
+    let drawn = drawings(&events);
+    assert_eq!(drawn.len(), 2, "{drawn:?}");
+    let envelope = DrawnEnvelope::from_response(&drawn[0].1).expect("drawn");
+    let draft = envelope.draft().unwrap();
+    assert_eq!(draft.components[1]["text"], json!({ "path": "/status" }));
+    assert_eq!(draft.components[1]["accessibility"], json!({ "label": "Invoice status" }));
+    // A decision's word in an accessibility label is refused like any shown text.
+    let error = drawn[1].1["error"].as_str().unwrap_or_default();
+    assert!(error.contains("Not shown: it looks like a decision"), "{error}");
+    assert!(error.contains("validationResult: {\"valid\":false,\"severity\":\"error\""), "{error}");
+}
+
+/// A drawing that pressures the person is shown, and the agent is told what to change as
+/// A2UI 1.0 `ValidationResult` warnings (spec 3.3 §7.4 rule 5, warning severity).
+#[tokio::test]
+async fn a_drawing_that_pressures_the_person_is_shown_with_warnings() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let card = json!({
+        "title": "Renewal",
+        "rows": [{ "label": "Offer", "value": "Only 2 left in stock" }, { "label": "Note", "value": "Act now" }]
+    });
+    let script =
+        vec![ScriptedResponse::function_call("render_card", card), ScriptedResponse::text("done")];
+    let harness = harness(script, sessions, &dir).await;
+
+    let events = send(&harness, "Show the renewal").await;
+
+    let drawn = drawings(&events);
+    let (_, response, record) = &drawn[0];
+    assert_eq!(response["status"], "shown", "{response}");
+    assert!(record.is_some(), "shown and recorded");
+    let warnings = response["warnings"].as_array().expect("warnings");
+    let codes: Vec<&str> = warnings.iter().filter_map(|w| w["code"].as_str()).collect();
+    assert!(
+        codes.contains(&"genui.warned.scarcity") && codes.contains(&"genui.warned.urgency"),
+        "{codes:?}"
+    );
+    assert!(warnings.iter().all(|w| w["severity"] == "warning" && w["valid"] == true));
+    assert!(response["message"].as_str().unwrap().contains("Change it:"));
+}
+
+/// A patch says what changed, and its envelope's delta from the version before carries only
+/// that; a surface patched past the budget is refused with what to do instead.
+#[tokio::test]
+async fn a_patch_says_what_changed_and_a_patch_loop_is_told_to_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let patch = |n: usize| {
+        (
+            "patch_surface",
+            json!({ "surfaceId": "invoice-10", "data": [{ "path": "/amount", "value": n }] }),
+        )
+    };
+    let script = vec![
+        ScriptedResponse::function_call("render_form", invoice_form()),
+        ScriptedResponse::text("drawn"),
+        ScriptedResponse::function_call(
+            "patch_surface",
+            json!({ "surfaceId": "invoice-10", "data": [{ "path": "/to", "value": "ana@example.com" }] }),
+        ),
+        ScriptedResponse::text("patched"),
+        ScriptedResponse::function_calls((0..MAX_PATCHES_PER_MINUTE).map(patch)),
+        ScriptedResponse::text("looped"),
+    ];
+    let harness = harness(script, sessions, &dir).await;
+    let drawn =
+        DrawnEnvelope::from_response(&drawings(&send(&harness, "draw").await)[0].1).unwrap();
+    let patched = drawings(&send(&harness, "patch").await);
+    assert_eq!(patched[0].1["changed"], json!({ "components": [], "data": ["/to"] }));
+    let after = DrawnEnvelope::from_response(&patched[0].1).unwrap();
+    let delta = after.delta_from(&drawn).expect("a sound base");
+    assert_eq!(delta.len(), 1, "{delta:?}");
+    assert!(matches!(&delta[0].body, A2uiBody::UpdateDataModel(update)
+        if update.path.as_deref() == Some("/to") && update.value == Some(json!("ana@example.com"))));
+    assert_eq!(drawn.delta_from(&after), None, "an older version has no delta from a newer");
+
+    // One patch has been made this minute, so the budget runs out on the last of these.
+    let looped = drawings(&send(&harness, "loop").await);
+    assert_eq!(looped.len(), MAX_PATCHES_PER_MINUTE);
+    let refused: Vec<&str> = looped
+        .iter()
+        .filter_map(|(_, response, _)| response.get("error").and_then(Value::as_str))
+        .collect();
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert!(refused[0].contains("put changes together in one patch"), "{}", refused[0]);
 }

@@ -1,16 +1,11 @@
 {
   "activityType": "a2ui-surface",
   "content": {
+    "a2uiVersion": "1.0",
     "a2ui_operations": [
       {
         "createSurface": {
           "catalogId": "https://adk-rust.com/a2ui/catalogs/forms/1.0/catalog.json",
-          "surfaceId": "invoice-10"
-        },
-        "version": "v0.9.1"
-      },
-      {
-        "updateComponents": {
           "components": [
             {
               "child": "body",
@@ -24,26 +19,26 @@
               "variant": "h3"
             },
             {
-              "checks": [
+              "@checks": [
                 {
                   "condition": {
+                    "@call": "required",
                     "args": {
                       "value": {
-                        "path": "/to"
+                        "@path": "/to"
                       }
-                    },
-                    "call": "required"
+                    }
                   },
                   "message": "Fill this in"
                 },
                 {
                   "condition": {
+                    "@call": "email",
                     "args": {
                       "value": {
-                        "path": "/to"
+                        "@path": "/to"
                       }
-                    },
-                    "call": "email"
+                    }
                   },
                   "message": "Enter an email address"
                 }
@@ -52,7 +47,7 @@
               "id": "field-to",
               "label": "To",
               "value": {
-                "path": "/to"
+                "@path": "/to"
               },
               "variant": "shortText"
             },
@@ -61,7 +56,7 @@
               "id": "field-amount",
               "label": "Amount",
               "value": {
-                "path": "/amount"
+                "@path": "/amount"
               },
               "variant": "number"
             },
@@ -99,19 +94,20 @@
               "id": "body"
             }
           ],
-          "surfaceId": "invoice-10"
-        },
-        "version": "v0.9.1"
-      },
-      {
-        "updateDataModel": {
-          "surfaceId": "invoice-10",
-          "value": {
+          "dataModel": {
             "amount": 4200,
             "to": ""
-          }
+          },
+          "metadata": {
+            "extensions": {
+              "adkrust_display_only": {
+                "version": "1.0"
+              }
+            }
+          },
+          "surfaceId": "invoice-10"
         },
-        "version": "v0.9.1"
+        "version": "1.0"
       }
     ],
     "actions": [

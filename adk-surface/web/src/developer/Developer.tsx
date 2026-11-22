@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { HomeClient } from "../client";
 import type { GraphView } from "../generated/workflow";
 import { GenuiProtocols } from "../genui/Protocols";
@@ -6,19 +6,24 @@ import type { WorkflowClient } from "../workflow/client";
 import { workflowLabels } from "../workflow/labels";
 import { runsOf } from "../workflow/route";
 import { Runs } from "../workflow/Runs";
+import { openWork, runFromEvents, runFromSpans } from "./run";
+import { RunView, usePoll } from "./RunView";
+import type { Edge } from "./RunView";
 import { topologyActivity } from "./topologyActivity";
-import type { A2aCard, AgentDetails, RuntimeEvent, Session, TopologyMember, TopologyRelationship, TraceSpan, UiCapabilities } from "./types";
+import type { A2aCard, AgentDetails, Session, TopologyMember, TraceSpan, UiCapabilities } from "./types";
 
-type Tab = "topology" | "protocols" | "telemetry" | "state" | "runs";
+type Tab = "run" | "protocols" | "state" | "runs";
 
 /** The tabs' labels, in sentence case (spec 3.3 §8). */
 const TAB_LABELS: Record<Tab, string> = {
-  topology: "Topology",
+  run: "Run",
   protocols: "Protocols",
-  telemetry: "Telemetry",
   state: "State",
   runs: workflowLabels.tab,
 };
+
+/** How often a live run is read again. */
+const LIVE_POLL_MS = 3000;
 
 const USER_KEY = "adk.home.developer.user";
 
@@ -32,9 +37,9 @@ function storedUser(): string {
 
 /**
  * The developer panel (spec 3.3 §4, §12 developer track): what the runtime UI that `adk-server`
- * bundled showed and is worth keeping — the agent's topology, the runtime services and UI
- * protocols its server advertises, a session's telemetry and state — on the server's own
- * APIs. Developer panels may use technical words (§8).
+ * bundled showed and is worth keeping — the agent's graph, the tree and trace of a session's
+ * run, the runtime services and UI protocols its server advertises, and a session's state — on
+ * the server's own APIs. Developer panels may use technical words (§8).
  */
 export function Developer({
   client,
@@ -57,8 +62,9 @@ export function Developer({
   const [traces, setTraces] = useState<TraceSpan[]>([]);
   const [user, setUser] = useState(storedUser);
   const [session, setSession] = useState<Session>();
-  const [tab, setTab] = useState<Tab>(runsPlace ? "runs" : "topology");
+  const [tab, setTab] = useState<Tab>(runsPlace ? "runs" : "run");
   const [problem, setProblem] = useState("");
+  const [reads, setReads] = useState(0);
 
   useEffect(() => {
     void Promise.all([
@@ -91,12 +97,28 @@ export function Developer({
         .then(setSession)
         .catch(() => setSession(undefined));
     }
-  }, [client, sessionId, app, user]);
+  }, [client, sessionId, app, user, reads]);
 
-  const tabs: Tab[] = ["topology", "protocols", "telemetry", "state", ...(workflow ? (["runs"] as const) : [])];
+  const refresh = useCallback(() => setReads((count) => count + 1), []);
+  // The trace where telemetry collects it, else the session's events.
+  const run = useMemo(
+    () => (traces.length > 0 ? runFromSpans(traces, Date.now(), openWork(session?.events ?? [])) : runFromEvents(session?.events ?? [])),
+    // `reads` moves a live run's clock on even when nothing new arrived.
+    [traces, session, reads],
+  );
+  usePoll(tab === "run" && run.live, LIVE_POLL_MS, refresh);
+  const { members, edges } = useMemo(() => topologyOf(agent), [agent]);
+  const { activeEdge } = topologyActivity(members, session?.events ?? [], run.live);
+  const waitingNote = !sessionId
+    ? "Open a thread to see its run here."
+    : traces.length === 0 && !user
+      ? "No trace for this session. Enter the user ID above to read its events, or turn on telemetry for the full trace."
+      : "No steps yet. Send a message in this thread; its steps show here as they run.";
+
+  const tabs: Tab[] = ["run", "protocols", "state", ...(workflow ? (["runs"] as const) : [])];
   const runsSession = runsPlace?.session ?? sessionId;
   return (
-    <main className="developer">
+    <main className={`developer${tab === "run" ? " developer-wide" : ""}`}>
       <header className="developer-head">
         <h1 className="developer-title">Developer panel</h1>
         <label>
@@ -140,7 +162,12 @@ export function Developer({
         ))}
       </nav>
       <section className="dev-content">
-        {tab === "topology" && <Topology agent={agent} events={session?.events ?? []} />}
+        {tab === "run" &&
+          (agent ? (
+            <RunView run={run} members={members} edges={edges} activeEdge={activeEdge} waitingNote={waitingNote} onRefresh={refresh} />
+          ) : (
+            <p className="muted">Select an agent to see its runs.</p>
+          ))}
         {tab === "runs" && workflow && (
           <Runs
             client={workflow.client}
@@ -157,24 +184,6 @@ export function Developer({
             <Protocols agent={agent} protocols={protocols} a2a={a2a} traceCount={traces.length} />
           </div>
         )}
-        {tab === "telemetry" &&
-          (traces.length === 0 ? (
-            <p className="muted">No spans for this session.</p>
-          ) : (
-            <div className="trace-list">
-              {traces.map((trace) => (
-                <details key={trace.span_id}>
-                  <summary>
-                    <strong>{trace.name}</strong>
-                    <span className="mono">
-                      {trace.end_time > trace.start_time ? `${((trace.end_time - trace.start_time) / 1_000_000).toFixed(1)} ms` : "active"}
-                    </span>
-                  </summary>
-                  <pre>{JSON.stringify(trace.attributes, null, 2)}</pre>
-                </details>
-              ))}
-            </div>
-          ))}
         {tab === "state" &&
           (!session ? (
             <p className="muted">Enter the user ID to read this session's state.</p>
@@ -201,93 +210,15 @@ async function a2aCard(): Promise<{ card: A2aCard; path: string } | undefined> {
   return undefined;
 }
 
-function Topology({ agent, events }: { agent?: AgentDetails; events: RuntimeEvent[] }) {
-  if (!agent) return <p className="muted">Select an agent to see its topology.</p>;
+/** The agent's members and the edges between them, from its topology or its children. */
+function topologyOf(agent?: AgentDetails): { members: TopologyMember[]; edges: Edge[] } {
+  if (!agent) return { members: [], edges: [] };
   const members: TopologyMember[] = agent.topology?.members ?? [
     { name: agent.name, description: agent.description, coordinator: true, capabilities: agent.capabilities },
     ...agent.children.map((child) => ({ ...child, coordinator: false })),
   ];
-  const relationships: Array<TopologyRelationship | { from: string; to: string; kind: "contains" }> =
-    agent.topology?.relationships ?? agent.children.map((child) => ({ from: agent.name, to: child.name, kind: "contains" as const }));
-  const width = 560;
-  const coordinator = members.find((member) => member.coordinator) ?? members[0];
-  if (!coordinator) return null;
-  const { activeMember, activeEdge } = topologyActivity(members, events, false);
-  const others = members.filter((member) => member.name !== coordinator.name);
-  const positions = new Map<string, { x: number; y: number }>();
-  const hasFlow = relationships.some((edge) => edge.kind === "flow");
-  let height: number;
-  if (hasFlow) {
-    const levels = new Map<string, number>([[coordinator.name, 0]]);
-    for (let pass = 0; pass < members.length; pass += 1) {
-      relationships.forEach((edge) => {
-        const level = levels.get(edge.from);
-        if (level !== undefined && !levels.has(edge.to)) levels.set(edge.to, level + 1);
-      });
-    }
-    let fallback = Math.max(0, ...levels.values()) + 1;
-    others.forEach((member) => {
-      if (!levels.has(member.name)) {
-        levels.set(member.name, fallback);
-        fallback += 1;
-      }
-    });
-    const maxLevel = Math.max(0, ...levels.values());
-    for (let level = 0; level <= maxLevel; level += 1) {
-      const row = members.filter((member) => levels.get(member.name) === level);
-      row.forEach((member, index) => positions.set(member.name, { x: ((index + 1) * width) / (row.length + 1), y: 58 + level * 112 }));
-    }
-    height = Math.max(260, 130 + maxLevel * 112);
-  } else {
-    positions.set(coordinator.name, { x: width / 2, y: 58 });
-    others.forEach((member, index) => {
-      const count = Math.min(3, others.length);
-      positions.set(member.name, { x: (((index % 3) + 1) * width) / (count + 1), y: 178 + Math.floor(index / 3) * 112 });
-    });
-    height = Math.max(260, 130 + Math.ceil((members.length - 1) / 3) * 120);
-  }
-  return (
-    <svg className="topology" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`Topology of ${agent.name}`}>
-      <defs>
-        <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" />
-        </marker>
-      </defs>
-      {relationships.map((edge) => {
-        const from = positions.get(edge.from);
-        const to = positions.get(edge.to);
-        if (!from || !to) return null;
-        return (
-          <path
-            key={`${edge.from}-${edge.to}-${edge.kind}`}
-            className={`edge edge-${edge.kind}${activeEdge === `${edge.from}->${edge.to}` ? " edge-active" : ""}`}
-            d={`M${from.x} ${from.y + 30} C${from.x} ${from.y + 80},${to.x} ${to.y - 65},${to.x} ${to.y - 30}`}
-            markerEnd="url(#arrow)"
-          />
-        );
-      })}
-      {members.map((member) => {
-        const point = positions.get(member.name);
-        if (!point) return null;
-        return (
-          <g
-            key={member.name}
-            className={`topology-node${member.coordinator ? " coordinator" : ""}${activeMember === member.name ? " active" : ""}`}
-            transform={`translate(${point.x - 73} ${point.y - 29})`}
-          >
-            <rect width="146" height="58" rx="9" />
-            <circle cx="19" cy="19" r="6" />
-            <text x="34" y="23">
-              {member.name}
-            </text>
-            <text className="node-kind" x="13" y="45">
-              {member.coordinator ? (hasFlow ? "Workflow" : "Coordinator") : hasFlow ? "Node" : "Member"}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
-  );
+  const edges: Edge[] = agent.topology?.relationships ?? agent.children.map((child) => ({ from: agent.name, to: child.name, kind: "contains" as const }));
+  return { members, edges };
 }
 
 function Protocols({

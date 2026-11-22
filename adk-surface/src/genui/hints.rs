@@ -45,6 +45,18 @@ struct Pressed {
     app: Option<String>,
     /// The request this send's call made, once a card matched it: a send has one.
     request: Option<String>,
+    /// The digest of the drawing a form's Send came from.
+    digest: Option<String>,
+}
+
+/// A form's Send as a decision on its call needs it: the call, its arguments, the form and
+/// version, and the drawing's digest.
+#[derive(Debug, Clone)]
+pub(crate) struct SentCall {
+    pub(crate) call_id: String,
+    pub(crate) args: Value,
+    pub(crate) form: (String, u64),
+    pub(crate) digest: Option<String>,
 }
 
 /// The hints of drawn-form calls: the session's held call, which the agent marks with
@@ -117,6 +129,7 @@ impl DrawnHints {
                 call_id: call.function_call_id.clone(),
                 form: Some((surface.to_string(), version)),
                 app: None,
+                digest: call.via.digest.clone(),
                 request: None,
             },
         );
@@ -140,6 +153,7 @@ impl DrawnHints {
                 form: None,
                 app: Some(app.to_string()),
                 request: None,
+                digest: None,
             },
         );
     }
@@ -177,6 +191,26 @@ impl DrawnHints {
         })?;
         send.request = Some(request.id.clone());
         Some((send.at, send.app.clone()))
+    }
+
+    /// The form's Send `request` came from, once matched to its card: what sealing the
+    /// person's approval binds (spec 3.3 §7.4 rule 5).
+    pub(crate) fn sent_call(&self, request: &ApprovalRequest) -> Option<SentCall> {
+        let pressed = self.pressed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let send = pressed.iter().rev().find(|pressed| {
+            pressed.request.as_deref() == Some(request.id.as_str())
+                || (pressed.request.is_none()
+                    && pressed.user == request.scope.user_id
+                    && pressed.session == request.scope.session_id
+                    && pressed.tool == request.tool_name
+                    && pressed.args == request.args_redacted)
+        })?;
+        Some(SentCall {
+            call_id: send.call_id.clone(),
+            args: send.args.clone(),
+            form: send.form.clone()?,
+            digest: send.digest.clone(),
+        })
     }
 
     /// The hint of a call an app asked for: its first step, its detail line, and no Always

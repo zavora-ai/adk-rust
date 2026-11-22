@@ -4,7 +4,7 @@ import type { AppOpen, AppPrompt, AppView } from "../generated/api";
 import { OPENING_THE_APP } from "../generated/words";
 import { visible } from "../safe";
 import type { AppsSeam } from "./apps";
-import { AppBridge, frameable, openable, pageTheme } from "./apps";
+import { AppBridge, frameable, hostStyles, openable, pageTheme } from "./apps";
 import "./genui.css";
 
 /** The frame's height before the app says how tall it is, in CSS pixels. */
@@ -135,6 +135,8 @@ function Framed({
       resize: (next) => setHeight(Math.min(Math.ceil(next), shown.maxHeight)),
       prompt: (next) => prompted.current(next),
       theme: pageTheme,
+      styles: hostStyles,
+      width: () => frame.current?.clientWidth ?? 0,
       toolInput: shown.toolInput,
       toolResult: shown.toolResult,
     });
@@ -144,7 +146,15 @@ function Framed({
       void bridge.receive(event.data);
     };
     window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
+    // The app redraws in the page's scheme when the person switches it.
+    const scheme = window.matchMedia?.("(prefers-color-scheme: dark)");
+    const onScheme = () => bridge.contextChanged();
+    scheme?.addEventListener?.("change", onScheme);
+    return () => {
+      bridge.teardown();
+      window.removeEventListener("message", onMessage);
+      scheme?.removeEventListener?.("change", onScheme);
+    };
   }, [seam, session, app.callId, shown]);
   return (
     <iframe
@@ -236,6 +246,38 @@ function Prompt({
           <div className="app-ask-actions">
             <button type="button" className="button button-primary" onClick={go} disabled={!ok}>
               {visible(prompt.openLabel)}
+            </button>
+            <button type="button" className="button button-secondary" onClick={onDone}>
+              {visible(prompt.dismissLabel)}
+            </button>
+          </div>
+        </div>
+      );
+    }
+    case "download": {
+      // Saved only on the person's press, as a file the browser keeps: never opened here.
+      const save = () => {
+        const bytes =
+          prompt.textContent !== undefined && prompt.textContent !== null
+            ? new TextEncoder().encode(prompt.textContent)
+            : Uint8Array.from(atob(prompt.blob ?? ""), (c) => c.charCodeAt(0));
+        const url = URL.createObjectURL(new Blob([bytes], { type: prompt.mimeType }));
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = prompt.name;
+        anchor.rel = "noopener";
+        anchor.click();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+        onDone();
+      };
+      return (
+        <div className="app-ask" role="group" aria-label={visible(prompt.text)}>
+          <p className="app-ask-text">
+            <strong>{visible(prompt.text)}</strong>
+          </p>
+          <div className="app-ask-actions">
+            <button type="button" className="button button-primary" onClick={save}>
+              {visible(prompt.saveLabel)}
             </button>
             <button type="button" className="button button-secondary" onClick={onDone}>
               {visible(prompt.dismissLabel)}

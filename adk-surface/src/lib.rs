@@ -77,6 +77,7 @@ pub mod error;
 mod evidence;
 pub mod genui;
 mod hints;
+pub mod images;
 mod inbox;
 mod local;
 #[cfg(feature = "mobile")]
@@ -86,6 +87,7 @@ mod origin;
 mod project;
 pub mod rules;
 mod source;
+pub mod suggest;
 #[cfg(feature = "tui")]
 pub mod tui;
 #[cfg(feature = "verb-ui")]
@@ -102,22 +104,24 @@ pub mod workflow;
 pub use agents::GrantedUse;
 pub use agents::{
     AgentCardView, AgentChoices, AgentColor, AgentDetail, AgentDraft, AgentLife, AgentPreview,
-    AgentPreviewRequest, AreaChoice, CardLine, ColorChoice, EndedWork, FileUse, ModelView,
-    RemovedAgent, RemovedThread, ShellUse, UsesDraft, WebUse,
+    AgentPreviewRequest, AgentThreads, AreaChoice, CardLine, ColorChoice, EndedWork, FileUse,
+    ModelView, RemovedAgent, RemovedThread, ShellUse, ThreadSummary, UsesDraft, WebUse,
 };
 pub use answers::{
-    AnswerLog, AnswerRecord, AuditAnswerLog, InMemoryAnswerLog, RECORD_LINES, RecordAnswerLog,
-    SURFACE_AUDIT_DECIDE,
+    AnswerLog, AnswerRecord, AnswerSummary, AuditAnswerLog, InMemoryAnswerLog, RECORD_LINES,
+    RecordAnswerLog, SURFACE_AUDIT_DECIDE, SurfaceCount,
 };
 pub use control::ControlSource;
 pub use engine::SURFACE_AUDIT_ANSWER;
-pub use engine::SURFACE_AUDIT_DRAWN_SUBMITTED;
 pub use engine::SURFACE_AUDIT_IMAGE_CHANGE;
 pub use engine::SURFACE_AUDIT_VISION_EXAMPLE;
 pub use engine::{
     Command, CommandOutcome, DEFAULT_POLL_INTERVAL, FeedFrame, SURFACE_AUDIT_RESUME_ALL,
     SURFACE_AUDIT_SEND, SURFACE_AUDIT_SET_MODE, SURFACE_AUDIT_STEER, SURFACE_AUDIT_STOP_ALL,
-    SurfaceEngine, SurfaceEngineBuilder,
+    SURFACE_AUDIT_STOP_TURN, SurfaceEngine, SurfaceEngineBuilder,
+};
+pub use engine::{
+    SURFACE_AUDIT_APP_CALL_AUTO_APPROVED, SURFACE_AUDIT_DRAWN_SEALED, SURFACE_AUDIT_DRAWN_SUBMITTED,
 };
 pub use error::{Result, SurfaceError};
 pub use evidence::{
@@ -126,14 +130,18 @@ pub use evidence::{
     MediaNotice, MediaNoticeKind, PurgedView, short_digest,
 };
 pub use hints::{CardHint, CardHints};
+pub use images::{MAX_IMAGE_BYTES, MAX_IMAGES, MessageImage};
 pub use local::{LocalSource, LocalSourceBuilder};
 pub use model::CardDetail;
 pub use model::{
     AgentRef, AgentRow, AgentStatus, Avatar, Briefing, BriefingLine, CallView, CardStatus, Decided,
-    DecidedAnswer, DecisionCard, FeedEntry, Mode, ModeView, ParkedView, Pill, QuietView,
-    Reversibility, Speaker, SpendView, StatusLine, ThreadItem, TimelineStep,
+    DecidedAnswer, DecisionCard, ElicitationView, ElicitedField, ElicitedKind, ElicitedOption,
+    FeedEntry, Mode, ModeView, ParkedView, Pill, QuietView, Reversibility, Speaker, SpendView,
+    StatusLine, ThreadItem, TimelineStep,
 };
+pub use model::{CommandRun, ImageData, OutputLine, RunStop, ShellPlace, ShellView};
 pub use origin::{Caller, Origin, SurfaceKind, Via};
+pub use project::RUN_LINES;
 pub use project::{CALL_TEXT_LIMIT, Place};
 pub use rules::{Allowed, Answer, AnswerOption, Risk};
 pub use source::{AgentState, AlwaysAllowOffer, RuleCommit, Source, SpendToday, Steered, Steering};

@@ -57,9 +57,8 @@ describe("the Runs tab", () => {
     );
     const absent = await screen.findByRole("navigation", { name: "Developer panel" });
     expect(within(absent).getAllByRole("button").map((tab) => tab.textContent)).toEqual([
-      "Topology",
+      "Run",
       "Protocols",
-      "Telemetry",
       "State",
     ]);
     unmount();

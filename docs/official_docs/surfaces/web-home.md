@@ -121,19 +121,24 @@ and the agenda. [The Engine](index.md#sources) lists what each source adds.
 
 The page is public like any static asset; its content security policy allows scripts, styles
 and fonts from the server only and no framing. `/` and `/ui` redirect to `/ui/`, and each
-section (`/ui/today`, `/ui/memory`, `/ui/developer`) serves the same page.
+section (`/ui/decisions`, `/ui/today`, `/ui/memory`, `/ui/developer`) and a drawing's own
+window (`/ui/canvas?session=…&surface=…`) serve the same page.
 
-## The three sections
+## The sections
 
-One header carries the brand, **Threads**, **Today** and **Memory & rules**, the status line
-(the mode — on **Threads**, the one the conversation shown runs in — what was spent of the
-daily limit, quiet time) and **Stop all**. After a stop, **Resume all** appears; resuming
-happens only here or on a paired local terminal (§11 S-I10).
+The header carries the brand, the sections — **Threads**, **Decisions**, **Today**, **Memory &
+rules** and **Developer** — **Search** (⌘K), the status line (the mode — on **Threads**, the one
+the conversation shown runs in — what was spent of the daily limit, quiet time) and **Stop
+all**. After a stop, **Resume all** appears; resuming happens only here or on a paired local
+terminal (§11 S-I10). On a screen wider than 1180 px the sections stand in an icon rail down
+the left edge, Developer at its foot: each keeps its name on hover and for assistive
+technology, and Decisions carries the count of what waits.
 
 | Section | What it shows | Where it reads it |
 |---|---|---|
-| **Threads** | The roster (avatar, name, status word), the selected agent's thread with its decisions inline on their own background, **Decisions** with a filled count badge, **Coming up** (today's times, and the day for what comes later in the week, so a weekday routine seen on a Saturday reads "Mon 09:00"; numbered weekdays are read as the kernel runs them: in five fields 0 and 7 are Sunday, so `1-5` is Monday to Friday, and in six 1 is Sunday, so `1-5` is Sunday to Thursday; `MON-FRI` is Monday to Friday in both). A thread follows one conversation: the session the agent's row names when it is first shown, or a new one, kept for the tab. A decision of another session, opened from **Decisions** or **Today**, shows in that session's thread with "A decision from another conversation" and **Back to your conversation**, and no message box; the thread still follows its own conversation | `GET /surface/agents`, the session feed, `GET /surface/decisions`, the kernel's processes and agenda |
-| **Today** | "While you were away": spent, quiet time, how many things wait, one line per event since you last marked it seen with a status pill, its actions and its record, **Mark as seen**, and today's routines with **Add a routine** | `GET /kernel/away`, `GET /kernel/away/lines/{seq}`, `POST /kernel/away/seen`, `GET /kernel/settings`, the kernel's agenda; **Do it** and **Not now** answer a suggestion through `POST /kernel/agenda/{id}/approve` or `reject`. Without a kernel ledger, `GET /surface/briefing` |
+| **Threads** | The roster (avatar, name, status word), the selected agent's thread with its decisions inline on their own background, **Decisions** with a filled count badge, **Coming up** (today's times, and the day for what comes later in the week, so a weekday routine seen on a Saturday reads "Mon 09:00"; numbered weekdays are read as the kernel runs them: in five fields 0 and 7 are Sunday, so `1-5` is Monday to Friday, and in six 1 is Sunday, so `1-5` is Sunday to Thursday; `MON-FRI` is Monday to Friday in both). A thread follows one conversation: the session the agent's row names when it is first shown, or a new one, kept for the tab; **Thread history** opens an earlier one. A decision of another session, opened from **Decisions** or **Today**, shows in that session's thread with "A decision from another conversation" and **Back to your conversation**, and no message box; the thread still follows its own conversation. See [A thread](#a-thread) | `GET /surface/agents`, the session feed, `GET /surface/decisions`, `GET /surface/agents/{id}/threads`, the kernel's processes and agenda |
+| **Decisions** | Everything waiting for the person, narrowed to one agent with the chips above the list, beside the selected decision's card; **Open in its thread** goes to its conversation. The card is the only place an answer is given | `GET /surface/decisions` |
+| **Today** | "While you were away": spent, quiet time, how many things wait, one line per event since you last marked it seen with a status pill, its actions and its record, **Mark as seen**, **How you answered this week**, and today's routines with **Add a routine** | `GET /kernel/away`, `GET /kernel/away/lines/{seq}`, `POST /kernel/away/seen`, `GET /kernel/settings`, `GET /surface/answers`, the kernel's agenda; **Do it** and **Not now** answer a suggestion through `POST /kernel/agenda/{id}/approve` or `reject`. Without a kernel ledger, `GET /surface/briefing` |
 | **Memory & rules** | "Agent Memory and Rules": **What your agents remember**, **What your agents can do** and **What your agents did**, as bordered lists | `GET /kernel/memory` and its corrections; `GET /rules` with **Extend** (`POST /rules/{id}/extend`) and **Stop allowing**; `GET /kernel/settings` and its changes; each agent's spend from `GET /kernel/processes`; `GET /kernel/record` and `GET /kernel/record/check`, or `GET /surface/briefing` without a signed record; **Where you can say yes from** from `GET /kernel/devices` and `GET /kernel/channels`, with **Remove**, **Add a phone or app** (a pairing code from `POST /kernel/pairing`) and **Pair a chat account** (`POST /kernel/channels/pair`) when the kernel pairs devices |
 
 | Light | Dark |
@@ -141,6 +146,27 @@ happens only here or on a paired local terminal (§11 S-I10).
 | ![Threads](../images/surfaces/web-threads-light.png) | ![Threads, dark](../images/surfaces/web-threads-dark.png) |
 | ![Today](../images/surfaces/web-today-light.png) | ![Today, dark](../images/surfaces/web-today-dark.png) |
 | ![Memory and rules](../images/surfaces/web-memory-light.png) | ![Memory and rules, dark](../images/surfaces/web-memory-dark.png) |
+| ![The Decisions inbox](../images/surfaces/web-decisions-light.png) | ![The Decisions inbox, dark](../images/surfaces/web-decisions-dark.png) |
+
+### A thread
+
+| Part | Behaviour |
+|---|---|
+| What an agent ran | A `bash` or `sandbox_exec` result reads as a run (`ThreadItem::Run`): the command, how it exited or why it stopped short (timed out, out of memory, refused by the sandbox), how long it took, its last lines with stderr marked, and how many lines there were in all. The agent can read all of it; the thread shows the tail |
+| Where its commands run | The thread's header says where the agent's commands run (`AgentRow.shell`), from the harness's isolation: in the OS sandbox and its enforcer, a container, a remote sandbox, on this computer, or in a sandbox that is unavailable. A run in a sandbox carries **Sandbox** |
+| Images in a message | The message box takes up to four PNG, JPEG, WebP or GIF images, picked, pasted or dropped, and sends them with the text (`send`, `queue` and `newThread` carry `images`). The engine checks each one's bytes against its type, and a message with images waits for the next turn instead of steering the running one. The thread shows the person's images; a click opens one |
+| The work log | Three or more plain tool steps in a row fold into one line: how many, how many failed, the last, and how long they took. A step still working stays outside the fold, and a run keeps its own card |
+| **Show beside** | Keeps a drawing in a canvas next to the thread, with tabs for its latest version, its earlier versions and its A2UI; the thread keeps a line with **Bring back**. **Open in its own window** shows it at `/ui/canvas`, following the session |
+| **Thread history** | The person's earlier threads with the agent (`GET /surface/agents/{id}/threads`) |
+| **Stop the turn** | While the agent works on the thread, the message box offers it: `stopTurn` stops the person's own running turn — a kernel kills the session's running and queued runs, a harness or a runner interrupts its run in flight — and the thread says so |
+| Suggested replies | An agent given `adk_surface::suggest::SuggestReplies` offers up to four short replies (`ThreadItem::Suggestions`) under its latest message until the person writes. A tap fills the message box and never sends |
+| **Ask for a drawing** | Puts the request in the message box, sent only with **Send** |
+
+| Light | Dark |
+|---|---|
+| ![What a coding agent ran, with the screenshot it was sent](../images/surfaces/web-runs-light.png) | ![What a coding agent ran, dark](../images/surfaces/web-runs-dark.png) |
+| ![An image waiting to send](../images/surfaces/web-attach-light.png) | ![An image waiting to send, dark](../images/surfaces/web-attach-dark.png) |
+| ![A drawing shown beside its thread](../images/surfaces/web-canvas-light.png) | ![A drawing beside its thread, dark](../images/surfaces/web-canvas-dark.png) |
 
 ### Today and the morning briefing
 
@@ -155,6 +181,7 @@ viewer `home`; a paired phone reads as itself, so each keeps its own place.
 | **Details** | Opens the line's record (`GET /kernel/away/lines/{seq}`, read with the page's sign-in): its entry on the record, when it was recorded, the area, what it cost and how long it took. Nothing links the tab away to the raw route, which needs the token the page sends and shows internal identifiers |
 | **Mark as seen** | The only thing that moves the home's place (`POST /kernel/away/seen` with the page's `through`); opening or reloading Today reads and moves nothing |
 | The morning briefing | Once quiet time ends, Threads shows the start of the same page — spent, quiet time, what waits, how many things happened — with **See what happened** (to Today) and **Not now**. It shows once for each end of quiet time, and not again after the page was marked seen; putting it away marks nothing seen |
+| **How you answered this week** | How many answers the person gave in the last seven days — allowed once, always allowed, edited, denied — and where they gave them, from the engine's answer log (`GET /surface/answers`, `AnswerLog::since`) |
 | Routines today | Each routine's time today, the **Morning briefing** at the end of quiet time, and **Quiet time starts** |
 
 A kernel without a `/proc` ledger, and `adk-rust serve` without a kernel, show the engine's
@@ -299,7 +326,11 @@ the screens.
 ## Decisions
 
 Every card is drawn from its inbox entry (spec 3.3 §7.1, §11 S-I1) and answers through
-`POST /surface/commands` with the version it showed (S-I2).
+`POST /surface/commands` with the version it showed (S-I2). A waiting card leads with its
+question and what it costs — the risk, whether it can be undone, where else it can be
+answered — then who asks, the exact call and how it got here. **Decisions** (`/ui/decisions`)
+lists every waiting card across agents beside the one selected; the card is still the only
+place an answer is given.
 
 | Rule | Behaviour |
 |---|---|
@@ -308,7 +339,9 @@ Every card is drawn from its inbox entry (spec 3.3 §7.1, §11 S-I1) and answers
 | Answered elsewhere | A conflict collapses the card to its line with "You said yes in Telegram at 07:31"; the answer is never retried |
 | Answered here | The card keeps its place in the thread as one line: a check, its heading, then who decided and where — "Send the October invoice to [CLIENT] · You said yes in the home app at 07:40". The line takes the focus the answer had |
 | Opening a decided card | A click, Enter or Space on the line shows the exact call, how it got here and the details again, and hides them; opening it answers nothing |
-| **Edit** | Offered only where the card shows the call's own arguments: never over a redacted view or an MCP server's form, which would be submitted as written |
+| **Edit** | Offered only where the card shows the call's own arguments: never over a redacted view |
+| **Answer**, on an MCP server's form | An elicitation the harness parked (`mcp:{server}/elicitation`) is drawn in the home's own fields from its schema (`DecisionCard.elicitation`): text, email, web address, date, number, yes or no, and choices. **Answer** sends the values as the decision's edit; the engine checks them against the fields the card drew before they are on record, and the harness checks them against the server's schema before the server sees them. A form with a field the home does not draw, or more than 24 fields, is offered **Deny** only |
+| An MCP server's address | A URL elicitation shows the server's message, the host on its own line, and the whole address as text, never as a link; the home never opens it. A host with look-alike characters (punycode or non-ASCII), a name before an `@`, or plain `http` adds a line saying why to look twice |
 | **Take over**, then **Done** | A tool that asks for a password or a one-time code shows what asks and what for; what the person types goes through `POST /surface/decisions/{id}/take-over` to that one call, never the inbox, the model or a log line (§8.2, §10 H2) |
 | The exact call | A truncated call cannot be approved until **Show the whole call** expands it |
 | Enter and Esc | Neither ever decides; Esc closes **Edit** without deciding (§7.4) |
@@ -329,11 +362,20 @@ to the audit record with the surface and, for an answer, the agent whose call it
 
 ## Light, dark, keyboard and phone
 
-- **Themes**: light and dark come from one set of tokens (spec 3.3 §9). The page follows the
-  device's setting; the switch in the header cycles device, light and dark and remembers the
-  choice in this browser only.
+- **Themes**: light and dark come from one set of tokens (spec 3.3 §9): Geist and Geist Mono
+  over warm neutrals, one accent kept for what waits on the person and for the primary action,
+  a layered near-black dark theme, a seven-step type scale, three radii and motion that
+  respects reduced motion. A script writes the tokens and checks WCAG AA contrast, and every
+  screen of the example is checked with axe at WCAG 2.1 AA in light and dark
+  (`e2e/a11y.spec.ts`). The page follows the device's setting; the switch in the header cycles
+  device, light and dark and remembers the choice in this browser only.
+- **Search and jump**: ⌘K, Ctrl+K or **Search** in the header finds a section, an agent's
+  thread, a decision waiting for you or an action (the theme, adding an agent). It opens a
+  decision's card and never answers one.
 - **Keyboard**: every control is reachable, focus is always visible, and **Skip to the content**
   is the first stop.
+- **Icon rail**: wider than 1180 px, the sections stand in a rail down the left edge; narrower
+  screens keep them in the header.
 - **Layout**: the page fills the window and never scrolls or bounces as a page. The header
   stays put; on **Threads** the roster, the thread and the right panel each scroll inside
   themselves, with the message box at the foot of the thread; **Today** and **Memory & rules**
@@ -345,16 +387,35 @@ to the audit record with the surface and, for an answer, the agent whose call it
 | Light | Dark |
 |---|---|
 | ![The phone layout](../images/surfaces/web-phone-light.png) | ![The phone layout, dark](../images/surfaces/web-phone-dark.png) |
+| ![Search and jump](../images/surfaces/web-palette-light.png) | ![Search and jump, dark](../images/surfaces/web-palette-dark.png) |
 
 The screenshots on this page render the example of spec 3.3 §5.1 (`/ui/fixture.html`), with
 the kernel's routes filled by the example's seams.
 
 ## The developer panel
 
-`/ui/developer` keeps what was worth keeping of the bundled runtime UI: the agent's topology,
-the runtime services and UI protocols the server advertises, a session's telemetry and its
-state, read from `adk-server`'s own APIs (`/api/apps`, `/api/ui/agents/{name}`,
-`/api/debug/trace/session/{id}`). Developer panels may use technical words (§8).
+`/ui/developer` keeps what was worth keeping of the bundled runtime UI, read from
+`adk-server`'s own APIs (`/api/apps`, `/api/ui/agents/{name}`,
+`/api/debug/trace/session/{id}`), in three tabs: **Run**, **Protocols** (the runtime services
+and UI protocols the server advertises) and **State** (a session's state). The panel loads only
+when it is opened. Developer panels may use technical words (§8).
+
+**Run** shows one run of a multi-agent system three ways, from the session's trace spans and,
+while the run waits, its events:
+
+| View | What it shows |
+|---|---|
+| Tree | Agents, then their steps — model calls, tool calls, handoffs — each with how long it took |
+| Graph | Who hands work to whom (delegate and handoff edges), with each agent's state |
+| Trace | Every step on one clock, so overlaps and waits stand out |
+| Inspector | The step picked in any view: its status, duration, start, agent, arguments and attributes |
+
+A call held for the person shows as held in all three. Nesting comes from time containment,
+since the exporter records no parent ids.
+
+| Light | Dark |
+|---|---|
+| ![The developer Run view](../images/surfaces/web-developer-run-light.png) | ![The developer Run view, dark](../images/surfaces/web-developer-run-dark.png) |
 
 ## Building the front end
 
