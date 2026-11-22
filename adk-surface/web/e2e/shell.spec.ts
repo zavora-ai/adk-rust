@@ -159,6 +159,10 @@ test("under the phone width the column scrolls under the header and the message 
   expect(await scrolls(content)).toBe(true);
   await scrollToEnd(content);
   await expect(page.getByRole("textbox", { name: "Message Finance" })).toBeInViewport({ ratio: 1 });
+  // The message box fits the phone's width: Send stays on screen and the column never scrolls
+  // sideways, whatever the text field's natural width.
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeInViewport({ ratio: 1 });
+  expect(await content.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
   await expect(page.getByRole("banner")).toBeInViewport({ ratio: 1 });
   await expectShell(page, ".app");
   await shoot(page, "shell-narrow");
