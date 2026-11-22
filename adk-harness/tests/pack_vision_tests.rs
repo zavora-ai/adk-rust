@@ -9,9 +9,9 @@
 //! face is not found again. The live run asks `claude-sonnet-5-5` through a recording proxy;
 //! its key comes from `ANTHROPIC_API_KEY` or the workspace `.env`.
 //!
-//! With feature `vision-local` the pack's default redactors — RF-DETR Nano and PP-OCRv6 —
-//! replace the doubles, and the bytes the provider receives are checked by the same real
-//! backends. Those runs need the weights:
+//! With feature `vision-local` the pack's default redactors — YuNet with RF-DETR Nano as
+//! its person fallback, and PP-OCRv6 — replace the doubles, and the bytes the provider
+//! receives are checked by the same real backends. Those runs need the weights:
 //!
 //! ```text
 //! HF_HUB_CACHE=/path/to/models cargo nextest run -p adk-harness --features vision-local \
@@ -702,13 +702,13 @@ async fn a_pack_without_redactors_refuses_every_release() {
     assert!(refused[0].reason.contains("no redactor"), "{}", refused[0].reason);
 }
 
-/// The default redactors (feature `vision-local`): RF-DETR Nano for faces and PP-OCRv6 for
-/// personal text, loaded on first use; checked here by the same backends on the bytes the
-/// provider received.
+/// The default redactors (feature `vision-local`): YuNet for faces with RF-DETR Nano for
+/// people it finds no face for, and PP-OCRv6 for personal text, loaded on first use; checked
+/// here by the same backends on the bytes the provider received.
 #[cfg(feature = "vision-local")]
 mod local {
     use super::*;
-    use adk_vision::onnx::{OnnxOptions, RfDetr};
+    use adk_vision::onnx::{OnnxOptions, RfDetr, YuNet};
     use adk_vision::{
         DecodeLimits, DetectQuery, FetchConfig, InMemoryAcceptanceStore, ManifestSet, ModelFetcher,
         PpOcrReader, PpOcrV6Size, RedactionClass, SourceImage,
@@ -718,8 +718,11 @@ mod local {
     const SEEDED: &[&str] =
         &["Ana", "Wanjiru", "Diaz", "ana.diaz", "example.com", "555-201", "7788", "123-45", "6789"];
 
-    /// The score `PersonRedactor` covers from.
+    /// The score `FaceRedactor` covers a person from.
     const PERSON_SCORE: f32 = 0.25;
+
+    /// The score `FaceRedactor` covers a face from.
+    const FACE_SCORE: f32 = 0.5;
 
     /// A COCO 2017 validation photo, pinned by SHA-256.
     struct Coco {
@@ -782,6 +785,7 @@ mod local {
     /// RF-DETR Nano and PP-OCRv6 tiny, small and medium, to check what left.
     struct Checkers {
         people: VisionRuntime,
+        faces: VisionRuntime,
         readers: Vec<(PpOcrV6Size, VisionRuntime)>,
     }
 
@@ -792,20 +796,33 @@ mod local {
             let detector =
                 RfDetr::new(&model, &OnnxOptions::default()).unwrap().with_threshold(0.05);
             let people = VisionRuntime::builder().detector(Arc::new(detector)).build().unwrap();
+            let manifest = ManifestSet::builtin().unwrap().get("yunet-2023mar").cloned().unwrap();
+            let model = fetcher().fetch(&manifest).await.unwrap();
+            let detector = YuNet::new(&model, &OnnxOptions::default()).unwrap().with_threshold(0.3);
+            let faces = VisionRuntime::builder().detector(Arc::new(detector)).build().unwrap();
             let mut readers = Vec::new();
             for size in [PpOcrV6Size::Tiny, PpOcrV6Size::Small, PpOcrV6Size::Medium] {
                 let reader = PpOcrReader::fetch(&fetcher(), size).await.unwrap();
                 let runtime = VisionRuntime::builder().reader(Arc::new(reader)).build().unwrap();
                 readers.push((size, runtime));
             }
-            Self { people, readers }
+            Self { people, faces, readers }
         }
 
         /// The person scores RF-DETR reports, best first.
         async fn people(&self, png: &[u8]) -> Vec<f32> {
+            Self::scores(&self.people, png, "person").await
+        }
+
+        /// The face scores YuNet reports, best first.
+        async fn faces(&self, png: &[u8]) -> Vec<f32> {
+            Self::scores(&self.faces, png, "face").await
+        }
+
+        async fn scores(runtime: &VisionRuntime, png: &[u8], label: &str) -> Vec<f32> {
             let image = SourceImage::decode(png, &DecodeLimits::default()).unwrap();
-            let query = DetectQuery::Classes(vec!["person".into()]);
-            let found = self.people.detect(&VisionCx::new(), &image, &query).await.unwrap();
+            let query = DetectQuery::Classes(vec![label.into()]);
+            let found = runtime.detect(&VisionCx::new(), &image, &query).await.unwrap();
             let mut scores: Vec<f32> = found.value.iter().filter_map(|r| r.score).collect();
             scores.sort_by(|a, b| b.total_cmp(a));
             scores
@@ -865,12 +882,12 @@ mod local {
 
     /// S3 with the real backends: the drawn identity card, the card with a real person's
     /// photo in the portrait's place, and a photo of two people go to Claude through the
-    /// pack's default redactors. In the bytes the provider received RF-DETR finds no person
-    /// and PP-OCRv6 tiny, small and medium find none of the seeded personal strings; each
-    /// egress copy is an artifact and its audit record links both digests.
+    /// pack's default redactors. In the bytes the provider received YuNet finds no face and
+    /// PP-OCRv6 tiny, small and medium find none of the seeded personal strings; each egress
+    /// copy is an artifact and its audit record links both digests.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    #[ignore = "needs the RF-DETR Nano and PP-OCRv6 weights and two COCO photos; see the module docs"]
-    async fn s3_the_default_redactors_leave_no_person_and_no_personal_string() {
+    #[ignore = "needs the YuNet, RF-DETR Nano and PP-OCRv6 weights and two COCO photos; see the module docs"]
+    async fn s3_the_default_redactors_leave_no_face_and_no_personal_string() {
         let checkers = Checkers::load().await;
         let photo_card = card_with_photo(&coco(&SKIER).await, [250, 30, 530, 400]);
         let baseball = coco(&BASEBALL).await.encode_png().unwrap();
@@ -922,32 +939,31 @@ mod local {
                 "{name}: the audit record links both digests"
             );
 
-            let before = checkers.people(source).await;
-            let after = checkers.people(bytes).await;
-            let covered = |scores: &[f32]| -> Vec<f32> {
-                scores.iter().copied().filter(|s| *s >= PERSON_SCORE).collect()
+            let (people, faces) = (checkers.people(source).await, checkers.faces(source).await);
+            let after = checkers.faces(bytes).await;
+            let over = |scores: &[f32], floor: f32| -> Vec<f32> {
+                scores.iter().copied().filter(|s| *s >= floor).collect()
             };
             let count = |class: RedactionClass| receipt.redactions.get(&class).copied();
             println!(
                 "{name}: source {} egress {}; redactions faces {:?} personal_text {:?}; people \
-                 (score >= {PERSON_SCORE}) before {:?} after {:?}; best person score before \
-                 {:.3} after {:.3}",
+                 (score >= {PERSON_SCORE}) in the source {:?}; faces (score >= {FACE_SCORE}) \
+                 before {:?} after {:?}",
                 receipt.source,
                 receipt.egress,
                 count(RedactionClass::faces()),
                 count(RedactionClass::personal_text()),
-                covered(&before),
-                covered(&after),
-                before.first().copied().unwrap_or(0.0),
-                after.first().copied().unwrap_or(0.0),
+                over(&people, PERSON_SCORE),
+                over(&faces, FACE_SCORE),
+                over(&after, FACE_SCORE),
             );
             assert!(
-                covered(&after).is_empty(),
-                "{name}: RF-DETR finds a person in the egress copy"
+                over(&after, FACE_SCORE).is_empty(),
+                "{name}: YuNet finds a face in the egress copy"
             );
             if *name != CARD {
                 assert!(
-                    !covered(&before).is_empty(),
+                    !over(&people, PERSON_SCORE).is_empty(),
                     "{name}: RF-DETR finds the person in the source"
                 );
                 assert!(count(RedactionClass::faces()) > Some(0), "{name}: the person was covered");

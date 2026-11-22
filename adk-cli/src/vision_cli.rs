@@ -45,10 +45,10 @@ const STATE_DIR: &str = ".adk/vision";
 const CLAUDE_MODEL: &str = "claude-haiku-5-5";
 const GEMINI_MODEL: &str = "gemini-3.7-flash";
 const NIM_VLM_MODEL: &str = "nvidia/nemotron-3.5-super-vl-120b-a12b";
-/// The detector the face redactor runs (spec 3.7 Q3: a person's whole box stands in for a
-/// face until a face detector is chosen).
+/// The detectors the face redactor runs (spec 3.7 Q3): YuNet for faces, RF-DETR Nano for
+/// each person YuNet finds no face for.
 #[cfg(feature = "vision-local")]
-const PERSON_DETECTOR: &str = "rf-detr-n";
+const FACE_DETECTORS: [&str; 2] = [adk_vision::DEFAULT_FACE_DETECTOR, "rf-detr-n"];
 
 /// `adk-rust vision` (spec 3.7 §8.1).
 #[derive(clap::Args, Debug, Clone)]
@@ -935,21 +935,26 @@ async fn redactors(
     fetcher: &ModelFetcher,
     set: &ManifestSet,
 ) -> Result<EgressGate> {
-    use adk_vision::onnx::{OnnxOptions, RfDetr};
-    use adk_vision::{PersonRedactor, PersonalTextRedactor, PpOcrReader, PpOcrV6Size};
+    use adk_vision::onnx::{OnnxOptions, RfDetr, YuNet};
+    use adk_vision::{FaceRedactor, PersonalTextRedactor, PpOcrReader, PpOcrV6Size};
 
     let classes = gate.redaction_classes();
     if classes.contains(&RedactionClass::faces()) {
-        let model = fetcher.fetch(lookup(set, PERSON_DETECTOR)?).await.with_context(|| {
-            format!(
-                "the face redactor needs `{PERSON_DETECTOR}`; fetch it with `adk-rust vision \
-                 models fetch {PERSON_DETECTOR}`"
-            )
-        })?;
-        // The redactor covers every person scoring 0.25 or more; RF-DETR reports from 0.5 by
-        // default, so the detector reports down to the redactor's floor.
-        let detector = RfDetr::new(&model, &OnnxOptions::default())?.with_threshold(0.25);
-        gate = gate.with_redactor(Arc::new(PersonRedactor::new(Arc::new(detector))));
+        let mut models = Vec::new();
+        for id in FACE_DETECTORS {
+            models.push(fetcher.fetch(lookup(set, id)?).await.with_context(|| {
+                format!(
+                    "the face redactor needs `{}` and `{}`; fetch them with `adk-rust vision \
+                     models fetch {} {}`",
+                    FACE_DETECTORS[0], FACE_DETECTORS[1], FACE_DETECTORS[0], FACE_DETECTORS[1]
+                )
+            })?);
+        }
+        // Each detector reports down to the redactor's floor: faces from 0.5, people from 0.25.
+        let faces = YuNet::new(&models[0], &OnnxOptions::default())?;
+        let people = RfDetr::new(&models[1], &OnnxOptions::default())?.with_threshold(0.25);
+        let redactor = FaceRedactor::new(Arc::new(faces)).with_person_fallback(Arc::new(people));
+        gate = gate.with_redactor(Arc::new(redactor));
     }
     if classes.contains(&RedactionClass::personal_text()) {
         let reader = PpOcrReader::fetch(fetcher, PpOcrV6Size::Tiny).await.context(
@@ -987,7 +992,9 @@ async fn run_task(project: &Path, task: RunTask) -> Result<()> {
         .with_context(|| format!("could not read {}", args.image.display()))?;
     let source = SourceImage::decode(&bytes, &DecodeLimits::default())?;
     let set = manifest_set(&args.manifests)?;
-    let fetcher = fetcher(project, None);
+    // The on-device profile loads models from the cache only, as HF_HUB_OFFLINE=1 does.
+    let on_device = rules(project, args.config.as_deref()).is_ok_and(|r| r.egress.on_device);
+    let fetcher = fetcher(project, on_device.then_some(true));
     let id = backend_id(&task);
     let remote =
         matches!(task, RunTask::Describe { .. }) || matches!(id.as_str(), "sam-3.1" | "nim");

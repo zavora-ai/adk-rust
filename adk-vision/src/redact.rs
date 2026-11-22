@@ -84,6 +84,7 @@ impl<T: ?Sized + Send + Sync + 'static> OnDevice<T> {
     }
 
     #[cfg(any(
+        test,
         feature = "onnx",
         feature = "onnx-dynamic",
         all(feature = "ocr", feature = "guardrail")
@@ -573,4 +574,104 @@ pub(crate) fn to_image_boxes(
         }
     }
     Ok(boxes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::{BackendDescriptor, Locality};
+    use crate::digest::Digest;
+    use crate::geometry::{CoordFrame, TransformChain};
+    use crate::media::DecodedImage;
+
+    /// Finds one region of a fixed label wherever it is asked.
+    struct Fixed(BackendDescriptor, &'static str, BBox);
+
+    #[async_trait]
+    impl Detector for Fixed {
+        fn descriptor(&self) -> &BackendDescriptor {
+            &self.0
+        }
+
+        async fn detect(
+            &self,
+            _: &VisionCx,
+            _: &SentImage,
+            _: &DetectQuery,
+        ) -> Result<Vec<RawRegion>> {
+            Ok(vec![RawRegion::boxed(self.2, self.1, 0.9)])
+        }
+    }
+
+    fn local(id: &str) -> BackendDescriptor {
+        BackendDescriptor::new(id, Locality::InProcess, CoordFrame::SentPixels)
+    }
+
+    fn missing(id: &'static str) -> OnDevice<dyn Detector> {
+        OnDevice::lazy(
+            id,
+            Box::new(move || {
+                Box::pin(async move {
+                    Err(VisionError::Offline { model: id.into(), file: "model.onnx".into() })
+                }) as Loading<dyn Detector>
+            }),
+        )
+    }
+
+    fn redactor(
+        faces: OnDevice<dyn Detector>,
+        people: Option<OnDevice<dyn Detector>>,
+    ) -> FaceRedactor {
+        FaceRedactor {
+            faces,
+            face_labels: vec!["face".into()],
+            face_min_score: 0.5,
+            people,
+            person_labels: vec!["person".into()],
+            person_min_score: 0.25,
+            margin: FACE_MARGIN,
+        }
+    }
+
+    fn image() -> SentImage {
+        SentImage::new(
+            Digest::of(b"frame"),
+            Arc::new(DecodedImage::filled(200, 200, [120, 120, 120, 255])),
+            TransformChain::new(200, 200),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_face_detector_that_cannot_load_covers_every_person_whole() {
+        let person = BBox::new(20.0, 10.0, 120.0, 190.0);
+        let people: Arc<dyn Detector> = Arc::new(Fixed(local("people"), "person", person));
+        let redactor = redactor(missing("yunet-2023mar"), Some(OnDevice::ready("people", people)));
+
+        let found = redactor.find_classified(&VisionCx::new(), &image()).await.unwrap();
+
+        assert_eq!(found, vec![(RedactionClass::people(), person.expanded(REDACTION_MARGIN))]);
+    }
+
+    #[tokio::test]
+    async fn without_a_person_fallback_a_missing_face_detector_refuses() {
+        let err = redactor(missing("yunet-2023mar"), None)
+            .find_classified(&VisionCx::new(), &image())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, VisionError::Offline { model, .. } if model == "yunet-2023mar"),
+            "{err}"
+        );
+
+        let faces: Arc<dyn Detector> =
+            Arc::new(Fixed(local("faces"), "face", BBox::new(40.0, 40.0, 60.0, 64.0)));
+        let err = redactor(OnDevice::ready("faces", faces), Some(missing("rf-detr-n")))
+            .find_classified(&VisionCx::new(), &image())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, VisionError::Offline { model, .. } if model == "rf-detr-n"),
+            "{err}"
+        );
+    }
 }

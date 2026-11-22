@@ -288,6 +288,10 @@ name = "local_redactor_tests"
 required-features = ["onnx", "ocr", "guardrail"]
 
 [[test]]
+name = "face_privacy_tests"
+required-features = ["stream"]
+
+[[test]]
 name = "ort_environment_tests"
 required-features = ["ocr"]
 
