@@ -108,6 +108,10 @@ track = ["dep:trackforge"]
 memory = ["dep:adk-rag", "dep:adk-memory", "adk-memory/graph-memory"]
 # The visual memory tests against adk-rag's embedded LanceDB backend (protoc needed).
 memory-lancedb = ["memory", "adk-rag/lancedb"]
+# The perceiver, reasoner and verifier roles and `VisionTeam` (§7.12): each role an adk-core
+# `Agent`, the perceiver's model through adk-agent's `LlmAgent`, disagreements held on the
+# governed path with the frame as evidence.
+team = ["guardrail", "dep:adk-agent", "dep:futures"]
 
 [dependencies]
 adk-core.workspace = true
@@ -136,6 +140,8 @@ adk-guardrail = { workspace = true, optional = true }
 adk-memory = { workspace = true, optional = true }
 # `memory`: chunks, collections and every vector store backend.
 adk-rag = { workspace = true, optional = true }
+# `team`: a perceiver with a model runs as an `LlmAgent`.
+adk-agent = { workspace = true, optional = true }
 # `mistralrs`: Qwen3-VL and the other mistral.rs vision models in process.
 adk-mistralrs = { workspace = true, optional = true }
 # Provider prices for preflight estimates, and the clients `nim` and `sam` build on.
@@ -181,7 +187,7 @@ adk-vision = { path = ".", features = ["conformance"] }
 # The governed-toolset scenarios (S1–S4, S7) run through `Runner` and `LlmAgent` with a
 # scripted model; the cloud contract tests replay recorded responses through the real
 # provider clients.
-adk-agent = { path = "../adk-agent" }
+adk-agent = { path = "../adk-agent", features = ["team-tools"] }
 # The eval agent scored by `adk-eval`'s vision criteria, in process.
 adk-eval = { path = "../adk-eval" }
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic", "gemini", "muse", "openai"] }
@@ -325,3 +331,11 @@ required-features = ["memory-lancedb"]
 [[test]]
 name = "memory_live_tests"
 required-features = ["memory", "onnx"]
+
+[[test]]
+name = "team_tests"
+required-features = ["team"]
+
+[[test]]
+name = "team_live_tests"
+required-features = ["team", "nim"]

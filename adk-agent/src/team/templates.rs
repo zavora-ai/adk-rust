@@ -56,6 +56,45 @@ pub enum TeamArchitectureTemplate {
         #[serde(default)]
         policy: TeamPolicy,
     },
+    /// A coordinator delegates to a perceiver, a reasoner and a verifier (spec 3.7 §7.12).
+    ///
+    /// Each member carries its role's capability, and each edge is isolated with no history
+    /// and the role's input schema; the reasoner and verifier edges validate what they return
+    /// against [`opinion_schema`](super::opinion_schema). See the
+    /// [`perception`](super::perception) roles.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_agent::{REASONER_CAPABILITY, TeamArchitectureTemplate, TeamPolicy};
+    ///
+    /// let spec = TeamArchitectureTemplate::PerceiveReasonVerify {
+    ///     name: "inspector".into(),
+    ///     coordinator: "lead".into(),
+    ///     perceiver: "perceiver".into(),
+    ///     reasoner: "reasoner".into(),
+    ///     verifier: "verifier".into(),
+    ///     policy: TeamPolicy::default(),
+    /// }
+    /// .lower()
+    /// .unwrap();
+    /// assert_eq!(spec.members[2].required_capabilities, vec![REASONER_CAPABILITY.to_string()]);
+    /// ```
+    PerceiveReasonVerify {
+        /// Team root name.
+        name: String,
+        /// Coordinator member name.
+        coordinator: String,
+        /// Perceiver member name.
+        perceiver: String,
+        /// Reasoner member name.
+        reasoner: String,
+        /// Verifier member name.
+        verifier: String,
+        /// Runtime policy.
+        #[serde(default)]
+        policy: TeamPolicy,
+    },
 }
 
 /// One manager branch in a hierarchical architecture.
@@ -131,6 +170,14 @@ impl TeamArchitectureTemplate {
                     policy: policy.clone(),
                 }
             }
+            Self::PerceiveReasonVerify {
+                name,
+                coordinator,
+                perceiver,
+                reasoner,
+                verifier,
+                policy,
+            } => super::perception::lower(name, coordinator, perceiver, reasoner, verifier, policy),
         };
         spec.validate()?;
         Ok(spec)

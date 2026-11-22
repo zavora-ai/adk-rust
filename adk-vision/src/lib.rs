@@ -19,7 +19,7 @@
 //!
 //! | Feature | Contents |
 //! |---------|----------|
-//! | (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor`, watch conditions ([`WatchEvaluator`]), calibration and measurement ([`Calibration`]) |
+//! | (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor`, watch conditions ([`WatchEvaluator`]), calibration and measurement ([`Calibration`]), the verifier loop ([`VerifierLoop`]) |
 //! | `fetch` | `ModelFetcher`: Hugging Face downloads by revision, SHA-256 checked before load, `HF_HUB_OFFLINE` honoured |
 //! | `conformance` | `conformance`: the suite every backend runs, and its test macros |
 //! | `eval` | `eval`: any runtime task as an `adk-eval` agent, in process or behind `cargo adk eval --agent-cmd` |
@@ -42,6 +42,7 @@
 //! | `track` | `ByteTracker`: ByteTrack through `trackforge`, anonymous tracks with stable identifiers across frames |
 //! | `gemini-video` | `GeminiVideoAnalyzer`: Gemini native video, through the File API above 20 MB, at an explicit frame rate and media resolution (implies `cloud`) |
 //! | `memory` | `memory`: `VisualMemory`, image embeddings as `adk-rag` chunks in any vector store with one embedding space per collection, text and example-image queries, `SiglipTextEmbedding` for `adk-rag` pipelines, captions with artifact references in `adk-memory`, erasure by source; the S16 week corpus |
+//! | `team` | `team`: the perceiver, reasoner and verifier roles and `VisionTeam`, which escalates a disagreement to a person on one card (implies `guardrail`) |
 //!
 //! [`VisionToolset`] — `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`,
 //! `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure` — is always built: each tool runs on
@@ -142,11 +143,14 @@ pub mod screen;
 mod sent;
 #[cfg(feature = "stream")]
 pub mod stream;
+#[cfg(feature = "team")]
+pub mod team;
 mod toolset;
 #[cfg(feature = "track")]
 mod track;
 mod tracker;
 mod traits;
+mod verify;
 pub mod video;
 mod watch;
 
@@ -223,6 +227,11 @@ pub use traits::{
     DocumentPage, DocumentReader, Editor, Embedder, EmbeddingSpace, ImageRegion, Metric,
     ReadOptions, Sampling, SegmentPrompt, Segmenter, TableCell, Tracker, VideoAnalysis,
     VideoAnalyzer, VideoEvent, VideoFrame, VideoInput, VideoPlan, VideoRequest, VideoUsage, Word,
+};
+pub use verify::{
+    ExpectedChange, LoopOutcome, Observation, Observer, RegionDiff, RegionExpectation,
+    VERIFICATION_TOOL, VerificationHold, VerificationReport, VerifiedAction, VerifierLoop,
+    check_change, diff_regions,
 };
 #[cfg(feature = "cloud")]
 pub use video::FramesAnalyzer;

@@ -136,16 +136,18 @@ pub use llm_agent::{
 pub use team::{
     BlackboardHistoryPolicy, BlackboardPolicy, BlackboardSchedule, BlackboardSpec,
     BlackboardTransition, CircuitBreakerPolicy, CompiledBlackboardTeam, CompiledTeam,
-    RelationshipApprovalPolicy, RelationshipFailureStrategy, RelationshipKind, RelationshipPolicy,
-    ResolvedTeamMember, StaticTeamAgentRegistry, TEAM_EDGE_ID_KEY, TEAM_EXECUTION_STATE_KEY,
-    TEAM_ROOT_INVOCATION_KEY, TeamAgentDescriptor, TeamAgentHealth, TeamAgentRegistry,
-    TeamArchitectureTemplate, TeamBudget, TeamContextPolicy, TeamEdgeExecution, TeamError,
-    TeamExecutionAnalysis, TeamExecutionSnapshot, TeamExecutionStatus, TeamExecutionUsage,
-    TeamFailurePolicy, TeamHistoryPolicy, TeamLifecycleContext, TeamLifecycleDecision,
-    TeamLifecycleHook, TeamLifecycleOutcome, TeamLifecyclePhase, TeamManagerBranch, TeamMemberSpec,
-    TeamPolicy, TeamRegistryRequirement, TeamRelationship, TeamReplayError, TeamResumePlan,
-    TeamResumePolicy, TeamRuntimeError, TeamSpec, TeamStateMergePolicy, TeamTerminationPolicy,
-    WorkflowArchitectureTemplate, analyze_team_execution, validate_team_replay,
+    PERCEIVER_CAPABILITY, REASONER_CAPABILITY, RelationshipApprovalPolicy,
+    RelationshipFailureStrategy, RelationshipKind, RelationshipPolicy, ResolvedTeamMember,
+    StaticTeamAgentRegistry, TEAM_EDGE_ID_KEY, TEAM_EXECUTION_STATE_KEY, TEAM_ROOT_INVOCATION_KEY,
+    TeamAgentDescriptor, TeamAgentHealth, TeamAgentRegistry, TeamArchitectureTemplate, TeamBudget,
+    TeamContextPolicy, TeamEdgeExecution, TeamError, TeamExecutionAnalysis, TeamExecutionSnapshot,
+    TeamExecutionStatus, TeamExecutionUsage, TeamFailurePolicy, TeamHistoryPolicy,
+    TeamLifecycleContext, TeamLifecycleDecision, TeamLifecycleHook, TeamLifecycleOutcome,
+    TeamLifecyclePhase, TeamManagerBranch, TeamMemberSpec, TeamPolicy, TeamRegistryRequirement,
+    TeamRelationship, TeamReplayError, TeamResumePlan, TeamResumePolicy, TeamRuntimeError,
+    TeamSpec, TeamStateMergePolicy, TeamTerminationPolicy, VERIFIER_CAPABILITY,
+    WorkflowArchitectureTemplate, analyze_team_execution, opinion_schema, perceiver_input_schema,
+    reasoner_input_schema, validate_team_replay, verifier_input_schema,
 };
 pub use tool_call_markup::{normalize_content, normalize_option_content};
 pub use tool_ledger::held_call_ledger_key;
