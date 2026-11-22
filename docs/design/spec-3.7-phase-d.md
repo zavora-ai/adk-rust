@@ -63,7 +63,7 @@ disagree the conservative reading applies and the row says so. "Class" is the
 | DA3-LARGE(-1.1), -GIANT, -NESTED | 0.35–1.40B | Apache-2.0 | CC BY-NC 4.0 (LARGE-1.1's card says Apache 2.0; the repository's table says CC BY-NC 4.0) | NonCommercial | — | — | — |
 | **MoGe-2** ViT-S, -B, -L | 35M, 104M, 326M | MIT (DINOv2 parts Apache-2.0) | MIT | Permissive | Metric point map, depth, normals | Estimates the field of view; takes it when known | Official `Ruicheng/moge-2-vits-normal-onnx`, 140.9 MB, raw forward pass only (no licence tag on the ONNX repository; the weights repository is MIT) |
 | MoGe-3 | 370M, 1.25B | MIT | MIT | Permissive | Metric | As MoGe-2 | None; "macOS is not supported" (needs Triton) |
-| ZoeDepth | ~345M (1.38 GB) | MIT | MIT | Permissive | Metric, trained on NYU and KITTI | Not used | — |
+| ZoeDepth | — (1.38 GB checkpoint) | MIT | MIT | Permissive | Metric, trained on NYU and KITTI | Not used | — |
 | Video Depth Anything Small, Metric Small | 28.4M | Apache-2.0 | Apache-2.0 (Base and Large CC BY-NC 4.0) | Permissive (Small) | Relative or metric, temporally consistent | Not used | — |
 | Prompt Depth Anything | 25.1M–340M | Apache-2.0 | Apache-2.0 | Permissive | Metric, given a low-resolution LiDAR depth prompt | — | — |
 | Metric3D v2 S, L, g | 412M (L) | BSD-2-Clause, "for further commercial inquiries, please contact…" | Not stated | Unknown: a user's manifest only | Metric through a canonical camera | Required (`cam_in`) | `onnx-community/metric3d-vit-small`, 150.7 MB (converter's tag CC0-1.0) |
@@ -72,7 +72,7 @@ disagree the conservative reading applies and the row says so. "Class" is the
 | Depth Pro 2 (2026-11-19) | 24M–872M | Apple sample-code licence | "for research use only" | NonCommercial | Metric | — | Core ML packages |
 | Marigold | UNet 3.46 GB | Apache-2.0 | "RAIL++-M" (README; one card says apache-2.0) | UseRestricted at best | Affine-invariant | — | — |
 | DepthCrafter | — | — | "academic, research and education purposes" | NonCommercial | Relative video depth | — | — |
-| DepthART | — | CC BY 4.0, one file CC BY-NC 4.0 | Distilled from Depth Anything V2 Large (CC BY-NC 4.0); the Hugging Face tag says apache-2.0 | Excluded until clarified | Metric | Required | 48.9 MB |
+| DepthART | — | CC BY 4.0, one file CC BY-NC 4.0 | Trained on supervision Depth Anything V2 Large generated (CC BY-NC 4.0); the Hugging Face tag says apache-2.0 | Excluded until clarified | Metric | Required | 48.9 MB |
 
 ### 3.2 Accuracy: metric against relative at 1–3 m
 
@@ -129,9 +129,9 @@ spans `s = f·S/Z` pixels for a focal length `f`. With its four corners located,
 marker's full pose; its translation is in the marker's units
 ([OpenCV ArUco tutorial](https://github.com/opencv/opencv/blob/4.x/doc/tutorials/objdetect/aruco_detection/aruco_detection.markdown)).
 The range error is `√((σs/s)² + (σf/f)² + (σS/S)²)`. For a 1920×1080 camera with `f ≈ 1400 px`,
-a focal length calibrated to 0.5% and a print tolerance of 0.5 mm†:
+a focal length calibrated to 0.5%, a print tolerance of 0.5 mm and corners located to ±0.3 px†:
 
-| Marker side | 1 m | 2 m | 3 m (corners ±0.3 px) | 3 m (corners ±1 px) |
+| Marker side | 1 m | 2 m | 3 m | 3 m, corners only to ±1 px |
 |---|---|---|---|---|
 | 50 mm | 1.3% | 1.6% | 2.1% | **6.2%** |
 | 100 mm | 0.8% | 0.9% | 1.2% | 3.1% |
@@ -167,7 +167,7 @@ Every corner of one planar marker lies at about one depth, so the fit cannot sep
 | b | Scaled on marker A, each depth backend reports the median range over held-out marker B, at another depth, within 5% | Yes for the anchored route; the threshold is confirmed by the first benchmark run (D-13) |
 | c | Each metric backend's zero-shot range to marker B is reported with its error | No — reported |
 | d | RF-DETR keypoints and the depth map normalise like S5: every keypoint lands within 2 px of ground truth in source pixels through a random transform chain, and depth sampled at a source pixel equals depth sampled at its image through the chain | Yes |
-| e | Lengths measured out of the fiducial's plane (a part raised on a block) are within 5% once depth is used, where today's planar calibration reports them wrongly | Yes |
+| e | Lengths measured out of the fiducial's plane (a part raised on a block) are within 5% once depth is used, where today's planar calibration reports them wrongly | Yes; the threshold confirmed with (b)'s |
 
 ### 3.5 Recommendation
 
@@ -296,7 +296,7 @@ pub struct RawDepth {
 pub enum DepthKind {
     /// Metres along the optical axis (REP 118), possibly off by an unknown scale.
     Metric,
-    /// Depth up to scale: MoGe's affine-free point map before its metric head.
+    /// Depth correct up to one global scale.
     UpToScale,
     /// Inverse depth up to scale and shift: Depth Anything V2's relative output.
     AffineInverse,
@@ -342,6 +342,19 @@ pub enum DepthScale {
     Model { abs_rel: f64 },
     /// Fitted to anchors: the fit's residual and the anchors' own uncertainty.
     Anchored { anchors: Vec<DepthAnchor>, residual_rel: f64 },
+}
+
+/// Something of known depth in the image, with its uncertainty.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
+pub enum DepthAnchor {
+    /// A fiducial's pose by PnP: its corners, at their depths.
+    Fiducial { region: usize, pose: Pose3, uncertainty_m: f64 },
+    /// A plane through a fiducial (the belt, the floor): every pixel of its mask.
+    Plane { mask: usize, normal: [f64; 3], offset_m: f64, uncertainty_m: f64 },
+    /// A registered depth sensor's raster.
+    Sensor { raster: Digest, uncertainty_rel: f64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -400,6 +413,15 @@ pub enum Shape3 {
 pub struct Pose3 {
     pub translation: [f64; 3],
     pub rotation: [f64; 4],
+}
+
+/// A keypoint in 3D: MediaPipe's world landmarks, or a 2D keypoint lifted with depth.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Keypoint3 {
+    pub at: [f64; 3],
+    pub visible: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<f32>,
 }
 ```
 
@@ -489,7 +511,7 @@ from each repository.
 | Option | Latest | Licence | Builds without ROS | Distros | Messages | Actions | Verdict |
 |---|---|---|---|---|---|---|---|
 | **`ros2-client`** (Atostek) on **RustDDS** | 0.12.1 (2026-10-26); RustDDS 0.15.1 | Apache-2.0 (Cargo.toml; the README carries the header; no root LICENSE file) | **Yes**: "does not link to rcl, rclcpp, or any non-Rust DDS library" | Humble to Lyrical by feature; Jazzy default | Serde structs; `.msg` generation "experimental" | Yes ("async required") | **Recommended.** Two backends: DDS interoperates with `rmw_fastrtps` and `rmw_cyclonedds`, Zenoh mirrors `rmw_zenoh`. CI on Ubuntu and macOS; Windows **UNVERIFIED** |
-| `hiroz` (ZettaScale, formerly `ros-z`) | 0.2.1 (2026-10-24) | Apache-2.0 OR MIT | Yes: "ROS 2 without ROS" | Humble to Rolling; interop CI against ROS images | Build-time codegen with RIHS01 hashes; bundles common packages, not `vision_msgs` | — | Alternate; Zenoh only; its README calls it "experimental software" |
+| `hiroz` (ZettaScale, formerly `ros-z`) | 0.2.1 (2026-10-24) | Apache-2.0 OR MIT | Yes: "ROS 2 without ROS" | Humble to Rolling; interop CI against ROS images | Build-time codegen with RIHS01 hashes; bundles common packages, not `vision_msgs` | **UNVERIFIED** | Alternate; Zenoh only; its README calls it "experimental software" |
 | `roslibrust` | 0.26.0 (2026-09-25) | MIT | Yes | rosbridge on Humble to Rolling; native through `hiroz` on Kilted and later | Build-time codegen from vendored `.msg` | **No** action trait | Not for S21, which needs actions |
 | `r2r` | 0.9.7 (2026-09-13) | MIT AND Apache-2.0 | **No**: panics "Source your ROS!"; needs libclang | Foxy to Lyrical | bindgen over the sourced ROS tree | Yes | Mature; fails the CI constraint |
 | `rclrs` (ros2-rust) | 0.8.0 (2026-09-23) | Apache-2.0 | **No**: links `rcl`, `rmw`; colcon plugins | Humble, Jazzy, Kilted, Lyrical, Rolling | `rosidl_generator_rs` in the ROS build | Yes (async, 0.6.0) | The official client; fails the CI constraint; a later optional backend for users with ROS |
