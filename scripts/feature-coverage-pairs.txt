@@ -485,6 +485,10 @@
 6 adk-vision onnx,fetch,conformance doc
 # The same backends against an onnxruntime loaded from ORT_DYLIB_PATH at run time: linted only.
 6 adk-vision onnx-dynamic lib
+# SAM 3 from user-supplied weights under the SAM License: the licence gate, a user manifest,
+# pre- and post-processing and the conformance suite on stand-in graphs; the weight-backed run
+# is ignored.
+6 adk-vision sam3-local doc
 # The cloud describers (spec 3.7 §7.7) on recorded responses, and Meta sam-3.1's request
 # building, stream parser and mask placement on recorded streams.
 6 adk-vision cloud,conformance doc
