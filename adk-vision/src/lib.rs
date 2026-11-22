@@ -27,6 +27,7 @@
 //! | `onnx` | `onnx`: RF-DETR, EfficientSAM, SAM 2.1 and SigLIP 2 on ONNX Runtime, the runtime downloaded at build time |
 //! | `onnx-dynamic` | The same backends against an onnxruntime library loaded from `ORT_DYLIB_PATH` |
 //! | `onnx-coreml`, `onnx-cuda` | The CoreML and CUDA execution providers for the `onnx` backends |
+//! | `sam3-local` | SAM 3 on ONNX Runtime from weights you supply under Meta's SAM License, after you accept it |
 //! | `cloud` | `LlmDescriber` over any `adk_core::Llm` that takes images, with the Gemini, Claude and 0–1000 region adapters; `FramesAnalyzer`, questions over sampled frames on the same models |
 //! | `nim` | NVIDIA NIM: vision-language models over the OpenAI-compatible client, and `NimDocumentReader` for NVIDIA's OCR, page, table and chart endpoints, remote (implies `cloud`) |
 //! | `sam` | The Meta `sam-3.1` client: `SamSegmenter`, its stream parser and mask placement; `SamVideoTracker`, masks with stable object identifiers over a clip |
