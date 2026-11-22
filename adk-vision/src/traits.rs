@@ -14,7 +14,7 @@ use crate::backend::BackendDescriptor;
 use crate::cx::VisionCx;
 use crate::edit::EditOp;
 use crate::error::Result;
-use crate::geometry::{BBox, EscalatedFrom, Mask, RawRegion, Region};
+use crate::geometry::{BBox, EscalatedFrom, Mask, RawRegion, Region, TrackId};
 use crate::media::{DecodedImage, FrameMeta};
 use crate::sent::{SentImage, VisionInput};
 
@@ -427,6 +427,13 @@ pub trait Tracker: Send {
 
     /// Forgets every track; identifiers start again. Called when the source session ends.
     fn reset(&mut self);
+
+    /// The tracks held after the last [`update`](Self::update), seen in that frame or kept
+    /// through a brief miss. A watch condition keeps its state for these, so an object the
+    /// detector misses for a frame does not fire again. None by default.
+    fn live_tracks(&self) -> Vec<TrackId> {
+        Vec::new()
+    }
 }
 
 /// How a video or stream is sampled, which every provider prices by.

@@ -11,7 +11,7 @@
 //! | `RtspSource` | `rtsp` | RTSP through `retina`: H.264, H.265, MJPEG | MJPEG in process; H.264 and H.265 through `ffmpeg` |
 //! | `FileSource` | `ffmpeg` | MP4 and MOV files | a user-installed `ffmpeg` binary |
 //! | `DeviceSource` | `device` | a camera on this machine: AVFoundation (macOS), v4l2 (Linux), DirectShow (Windows) | a user-installed `ffmpeg` binary |
-//! | `ScreenSource` | `screen` | a `ComputerActuator` screenshot or a computer-use-mcp observation, at an interval | PNG, JPEG |
+//! | `ScreenSource` | `screen` | a `ComputerActuator` screenshot or a computer-use-mcp observation, at an interval; with `computer-use`, `RuntimeObserver` and `screen_source` over any `ComputerUseRuntime` | PNG, JPEG |
 //! | `BrowserSource` | `browser` | the `browser_screenshot` tool, at an interval | PNG |
 //! | `SurfaceCameraSource` | `surface-camera` | frames the web home pushes through a `CameraFeed` | JPEG |
 //!
@@ -35,10 +35,17 @@
 //!   card, or a sample a person kept; [`FrameKeeper`] stores those for 30 days by default
 //!   (Q13), purges them after, and writes `vision.evidence.kept` and `.purged` records.
 //! - **Detection and tracking.** The detector runs through [`VisionRuntime`], so each frame
-//!   is metered like any other call and its regions come back in source pixels; the
+//!   is metered — in `UsageUnit::Frames`, at zero cost on the device — and its regions come
+//!   back in source pixels; the
 //!   [`Tracker`] gives them anonymous track identifiers that reset with the source session.
 //! - **Observations.** Each processed frame reaches an [`ObservationSink`]: watch
 //!   conditions, wakes and the live camera surface consume the stream there.
+//! - **Watches and wakes.** [`StreamWatch`] is the watch stage: it holds watch conditions
+//!   against every observation, keeps the frame of each event as its wake payload, and
+//!   delivers the event to a [`WatchSink`](crate::WatchSink) such as the kernel's
+//!   `VisionWakeSource`. [`FrameSources`] holds an operator's named sources and streams each
+//!   only while a watch is registered on it; the `vision_watch` tool starts and stops those
+//!   watches (spec 3.7 §7.8, §7.10).
 //!
 //! With the `conformance` feature, [`check_frame_source`] checks any source against the
 //! [`FrameSource`] contract: refused bad rates, rising indices and times, the sampling rate,
@@ -66,6 +73,8 @@ mod queue;
 mod records;
 mod retention;
 mod sampler;
+mod sources;
+mod watching;
 
 #[cfg(feature = "browser")]
 mod browser;
@@ -73,6 +82,8 @@ mod browser;
 mod camera;
 #[cfg(any(feature = "screen", feature = "browser"))]
 mod capture;
+#[cfg(all(feature = "screen", feature = "computer-use"))]
+mod computer_use;
 #[cfg(feature = "conformance")]
 mod conformance;
 #[cfg(feature = "device")]
@@ -101,6 +112,8 @@ pub use browser::BrowserSource;
 pub use camera::{CameraFeed, SurfaceCameraSource};
 #[cfg(any(feature = "screen", feature = "browser"))]
 pub use capture::observation_image;
+#[cfg(all(feature = "screen", feature = "computer-use"))]
+pub use computer_use::{RuntimeObserver, screen_source};
 #[cfg(feature = "conformance")]
 pub use conformance::{FrameSourceReport, check_frame_source};
 #[cfg(feature = "device")]
@@ -133,6 +146,10 @@ pub use rtsp::{RtspSource, RtspTransport};
 pub use sampler::Sampler;
 #[cfg(feature = "screen")]
 pub use screen::{ScreenSource, VisualObserver};
+pub use sources::{
+    FrameSources, SourceSpec, SourceStatus, StreamEnd, TrackerFactory, WatchChange, WatchOutcome,
+};
+pub use watching::StreamWatch;
 
 /// How many decoded frames a source holds for a consumer that has fallen behind, before it
 /// drops the oldest.

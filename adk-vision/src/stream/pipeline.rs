@@ -22,7 +22,7 @@ use super::records::{
 use crate::cx::VisionCx;
 use crate::digest::Digest;
 use crate::error::{Result, VisionError};
-use crate::geometry::Region;
+use crate::geometry::{Region, TrackId};
 use crate::media::{FrameMeta, FrameSourceId, SourceImage};
 use crate::runtime::{CallOptions, CallRecord, VisionRuntime};
 use crate::traits::{DetectQuery, Sampling, Tracker};
@@ -50,6 +50,9 @@ pub struct Observation {
     /// What the detector found, in source pixels, with the tracker's anonymous track
     /// identifiers.
     pub regions: Vec<Region>,
+    /// The tracks the tracker holds after this frame, seen in it or kept through a brief
+    /// miss ([`Tracker::live_tracks`]).
+    pub tracks: Vec<TrackId>,
     /// The detector's metered calls.
     pub calls: Vec<CallRecord>,
 }
@@ -63,7 +66,7 @@ impl Observation {
     }
 
     /// The observation as a [`WatchEvaluator`](crate::WatchEvaluator) takes it: source,
-    /// session, frame and tracked regions.
+    /// session, frame, tracked regions and the tracks the tracker still holds.
     pub fn tracked(&self) -> TrackedObservation {
         TrackedObservation::new(
             self.source.clone(),
@@ -71,6 +74,7 @@ impl Observation {
             self.frame_ref(),
             self.regions.clone(),
         )
+        .with_tracks(self.tracks.iter().copied())
     }
 }
 
@@ -155,7 +159,8 @@ pub enum SourceEvent {
 /// [`WatchEvaluator`](crate::WatchEvaluator) takes. A sink that holds watch conditions keeps
 /// the frame of each event as its wake payload, so the frame is stored redacted, and hands the
 /// event with the frame's artifact to a [`WatchSink`](crate::WatchSink) such as the kernel's
-/// `VisionWakeSource`:
+/// `VisionWakeSource`. [`StreamWatch`](super::StreamWatch) is that sink, with the
+/// `vision.watch.fired` record; in outline:
 ///
 /// ```
 /// use std::sync::{Arc, Mutex};
@@ -299,7 +304,7 @@ struct Detection {
 /// | Source and sampler | Frames at the sampling rate and size; the source drops what the pipeline cannot keep up with |
 /// | Frame governor | Thins, or pauses, frames to the [`FrameBudget`]; records each change |
 /// | Privacy | The [`PrivacyHook`] redacts every frame first; a failing hook drops the frame |
-/// | Detector | [`VisionRuntime::detect_with`], metered, regions in source pixels |
+/// | Detector | [`VisionRuntime::detect_with`], metered in frames, regions in source pixels |
 /// | Tracker | Anonymous track identifiers, reset when the stream starts and stops (V-I8) |
 /// | Sink | [`ObservationSink::observe`] |
 ///
@@ -413,16 +418,20 @@ impl StreamPipelineBuilder {
         self
     }
 
-    /// Detects `query` on every processed frame through `runtime`'s detection route.
+    /// Detects `query` on every processed frame through `runtime`'s detection route. Each
+    /// call is metered in [`UsageUnit::Frames`](adk_core::UsageUnit::Frames), so a stream
+    /// counts against frame caps and quotas, not image ones (spec 3.7 X3).
     pub fn detector(mut self, runtime: Arc<VisionRuntime>, query: DetectQuery) -> Self {
-        self.detection = Some(Detection { runtime, query, options: CallOptions::default() });
+        self.detection =
+            Some(Detection { runtime, query, options: CallOptions::default().as_frames() });
         self
     }
 
-    /// Sets the detection call's options: a route, a region of interest.
+    /// Sets the detection call's options: a route, a region of interest. The calls stay
+    /// metered as frames.
     pub fn detect_options(mut self, options: CallOptions) -> Self {
         if let Some(detection) = &mut self.detection {
-            detection.options = options;
+            detection.options = options.as_frames();
         }
         self
     }
@@ -691,12 +700,14 @@ impl StreamPipeline {
                     }
                 }
             };
-            let regions = match &self.tracker {
-                Some(tracker) => tracker
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .update(&meta, regions),
-                None => regions,
+            let (regions, tracks) = match &self.tracker {
+                Some(tracker) => {
+                    let mut tracker =
+                        tracker.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let regions = tracker.update(&meta, regions);
+                    (regions, tracker.live_tracks())
+                }
+                None => (regions, Vec::new()),
             };
             self.sink
                 .observe(
@@ -708,6 +719,7 @@ impl StreamPipeline {
                         image: redacted,
                         digest,
                         regions,
+                        tracks,
                         calls,
                     },
                 )

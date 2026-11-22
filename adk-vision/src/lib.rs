@@ -36,9 +36,10 @@
 //! | `ocr-vl-metal` | `ocr-vl` on Apple GPUs |
 //! | `mistralrs` | `mistralrs`: `LlmDescriber::mistralrs` loads a verified Qwen3-VL (or another mistral.rs vision model) in this process; regions in Qwen3-VL's own 0–1000 frame (implies `cloud`, `fetch`) |
 //! | `mistralrs-metal`, `mistralrs-cuda` | `mistralrs` on Apple GPUs or CUDA |
-//! | `stream` | `stream`: `FrameSource`, the sampler, the frame governor, frame retention and the stream pipeline |
+//! | `stream` | `stream`: `FrameSource`, the sampler, the frame governor, frame retention and the stream pipeline; `StreamWatch`, which keeps each watch event's frame and wakes a `WatchSink`; `FrameSources`, the named sources `vision_watch` starts and stops watches on |
 //! | `rtsp`, `ffmpeg`, `screen`, `browser`, `surface-camera` | The frame sources: `RtspSource`, `FileSource` (and H.264/H.265 through a user-installed ffmpeg), `ScreenSource`, `BrowserSource`, `SurfaceCameraSource` |
 //! | `device` | `DeviceSource`: a camera on this machine through a user-installed ffmpeg (AVFoundation, v4l2, DirectShow), and `DeviceSource::list` (implies `ffmpeg`) |
+//! | `computer-use` | `GroundedTarget::target_evidence` as `adk-computer-use` `TargetEvidence`; with `screen`, `stream::RuntimeObserver` and `stream::screen_source`, any `ComputerUseRuntime` as a screen frame source |
 //! | `stream-fixtures` | `stream::fixtures`: the generated conveyor clip and an in-process RTSP test server |
 //! | `track` | `ByteTracker`: ByteTrack through `trackforge`, anonymous tracks with stable identifiers across frames |
 //! | `gemini-video` | `GeminiVideoAnalyzer`: Gemini native video, through the File API above 20 MB, at an explicit frame rate and media resolution (implies `cloud`) |
@@ -46,7 +47,8 @@
 //! | `team` | `team`: the perceiver, reasoner and verifier roles and `VisionTeam`, which escalates a disagreement to a person on one card (implies `guardrail`) |
 //!
 //! [`VisionToolset`] — `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`,
-//! `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure` — is always built: each tool runs on
+//! `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure`, and with feature
+//! `stream` `vision_watch` over registered frame sources — is always built: each tool runs on
 //! the governed path, a remote call is held with the exact egress image as approval
 //! evidence, and every call, release and edit writes its `vision.*` audit record
 //! ([`audit`]).
@@ -216,6 +218,8 @@ pub use runtime::{
 #[cfg(feature = "sam")]
 pub use sam::{SamConfig, SamSegmenter, SamVideoTracker};
 pub use sent::{SentImage, VisionInput};
+#[cfg(feature = "stream")]
+pub use toolset::VISION_WATCH_TOOL;
 pub use toolset::{
     ANSWER_ARTIFACT_PREFIX, EgressApproval, VISION_EGRESS_POLICY_REF, VISION_TOOL_NAMES,
     VisionTool, VisionToolKind, VisionToolset, VisionToolsetBuilder, answer_artifact_name,
@@ -240,7 +244,7 @@ pub use video::{FramesAnalyzer, VisibilityPass};
 #[cfg(feature = "gemini-video")]
 pub use video::{GEMINI_INLINE_LIMIT, GeminiVideoAnalyzer, MediaResolution};
 pub use watch::{
-    FrameRef, TrackedObservation, VISION_WATCH_FIRED, VISION_WATCH_REGISTERED, WatchCondition,
-    WatchEvaluator, WatchEvent, WatchEventKind, WatchSink, Zone, ZoneAnchor,
-    watch_registered_draft,
+    FrameRef, TrackedObservation, VISION_WATCH_FIRED, VISION_WATCH_REGISTERED,
+    VISION_WATCH_STOPPED, WatchCondition, WatchEvaluator, WatchEvent, WatchEventKind, WatchSink,
+    Zone, ZoneAnchor, watch_registered_draft,
 };

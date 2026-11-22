@@ -57,6 +57,10 @@ pub const VISION_PAYLOAD_KIND: &str = "vision";
 /// below [`WAKE_PAYLOAD_LIMIT`] whatever a detector names its labels.
 const PAYLOAD_TEXT_CHARS: usize = 64;
 
+/// The most characters of the frame's artifact file name: a media-store name,
+/// `vision-<64 hex>.png`, is 75, and a cut name would name no artifact.
+const PAYLOAD_FILE_CHARS: usize = 128;
+
 /// The most bytes of a source name or a key part.
 const MAX_KEY_PART: usize = 128;
 
@@ -361,8 +365,9 @@ fn region_json(region: &VisualRegion) -> Value {
 /// `width`, `height`, `artifact`), `regions` (each `box`, `label`, `score`, `track`) and
 /// `moreRegions`, the count of regions left out.
 ///
-/// Texts are cut to 64 characters (the digest to 80) and boxes rounded to a tenth of a pixel,
-/// so the fixed part stays under 3 KiB; the regions kept are the longest prefix of
+/// Texts are cut to 64 characters (the digest to 80, the frame's file name to 128) and boxes
+/// rounded to a tenth of a pixel, so the fixed part stays under 3.5 KiB; the regions kept are
+/// the longest prefix of
 /// `wake.regions` that fits.
 ///
 /// # Example
@@ -393,7 +398,7 @@ pub fn vision_payload(source: &str, wake: &VisualWake) -> Value {
             "appName": text(&artifact.app_name),
             "userId": text(&artifact.user_id),
             "sessionId": text(&artifact.session_id),
-            "fileName": text(&artifact.file_name),
+            "fileName": clip(&artifact.file_name, PAYLOAD_FILE_CHARS),
             "version": artifact.version,
         });
     }
@@ -530,6 +535,16 @@ mod tests {
         });
         assert_eq!(received, published);
         assert_eq!(received.key, "queue:cam-1:s1:3:seal:detected");
+    }
+
+    #[test]
+    fn a_media_store_file_name_reaches_the_payload_whole() {
+        let file = format!("vision-{}.png", "0f".repeat(32));
+        let frame =
+            frame().with_artifact(ArtifactLocator::new("inspector", "line-1", "s1", &file, 0));
+        let wake = VisualWake::new("s1", "seal", "detected", 1, "seal", 0.9, frame);
+        let payload = vision_payload("cam-1", &wake);
+        assert_eq!(payload["frame"]["artifact"]["fileName"], json!(file));
     }
 
     #[test]

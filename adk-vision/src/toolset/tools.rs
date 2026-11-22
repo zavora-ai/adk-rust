@@ -20,7 +20,9 @@ use crate::media::{MediaScope, SourceImage};
 use crate::runtime::{CallOptions, CallRecord};
 use crate::traits::{DescribeSpec, DetectQuery, ReadOptions, SegmentPrompt};
 
-/// The names of every vision tool, in the order [`VisionToolKind::ALL`] lists them.
+/// The names of every vision tool: the image tools in the order [`VisionToolKind::ALL`]
+/// lists them, then `vision_watch` (feature `stream`, offered when the toolset has frame
+/// sources).
 ///
 /// # Example
 ///
@@ -36,6 +38,7 @@ pub const VISION_TOOL_NAMES: &[&str] = &[
     "vision_redact",
     "vision_annotate",
     "vision_measure",
+    "vision_watch",
 ];
 
 /// Which vision tool a [`VisionTool`] is.
@@ -70,7 +73,7 @@ pub enum VisionToolKind {
 }
 
 impl VisionToolKind {
-    /// Every tool, in [`VISION_TOOL_NAMES`] order.
+    /// Every image tool, in [`VISION_TOOL_NAMES`] order.
     pub const ALL: [Self; 8] = [
         Self::Detect,
         Self::Segment,

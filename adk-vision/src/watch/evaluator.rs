@@ -81,6 +81,65 @@ impl WatchEvaluator {
         &self.conditions
     }
 
+    /// The condition named `name`.
+    pub fn condition(&self, name: &str) -> Option<&WatchCondition> {
+        self.conditions.iter().find(|condition| condition.name == name)
+    }
+
+    /// Adds a condition while the stream runs. It starts with no streaks; the other
+    /// conditions keep theirs.
+    ///
+    /// # Errors
+    ///
+    /// [`VisionError::InvalidInput`] for an invalid condition or a name already in use.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_vision::{WatchCondition, WatchEvaluator};
+    ///
+    /// let mut watch = WatchEvaluator::new(Vec::new()).unwrap();
+    /// watch.add(WatchCondition::new("seal", ["torn seal"])).unwrap();
+    /// assert!(watch.add(WatchCondition::new("seal", ["scratch"])).is_err());
+    /// assert_eq!(watch.remove("seal").unwrap().labels, vec!["torn seal".to_string()]);
+    /// assert!(watch.conditions().is_empty());
+    /// ```
+    pub fn add(&mut self, condition: WatchCondition) -> Result<()> {
+        condition.validate()?;
+        if self.condition(&condition.name).is_some() {
+            return Err(VisionError::InvalidInput(format!(
+                "a watch condition named `{}` is already registered; each name keys its own events",
+                condition.name
+            )));
+        }
+        self.conditions.push(condition);
+        for state in self.sources.values_mut() {
+            state.last_fire.push(None);
+        }
+        Ok(())
+    }
+
+    /// Removes the condition named `name`, with its state; the other conditions keep theirs.
+    pub fn remove(&mut self, name: &str) -> Option<WatchCondition> {
+        let index = self.conditions.iter().position(|condition| condition.name == name)?;
+        let removed = self.conditions.remove(index);
+        let shift = |c: usize| if c > index { c - 1 } else { c };
+        for state in self.sources.values_mut() {
+            state.last_fire.remove(index);
+            state.streaks = std::mem::take(&mut state.streaks)
+                .into_iter()
+                .filter(|((c, _), _)| *c != index)
+                .map(|((c, track), streak)| ((shift(c), track), streak))
+                .collect();
+            state.fired = std::mem::take(&mut state.fired)
+                .into_iter()
+                .filter(|(c, _)| *c != index)
+                .map(|(c, track)| (shift(c), track))
+                .collect();
+        }
+        Some(removed)
+    }
+
     /// Forgets every source's state, as a new session would.
     pub fn reset(&mut self) {
         self.sources.clear();
@@ -189,4 +248,67 @@ fn event_regions(
         .collect();
     others.sort_by(|a, b| score(b).total_cmp(&score(a)));
     std::iter::once(firing).chain(others).cloned().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::BackendId;
+    use crate::digest::Digest;
+    use crate::geometry::{BBox, CoordFrame, RegionOrigin, Shape, TransformChain};
+    use crate::watch::FrameRef;
+
+    fn seen(index: u64, labels: &[(&str, u64)]) -> TrackedObservation {
+        let digest = Digest::of(&index.to_be_bytes());
+        let regions = labels
+            .iter()
+            .map(|(label, track)| Region {
+                image: digest,
+                shape: Shape::Box(BBox::new(10.0, 10.0, 40.0, 40.0)),
+                label: Some((*label).into()),
+                score: Some(0.9),
+                track: Some(TrackId(*track)),
+                origin: RegionOrigin {
+                    backend: BackendId::new("scripted"),
+                    manifest: None,
+                    frame: CoordFrame::SentPixels,
+                    chain: TransformChain::new(640, 480),
+                    escalated_from: None,
+                },
+            })
+            .collect();
+        TrackedObservation::new(
+            FrameSourceId("cam".into()),
+            "s1",
+            FrameRef::new(index, Utc::now(), digest, 640, 480),
+            regions,
+        )
+    }
+
+    #[test]
+    fn adding_and_removing_a_condition_keeps_the_others_streaks() {
+        let mut watch = WatchEvaluator::new(vec![
+            WatchCondition::new("first", ["seal"]).with_min_frames(1),
+            WatchCondition::new("second", ["seal"]).with_min_frames(3),
+        ])
+        .unwrap();
+        // `first` fires at once; `second` has a streak of two.
+        let fired: Vec<String> = (0..2)
+            .flat_map(|i| watch.observe(&seen(i, &[("seal", 4)])))
+            .map(|e| e.condition)
+            .collect();
+        assert_eq!(fired, vec!["first"]);
+        // Removing `first` shifts `second` to index 0 with its streak intact.
+        assert!(watch.remove("first").is_some());
+        assert!(watch.remove("first").is_none());
+        watch.add(WatchCondition::new("third", ["seal"]).with_min_frames(2)).unwrap();
+        let next: Vec<String> =
+            watch.observe(&seen(2, &[("seal", 4)])).into_iter().map(|e| e.condition).collect();
+        assert_eq!(next, vec!["second"], "the third frame of `second`'s streak; `third` has one");
+        let after: Vec<String> =
+            watch.observe(&seen(3, &[("seal", 4)])).into_iter().map(|e| e.condition).collect();
+        assert_eq!(after, vec!["third"]);
+        // `second` and `third` fired for track 4 once each; nothing fires again.
+        assert!(watch.observe(&seen(4, &[("seal", 4)])).is_empty());
+    }
 }

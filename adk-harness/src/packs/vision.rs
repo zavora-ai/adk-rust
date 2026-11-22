@@ -5,8 +5,8 @@
 //!
 //! | Piece | What the pack does |
 //! |-------|--------------------|
-//! | Tools | `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`, `vision_crop`, `vision_redact`, `vision_annotate` join the harness tools, so RBAC, hooks and the class registry cover them |
-//! | Classes | A call that stays on the device is `Read`. A call that sends an image off it is `External`: trusted read-only under an `allow` rule, otherwise held in Ask and Auto and denied in ReadOnly and Plan |
+//! | Tools | The tools the runtime has a backend for join the harness tools, so RBAC, hooks and the class registry cover them (table below) |
+//! | Classes | A call that stays on the device is `Read`. A call that sends an image off it is `External`: trusted read-only under an `allow` rule, otherwise held in Ask and Auto and denied in ReadOnly and Plan. `vision_watch` lists as `Read`; starting or stopping a watch is `External`, `Idempotent` from a trusted origin |
 //! | Egress rules | `.adk/vision.toml` in the workspace, or the operator's [`VisionPack::config`]. Faces and personal text are always redacted; a workspace file's `allow` rules count only when the operator trusts them ([`VisionPack::trust_workspace_rules`]) |
 //! | Redactors | The operator's [`VisionPack::redactor`]s; with feature `vision-local`, RF-DETR Nano for `faces` and PP-OCRv6 for `personal_text` for each required class none covers. A required class no redactor covers refuses every release |
 //! | Approvals | The toolset's egress policy joins the operator policy, so a rule that asks holds the call, and the held call carries the exact egress image as evidence |
@@ -15,6 +15,22 @@
 //!
 //! Nothing in the pack is `ComputerUse`: screen actions stay in the computer-use and browser
 //! packs.
+//!
+//! | Tool | Offered when | Does | Effect |
+//! |------|--------------|------|--------|
+//! | `vision_detect` | the runtime has a detector | Objects by class or concept, boxes in the image's pixels | `ReadOnly` |
+//! | `vision_segment` | a segmenter | Masks from concepts, boxes or points | `ReadOnly` |
+//! | `vision_read` | a document reader | Text, tables and fields, delivered as screened untrusted text | `ReadOnly` |
+//! | `vision_describe` | a describer | An answer as text or a schema's value, delivered as screened untrusted text | `ReadOnly` |
+//! | `vision_crop` | an editor | A new image of one region | `Idempotent` |
+//! | `vision_redact` | an editor | A new image with regions filled solid black | `Idempotent` |
+//! | `vision_annotate` | an editor | A new image with labelled boxes | `Idempotent` |
+//! | `vision_measure` | a segmenter | Maximum length and area in millimetres under a fiducial's calibration | `ReadOnly` |
+//! | `vision_watch` | [`VisionPack::frame_sources`] | Lists the operator's frame sources; starts or stops a watch condition that wakes a sleeping agent | `Idempotent` |
+//!
+//! A woken turn names the kept frame by the digest its wake payload carries; the image tools
+//! load it from the session's artifacts, so the operator keeps wake frames in the session the
+//! sleeping process runs in.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -22,9 +38,11 @@ use std::sync::Arc;
 use adk_core::audit_log::AuditTrail;
 use adk_core::egress::EgressPolicy;
 use adk_core::{AdkError, Llm, Result, Tool, ToolContext, ToolEffect, ToolPolicy};
+use adk_vision::stream::FrameSources;
 use adk_vision::{
     EgressAction, EgressGate, EgressRecorder, ImagePrivacyGuardrail, InMemoryEgressRecorder,
-    MediaStore, RedactionClass, Redactor, VisionConfig, VisionRuntime, VisionToolset,
+    MediaStore, RedactionClass, Redactor, VISION_WATCH_TOOL, VisionConfig, VisionRuntime,
+    VisionToolset,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -96,6 +114,7 @@ pub struct VisionPack {
     recorder: Arc<dyn EgressRecorder>,
     model_hosts: Vec<String>,
     classes: (String, String),
+    sources: Option<FrameSources>,
     #[cfg(feature = "vision-local")]
     fetcher: Option<adk_vision::ModelFetcher>,
 }
@@ -129,9 +148,18 @@ impl VisionPack {
             recorder: Arc::new(InMemoryEgressRecorder::new()),
             model_hosts: Vec::new(),
             classes: ("document".to_string(), "document_crop".to_string()),
+            sources: None,
             #[cfg(feature = "vision-local")]
             fetcher: None,
         }
+    }
+
+    /// Offers `vision_watch` over `sources`: the agent lists the operator's frame sources and
+    /// starts or stops watch conditions on them; each event keeps its frame and wakes the
+    /// process sleeping on the source (spec 3.7 §7.8, §7.10).
+    pub fn frame_sources(mut self, sources: FrameSources) -> Self {
+        self.sources = Some(sources);
+        self
     }
 
     /// Installs an on-device redactor: `PersonRedactor` for faces, `PersonalTextRedactor`
@@ -268,10 +296,12 @@ impl VisionPack {
                  (spec 3.7 X15)",
             ));
         }
-        let toolset = VisionToolset::builder(Arc::new(runtime))
-            .data_classes(&self.classes.0, &self.classes.1)
-            .build()
-            .map_err(AdkError::from)?;
+        let mut toolset = VisionToolset::builder(Arc::new(runtime))
+            .data_classes(&self.classes.0, &self.classes.1);
+        if let Some(sources) = self.sources {
+            toolset = toolset.frame_sources(sources);
+        }
+        let toolset = toolset.build().map_err(AdkError::from)?;
         Ok(VisionPackRuntime { toolset, gate, model_hosts: self.model_hosts })
     }
 }
@@ -418,7 +448,37 @@ struct VisionClasses {
 
 impl CallClasses for VisionClasses {
     fn class_of_call(&self, tool: &str, args: &Value) -> Option<ToolKind> {
-        self.toolset.is_tool(tool).then(|| class_for(self.toolset.egress_action(tool, args)))
+        if !self.toolset.is_tool(tool) {
+            return None;
+        }
+        if tool == VISION_WATCH_TOOL {
+            return Some(watch_class(args));
+        }
+        Some(class_for(self.toolset.egress_action(tool, args)))
+    }
+}
+
+/// The class of a `vision_watch` call: `list` reads; `start` and `stop` change what streams
+/// and what wakes, so they are `External`, `Idempotent` from the pack's trusted origin.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::ToolEffect;
+/// use adk_harness::ToolKind;
+/// use adk_harness::packs::vision::watch_class;
+/// use serde_json::json;
+///
+/// assert_eq!(watch_class(&json!({ "action": "list" })), ToolKind::Read);
+/// assert_eq!(
+///     watch_class(&json!({ "action": "start", "source": "line-1", "name": "seal" })),
+///     ToolKind::External { effect: ToolEffect::Idempotent, trusted_origin: true }
+/// );
+/// ```
+pub fn watch_class(args: &Value) -> ToolKind {
+    match args.get("action").and_then(Value::as_str) {
+        Some("list") => ToolKind::Read,
+        _ => ToolKind::External { effect: ToolEffect::Idempotent, trusted_origin: true },
     }
 }
 
