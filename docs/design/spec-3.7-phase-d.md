@@ -564,7 +564,7 @@ tracks, becomes a message. Regions leave; pixels do not.
 | `RegionOrigin` (backend, manifest) | `VisionInfo` (`method`, `database_location`, `database_version`), latched | The transform chain stays in adk-vision; every published box is already in source pixels |
 | The frame's digest and artifact | `adk_vision_msgs/FrameRef { header, digest, artifact }` with the same header | `vision_msgs` "decouple[s] source data from the detection" and tells consumers to match by header, so the digest travels beside the detections, not inside them |
 | `Region3` with `Shape3::Box` | `Detection3D.bbox` (`BoundingBox3D`: centre `Pose`, size in metres) in the optical frame | — |
-| `Keypoints` | `adk_vision_msgs/Keypoints2DArray` | `vision_msgs` has no keypoint message; a small Apache-2.0 package, published with the bridge |
+| `Keypoints` | `adk_vision_msgs/Keypoints2DArray` | `vision_msgs` has no keypoint message; a small Apache-2.0 ROS package published with the bridge, which a consumer installs to decode it and standard consumers ignore |
 | `CameraIntrinsics` | `sensor_msgs/CameraInfo` (`k`, `d`, `p`, `distortion_model`) | "K[0] == 0.0 indicates an uncalibrated camera" |
 | `DepthMap` | `sensor_msgs/Image`, `32FC1` metres (REP 118), with `CameraInfo` | Published only when configured |
 | Masks, polygons, frames | Not published by default | A frame published to ROS is pixels leaving the process: only a redacted frame, only when configured, recorded as an egress |
