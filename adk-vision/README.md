@@ -27,6 +27,7 @@ Local-first perception for Rust Agent Development Kit (ADK-Rust) agents.
 | Video | `SourceClip`, `VideoSource`, `FramesAnalyzer`, `SamVideoTracker` | `analyze_video` holds a call's frames before anything leaves; questions over sampled frames on any model (`cloud`), tracks through a clip with `sam-3.1` video (`sam`) |
 | Tools | `VisionToolset` | `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`, `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure` on the governed path; a remote call is held with the exact egress image and releases only that digest |
 | Watch | `WatchCondition`, `WatchEvaluator`, `WatchSink` | Conditions held on the device against tracked objects; one event per object, keyed for the kernel's `VisionWakeSource`, never carrying pixels |
+| Memory | `VisualMemory`, `VisualQuery`, `SiglipTextEmbedding` | Image embeddings as `adk-rag` chunks in any vector store, found by text or an example image; one embedding space per collection; captions with artifact references in `adk-memory`; erasure by source (`memory`) |
 | Measurement | `Calibration`, `Measurement` | A fiducial of known size gives pixels per millimetre; maximum length and area from masks with their uncertainty, valid only in the fiducial's plane |
 | Privacy | `PersonRedactor`, `PersonalTextRedactor`, `ImagePrivacyGuardrail` | Faces and personal text filled solid black on the device — by default RF-DETR Nano (`onnx`) and PP-OCRv6 (`ocr`), loaded on first use; the same gate on model requests, tool results and user input |
 
@@ -66,6 +67,8 @@ features — `fetch`, `cloud`, `nim`, `sam`, `guardrail` — as `adk_rust::visio
 | `track` | `ByteTracker`: ByteTrack through `trackforge` 0.5, anonymous tracks that keep their identifiers through jitter and occlusion |
 | `computer-use` | `GroundedTarget::target_evidence`: a chosen set-of-marks candidate as `adk-computer-use` `TargetEvidence`, bounds in logical points at the screenshot's device pixel ratio |
 | `gemini-video` | `GeminiVideoAnalyzer`: Gemini native video, uploading clips above 20 MB once through the File API, at an explicit frame rate and media resolution; implies `cloud` |
+| `memory` | `VisualMemory`: image embeddings as `adk-rag` chunks with the caption, artifact, digest, region, source, capture time and run; text and example-image search with day, kind and source filters; the collection's embedding space recorded and any other refused; captions in `adk-memory` and sources in its graph memory; `erase_source` with a `vision.memory.erased` record; the S16 week corpus |
+| `memory-lancedb` | The visual memory tests against `adk-rag`'s embedded LanceDB backend (needs `protoc`) |
 
 ## Quick Start
 
@@ -293,6 +296,17 @@ unless a wake, a card or a person keeps them through `FrameKeeper`, which stores
 redacted frames, for 30 days by default. See
 [Streams](../docs/official_docs/vision/streams.md).
 
+## Visual Memory
+
+`VisualMemory` (feature `memory`) embeds each image through the runtime and stores it as an
+`adk-rag` chunk in any `VectorStore`: the caption is its text, the artifact its `source_uri`,
+and its metadata names the digest, region, source, capture time and the run that stored it.
+`search_text` and `search_image` find images in the same SigLIP 2 space, and every hit links
+to its artifact and run. The collection records its embedding space and refuses any other, so
+a new embedder means a new collection. Captions go to `adk-memory` with a reference to their
+artifact, and `erase_source` removes a source's chunks, captions, graph entity and unshared
+artifacts. See [Visual memory](../docs/official_docs/vision/memory.md).
+
 ## Documentation
 
 - [Getting started: a Document desk](../docs/official_docs/vision/getting-started.md), from
@@ -309,6 +323,9 @@ redacted frames, for 30 days by default. See
 - [Vision benchmarks](../docs/official_docs/vision/benchmarks.md)
 - [Streams](../docs/official_docs/vision/streams.md): sources, sampling, the frame governor,
   the privacy step, retention and the stream pipeline
+- [Visual memory](../docs/official_docs/vision/memory.md): image embeddings as `adk-rag`
+  chunks, text and example-image queries, one embedding space per collection, captions in
+  `adk-memory`, erasure by source
 - [Spec 3.7](../docs/design/spec-3.7-vision.md)
 
 ## License

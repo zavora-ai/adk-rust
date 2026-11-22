@@ -268,6 +268,22 @@ pub enum VisionError {
         source: std::io::Error,
     },
 
+    /// A visual memory collection holds vectors of another embedding space; vectors of two
+    /// spaces never share a collection.
+    #[error(
+        "collection `{collection}` holds vectors of embedding space {recorded}, not {offered}; \
+         re-index into a new collection with this embedder, or use the embedder the collection \
+         was built with"
+    )]
+    SpaceMismatch {
+        /// The collection.
+        collection: String,
+        /// The space the collection recorded, or a note that its record could not be read.
+        recorded: String,
+        /// The space of the embedder that was offered.
+        offered: String,
+    },
+
     /// An error from the platform: a budget or spend refusal, a frozen kill switch, storage.
     #[error(transparent)]
     Core(#[from] AdkError),
@@ -303,6 +319,7 @@ impl VisionError {
             Self::Parse { .. } => "vision.parse",
             Self::Backend { .. } => "vision.backend",
             Self::Io { .. } => "vision.io",
+            Self::SpaceMismatch { .. } => "vision.memory.space_mismatch",
             Self::Core(_) => "vision.core",
         }
     }
@@ -316,6 +333,7 @@ impl VisionError {
             | Self::Decode(_)
             | Self::InputTooLarge { .. }
             | Self::Manifest { .. }
+            | Self::SpaceMismatch { .. }
             | Self::InvalidInput(_) => ErrorCategory::InvalidInput,
             Self::NotReleased { .. }
             | Self::EgressRefused { .. }
