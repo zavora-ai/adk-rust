@@ -304,6 +304,10 @@ name = "stream_device_tests"
 required-features = ["device"]
 
 [[test]]
+name = "stream_device_live_tests"
+required-features = ["device", "onnx"]
+
+[[test]]
 name = "stream_sources_tests"
 required-features = ["screen", "browser", "surface-camera"]
 

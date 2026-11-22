@@ -459,14 +459,23 @@ impl DeviceSource {
     /// The error for a camera ffmpeg could not open, with what to try on this platform.
     fn open_error(&self, input: &CaptureInput, err: VisionError) -> VisionError {
         let message = match err {
-            VisionError::Backend { message, .. } => message,
+            // ffmpeg's log lines, joined by `forward`, without their prefixes.
+            VisionError::Backend { message, .. } => {
+                message.split("; ").map(log_text).collect::<Vec<_>>().join("; ")
+            }
             other => other.to_string(),
         };
+        let not_found = message.contains("Invalid device index")
+            || message.contains("not found")
+            || message.contains("No such file or directory");
         let (what, hint) = match input {
             CaptureInput::TestPattern => ("the test pattern".to_string(), ""),
             CaptureInput::Device { api, input } => (
                 format!("{api} device `{input}`"),
                 match api {
+                    DeviceApi::AvFoundation if not_found => {
+                        "; `adk-rust vision sources list` shows the devices ffmpeg can open"
+                    }
                     DeviceApi::AvFoundation => {
                         "; on macOS the first capture asks for camera permission for the app that runs this process (usually the terminal): allow it in System Settings → Privacy & Security → Camera and run again. Also check the device with `adk-rust vision sources list` and that the capture rate and size are a mode it offers"
                     }
@@ -568,7 +577,8 @@ fn device_input(
     }
 }
 
-/// A log line without ffmpeg's `[context @ 0x…] ` prefix and `[info] ` level tag.
+/// A log line without ffmpeg's `[context @ 0x…] ` prefix and its `[info] ` (or other) level
+/// tag.
 fn log_text(line: &str) -> &str {
     let mut text = line.trim_end_matches('\r');
     if text.starts_with('[')
@@ -577,7 +587,10 @@ fn log_text(line: &str) -> &str {
     {
         text = &text[end + 2..];
     }
-    text.strip_prefix("[info] ").unwrap_or(text)
+    ["[info] ", "[warning] ", "[error] ", "[fatal] "]
+        .iter()
+        .find_map(|tag| text.strip_prefix(tag))
+        .unwrap_or(text)
 }
 
 fn parse_avfoundation(output: &str) -> Vec<CaptureDevice> {
@@ -911,5 +924,19 @@ mod tests {
         let text = err.to_string();
         assert!(text.contains("Cannot use Huddly GO"), "{text}");
         assert!(text.contains("Privacy & Security → Camera"), "{text}");
+        let err = source.open_error(
+            &input,
+            VisionError::Backend {
+                backend: "ffmpeg".into(),
+                message: "[AVFoundation indev @ 0xbef00c140] [error] Invalid device index; [fatal] Error opening input files: Input/output error".into(),
+            },
+        );
+        let text = err.to_string();
+        assert!(
+            text.contains(": Invalid device index; Error opening input files"),
+            "the log prefixes go: {text}"
+        );
+        assert!(!text.contains("Privacy"), "a missing device is not a permission: {text}");
+        assert!(text.contains("sources list"), "{text}");
     }
 }
