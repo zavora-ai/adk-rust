@@ -1,0 +1,8 @@
+[AVFoundation indev @ 0x706c1c140] AVFoundation video devices:
+[AVFoundation indev @ 0x706c1c140] [0] Huddly GO
+[AVFoundation indev @ 0x706c1c140] [1] OBS Virtual Camera
+[AVFoundation indev @ 0x706c1c140] [2] Capture screen 0
+[AVFoundation indev @ 0x706c1c140] AVFoundation audio devices:
+[in#0 @ 0x706c1c000] Error opening input: Input/output error
+Error opening input file .
+Error opening input files: Input/output error

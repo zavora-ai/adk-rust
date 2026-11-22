@@ -10,6 +10,8 @@
 //! | `vision run detect\|segment\|read\|describe <image>` | `VisionRuntime` with one backend, the `EgressGate` of `.adk/vision.toml` for a remote one |
 //! | `vision run … --backend sam-3.1 --mask-decoder boxes\|external\|licensed` | `SamConfig::with_mask_decoder`: `[sam.masks]` of `.adk/vision.toml` unless a flag chooses; `licensed` needs feature `vision-sam-codec` and `vision models accept sam-mask-codec` |
 //! | `vision egress log` | The project's `.adk/vision/egress.jsonl`, written by the gate before each release (V-I3) |
+//! | `vision sources list` | `DeviceSource::list`: the cameras and screens a user-installed ffmpeg lists, no camera permission needed |
+//! | `vision sources test <source>` | `DeviceSource`, `RtspSource` or `FileSource`: a few sampled frames, their size, rate and brightness; credentials redacted, nothing stored |
 //!
 //! Everything a project keeps is beside its `.adk/vision.toml`, in `.adk/vision/`.
 
@@ -19,6 +21,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use adk_core::egress::EgressPolicy;
+use adk_vision::stream::{
+    DeviceApi, DeviceSelector, DeviceSource, FfmpegBinary, FileSource, FrameSource, RtspSource,
+};
 use adk_vision::{
     AcceptanceStore, BBox, CallOptions, CallRecord, DataClass, DecodeLimits, DescribeSpec,
     DetectQuery, Digest, DocumentPage, EditOp, EgressGate, EgressRecord, EgressRecorder,
@@ -28,6 +33,7 @@ use adk_vision::{
     SegmentPrompt, Shape, SourceImage, TransformChain, VisionConfig, VisionCx, VisionError,
     VisionRuntime, VisionRuntimeBuilder, VisionTask, apply_edit,
 };
+use adk_vision::{FramePixels, FrameSourceId, Sampling};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
@@ -77,6 +83,59 @@ pub enum VisionCommands {
     Egress {
         #[command(subcommand)]
         command: EgressCommand,
+    },
+
+    /// Frame sources: the cameras on this machine, and a sampled probe of a camera, an RTSP
+    /// URL or a video file
+    ///
+    /// Example: `adk-rust vision sources list`, then `adk-rust vision sources test 0`.
+    Sources {
+        #[command(subcommand)]
+        command: SourcesCommand,
+    },
+}
+
+/// `adk-rust vision sources`.
+#[derive(clap::Subcommand, Debug, Clone)]
+pub enum SourcesCommand {
+    /// The cameras and screens ffmpeg can capture on this machine; needs no camera permission
+    List {
+        /// table or json
+        #[arg(long, value_enum, default_value_t = ListFormat::Table)]
+        output: ListFormat,
+    },
+
+    /// Open a source, sample a few frames, and report their size, rate and brightness;
+    /// nothing is stored
+    ///
+    /// SOURCE is a device from `sources list` (its index, its name or `/dev/videoN`), an
+    /// `rtsp://` URL, an MP4 or MOV file, or `testsrc` for ffmpeg's test pattern. On macOS
+    /// the first capture from a camera asks for camera permission for the terminal.
+    Test {
+        /// A device index, name or node, an `rtsp://` URL, a video file, or `testsrc`
+        #[arg(value_name = "SOURCE")]
+        source: String,
+        /// Frames to sample
+        #[arg(long, default_value_t = 5)]
+        frames: usize,
+        /// Frames a second to sample
+        #[arg(long, default_value_t = 2.0)]
+        fps: f32,
+        /// Scale frames down to this long edge, in pixels
+        #[arg(long, value_name = "PX")]
+        max_long_edge: Option<u32>,
+        /// A camera's capture rate, one it offers (default 30)
+        #[arg(long, value_name = "FPS")]
+        frame_rate: Option<f32>,
+        /// A camera's capture size, one it offers, such as `1280x720` (default: the camera's)
+        #[arg(long, value_name = "WIDTHxHEIGHT")]
+        video_size: Option<String>,
+        /// Seconds to wait for each frame
+        #[arg(long, value_name = "SECS", default_value_t = 20)]
+        timeout: u64,
+        /// table or json
+        #[arg(long, value_enum, default_value_t = ListFormat::Table)]
+        output: ListFormat,
     },
 }
 
@@ -308,6 +367,7 @@ pub async fn run(args: VisionArgs) -> Result<()> {
         VisionCommands::Egress { command: EgressCommand::Log { since, output } } => {
             egress_log(&project, since.as_deref(), output)
         }
+        VisionCommands::Sources { command } => sources(command).await,
     }
 }
 
@@ -1303,6 +1363,316 @@ fn short(digest: &Digest) -> String {
     digest.to_string().chars().take(25).collect()
 }
 
+// --- sources ---------------------------------------------------------------------------
+
+async fn sources(command: SourcesCommand) -> Result<()> {
+    match command {
+        SourcesCommand::List { output } => list_sources(output).await,
+        SourcesCommand::Test {
+            source,
+            frames,
+            fps,
+            max_long_edge,
+            frame_rate,
+            video_size,
+            timeout,
+            output,
+        } => {
+            let mode = CaptureMode {
+                frame_rate,
+                video_size: video_size.as_deref().map(parse_video_size).transpose()?,
+            };
+            let probe = probe_source(
+                &source,
+                &mode,
+                Sampling { fps, max_long_edge },
+                frames,
+                std::time::Duration::from_secs(timeout),
+            )
+            .await?;
+            print_probe(&probe, output)
+        }
+    }
+}
+
+async fn list_sources(output: ListFormat) -> Result<()> {
+    let (version, devices) = tokio::task::spawn_blocking(|| {
+        let version = FfmpegBinary::from_env().check()?;
+        DeviceSource::list().map(|devices| (version, devices))
+    })
+    .await??;
+    if output == ListFormat::Json {
+        let rows: Vec<Value> = devices
+            .iter()
+            .map(|d| {
+                json!({
+                    "index": d.index,
+                    "name": d.name,
+                    "kind": d.kind.as_str(),
+                    "open": d.selector.to_string(),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
+    }
+    let api = DeviceApi::native().map_or("-", DeviceApi::ffmpeg_format);
+    // `ffmpeg version 8.0.1 Copyright …` becomes `ffmpeg 8.0.1`.
+    let version = match version.split_whitespace().collect::<Vec<_>>().as_slice() {
+        ["ffmpeg", "version", number, ..] => format!("ffmpeg {number}"),
+        _ => version,
+    };
+    if devices.is_empty() {
+        println!("{version} lists no camera through {api}");
+        return Ok(());
+    }
+    println!("{version} through {api}:");
+    println!("{:<6} {:<7} {:<32} test with", "index", "kind", "name");
+    for d in &devices {
+        println!(
+            "{:<6} {:<7} {:<32} adk-rust vision sources test {}",
+            d.index,
+            d.kind.as_str(),
+            d.name,
+            shell_word(&d.selector.to_string())
+        );
+    }
+    if DeviceApi::native() == Some(DeviceApi::AvFoundation) {
+        println!(
+            "The first capture from a camera asks for camera permission for this terminal \
+             (System Settings → Privacy & Security → Camera); a screen needs Screen Recording."
+        );
+    }
+    Ok(())
+}
+
+/// `word`, quoted for a POSIX shell when it holds anything but plain characters.
+fn shell_word(word: &str) -> String {
+    if !word.is_empty()
+        && word.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-'))
+    {
+        word.to_string()
+    } else {
+        format!("'{}'", word.replace('\'', r"'\''"))
+    }
+}
+
+/// A camera's capture mode from the command line.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct CaptureMode {
+    frame_rate: Option<f32>,
+    video_size: Option<(u32, u32)>,
+}
+
+fn parse_video_size(text: &str) -> Result<(u32, u32)> {
+    let invalid = || anyhow!("--video-size `{text}` is not WIDTHxHEIGHT, such as 1280x720");
+    let (width, height) = text.split_once(['x', 'X', '×']).ok_or_else(invalid)?;
+    let parse = |v: &str| v.trim().parse::<u32>().ok().filter(|v| *v > 0).ok_or_else(invalid);
+    Ok((parse(width)?, parse(height)?))
+}
+
+/// What `sources test` opens.
+#[derive(Debug)]
+enum ProbeTarget {
+    Device(DeviceSource),
+    Rtsp(RtspSource),
+    File(FileSource),
+}
+
+impl ProbeTarget {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Device(device) if device.selector().is_none() => "test pattern",
+            Self::Device(_) => "device",
+            Self::Rtsp(_) => "rtsp",
+            Self::File(_) => "file",
+        }
+    }
+
+    /// The source as it may be shown: an RTSP URL without its credentials.
+    fn label(&self) -> String {
+        match self {
+            Self::Device(device) => device
+                .selector()
+                .map_or_else(|| "ffmpeg testsrc2".to_string(), |s| format!("device `{s}`")),
+            Self::Rtsp(camera) => camera.url().to_string(),
+            Self::File(file) => file.path().display().to_string(),
+        }
+    }
+
+    fn source(&self) -> &dyn FrameSource {
+        match self {
+            Self::Device(device) => device,
+            Self::Rtsp(camera) => camera,
+            Self::File(file) => file,
+        }
+    }
+}
+
+/// Reads SOURCE: `testsrc`, an `rtsp://` URL, an existing file, or a device. No error repeats
+/// a URL, which may hold a password.
+fn probe_target(text: &str, mode: &CaptureMode) -> Result<ProbeTarget> {
+    let device = |source: DeviceSource| {
+        let source = match mode.frame_rate {
+            Some(rate) => source.with_frame_rate(rate),
+            None => source,
+        };
+        match mode.video_size {
+            Some((width, height)) => source.with_video_size(width, height),
+            None => source,
+        }
+    };
+    if text == "testsrc" {
+        let pattern = DeviceSource::test_pattern(FrameSourceId("testsrc".into()));
+        return Ok(ProbeTarget::Device(device(pattern)));
+    }
+    if let Some((scheme, _)) = text.split_once("://") {
+        if scheme.eq_ignore_ascii_case("rtsp") {
+            return Ok(ProbeTarget::Rtsp(RtspSource::new(FrameSourceId("rtsp".into()), text)?));
+        }
+        bail!("`{scheme}://` sources are not supported; sources test reads rtsp:// URLs");
+    }
+    let path = Path::new(text);
+    if path.is_file() {
+        return Ok(ProbeTarget::File(FileSource::new(FrameSourceId("file".into()), path)));
+    }
+    Ok(ProbeTarget::Device(device(DeviceSource::new(
+        FrameSourceId("device".into()),
+        DeviceSelector::parse(text),
+    ))))
+}
+
+/// What `sources test` saw.
+#[derive(Debug)]
+struct Probe {
+    kind: &'static str,
+    label: String,
+    frames: usize,
+    first_frame: std::time::Duration,
+    elapsed: std::time::Duration,
+    /// Presentation times of the first and last frame.
+    span: (std::time::Duration, std::time::Duration),
+    sizes: std::collections::BTreeSet<(u32, u32)>,
+    /// Mean brightness of each frame, 0–255.
+    brightness: Vec<f64>,
+}
+
+async fn probe_source(
+    text: &str,
+    mode: &CaptureMode,
+    sampling: Sampling,
+    count: usize,
+    timeout: std::time::Duration,
+) -> Result<Probe> {
+    use futures::StreamExt;
+
+    if count == 0 {
+        bail!("--frames must be at least 1");
+    }
+    let target = probe_target(text, mode)?;
+    let started = std::time::Instant::now();
+    let mut stream = target.source().frames(sampling).await?;
+    let mut probe = Probe {
+        kind: target.kind(),
+        label: target.label(),
+        frames: 0,
+        first_frame: std::time::Duration::ZERO,
+        elapsed: std::time::Duration::ZERO,
+        span: (std::time::Duration::ZERO, std::time::Duration::ZERO),
+        sizes: std::collections::BTreeSet::new(),
+        brightness: Vec::new(),
+    };
+    while probe.frames < count {
+        let next = tokio::time::timeout(timeout, stream.next()).await.map_err(|_| {
+            let hint = if probe.frames == 0
+                && matches!(target, ProbeTarget::Device(_))
+                && DeviceApi::native() == Some(DeviceApi::AvFoundation)
+            {
+                "; on macOS, check that this terminal may use the camera in System Settings → \
+                 Privacy & Security → Camera"
+            } else {
+                ""
+            };
+            anyhow!("no frame from {} within {} s{hint}", probe.label, timeout.as_secs())
+        })?;
+        let Some(frame) = next else { break };
+        let frame = frame?;
+        if probe.frames == 0 {
+            probe.first_frame = started.elapsed();
+            probe.span.0 = frame.pts;
+        }
+        probe.span.1 = frame.pts;
+        probe.frames += 1;
+        if let FramePixels::Ephemeral(pixels) = &frame.pixels {
+            probe.sizes.insert(pixels.size());
+            probe.brightness.push(brightness(pixels.rgba()));
+        }
+    }
+    probe.elapsed = started.elapsed();
+    // Dropping the stream stops the source and kills any ffmpeg it started.
+    drop(stream);
+    if probe.frames == 0 {
+        bail!("{} ended before its first frame", probe.label);
+    }
+    Ok(probe)
+}
+
+/// Mean of the red, green and blue channels over every 16th pixel.
+fn brightness(rgba: &[u8]) -> f64 {
+    let (sum, n) = rgba.chunks_exact(4).step_by(16).fold((0u64, 0u64), |(sum, n), p| {
+        (sum + u64::from(p[0]) + u64::from(p[1]) + u64::from(p[2]), n + 3)
+    });
+    if n == 0 { 0.0 } else { sum as f64 / n as f64 }
+}
+
+fn print_probe(probe: &Probe, output: ListFormat) -> Result<()> {
+    let gap = (probe.frames > 1)
+        .then(|| (probe.span.1 - probe.span.0).as_secs_f64() / (probe.frames - 1) as f64);
+    let mean = probe.brightness.iter().sum::<f64>() / probe.brightness.len().max(1) as f64;
+    let low = probe.brightness.iter().copied().fold(f64::INFINITY, f64::min);
+    let high = probe.brightness.iter().copied().fold(0.0, f64::max);
+    if output == ListFormat::Json {
+        let body = json!({
+            "source": probe.label,
+            "kind": probe.kind,
+            "frames": probe.frames,
+            "firstFrameMs": probe.first_frame.as_millis() as u64,
+            "elapsedMs": probe.elapsed.as_millis() as u64,
+            "meanGapMs": gap.map(|g| (g * 1000.0).round() as u64),
+            "sizes": probe.sizes.iter().map(|(w, h)| json!([w, h])).collect::<Vec<_>>(),
+            "brightness": { "mean": mean.round(), "min": low.round(), "max": high.round() },
+            "stored": false,
+        });
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let sizes = probe.sizes.iter().map(|(w, h)| format!("{w}×{h}")).collect::<Vec<_>>().join(", ");
+    println!("{:<12} {} ({})", "source", probe.label, probe.kind);
+    println!("{:<12} {:.2} s to the first frame", "opened", probe.first_frame.as_secs_f64());
+    match gap {
+        Some(gap) => println!(
+            "{:<12} {} in {:.2} s, one every {gap:.3} s of media time",
+            "frames",
+            probe.frames,
+            probe.elapsed.as_secs_f64()
+        ),
+        None => println!("{:<12} 1 in {:.2} s", "frames", probe.elapsed.as_secs_f64()),
+    }
+    println!("{:<12} {sizes}", "size");
+    println!(
+        "{:<12} mean {mean:.0} of 255 (lowest frame {low:.0}, highest {high:.0})",
+        "brightness"
+    );
+    if high < 8.0 {
+        println!(
+            "{:<12} every frame is black: a covered lens, or a camera not yet allowed",
+            "warning"
+        );
+    }
+    println!("{:<12} nothing; the frames stayed in memory", "stored");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use adk_vision::EgressAction;
@@ -1468,5 +1838,69 @@ mod tests {
         assert_eq!(backend_id(&detect), "rf-detr-n");
         let describe = RunTask::Describe { run, question: "?".into(), model: None, regions: false };
         assert_eq!(backend_id(&describe), "claude");
+    }
+
+    #[test]
+    fn a_source_is_a_test_pattern_a_url_a_file_or_a_device() {
+        let mode = CaptureMode::default();
+        let target = probe_target("testsrc", &mode).unwrap();
+        assert_eq!((target.kind(), target.label()), ("test pattern", "ffmpeg testsrc2".into()));
+        let target = probe_target("rtsp://admin:hunter2@10.0.0.8:554/stream1", &mode).unwrap();
+        assert_eq!((target.kind(), target.label()), ("rtsp", "rtsp://10.0.0.8:554/stream1".into()));
+        assert!(!format!("{target:?}").contains("hunter2"));
+        let dir = tempfile::tempdir().unwrap();
+        let clip = dir.path().join("dock.mp4");
+        std::fs::write(&clip, b"").unwrap();
+        let target = probe_target(clip.to_str().unwrap(), &mode).unwrap();
+        assert_eq!((target.kind(), target.label()), ("file", clip.display().to_string()));
+        let target = probe_target("Huddly GO", &mode).unwrap();
+        assert_eq!((target.kind(), target.label()), ("device", "device `Huddly GO`".into()));
+        let target = probe_target("0", &mode).unwrap();
+        assert_eq!(target.label(), "device `0`");
+    }
+
+    #[test]
+    fn other_urls_are_refused_without_repeating_them() {
+        let err = probe_target("http://admin:hunter2@cam.local/mjpeg", &CaptureMode::default())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("http://") && !err.contains("hunter2"), "{err}");
+        let err =
+            probe_target("rtsp://admin:hunter2@", &CaptureMode::default()).unwrap_err().to_string();
+        assert!(!err.contains("hunter2"), "{err}");
+    }
+
+    #[test]
+    fn video_sizes_and_shell_words_parse() {
+        assert_eq!(parse_video_size("1280x720").unwrap(), (1280, 720));
+        assert_eq!(parse_video_size("640×480").unwrap(), (640, 480));
+        assert!(parse_video_size("1280").is_err());
+        assert!(parse_video_size("0x720").is_err());
+        assert_eq!(shell_word("0"), "0");
+        assert_eq!(shell_word("/dev/video2"), "/dev/video2");
+        assert_eq!(shell_word("Huddly GO"), "'Huddly GO'");
+        assert_eq!(shell_word("Bob's Cam"), r"'Bob'\''s Cam'");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sources_test_samples_the_test_pattern_and_stores_nothing() {
+        if let Err(err) = FfmpegBinary::from_env().check() {
+            eprintln!("skipping: {err}");
+            return;
+        }
+        let mode = CaptureMode { frame_rate: Some(30.0), video_size: Some((640, 360)) };
+        let probe = probe_source(
+            "testsrc",
+            &mode,
+            Sampling { fps: 5.0, max_long_edge: Some(320) },
+            4,
+            std::time::Duration::from_secs(20),
+        )
+        .await
+        .unwrap();
+        assert_eq!(probe.frames, 4);
+        assert_eq!(probe.sizes.into_iter().collect::<Vec<_>>(), vec![(320, 180)]);
+        assert_eq!(probe.span, (std::time::Duration::ZERO, std::time::Duration::from_millis(600)));
+        assert!(probe.brightness.iter().all(|b| *b > 8.0), "{:?}", probe.brightness);
     }
 }

@@ -10,6 +10,7 @@
 //! |--------|---------|--------|--------|
 //! | `RtspSource` | `rtsp` | RTSP through `retina`: H.264, H.265, MJPEG | MJPEG in process; H.264 and H.265 through `ffmpeg` |
 //! | `FileSource` | `ffmpeg` | MP4 and MOV files | a user-installed `ffmpeg` binary |
+//! | `DeviceSource` | `device` | a camera on this machine: AVFoundation (macOS), v4l2 (Linux), DirectShow (Windows) | a user-installed `ffmpeg` binary |
 //! | `ScreenSource` | `screen` | a `ComputerActuator` screenshot or a computer-use-mcp observation, at an interval | PNG, JPEG |
 //! | `BrowserSource` | `browser` | the `browser_screenshot` tool, at an interval | PNG |
 //! | `SurfaceCameraSource` | `surface-camera` | frames the web home pushes through a `CameraFeed` | JPEG |
@@ -74,6 +75,8 @@ mod camera;
 mod capture;
 #[cfg(feature = "conformance")]
 mod conformance;
+#[cfg(feature = "device")]
+mod device;
 #[cfg(feature = "ffmpeg")]
 mod ffmpeg;
 #[cfg(feature = "stream-fixtures")]
@@ -100,6 +103,10 @@ pub use camera::{CameraFeed, SurfaceCameraSource};
 pub use capture::observation_image;
 #[cfg(feature = "conformance")]
 pub use conformance::{FrameSourceReport, check_frame_source};
+#[cfg(feature = "device")]
+pub use device::{
+    CaptureDevice, DEFAULT_CAPTURE_RATE, DeviceApi, DeviceKind, DeviceSelector, DeviceSource,
+};
 #[cfg(feature = "ffmpeg")]
 pub use ffmpeg::{FFMPEG_ENV, FfmpegBinary, FileSource};
 pub use governor::{

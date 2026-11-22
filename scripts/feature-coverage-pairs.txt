@@ -157,8 +157,8 @@
 # The in-process ONNX embedder for long-term memory, off by default so the default build
 # needs no network (spec 3.1 §7.15.2).
 8 adk-cli memory-local
-# `adk-rust vision` (spec 3.7 §8.1): manifests, licences, the egress log and `vision run`;
-# with `vision-local` the on-device backends and the gate's redactors.
+# `adk-rust vision` (spec 3.7 §8.1): manifests, licences, the egress log, `vision run` and
+# `vision sources`; with `vision-local` the on-device backends and the gate's redactors.
 8 adk-cli vision
 8 adk-cli vision-local
 # `vision run --mask-decoder licensed`: the SAM-licensed codec behind recorded acceptance.
@@ -511,6 +511,11 @@
 # adk-rag pipeline, erasure by source — and the S16 week corpus, with the doctests; the
 # SigLIP 2 run is ignored.
 6 adk-vision memory doc
+# Local cameras (spec 3.7 §7.13): the AVFoundation, v4l2 and DirectShow device listings on
+# recorded outputs, and capture with ffmpeg's testsrc2 standing in for a camera through the
+# frame source conformance check (skipping, saying so, without ffmpeg); the RF-DETR run on a
+# real camera is ignored.
+6 adk-vision device,conformance doc
 # `onnx-coreml`, `onnx-cuda` and `ocr-vl-metal` need GPU toolchains a runner does not have, and
 # stay out as adk-mistralrs's `cuda` and `metal` do.
 6 adk-site gen-astro
