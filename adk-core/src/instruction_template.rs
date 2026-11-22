@@ -159,10 +159,9 @@ async fn replace_match(ctx: &dyn InvocationContext, content: &str) -> Result<Str
                         format!(
                             "State variable '{var_name}' not found. Set it in session state, or \
                              write {{{var_name}?}} when it may be absent. If the braces are text \
-                             rather than a placeholder, set the instruction with \
-                             `instruction_provider`, which sends it as written, or write \
-                             {{{{{var_name}}}}} or \\{{{var_name}}}, which reach the model \
-                             unchanged"
+                             rather than a placeholder, move that text to `static_instruction`, \
+                             which sends it as written, or write {{{{{var_name}}}}} or \
+                             \\{{{var_name}}}, which reach the model unchanged"
                         ),
                     ))
                 }

@@ -200,9 +200,9 @@ async fn test_missing_variable_error() {
             ErrorCategory::InvalidInput,
             "agent.instruction.state_missing",
             "State variable 'group' not found. Set it in session state, or write {group?} when \
-             it may be absent. If the braces are text rather than a placeholder, set the \
-             instruction with `instruction_provider`, which sends it as written, or write \
-             {{group}} or \\{group}, which reach the model unchanged",
+             it may be absent. If the braces are text rather than a placeholder, move that text \
+             to `static_instruction`, which sends it as written, or write {{group}} or \
+             \\{group}, which reach the model unchanged",
         )
     );
 }
