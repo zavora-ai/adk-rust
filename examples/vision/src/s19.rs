@@ -95,7 +95,9 @@ async fn sandboxed(
 ) -> Result<Sandboxed> {
     let exe = std::env::current_exe()?;
     let bin = exe.parent().context("the binary's directory")?;
-    let scratch = tempfile::tempdir()?;
+    // Beside the binary rather than under /tmp, which bubblewrap covers with an empty mount
+    // when the network is denied.
+    let scratch = tempfile::Builder::new().prefix("s19-").tempdir_in(bin)?;
     let report = scratch.path().join("report.json");
     let tmp = scratch.path().join("tmp");
     std::fs::create_dir_all(&tmp)?;
