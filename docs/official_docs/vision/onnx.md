@@ -22,6 +22,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 | `onnx-dynamic` | The same backends against an onnxruntime library loaded at run time from `ORT_DYLIB_PATH`, for offline and production builds |
 | `onnx-coreml` | `OnnxExecutionProvider::CoreMl` (links only on Apple targets) |
 | `onnx-cuda` | `OnnxExecutionProvider::Cuda` (downloads the CUDA build of onnxruntime) |
+| `sam3-local` | `Sam3` and `Sam3Tracker`: Meta's SAM 3 from weights you supply under the SAM License, after you accept it ([SAM 3 Under the SAM License](#sam-3-under-the-sam-license)). In no `adk-rust` tier. Implies `onnx` |
 
 ## Backends
 
@@ -31,6 +32,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 | `EfficientSam` | `Segmenter` | Point and box prompts | One mask per object, scored by predicted IoU | `SentPixels` (images over 1024 px are downscaled first) |
 | `Sam2` | `Segmenter` | Point and box prompts | One mask per object, scored by predicted IoU | `ModelInput` 1024×1024, stretched |
 | `SigLip2` | `Embedder` | Images and texts | Unit-length vectors, `Metric::Cosine` | — |
+| `Sam3` (`sam3-local`) | `Segmenter`, `Detector` | Concept prompts and `DetectQuery`; point and box prompts with `Sam3::with_tracker` | Masks (segmenting) or boxes (detecting), labelled with the concept | `ModelInput` 1008×1008, stretched |
+| `Sam3Tracker` (`sam3-local`) | `Segmenter` | Point and box prompts | One mask per object, scored by predicted IoU | `ModelInput` 1008×1008, stretched |
 
 Each backend is built from a `VerifiedModel`, so a file loads only after its size and
 SHA-256 matched the manifest (V-I10). It reads its input size, letterbox, normalisation and
@@ -228,10 +231,128 @@ with a manifest of its own. A `local` source points at the directory holding the
 | `EfficientSam` | The `.onnx` file whose name contains `encoder`, and the one containing `decoder` | `input` (the long edge the runtime downscales to) |
 | `Sam2` | The `.onnx` file containing `encoder` but not `decoder`, the one containing `decoder`, and their `.onnx_data` beside them | `input`, `mean`, `std` |
 | `SigLip2` | The `.onnx` file containing `vision`, the one containing `text`, and `tokenizer.json` | `input`, `mean`, `std` |
+| `Sam3` | The `.onnx` file containing `vision`, the one containing `text`, the one containing `decoder`, and `tokenizer.json`; licence `LicenseRef-SAM`, `useRestricted` | `input`, `mean`, `std` (1008×1008, stretch and 0.5 when absent) |
+| `Sam3Tracker` | As `Sam2`; licence `LicenseRef-SAM`, `useRestricted` | As `Sam3` |
 
 RF-DETR's graph may name its outputs `pred_boxes` and `logits` (the Transformers.js
 export) or `dets` and `labels` (RF-DETR's own `export()`); an RF-DETR-Seg export's mask
 output is found by name (`pred_masks`, `masks`) or as the other rank-4 output.
+
+## SAM 3 Under the SAM License
+
+Feature `sam3-local` runs Meta's SAM 3 on the device: `Sam3` segments and detects every
+instance of a noun phrase, as the cloud `sam-3.1` does, and `Sam3Tracker` segments from
+points and boxes. ADK-Rust ships the backends, not the model:
+
+| Item | State |
+|------|-------|
+| Weights | Meta publishes SAM 3 and SAM 3.1 on Hugging Face ([`facebook/sam3`](https://huggingface.co/facebook/sam3), [`facebook/sam3.1`](https://huggingface.co/facebook/sam3.1)) behind an access request Meta approves by hand. The request asks for a name, date of birth, country, affiliation and job title, and its checkbox accepts the SAM License and Meta's Privacy Policy |
+| ONNX | Meta publishes PyTorch and safetensors checkpoints only. `Sam3` reads the graph layout of the Transformers `Sam3Model`, `Sam3Tracker` that of Transformers.js's `Sam3TrackerModel` |
+| Built-in record | None. A record would either pin Meta's gated checkpoint, which `ort` cannot run, or an export someone else redistributed, which would route every user around Meta's access request. You write the manifest for weights you obtained |
+| Licence | The [SAM License](https://github.com/facebookresearch/sam3/blob/a13e358df479a80938c8bfed0e0754bea8fdb277/LICENSE) (`LicenseRef-SAM`), the text that also governs `adk-vision-sam-codec`. `Sam3::new` and `Sam3Tracker::new` refuse a manifest that names another licence or class, so the weights never load without a recorded acceptance |
+
+> **Important:** the SAM License binds whoever uses or distributes SAM 3 weights or their
+> exports: distribution only under the SAM License with a copy of it (clause 1.b.i);
+> acknowledging SAM in published research (1.b.ii); no use for ITAR-controlled activities or
+> end uses Trade Controls prohibit, including military, warfare, nuclear, espionage and
+> weapons (1.b.iii, 1.b.v); no reverse engineering (1.b.iv); an indemnity of Meta for
+> third-party claims from your use (5.b); and terms Meta may change (8). Exports others
+> publish are SAM Materials too, under the same terms.
+
+### Running Your Own Export
+
+1. Request access to `facebook/sam3` and download the checkpoint once Meta approves it.
+2. Export it to ONNX in the layout below: three graphs for concepts, two for the tracker.
+3. Write a manifest per model, each file pinned by SHA-256 and size, naming the SAM License:
+
+   ```json
+   {
+     "id": "sam3-local",
+     "task": "segment",
+     "source": { "kind": "local", "dir": "/models/sam3" },
+     "files": [
+       { "path": "vision_encoder.onnx", "sha256": "sha256:<its SHA-256>", "size": 0 },
+       { "path": "text_encoder.onnx", "sha256": "sha256:<its SHA-256>", "size": 0 },
+       { "path": "prompt_decoder.onnx", "sha256": "sha256:<its SHA-256>", "size": 0 },
+       { "path": "tokenizer.json", "sha256": "sha256:<its SHA-256>", "size": 0 }
+     ],
+     "licence": {
+       "id": "LicenseRef-SAM",
+       "url": "https://github.com/facebookresearch/sam3/blob/a13e358df479a80938c8bfed0e0754bea8fdb277/LICENSE",
+       "class": "useRestricted"
+     },
+     "runtime": { "kind": "ort", "opset": 18 }
+   }
+   ```
+
+4. Read the licence and record your acceptance from a terminal; until then verification fails
+   with `licence acceptance required` and the licence URL:
+
+   ```bash
+   adk-rust vision models accept sam3-local --manifest sam3-local.json
+   ```
+
+5. Load it with the acceptances of the project:
+
+```rust,no_run
+use std::path::Path;
+use std::sync::Arc;
+use adk_vision::onnx::{OnnxOptions, Sam3};
+use adk_vision::{
+    DecodeLimits, FetchConfig, FileAcceptanceStore, ManifestSet, ModelFetcher,
+    SegmentPrompt, SourceImage, VisionCx, VisionRuntime,
+};
+
+#[tokio::main]
+async fn main() -> adk_vision::Result<()> {
+    let project = Path::new(".");
+    let manifests = ManifestSet::new().with_dir(Path::new("manifests"))?;
+    let acceptances = Arc::new(FileAcceptanceStore::in_project(project));
+    let fetcher = ModelFetcher::new(FetchConfig::from_env(), acceptances);
+    let model = fetcher.fetch(manifests.get("sam3-local").expect("your manifest")).await?;
+    let sam3 = Arc::new(Sam3::new(&model, &OnnxOptions::default())?);
+
+    let runtime = VisionRuntime::builder().segmenter(sam3).build()?;
+    let bytes = std::fs::read("shelf.jpg").expect("a photo");
+    let photo = SourceImage::decode(&bytes, &DecodeLimits::default())?;
+    let prompts = [SegmentPrompt::Concept { text: "torn seal".into() }];
+    for region in runtime.segment(&VisionCx::new(), &photo, &prompts).await?.value {
+        println!("{:?} {:?} {:?}", region.label, region.score, region.shape.bbox());
+    }
+    Ok(())
+}
+```
+
+`Sam3::with_tracker(Sam3Tracker::new(&tracker_model, &options)?)` adds point and box prompts to
+the same segmenter, and `Sam3::with_threshold` changes the score cut-off.
+
+### Graph Layouts
+
+| Graph (file name contains) | Inputs | Outputs |
+|----------------------------|--------|---------|
+| `vision` | `pixel_values` `[1, 3, 1008, 1008]` | `fpn_hidden_state_0`, `_1`, `_2` |
+| `text` | `input_ids`, `attention_mask` `[1, 32]` (int64) | `text_features` `[1, 32, 256]` |
+| `decoder` | the three feature maps, `text_features`, `attention_mask` | `pred_masks` `[1, Q, 288, 288]` (logits), `pred_boxes` `[1, Q, 4]` (corners in `0..1`), `pred_logits` `[1, Q]`, `presence_logits` `[1, 1]` |
+| Tracker `encoder` | `pixel_values` | `image_embeddings.0`, `.1`, `.2` |
+| Tracker `decoder` | `input_points`, `input_labels`, `input_boxes` and the embeddings | `iou_scores`, `pred_masks` (288×288), `object_score_logits` |
+
+The image is stretched to 1008×1008 and mapped to `[-1, 1]`; concepts are lowercased CLIP
+tokens padded with `<|endoftext|>` to 32. A query scores `sigmoid(pred_logits) ×
+sigmoid(presence_logits)` and is kept above 0.5, as Meta's `Sam3Processor` keeps it; its mask
+is upsampled bilinearly to 1008×1008 and thresholded at 0. The image encoder runs once per
+prepared image and the text encoder once per concept, both cached for the next calls.
+
+Stand-in graphs with these inputs and outputs run the licence gate, the coordinate mapping
+and the conformance suite in CI (`adk-vision/tests/sam3_local_tests.rs`). Accuracy and
+latency against real weights are not recorded yet: `sam3_local_live_tests` measures them on
+the drawn shapes and the S5 widgets beside SAM 2.1 Tiny, once weights and an acceptance are in
+place:
+
+```bash
+ADK_VISION_SAM3_MANIFEST=sam3-local.json ADK_VISION_SAM3_PROJECT=. \
+  cargo nextest run -p adk-vision --features sam3-local --test sam3_local_live_tests \
+  --run-ignored only --no-capture
+```
 
 ## Execution Providers
 

@@ -76,12 +76,22 @@ impl Sam2 {
     /// [`VisionError::Backend`](crate::VisionError::Backend) when onnxruntime cannot load
     /// them.
     pub fn new(model: &VerifiedModel, options: &OnnxOptions) -> Result<Self> {
+        let normalize = Normalize::from_io(&model.manifest().io, (1024, 1024), Letterbox::Stretch);
+        Self::with_normalize(model, options, normalize)
+    }
+
+    /// Loads the same split graphs with a family's own input size and normalisation, such
+    /// as SAM 3's tracker, whose export shares SAM 2's inputs and outputs.
+    pub(super) fn with_normalize(
+        model: &VerifiedModel,
+        options: &OnnxOptions,
+        normalize: Normalize,
+    ) -> Result<Self> {
         let manifest = model.manifest();
         check_manifest(manifest, VisionTask::Segment)?;
         let encoder =
             OrtModel::load(&manifest.id, onnx_file(model, "encoder", "decoder")?, options)?;
         let decoder = OrtModel::load(&manifest.id, onnx_file(model, "decoder", "")?, options)?;
-        let normalize = Normalize::from_io(&manifest.io, (1024, 1024), Letterbox::Stretch);
         let (width, height) = normalize.size;
         let descriptor = BackendDescriptor::new(
             manifest.id.clone(),

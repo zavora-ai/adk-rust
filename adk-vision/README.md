@@ -50,6 +50,7 @@ features — `fetch`, `cloud`, `nim`, `sam`, `guardrail` — as `adk_rust::visio
 | `onnx` | Local backends on ONNX Runtime: `RfDetr`, `EfficientSam`, `Sam2`, `SigLip2`; onnxruntime downloaded at build time |
 | `onnx-dynamic` | The same backends against an onnxruntime library loaded from `ORT_DYLIB_PATH` |
 | `onnx-coreml`, `onnx-cuda` | The CoreML and CUDA execution providers for the `onnx` backends |
+| `sam3-local` | `Sam3` (concept segmentation and detection) and `Sam3Tracker` (points and boxes): Meta's SAM 3 on ONNX Runtime from weights you supply with your own manifest under the SAM License, loaded only after a person accepts it; no weights or built-in record ship; in no `adk-rust` tier; implies `onnx` |
 | `cloud` | `LlmDescriber`: any `adk_core::Llm` that takes images as a `Describer`, with Gemini (`box_2d`, 0–1000), Claude (pixels of the image as sent) and prompt-fixed 0–1000 region adapters, and provider-formula preflight estimates |
 | `nim` | NVIDIA NIM: vision-language models (`NimConfig`, reasoning off, unpriced) and `NimDocumentReader` for NVIDIA's OCR, page-element, table and chart endpoints, remote, behind the egress gate; implies `cloud` |
 | `sam` | `SamSegmenter`: Meta `sam-3.1` request building, stream parser and mask placement, billed per request at $2.50 per 1,000 images; masks as boxes, or decoded by a program you installed (`ExternalMaskDecoder`) |

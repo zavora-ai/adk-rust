@@ -7,6 +7,7 @@
 //! | [`EfficientSam`] | [`Segmenter`](crate::Segmenter) | EfficientSAM-Ti (split encoder and decoder) | `SentPixels` |
 //! | [`Sam2`] | [`Segmenter`](crate::Segmenter) | SAM 2.1 Tiny (split encoder and decoder) | `ModelInput` 1024×1024, stretched |
 //! | [`SigLip2`] | [`Embedder`](crate::Embedder) | SigLIP 2 base (so400m opt-in) | — |
+//! | `Sam3`, `Sam3Tracker` (feature `sam3-local`) | [`Segmenter`](crate::Segmenter), [`Detector`](crate::Detector) | SAM 3 from weights you supply under Meta's SAM License, after you accept it | `ModelInput` 1008×1008, stretched |
 //!
 //! Every backend is built from a [`VerifiedModel`](crate::VerifiedModel), so no file loads
 //! unless its SHA-256 matched its manifest (V-I10), and reads its input size, normalisation
@@ -60,11 +61,15 @@ mod preprocess;
 mod rf_detr;
 mod sam;
 mod sam2;
+#[cfg(feature = "sam3-local")]
+mod sam3;
 mod session;
 mod siglip;
 
 pub use efficient_sam::EfficientSam;
 pub use rf_detr::RfDetr;
 pub use sam2::Sam2;
+#[cfg(feature = "sam3-local")]
+pub use sam3::{SAM_LICENCE_ID, Sam3, Sam3Tracker};
 pub use session::{OnnxExecutionProvider, OnnxOptions};
 pub use siglip::SigLip2;
