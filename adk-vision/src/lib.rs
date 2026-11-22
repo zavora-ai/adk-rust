@@ -19,7 +19,7 @@
 //!
 //! | Feature | Contents |
 //! |---------|----------|
-//! | (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor`, watch conditions ([`WatchEvaluator`]), calibration and measurement ([`Calibration`]) |
+//! | (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor`, watch conditions ([`WatchEvaluator`]), calibration and measurement ([`Calibration`]), the verifier loop ([`VerifierLoop`]) |
 //! | `fetch` | `ModelFetcher`: Hugging Face downloads by revision, SHA-256 checked before load, `HF_HUB_OFFLINE` honoured |
 //! | `conformance` | `conformance`: the suite every backend runs, and its test macros |
 //! | `eval` | `eval`: any runtime task as an `adk-eval` agent, in process or behind `cargo adk eval --agent-cmd` |
