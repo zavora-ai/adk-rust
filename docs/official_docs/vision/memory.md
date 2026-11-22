@@ -208,7 +208,8 @@ The recorded baseline, on an Apple Silicon laptop CPU with `ort` 2.0.0-rc.15:
 
 The example image ranks the whole scene — belt, carton, lighting — close to every frame
 (cosines around 0.96), so dented and intact cartons interleave with the torn seals; the text
-query separates them. Indexing the 105 images took about 50 s on the CPU, and the run also
+query separates them. LanceDB returns the same hits as the in-memory store. Indexing the 105
+images took between 16 s and 50 s on the CPU across runs, and each run also
 checks that every hit's artifact loads with its digest and names its storing run, that the
 collection refuses another embedder, and that erasing `conveyor-2` removes its 42 chunks,
 42 captions, 42 artifacts and its graph entity.
