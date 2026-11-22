@@ -260,6 +260,10 @@ name = "sam_codec_tests"
 required-features = ["sam-codec"]
 
 [[test]]
+name = "sam3_local_tests"
+required-features = ["sam3-local"]
+
+[[test]]
 name = "ocr_live_tests"
 required-features = ["ocr", "fetch", "conformance"]
 
