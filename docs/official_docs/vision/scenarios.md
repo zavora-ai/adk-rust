@@ -53,13 +53,16 @@ buttons, one under its notes and one in its footer.
 
 | Scenario | What passes | Runs on |
 |----------|-------------|---------|
-| S14 Screen copilot | Every click lands inside its target: the CRM link, chosen from `browser_elements` marks at ratio 2, is clicked by selector inside its element, and every desktop click, given in the pixels of the screenshot fitted to Claude's limits (2380×1546) and grounded through `ScreenSpace`, lands inside its target in pixels and in points. Every desktop action happens inside an approved `computer_use_execute` whose reference graph previews, holds, executes once and verifies it; every browser action is a governed browser call. The copilot grounds "Save" by label and reading order and picks the notes' Save; the verifier finds no "Customer saved" on the fresh screenshot, and the copilot grounds Save again on the footer's, which saves once. The verifier reads each typed value back in its field. A step aimed at Mail's Send is blocked at preview and never runs, and the browser loads only the CRM's pages. The saved customer matches the CRM's record field for field | PP-OCRv6 tiny marks per window on the device; the harness, its browser and computer-use packs, `MarkSet`, `ScreenPlan`, `FittedActuator`, target evidence and `check_change` |
+| S14 Screen copilot | Every click lands inside its target: the CRM link, chosen from `browser_elements` marks at ratio 2, is clicked by selector inside its element, and every desktop click, given in the pixels of the screenshot fitted to Claude's limits (2380×1546) and grounded through `ScreenSpace`, lands inside its target in pixels and in points. Every desktop action happens inside an approved `computer_use_execute` whose reference graph previews, holds, executes once and verifies it; every browser action is a governed browser call. The eleven form steps take one approval: one screen-plan card, its `harness.computer_use.plan_decided` record, and each step's execution bound to the plan's digest in order. The copilot grounds "Save" by label and reading order and picks the notes' Save; the verifier finds no "Customer saved" on the fresh screenshot, and the copilot grounds Save again on the footer's — a target the plan did not show, so it is held again and takes a second approval — which saves once. The verifier reads each typed value back in its field. A step aimed at Mail's Send is blocked at preview and never runs, and the browser loads only the CRM's pages. The saved customer matches the CRM's record field for field | PP-OCRv6 tiny marks per window on the device; the harness, its browser and computer-use packs, `MarkSet`, `ScreenPlan`, `FittedActuator`, target evidence and `check_change` |
 
 Each step's target evidence binds the screenshot's digest and states logical points at ratio 2
-(V-I14). The eleven form steps are previewed on one screenshot as one `ScreenPlan` in the form's
-window; before each runs, it is grounded again on a fresh screenshot and checked with
-`ScreenPlan::check_call`. Each `computer_use_execute` is approved on its own: the harness card
-that answers a whole plan from one decision is not wired yet ([Screen grounding](screen.md)).
+(V-I14). The copilot previews the eleven form steps together (`computer_use_preview
+{ actions }`), so the harness shows them as one screen plan in the form's window and the person
+approves them once (spec 3.7 Q8). Before each step runs, the reference graph previews it again:
+the runtime grounds the previewed target on a fresh screenshot, the harness checks it against
+the plan's target, and the runtime checks the call with `ScreenPlan::check_call`. The person
+approves twice for twelve desktop executions — the plan, then the re-grounded Save — and the
+browser click once ([Screen grounding](screen.md#in-the-harness)).
 
 ### What Stands In for What in S14
 
