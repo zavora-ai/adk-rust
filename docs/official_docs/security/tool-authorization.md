@@ -384,6 +384,11 @@ that has a decision. The decision does not depend on the model issuing the call 
   is saved but not answered rather than silently dropped. Run again with an empty message to
   answer it, or resume held calls with an empty message before sending a new one.
 
+- **Grouped decisions.** A change set or a screen plan is decided by a live prompter during the
+  run. A held call that parks instead — on a surface without a live prompter — is decided and
+  resumed on its own like any held call. A parked step of a screen plan resumes without the
+  plan's binding, so it runs as a single approved action, never as a step of the plan.
+
 `CodeActAgent` resumes a held call from its checkpoint (`Disposition::AwaitingConfirmation`),
 which already re-dispatches the call through the governed path. The event that records the
 call's result answers the held call with a function response under its ID, as `LlmAgent`'s
@@ -1450,7 +1455,9 @@ Order of evaluation in `LlmAgent` and `CodeActAgent`:
       checked against the policy again
    7. Confirmation, when the agent or the policy requires it — a call-ID decision, a fingerprint
       approval, the `ApprovalStore`, the run's `ToolReviewer` for a call the policy holds (see
-      [Model Reviewer](#model-reviewer)), the `ToolConfirmationHandler`, or a hold
+      [Model Reviewer](#model-reviewer)), the `ToolConfirmationHandler`, or a hold. The
+      harness's handler answers the calls of a change set, and the steps of a screen plan,
+      from one decision of the person (see [Decisions for a Group of Calls](#decisions-for-a-group-of-calls))
 6. Action ledger (`ToolEffect::NonIdempotent` tools, `RunConfig::action_ledger`) — a recorded
    call is answered from its record without executing (`CodeActAgent` raises the answer into
    the script); otherwise the call is begun under its `ToolContext::idempotency_key()`. The kill
@@ -1481,6 +1488,24 @@ Order of evaluation in `LlmAgent` and `CodeActAgent`:
 
 > **Note:** An `on_tool_error` callback that returns a fallback value replaces the error,
 > including an access denial. Keep fallbacks to tools whose failures are safe to paper over.
+
+### Decisions for a Group of Calls
+
+Two harness mechanisms let a person decide several held calls at once. Both live in the
+`ToolConfirmationHandler` at step 5.7, so `LlmAgent`, `CodeActAgent` and the realtime runners
+reach them through the same governed path, and both answer each call with its own arguments
+plus a binding to what the person saw, which the governed path checks against the policy again.
+
+| Mechanism | Group | Binding added to each call | Checked again when the call runs |
+|-----------|-------|----------------------------|----------------------------------|
+| Change set (spec 3.1 §7.26) | Two or more held edits of one model turn | `expect_sha256`: the file's hash at that point of the reviewed diff | The write refuses a file whose content differs (`devtools.stale`) |
+| Screen plan (spec 3.7 Q8) | Up to N previewed desktop actions in one window | `plan: { digest, step }`: the plan's fingerprint over its window, steps and targets, and the step number | The step is previewed again on a fresh observation; a target that moved, changed label or left the window runs nothing, ends the plan, and is held for a fresh approval |
+
+Neither is a standing rule: each decision answers only the exact calls it showed, each once.
+A call whose arguments differ from the shown ones, a step out of order, and a call of another
+plan, window or target are asked about on their own. `computer_use_execute` stays outside every
+standing rule, `tool_approvals` entry and hook decision. See
+[Screen plans](../harness/packs.md#screen-plans-one-approval-per-plan).
 
 ## Answer Status
 

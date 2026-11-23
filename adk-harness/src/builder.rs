@@ -2577,6 +2577,12 @@ impl HarnessAgentBuilder {
                 policy.observe_rules(prompter.clone());
                 let handler =
                     PromptingConfirmationHandler::new(prompter, rules.clone(), policy.clone());
+                // A screen plan's steps are approved with one answer (spec 3.7 Q8).
+                #[cfg(feature = "computer-use")]
+                let handler = match &computer_use {
+                    Some(computer_use) => handler.with_screen_plans(computer_use.plans.clone()),
+                    None => handler,
+                };
                 // A crossing is put to the person with its three answers (spec 3.2 §7.8).
                 #[cfg(feature = "kernel")]
                 let handler = match &partition {

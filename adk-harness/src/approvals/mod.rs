@@ -6,6 +6,8 @@ mod changeset;
 pub mod matcher;
 mod prompt;
 mod rule;
+#[cfg(feature = "computer-use")]
+mod screen_plan;
 mod store;
 
 pub use changeset::{
@@ -20,6 +22,10 @@ pub use prompt::{
 pub use rule::{
     ArgSpec, OriginPin, RuleOwner, RulePredicate, RuleScope, RuleSuggestion,
     SHELL_PREFIX_SUGGESTION_DENYLIST, StandingDecision, StandingRule, SuggestedScope,
+};
+#[cfg(feature = "computer-use")]
+pub use screen_plan::{
+    RenderedScreenPlan, SCREEN_PLAN_MAX_BYTES, ScreenPlanAnswer, ScreenPlanPrompt,
 };
 #[cfg(feature = "postgres")]
 pub use store::PostgresStandingRuleStore;
