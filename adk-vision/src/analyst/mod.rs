@@ -23,21 +23,37 @@
 //!
 //! ```
 //! use std::sync::Arc;
-//! use adk_core::{Content, LlmResponse};
+//! use adk_core::egress::EgressPolicy;
+//! use adk_core::{Content, LlmResponse, UsageMetadata};
 //! use adk_model::MockLlm;
 //! use adk_rag::{InMemoryVectorStore, Scope};
-//! use adk_vision::analyst::{AnalystQuery, Chunking, ClipSource, VideoAnalyst, WordHashEmbedding};
 //! use adk_vision::analyst::fixtures::{WarehouseClip, WarehouseSpec};
-//! use adk_vision::{FramesAnalyzer, LlmDescriber, MediaScope, Sampling, VisionCx, VisionRuntime};
+//! use adk_vision::analyst::{AnalystQuery, Chunking, ClipSource, VideoAnalyst, WordHashEmbedding};
+//! use adk_vision::{
+//!     EgressAction, EgressConfig, EgressGate, FramesAnalyzer, InMemoryEgressRecorder,
+//!     LlmDescriber, MediaScope, Sampling, VisionCx, VisionRuntime,
+//! };
 //!
 //! # tokio::runtime::Runtime::new().unwrap().block_on(async {
-//! // A captioner on this machine that always sees a forklift.
+//! // A remote captioner that always sees a forklift and reports its tokens.
 //! let caption = r#"{"caption": "An orange forklift stops at aisle 2.", "objects": ["forklift"]}"#;
-//! let qwen = MockLlm::new("qwen3-vl-4b-instruct")
-//!     .with_response(LlmResponse::new(Content::new("model").with_text(caption)));
-//! let describer = LlmDescriber::local(Arc::new(qwen)).unwrap();
+//! let mut response = LlmResponse::new(Content::new("model").with_text(caption));
+//! response.usage_metadata = Some(UsageMetadata {
+//!     prompt_token_count: 1_200,
+//!     candidates_token_count: 60,
+//!     ..Default::default()
+//! });
+//! let haiku = MockLlm::new("claude-haiku-5-5").with_response(response);
+//! let describer = LlmDescriber::remote(Arc::new(haiku), ["api.anthropic.com"]).unwrap();
+//! // Every frame sent to it passes the egress gate.
+//! let gate = EgressGate::new(
+//!     EgressPolicy::public_only(),
+//!     EgressConfig::default().with_rule("api.anthropic.com", &["image"], EgressAction::Allow),
+//!     Arc::new(InMemoryEgressRecorder::new()),
+//! );
 //! let runtime = VisionRuntime::builder()
-//!     .video_analyzer(Arc::new(FramesAnalyzer::local(&describer)))
+//!     .remote_video_analyzer(Arc::new(FramesAnalyzer::remote(&describer)))
+//!     .egress_gate(gate)
 //!     .build()
 //!     .unwrap();
 //! let analyst = VideoAnalyst::builder(
@@ -51,6 +67,7 @@
 //! .await
 //! .unwrap();
 //!
+//! // Ten minutes of the warehouse clip, sampled every 10 s: twenty chunks of three frames.
 //! let clip = WarehouseClip::new(WarehouseSpec::default().with_duration(600_000));
 //! let scope = Scope::new("site-7").unwrap();
 //! let source = ClipSource::new("cam-3", MediaScope::new("site-7", "ops", "s1"));
@@ -60,9 +77,10 @@
 //!     .await
 //!     .unwrap()
 //!     .value;
-//! assert_eq!(indexed.chunks.len(), 20);
-//! assert_eq!(indexed.cost_per_hour_micro_usd(), Some(0));
+//! assert_eq!((indexed.chunks.len(), indexed.usage.frames), (20, 60));
+//! assert!(indexed.cost_per_hour_micro_usd().is_some_and(|c| c > 0));
 //!
+//! // Without an answerer, the chunk nearest the question is the answer.
 //! let answer = analyst
 //!     .ask(&cx, &scope, "When does the forklift stop?", &AnalystQuery::top(3))
 //!     .await
