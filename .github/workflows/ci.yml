@@ -552,10 +552,13 @@ jobs:
       run: test -f website-scenarios.md && cat website-scenarios.md >> "$GITHUB_STEP_SUMMARY" || true
 
   # ── adk-vision: the spec 3.7 scenarios run ────────────────────
-  # examples/vision holds S1–S8, S18 and S19 of spec 3.7 §5: PP-OCRv6 tiny, RF-DETR Nano and
-  # YuNet on the device, fetched by revision and SHA-256 into a cached Hugging Face cache, and
-  # the cloud backends on recorded responses (§11); S19 runs S1 again under bubblewrap with the
-  # network denied. examples-compile only checks the crate.
+  # examples/vision holds S1–S13, S18 and S19 of spec 3.7 §5: PP-OCRv6 tiny, RF-DETR Nano,
+  # SAM 2.1 Tiny and YuNet on the device, fetched by revision and SHA-256 into a cached Hugging
+  # Face cache; the conveyor clip over the in-process RTSP server; the kernel, harness and live
+  # camera surface in process; and the cloud backends on recorded responses (§11). S19 runs S1
+  # again under bubblewrap with the network denied. No ffmpeg is needed: S11's clips are
+  # committed and S13 draws its frames from the clip's sprites without one.
+  # examples-compile only checks the crate.
   vision-scenarios:
     needs: scope
     if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push' && contains(fromJSON(needs.scope.outputs.jobs), 'vision-scenarios')
@@ -575,7 +578,7 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .hf-cache
-        key: vision-weights-${{ hashFiles('adk-vision/manifests/builtin.json') }}
+        key: vision-weights-${{ hashFiles('adk-vision/manifests/builtin.json', 'examples/vision/src/fixtures.rs', 'examples/vision/src/s9.rs') }}
 
     # S19's sandbox, as sandbox-linux.yml sets it up: bubblewrap, with the AppArmor
     # restriction on unprivileged user namespaces lifted.

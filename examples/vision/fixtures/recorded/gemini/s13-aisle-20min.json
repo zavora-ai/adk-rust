@@ -1,0 +1,193 @@
+{
+  "recorded": "2026-11-23",
+  "model": "gemini-3.6-flash",
+  "note": "S13 live through examples/vision with VISION_RECORD_GEMINI and adk-vision/tests/fixtures/video/recorded/proxy.py: aisle-forklift-20min.mp4 uploaded through the resumable File API, polled from PROCESSING to ACTIVE (15 further PROCESSING polls dropped), then asked about as a fileData part at videoMetadata.fps 1 and mediaResolution LOW. gemini-3.8-flash answered 503 (high demand) to the same request minutes earlier, so the answer is gemini-3.6-flash.",
+  "exchanges": [
+    {
+      "method": "POST",
+      "path": "/upload/v1beta/files",
+      "request": {
+        "file": {
+          "displayName": "sha256:c3ad5772b22adb9e99660397f77d18104261a11c72e2ef575ac121683408a12d"
+        }
+      },
+      "status": 200,
+      "contentType": "text/plain; charset=utf-8",
+      "uploadUrl": "http://127.0.0.1:18762/upload/v1beta/files?upload_id=<upload>&upload_protocol=resumable",
+      "response": ""
+    },
+    {
+      "method": "POST",
+      "path": "/upload/v1beta/files?upload_id=<upload>&upload_protocol=resumable",
+      "request": "{{media:binary:sha256:c3ad5772b22adb9e99660397f77d18104261a11c72e2ef575ac121683408a12d:226560}}",
+      "status": 200,
+      "contentType": "application/json; charset=UTF-8",
+      "uploadUrl": null,
+      "response": {
+        "file": {
+          "name": "files/n5yozvi2h15s",
+          "displayName": "sha256:c3ad5772b22adb9e99660397f77d18104261a11c72e2ef575ac121683408a12d",
+          "mimeType": "video/mp4",
+          "sizeBytes": "226560",
+          "createTime": "2026-11-22T23:42:06.793328Z",
+          "updateTime": "2026-11-22T23:42:06.793328Z",
+          "expirationTime": "2026-11-24T23:42:06.151124623Z",
+          "sha256Hash": "YzNhZDU3NzJiMjJhZGI5ZTk5NjYwMzk3Zjc3ZDE4MTA0MjYxYTExYzcyZTJlZjU3NWFjMTIxNjgzNDA4YTEyZA==",
+          "uri": "https://generativelanguage.googleapis.com/v1beta/files/n5yozvi2h15s",
+          "state": "PROCESSING",
+          "source": "UPLOADED"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1beta/files/n5yozvi2h15s",
+      "request": null,
+      "status": 200,
+      "contentType": "application/json; charset=UTF-8",
+      "uploadUrl": null,
+      "response": {
+        "name": "files/n5yozvi2h15s",
+        "displayName": "sha256:c3ad5772b22adb9e99660397f77d18104261a11c72e2ef575ac121683408a12d",
+        "mimeType": "video/mp4",
+        "sizeBytes": "226560",
+        "createTime": "2026-11-22T23:42:06.793328Z",
+        "updateTime": "2026-11-22T23:42:06.793328Z",
+        "expirationTime": "2026-11-24T23:42:06.151124623Z",
+        "sha256Hash": "YzNhZDU3NzJiMjJhZGI5ZTk5NjYwMzk3Zjc3ZDE4MTA0MjYxYTExYzcyZTJlZjU3NWFjMTIxNjgzNDA4YTEyZA==",
+        "uri": "https://generativelanguage.googleapis.com/v1beta/files/n5yozvi2h15s",
+        "state": "PROCESSING",
+        "source": "UPLOADED"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1beta/files/n5yozvi2h15s",
+      "request": null,
+      "status": 200,
+      "contentType": "application/json; charset=UTF-8",
+      "uploadUrl": null,
+      "response": {
+        "name": "files/n5yozvi2h15s",
+        "displayName": "sha256:c3ad5772b22adb9e99660397f77d18104261a11c72e2ef575ac121683408a12d",
+        "mimeType": "video/mp4",
+        "sizeBytes": "226560",
+        "createTime": "2026-11-22T23:42:06.793328Z",
+        "updateTime": "2026-11-22T23:42:18.355907Z",
+        "expirationTime": "2026-11-24T23:42:06.151124623Z",
+        "sha256Hash": "YzNhZDU3NzJiMjJhZGI5ZTk5NjYwMzk3Zjc3ZDE4MTA0MjYxYTExYzcyZTJlZjU3NWFjMTIxNjgzNDA4YTEyZA==",
+        "uri": "https://generativelanguage.googleapis.com/v1beta/files/n5yozvi2h15s",
+        "state": "ACTIVE",
+        "videoMetadata": {
+          "videoDuration": "1200s"
+        },
+        "source": "UPLOADED"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1beta/models/gemini-3.6-flash:generateContent",
+      "request": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "fileData": {
+                  "mimeType": "video/mp4",
+                  "fileUri": "https://generativelanguage.googleapis.com/v1beta/files/n5yozvi2h15s"
+                },
+                "videoMetadata": {
+                  "fps": 1.0
+                }
+              },
+              {
+                "text": "Question about the video above, which is 20:00.0 long: When does the forklift enter the aisle?\n\nAnswer with JSON only: {\"answer\": <the answer in words>, \"events\": [{\"start\": \"m:ss.s\", \"end\": \"m:ss.s\", \"text\": <what happens>}]}, with times from the start of the video. List an event only for what the question asks about; if it does not happen, say so in the answer and give no events."
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "generationConfig": {
+          "maxOutputTokens": 2048,
+          "responseMimeType": "application/json",
+          "responseSchema": {
+            "properties": {
+              "answer": {
+                "type": "string"
+              },
+              "events": {
+                "items": {
+                  "properties": {
+                    "end": {
+                      "description": "m:ss.s from the start of the video",
+                      "type": "string"
+                    },
+                    "start": {
+                      "description": "m:ss.s from the start of the video",
+                      "type": "string"
+                    },
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "start",
+                    "end",
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "answer",
+              "events"
+            ],
+            "type": "object"
+          },
+          "mediaResolution": "MEDIA_RESOLUTION_LOW"
+        }
+      },
+      "status": 200,
+      "contentType": "application/json; charset=UTF-8",
+      "uploadUrl": null,
+      "response": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "{\n  \"answer\": \"The forklift enters the aisle at 12:40.0.\",\n  \"events\": [\n    {\n      \"start\": \"12:40.0\",\n      \"end\": \"13:00.0\",\n      \"text\": \"The forklift enters the aisle\"\n    }\n  ]\n}",
+                  "thoughtSignature": "EuMJCuAJAWkUfRMQLfc0FyVrvT+LAJVL1YQsXp1ddOzty0vH9W5CJBJ9sYBt6jkc1f9tVwoS1ZiRF3vRRtSDJ5kCwJ/O9+8v48xBJkfpSr1FyAhAvxPgnZqsIL2WCSfG0PWQ+5csl+yV/BZS02vWFgPMDyoi+1+jp29R+SsXhfNL7J4QU+YLgFjvUfaDsPTB5jhbr6M0RgVxNkts55VsdWSs3I/jddbZHNgqBRUshrrm8rQ1FeWC01MalVVVnWGpkXGv+JZjRNsxSK6B+fdG+bQOjPWtcjEwlTjCHowe7N0My/qu0oVoUKxo+bfZ1HuYCYXKkjpidl2oAp2Q8Q3ZGOLH8yJ3BIm+qnSnDoT3/V5FNK7/zsUflxImnLihRP4e8cTs+bfmPyp3vcAppuZfLajM/v0z2fHQE2QAQeUp34VXxYqeLGYBiqDbVC3sCzZVCb9Db4ges0+KHGl/TFE1x/VXZxawftBqgBk1RRog7MBqC5xq4ck0V5p/sjKopXO1iNXPJnl8rgc4fodaf1al+L3ERxSGlsoENcmTuPCmAC2aTMkD9e8QWsPh46rfYa5QqX2jntF7IpENxR+8D0j51o2R9wFo3owvbwnyCihpGDMZaXswvqay5DrUYnjW65UJqeR/TeKyDnw1n9bdJ+xEgf/wKZk4OoxhkSzQnI2ybmkE2fwWx9gxxqLRuPKJij30RW1D4RX99eT5y1IUskOp2N70vOoHJ3QKTV3FiuZsNvBk1pIMMVNK3bQhv3YD/b7XcmPqruMypSfxKxJz8SH6RrrEGrFmhyrWb7ePeTmPMP4atZcoyrjKmhuVknyMDyYxJB1QbdK+55EhyVa3hH+zHUUEvzZBwDyTUJFP+MDUL1gtsQRsn8V6YCdTEEfkGXTRjn6PyGgmGo8lKNS/CJBY8PqRtZzC2vrgxo80VsDL0YEhTAdAIUxPn8LKcWZhQ2KsS+EtRGKXcyoNJMjB3fv9rn05FJDjikv/LbJ1cwtdIxGq6c/6N0FEU2CqtbbBrAgwiSAp8YM6V9l62Pbb304cdDis8fSJrSmpsBNlF2LId9uyL/M6r+JYZRsl3LBIXMCoS7lKMPTEaF7JvcD4pWOVH9Bqlxm47ZTkAILspb4m6XgnMbAt0Z+4tXXqobsNpTT9dgJUd7FMN4fembYYlkWZG62JtTx2H90U+faXrnprsnasbyQuBtLmRCtJKFddB1m+UJg5R2ewpZiDtf0+qvNhypVC6+hiCB6JgINUY8j2rxlMO8P7hjg99oYGWizIBhFxqUxDPtqWf89agzcbDKTqOscZwiPUyE3yT1qXyBkZpRIdhV47t0MpZZ1KSBLRrNIAmGiDPTetjkz6Fy5l8i3sXCCToDMoHuWZNCTx1CzUXwfBJVfO5ahMCGR8dGGcRPGbjjGnJTHbl8eZv+NA7lZZA4xX6hXazWuFYAeO4zHOTiaExcAcxiTB9EgvDT3Ko+fPOQ2nxTB4VyFKA3GSWqt8tT7fZg9ONMkrreRD5Cg5qjuzK3wIR1uvPGrgPo+zdno10qaBHHPRwQ/3hgek0X05M/ZA14vvU4sNmBiMxDCGcZFdMq8dT9c23NXmsZoFdyinzqeKUunG7Os9ijzB0b+395xntByMtfQAKKDEWGDyebgPJ5lZu8W21F8HZrhVTj8mKjrSIgFU"
+                }
+              ],
+              "role": "model"
+            },
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "usageMetadata": {
+          "promptTokenCount": 79309,
+          "candidatesTokenCount": 79,
+          "totalTokenCount": 79775,
+          "promptTokensDetails": [
+            {
+              "modality": "VIDEO",
+              "tokenCount": 79200
+            },
+            {
+              "modality": "TEXT",
+              "tokenCount": 109
+            }
+          ],
+          "thoughtsTokenCount": 387,
+          "serviceTier": "standard"
+        },
+        "modelVersion": "gemini-3.6-flash",
+        "responseId": "230Da6LMGIO_nsEP0tjrsA8"
+      }
+    }
+  ]
+}

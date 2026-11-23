@@ -1,0 +1,158 @@
+{
+  "model": "qwen3-vl-4b-instruct",
+  "written": "2026-11-23",
+  "note": "Scripted, not recorded: the visibility pass's requests over S13's 240 frames (one every 5 s; stride 5, 4 frames a check, 8 a question) and answers in Qwen3-VL's JSON form that state what each frame shows. Qwen3-VL-4B could not run live: its 8.9 GB of weights need 14 GiB free and the machine had 7.6-11 GiB. Token counts are estimates (about 240 tokens a 640x360 image).",
+  "exchanges": [
+    {
+      "kind": "target",
+      "images": 0,
+      "response": "{\"target\": \"the orange forklift\"}",
+      "usage": {
+        "input": 52,
+        "output": 9
+      }
+    },
+    {
+      "kind": "check",
+      "images": 4,
+      "frames": [
+        0,
+        25000,
+        50000,
+        75000
+      ],
+      "response": "{\"visible\": []}",
+      "usage": {
+        "input": 1024,
+        "output": 8
+      }
+    },
+    {
+      "kind": "check",
+      "images": 4,
+      "frames": [
+        100000,
+        125000,
+        150000,
+        175000
+      ],
+      "response": "{\"visible\": []}",
+      "usage": {
+        "input": 1024,
+        "output": 8
+      }
+    },
+    {
+      "kind": "check",
+      "images": 4,
+      "frames": [
+        200000,
+        225000,
+        250000,
+        275000
+      ],
+      "response": "{\"visible\": []}",
+      "usage": {
+        "input": 1024,
+        "output": 8
+      }
+    },
+    {
+      "kind": "check",
+      "images": 4,
+      "frames": [
+        300000,
+        325000,
+        350000,
+        375000
+      ],
+      "response": "{\"visible\": []}",
+      "usage": {
+        "input": 1024,
+        "output": 8
+      }
+    },
+    {
+      "kind": "check",
+      "images": 4,
+      "frames": [
+        400000,
+        425000,
+        450000,
+        475000
+      ],
+      "response": "{\"visible\": []}",
+      "usage": {
+        "input": 1024,
+        "output": 8
+      }
+    },
+    {
+      "kind": "check",
+      "images": 4,
+      "frames": [
+        500000,
+        525000,
+        550000,
+        575000
+      ],
+      "response": "{\"visible\": []}",
+      "usage": {
+        "input": 1024,
+        "output": 8
+      }
+    },
+    {
+      "kind": "check",
+      "images": 4,
+      "frames": [
+        600000,
+        625000,
+        650000,
+        675000
+      ],
+      "response": "{\"visible\": []}",
+      "usage": {
+        "input": 1024,
+        "output": 8
+      }
+    },
+    {
+      "kind": "check",
+      "images": 4,
+      "frames": [
+        700000,
+        725000,
+        750000,
+        775000
+      ],
+      "response": "{\"visible\": [4]}",
+      "usage": {
+        "input": 1024,
+        "output": 8
+      }
+    },
+    {
+      "kind": "ask",
+      "images": 6,
+      "stamps": [
+        "image 1 at 12:30.0",
+        "image 3 at 12:50.0",
+        "image 6 at 13:20.0"
+      ],
+      "frames": [
+        750000,
+        760000,
+        770000,
+        780000,
+        790000,
+        800000
+      ],
+      "response": "{\"answer\": \"The orange forklift enters aisle 3 at about 12:50, when it is first seen past the yellow line.\", \"events\": [{\"start\": 3, \"end\": 4, \"text\": \"the orange forklift crosses the yellow entrance line into aisle 3\"}]}",
+      "usage": {
+        "input": 1692,
+        "output": 46
+      }
+    }
+  ]
+}

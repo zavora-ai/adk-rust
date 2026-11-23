@@ -152,6 +152,7 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 Local-first perception (`adk-vision`, spec 3.7, Experimental): regions in source pixels, verified weights, and a gate every image passes before it leaves the machine.
 
 - [Getting Started](vision/getting-started.md) - A Document desk from the `vision` template: what runs on the device, what may leave and how you approve it, the egress log, and the S1–S8 scenarios behind it
+- [The Vision Scenarios](vision/scenarios.md) - Spec 3.7's S1–S13 as one program: the Inspector on an RTSP conveyor stream, visual wakes into a sleeping harness, the frame governor across midnight, the live camera surface without a browser, native video two ways, each asserted on records, with what stands in for what
 - [The `adk-rust vision` CLI](vision/cli.md) - Model manifests, fetches by revision, licence acceptance, one perception call through the egress gate, and the egress log
 - [Overview](vision/index.md) - Concepts and the eight traits, coordinate frames and transform chains, the runtime's routing and crop escalation, the egress gate, model manifests, licences and the fetcher, writing a backend and its conformance suite
 - [Governed Vision Tools](vision/governed-tools.md) - The eight vision tools on the governed path, approval with the exact egress image, egress rules, budget holds before release, `vision.*` audit records, and the harness vision pack

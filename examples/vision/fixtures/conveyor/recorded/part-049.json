@@ -1,0 +1,30 @@
+{
+  "method": "POST",
+  "path": "/v1/responses",
+  "request": {
+    "model": "sam-3.1",
+    "stream": true,
+    "input": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "crack"
+          },
+          {
+            "type": "input_video",
+            "video_url": "{{media:video/mp4:sha256:5ba28e756e0d91223b41fe1eac84b0c217a8fc82f90fdd2989131b93c4f274c4:14695}}"
+          }
+        ]
+      }
+    ]
+  },
+  "status": 200,
+  "contentType": "text/event-stream",
+  "uploadUrl": null,
+  "response": "event: response.created\ndata: {\"response\":{\"background\":false,\"created_at\":1795392161.0,\"error\":null,\"id\":\"resp_6b0382a1ff3255d3c97e41fa\",\"incomplete_details\":null,\"instructions\":null,\"model\":\"sam-3.1\",\"object\":\"response\",\"output\":[],\"parallel_tool_calls\":true,\"service_tier\":\"default\",\"status\":\"in_progress\",\"store\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[],\"top_logprobs\":0,\"top_p\":1.0,\"truncation\":\"disabled\"},\"sequence_number\":0,\"type\":\"response.created\"}\n\nevent: response.in_progress\ndata: {\"response\":{\"background\":false,\"created_at\":1795392161.0,\"error\":null,\"id\":\"resp_6b0382a1ff3255d3c97e41fa\",\"incomplete_details\":null,\"instructions\":null,\"model\":\"sam-3.1\",\"object\":\"response\",\"output\":[],\"parallel_tool_calls\":true,\"service_tier\":\"default\",\"status\":\"in_progress\",\"store\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[],\"top_logprobs\":0,\"top_p\":1.0,\"truncation\":\"disabled\"},\"sequence_number\":1,\"type\":\"response.in_progress\"}\n\nevent: response.output_item.added\ndata: {\"item\":{\"content\":[{\"annotations\":[],\"logprobs\":[],\"text\":\"\",\"type\":\"output_text\"}],\"id\":\"msg_2eb0dc8a-60a3-4590-abbd-9b46dbc0c63b\",\"role\":\"assistant\",\"status\":\"in_progress\",\"type\":\"message\"},\"output_index\":0,\"sequence_number\":2,\"type\":\"response.output_item.added\"}\n\nevent: response.content_part.added\ndata: {\"content_index\":0,\"item_id\":\"msg_2eb0dc8a-60a3-4590-abbd-9b46dbc0c63b\",\"output_index\":0,\"part\":{\"annotations\":[],\"logprobs\":[],\"text\":\"\",\"type\":\"output_text\"},\"sequence_number\":3,\"type\":\"response.content_part.added\"}\n\nevent: response.output_text.done\ndata: {\"content_index\":0,\"item_id\":\"msg_2eb0dc8a-60a3-4590-abbd-9b46dbc0c63b\",\"logprobs\":[],\"output_index\":0,\"sequence_number\":4,\"text\":\"\",\"type\":\"response.output_text.done\"}\n\nevent: response.content_part.done\ndata: {\"content_index\":0,\"item_id\":\"msg_2eb0dc8a-60a3-4590-abbd-9b46dbc0c63b\",\"output_index\":0,\"part\":{\"annotations\":[],\"logprobs\":[],\"text\":\"\",\"type\":\"output_text\"},\"sequence_number\":5,\"type\":\"response.content_part.done\"}\n\nevent: response.output_item.done\ndata: {\"item\":{\"content\":[{\"annotations\":[],\"logprobs\":[],\"text\":\"\",\"type\":\"output_text\"}],\"id\":\"msg_2eb0dc8a-60a3-4590-abbd-9b46dbc0c63b\",\"role\":\"assistant\",\"status\":\"completed\",\"type\":\"message\"},\"output_index\":0,\"sequence_number\":6,\"type\":\"response.output_item.done\"}\n\nevent: response.completed\ndata: {\"response\":{\"background\":false,\"completed_at\":1795392162.0,\"created_at\":1795392161.0,\"error\":null,\"id\":\"resp_6b0382a1ff3255d3c97e41fa\",\"incomplete_details\":null,\"instructions\":null,\"model\":\"sam-3.1\",\"object\":\"response\",\"output\":[{\"content\":[{\"annotations\":[],\"logprobs\":[],\"text\":\"\",\"type\":\"output_text\"}],\"id\":\"msg_2eb0dc8a-60a3-4590-abbd-9b46dbc0c63b\",\"role\":\"assistant\",\"status\":\"completed\",\"type\":\"message\"}],\"parallel_tool_calls\":true,\"service_tier\":\"default\",\"status\":\"completed\",\"store\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[],\"top_logprobs\":0,\"top_p\":1.0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":0,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":0,\"video_frames_processed\":50}},\"sequence_number\":7,\"type\":\"response.completed\"}\n\ndata: [DONE]\n\n",
+  "recorded": "2026-11-23",
+  "note": "sam-3.1 video on part-049.mp4 with the phrase \"crack\", sent through the recording proxy with the same body SamVideoTracker builds. The answer holds no object (the drawn crack is 2.2 px wide) and is billed video_frames_processed 50 for the clip's 30 frames."
+}

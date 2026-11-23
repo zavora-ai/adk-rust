@@ -1,14 +1,21 @@
-//! Scenarios S1–S8, S18 and S19 of spec 3.7 §5 for `adk-vision`: the Document desk, phase A,
-//! blur by default on streams and the on-device profile.
+//! Scenarios S1–S13, S18 and S19 of spec 3.7 §5 for `adk-vision`: the Document desk and phase A
+//! (S1–S8); the Inspector, visual wakes, frame budgets, the live camera surface and native video
+//! of phase B (S9–S13); blur by default on streams and the on-device profile (S18, S19).
 //!
-//! On the device, for real: PP-OCRv6 tiny reads, RF-DETR Nano and YuNet detect, each fetched
-//! by revision and SHA-256 through the model fetcher on the first run (`HF_HUB_CACHE`). In the
-//! cloud, on recorded responses: Claude, Gemini, Meta `sam-3.1` and NVIDIA NIM answer
-//! through their real clients from a local server, so no key is needed. Every pass condition
-//! is asserted on stores, egress records, ledgers and audit records, never on model prose.
+//! On the device, for real: PP-OCRv6 tiny reads, RF-DETR Nano and YuNet detect and SAM 2.1 Tiny
+//! segments, each fetched by revision and SHA-256 through the model fetcher on the first run
+//! (`HF_HUB_CACHE`); the conveyor clip streams over an in-process RTSP server. In the cloud,
+//! on recorded responses: Claude, Gemini, Meta `sam-3.1` and NVIDIA NIM answer through their
+//! real clients from a local server, so no key is needed. Every pass condition is asserted on
+//! stores, egress records, ledgers, approvals and audit records, never on model prose.
 
+mod conveyor;
 mod fixtures;
 mod replay;
+mod s10;
+mod s11;
+mod s12;
+mod s13;
 mod s18;
 mod s19;
 mod s1_s2;
@@ -17,6 +24,7 @@ mod s5;
 mod s6;
 mod s7;
 mod s8;
+mod s9;
 
 use std::path::PathBuf;
 
@@ -67,6 +75,11 @@ const SCENARIOS: &[(&str, &str)] = &[
     ("s6_weights_you_can_trust", "S6 Weights you can trust"),
     ("s7_a_budget_per_image", "S7 A budget per image"),
     ("s8_same_tool_any_backend", "S8 Same tool, any backend"),
+    ("s9_inspector", "S9 Inspector"),
+    ("s10_wake_on_what_matters", "S10 Wake on what matters"),
+    ("s11_a_budget_per_frame", "S11 A budget per frame"),
+    ("s12_live_camera_surface", "S12 Live camera surface"),
+    ("s13_native_video_two_ways", "S13 Native video, two ways"),
     ("s18_blur_by_default_on_streams", "S18 Blur by default on streams"),
     ("s19_off_the_network", "S19 Off the network"),
 ];
@@ -81,6 +94,11 @@ async fn run(name: &str, desk: &s1_s2::Shared) -> Result<Checks> {
         "s6_weights_you_can_trust" => s6::run().await,
         "s7_a_budget_per_image" => s7::run().await,
         "s8_same_tool_any_backend" => s8::run().await,
+        "s9_inspector" => s9::run().await,
+        "s10_wake_on_what_matters" => s10::run().await,
+        "s11_a_budget_per_frame" => s11::run().await,
+        "s12_live_camera_surface" => s12::run().await,
+        "s13_native_video_two_ways" => s13::run().await,
         "s18_blur_by_default_on_streams" => s18::run().await,
         "s19_off_the_network" => s19::run().await,
         other => bail!("no scenario `{other}`"),
@@ -101,6 +119,9 @@ async fn main() -> Result<()> {
     // S19's sandboxed run of S1: this binary again, inside the operating system's sandbox.
     if let Some(report) = s19::child_report(&args) {
         return s19::child(std::path::Path::new(report)).await;
+    }
+    if args.iter().any(|arg| arg == "--write-s11-clips") {
+        return s11::write_clips();
     }
     let report = args
         .iter()
