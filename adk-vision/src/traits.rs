@@ -474,7 +474,10 @@ pub enum VideoRequest {
         /// The prompts.
         prompts: Vec<SegmentPrompt>,
     },
-    /// Caption fixed-length chunks.
+    /// Caption the video in chunks of `chunk_ms`, counted from its first frame: one event per
+    /// chunk that holds a frame, whose text is the caption and whose labels name what it
+    /// shows. The video analyst (`adk_vision::analyst`, feature `analyst`) sends one chunk
+    /// per call.
     Caption {
         /// Chunk length in milliseconds.
         chunk_ms: u64,
@@ -545,7 +548,18 @@ impl VideoPlan {
     }
 }
 
-/// A time range a video analysis names.
+/// A time range a video analysis names: an event an `Ask` found, or a chunk a `Caption`
+/// described.
+///
+/// # Example
+///
+/// ```
+/// use adk_vision::VideoEvent;
+///
+/// let chunk = VideoEvent::new(30_000, 60_000, "An orange forklift drives into aisle 2.")
+///     .with_labels(["forklift", "pallet"]);
+/// assert_eq!(chunk.labels, ["forklift", "pallet"]);
+/// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoEvent {
@@ -555,6 +569,26 @@ pub struct VideoEvent {
     pub end_ms: u64,
     /// What happens.
     pub text: String,
+    /// The people, vehicles and objects a caption names, as short noun phrases.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+}
+
+impl VideoEvent {
+    /// An event from `start_ms` to `end_ms` described by `text`, with no labels.
+    pub fn new(start_ms: u64, end_ms: u64, text: impl Into<String>) -> Self {
+        Self { start_ms, end_ms, text: text.into(), labels: Vec::new() }
+    }
+
+    /// Adds the things the event names.
+    pub fn with_labels<I, S>(mut self, labels: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.labels.extend(labels.into_iter().map(Into::into));
+        self
+    }
 }
 
 /// The regions found on one frame of a video, each with the track it belongs to.

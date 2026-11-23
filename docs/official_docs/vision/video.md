@@ -1,22 +1,24 @@
 # Video and Tracking
 
-`adk-vision` analyses video two ways: a `Tracker` associates detections across the frames
-of a stream into anonymous tracks, and a `VideoAnalyzer` answers questions about a clip or
-tracks objects through it. Every video call goes through `VisionRuntime::analyze_video`,
+`adk-vision` analyses video three ways: a `Tracker` associates detections across the frames
+of a stream into anonymous tracks, a `VideoAnalyzer` answers questions about a clip, captions
+it chunk by chunk or tracks objects through it, and the `VideoAnalyst` indexes a video's
+chunk captions so questions about an hour of video are answered from the chunks that matter. Every video call goes through `VisionRuntime::analyze_video`,
 which holds the call's frames against the run's budget before anything leaves the machine,
 releases a clip only through the egress gate, and returns every region in source pixels
-with its track. This is phase B of [spec 3.7](../../design/spec-3.7-vision.md) (§7.13).
+with its track. This is phases B and C of [spec 3.7](../../design/spec-3.7-vision.md) (§7.13, §7.15).
 
 | Feature | Adds |
 |---------|------|
 | `track` | `ByteTracker`: ByteTrack through `trackforge` 0.5 (MIT, pure Rust) |
-| `cloud` | `FramesAnalyzer`: `Ask` over sampled frames on any vision-language model |
+| `cloud` | `FramesAnalyzer`: `Ask` and `Caption` over sampled frames on any vision-language model |
 | `gemini-video` | `GeminiVideoAnalyzer`: `Ask` over a clip with Gemini native video (implies `cloud`) |
 | `sam` | `SamVideoTracker`: `Track` over a clip with Meta `sam-3.1` video |
+| `analyst` | `VideoAnalyst`: chunk, caption, index and answer with citations (implies `cloud`, `memory`, `stream`) |
 
 ```toml
 [dependencies]
-adk-vision = { version = "3.0.0", features = ["track", "cloud", "gemini-video", "sam"] }
+adk-vision = { version = "3.0.0", features = ["track", "cloud", "gemini-video", "sam", "analyst"] }
 ```
 
 ## Tracking Across Frames
@@ -152,6 +154,18 @@ let runtime = VisionRuntime::builder()
 # }
 ```
 
+### Captions over Sampled Frames
+
+`VideoRequest::Caption { chunk_ms }` asks `FramesAnalyzer` to describe the video chunk by
+chunk: chunks of `chunk_ms` counted from the first frame, one call per chunk that holds a
+frame, over at most `frames_per_call` of its frames, evenly spaced. Each chunk becomes one
+`VideoEvent` whose `text` is the caption and whose `labels` name the people, vehicles and
+objects it names. `with_caption_instructions` replaces `DEFAULT_CAPTION_INSTRUCTIONS`, which
+asks for each person, vehicle and object that moves, appears, disappears or changes, what it
+does and where, and changes to the picture itself such as the light — leaving out what stays
+the same, and answering only "Nothing happens." for a quiet chunk, so captions of quiet chunks
+do not crowd out the moments a search looks for. The answer format stays fixed.
+
 ### Finding the Moment First: the Visibility Pass
 
 A small model asked about many frames at once misplaces the moment, or names one in frames
@@ -203,7 +217,8 @@ call, a check of every `stride`-th frame and a refine after each.
 
 `video_analyzer_conformance_tests!` (feature `conformance`) runs a `VideoAnalyzer` through
 `VisionRuntime::analyze_video` on a `VideoFixture` — a clip or sampled frames, the request
-it answers, and optionally when the answer's first event should start:
+it answers, optionally when the answer's first event should start, and with
+`with_caption(chunk_ms)` that the analyzer captions in chunks:
 
 ```rust,ignore
 mod gemini_video {
@@ -231,13 +246,140 @@ example to start the local server a recorded answer replays from.
 | Usage | The call records its frames as `UsageUnit::Frames` in its call record and the run budget; a local analyzer costs nothing, a per-unit price is charged at least once, a reported cost is spent |
 | Egress | A local analyzer leaves the egress recorder empty; every release of a remote one — the clip or each frame — is in the call record and names the fixture's media |
 | Normalisation | Events in milliseconds from the start, ordered, inside the video, the first within the fixture's tolerance; an `Ask` has an answer; track regions in source pixels of the clip or their frame, in frame order, each with its track |
-| Unsupported | A request the analyzer does not answer (`Caption` by default) is refused as `Unsupported` and its frames go back to the budget |
+| Caption | With `with_caption`: one event per chunk that holds a frame, in order, none overlapping, each inside its chunk and the video, each with a caption |
+| Unsupported | A request the analyzer does not answer (`Caption` by default; `with_refused` names another) is refused as `Unsupported` and its frames go back to the budget |
 | Cancellation, kill switch | Refused before anything is released |
 | Frame cap | A run capped at one frame is refused before anything is released, naming the unit |
 | Unreleased | A remote analyzer without an egress gate is refused as `Forbidden` |
 
-`FramesAnalyzer` (local, remote, and with a visibility pass), `GeminiVideoAnalyzer` and
-`SamVideoTracker` pass the suite against local servers replaying recorded answers.
+`FramesAnalyzer` (local, remote, with a visibility pass, and captioning the warehouse clip),
+`GeminiVideoAnalyzer` and `SamVideoTracker` pass the suite against local servers replaying
+recorded answers.
+
+## The Video Analyst
+
+`VideoAnalyst` (feature `analyst`) is NVIDIA's chunk, caption and index pattern from its Video
+Search and Summarization blueprint, built from workspace parts: a video is cut into chunks,
+each chunk is captioned by a vision-language model, the captions are indexed, and a question
+is answered from the chunks a retrieval finds, citing them with their time ranges.
+
+| Step | What happens |
+|------|--------------|
+| Chunk | Frames from any frame source are cut into `Chunking::fixed(window_ms)` windows from time zero, or at `Chunking::scene_change()` cuts — a cut where the 32×18 grey thumbnails of two frames differ by more than a threshold, every scene between a shortest and a longest length. One chunk is held at a time |
+| Caption | At most `frames_per_chunk` (6) of the chunk's frames, evenly spaced, go to the runtime's video analyzer as one `VideoRequest::Caption` call: metered as `UsageUnit::Frames`, on the device at zero cost, or remote with every frame released through the egress gate |
+| Index | The caption and its labels are embedded by any `adk_rag::EmbeddingProvider` and stored as one chunk in any `VectorStore`, with `startMs`, `endMs`, the keyframe and the clip in its metadata |
+| Remember | With `captions`, each caption is an `adk-memory` entry `[m:ss.s–m:ss.s] caption` with `Part::FileData` references to its keyframe and clip; with `graph`, the clip is a `vision.clip` entity whose observations are the captions, related to a `vision.label` entity for each thing they name |
+| Keyframes | With `keyframes`, each chunk's middle frame passes the `FramePrivacy` hook and is stored as an image artifact; with `visual_memory`, it is also embedded in a `VisualMemory`, so a moment can be found by an example image |
+| Ask | `ask` has the `answerer` model write the caption it expects the answer's chunk to have, retrieves the `top_k` chunks nearest the question and that caption, and asks the answerer — which sees caption text and time ranges, never frames — for JSON naming the chunks that show the answer, earliest first, and whether the captions show it at all (`supported`); when none does, it cites the closest chunks with `supported` false. A number it was not shown is dropped. Without an answerer, the chunk nearest the question is the answer |
+| Erase | `erase_source` deletes a clip's chunks, captions, graph entity, keyframes and their visual-memory vectors, and writes `vision.analyst.erased`; indexing a clip again erases its earlier chunks first |
+
+```rust,no_run
+use std::sync::Arc;
+use adk_memory::{GraphMemoryService, InMemoryMemoryService};
+use adk_rag::{InMemoryVectorStore, Scope};
+use adk_vision::analyst::{AnalystQuery, Chunking, ClipSource, VideoAnalyst, WordHashEmbedding};
+use adk_vision::stream::{FramePrivacy, FrameSource, NoRedaction};
+use adk_vision::{FramesAnalyzer, LlmDescriber, MediaScope, Sampling, VisionCx, VisionRuntime};
+
+# async fn run(
+#     qwen: LlmDescriber<adk_vision::SentImage>,
+#     artifacts: Arc<dyn adk_artifact::ArtifactService>,
+#     source: &dyn FrameSource,
+# ) -> adk_vision::Result<()> {
+let runtime = Arc::new(
+    VisionRuntime::builder()
+        .video_analyzer(Arc::new(FramesAnalyzer::local(&qwen)))
+        .build()?,
+);
+let graph = GraphMemoryService::new("sqlite:warehouse.db").await?;
+graph.migrate().await?;
+let analyst = VideoAnalyst::builder(
+    runtime,
+    Arc::new(InMemoryVectorStore::new()),
+    Arc::new(WordHashEmbedding::default()),
+    "warehouse-chunks",
+)
+.chunking(Chunking::fixed(30_000))
+.captions(Arc::new(InMemoryMemoryService::new()))
+.graph(Arc::new(graph))
+.keyframes(artifacts, FramePrivacy::new(Arc::new(NoRedaction)))
+.answerer(&qwen)
+.open()
+.await?;
+
+let scope = Scope::new("site-7").map_err(|e| adk_vision::VisionError::InvalidInput(e.to_string()))?;
+let clip = ClipSource::new("dock-cam-2026-11-18", MediaScope::new("site-7", "ops", "s1"));
+let sampling = Sampling::at(0.2);
+let cx = VisionCx::new();
+let indexed = analyst.index(&cx, &scope, &clip, source.frames(sampling).await?, sampling).await?.value;
+println!("{} chunks, {:?} µUSD an hour", indexed.chunks.len(), indexed.cost_per_hour_micro_usd());
+
+let answer = analyst.ask(&cx, &scope, "When does a truck back into the dock?", &AnalystQuery::top(8)).await?;
+if let Some(chunk) = answer.primary() {
+    println!("{} — {} ({})", answer.answer, chunk.time_range(), chunk.caption);
+}
+# Ok(())
+# }
+```
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `chunking` | `Chunking::fixed(30_000)` | Fixed windows, or `Chunking::scene_change()` (threshold 0.12, scenes of 5–60 s) with `with_threshold` and `with_bounds` |
+| `frames_per_chunk` | 6 | Frames sent per caption call, evenly spaced over the chunk |
+| `call_options` | none | The video route and the data class remote frames are released as |
+| `captions`, `graph` | off | `adk-memory` entries per chunk; the clip in graph memory |
+| `keyframes`, `visual_memory` | off | Middle frames through the privacy hook into artifacts; their embeddings in a `VisualMemory` built without captions or a graph |
+| `answerer` | none | The model that answers from captions; any `LlmDescriber`, local or remote, metered by its token price |
+| `expand_questions` | on | Search for the question together with the caption the answerer expects, so a question in other words than the captions — "when do the lights go out?" over "the picture turns dark" — still finds its chunk |
+
+No backend is assumed. The captioner is whatever video analyzer the runtime routes to, the
+store any `adk-rag` backend, and the text embedding any `EmbeddingProvider`.
+`WordHashEmbedding` needs no model: it hashes each word's crude stem into a bucket and
+scales the counts to unit length, so similarity measures the words two texts share. A
+sentence embedding model — `adk-rag`'s `OnnxEmbeddingProvider` on the device, or a hosted
+one — also matches captions that say the same thing in other words.
+
+### Cost per Hour of Video
+
+`IndexedClip::usage` sums the caption calls' frames, requests, tokens and cost, and
+`cost_per_hour_micro_usd` scales the cost to one hour of the video the chunks cover: zero
+on the device, `None` when any call's cost is unknown. Each `ask` reports its own answer
+call in `AnalystAnswer::usage`. `vision.analyst.indexed` records chunks, frames read and
+sent, requests, cost and cost per hour; `vision.analyst.asked` records the chunks retrieved
+and cited and the question's digest, never its text.
+
+### Scenario S17
+
+`analyst::fixtures::WarehouseClip` draws an hour of a warehouse camera — a loading dock, three
+racks of cartons, a fire exit and a timestamp overlay — with ten labelled events: a forklift
+driving up to aisle 2, a truck backing into the dock, cartons falling, a worker in a yellow
+vest crossing, a spill, the fire exit blocked, a ladder climb, a near miss between two
+forklifts, a fire, and the lights going out. A worker pushing a cart now and then is not an
+event. `WarehouseSpec::with_duration` scales the start times for a shorter clip and keeps
+how long each event lasts.
+
+The live run, recorded on 2026-11-23:
+
+| Item | Value |
+|------|-------|
+| Clip | `WarehouseClip`, one hour at 480×270, sampled every 2.5 s |
+| Chunks | 30-second fixed windows, six frames of each sent: 120 chunks, 720 frames |
+| Captioner | `claude-haiku-5-5` through `FramesAnalyzer::remote`, every frame released through the egress gate |
+| Store and embedding | `InMemoryVectorStore`, `WordHashEmbedding` |
+| Answerer | `claude-haiku-5-5`, the 8 nearest chunks, question expansion on |
+| Citations | 9 of 10 answers cite the chunk that holds the event's start: 8 with `supported` true, the near miss as the closest match with `supported` false; the spill is missed, because the captioner describes the drum and puddle as "a blue vehicle" |
+| Cost | Captioning 32,587 µUSD for the hour (193,320 input and 16,749 output tokens): $0.033 per hour of video. The ten answers, with their expansions, 3,334 µUSD |
+
+The PR tier replays that run through the egress gate (`adk-vision/tests/analyst_tests.rs`):
+the replay must cite as the live run did and report the same cost per hour. A second test
+runs the analyst's own steps over the whole hour with a captioner that reads the clip's
+truth, and checks every citation, the captions' artifact references, the graph entity and
+the erasure.
+
+```bash
+ANTHROPIC_API_KEY=... cargo test -p adk-vision --features analyst \
+    --test analyst_live_tests -- --ignored --nocapture
+```
 
 ## Tracking Through a Clip with `sam-3.1`
 

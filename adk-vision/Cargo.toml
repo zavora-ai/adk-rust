@@ -17,7 +17,7 @@ exclude = ["tests/"]
 [package.metadata.docs.rs]
 # docs.rs has no CUDA or Metal toolchain, so the GPU features are left out; ort-sys skips
 # linking on docs.rs.
-features = ["fetch", "conformance", "eval", "guardrail", "onnx", "ocr", "ocr-vl", "cloud", "nim", "sam", "sam-codec", "mistralrs", "track", "gemini-video", "memory"]
+features = ["fetch", "conformance", "eval", "guardrail", "onnx", "ocr", "ocr-vl", "cloud", "nim", "sam", "sam-codec", "mistralrs", "track", "gemini-video", "memory", "analyst"]
 
 # Spec 3.7 §7.1: media, geometry, manifests, the traits, `VisionRuntime`, the egress boundary
 # and the deterministic `Editor` always build; each runtime and provider is a feature, added
@@ -113,6 +113,11 @@ track = ["dep:trackforge"]
 # adk-memory, sources and labels in its graph memory, erasure by source; and the week corpus
 # of scenario S16.
 memory = ["dep:adk-rag", "dep:adk-memory", "adk-memory/graph-memory"]
+# The video analyst (§7.13, §7.15, S17): a video cut into fixed or scene chunks, each captioned
+# by the runtime's video analyzer, indexed in any vector store with captions in adk-memory and
+# the clip in its graph memory; questions answered from retrieved chunks, citing their time
+# ranges; cost per hour of video; erasure by clip; and the warehouse clip of scenario S17.
+analyst = ["cloud", "memory", "stream"]
 # The visual memory tests against adk-rag's embedded LanceDB backend (protoc needed).
 memory-lancedb = ["memory", "adk-rag/lancedb"]
 # The perceiver, reasoner and verifier roles and `VisionTeam` (§7.12): each role an adk-core
@@ -355,6 +360,14 @@ required-features = ["mistralrs"]
 [[test]]
 name = "memory_tests"
 required-features = ["memory"]
+
+[[test]]
+name = "analyst_tests"
+required-features = ["analyst", "conformance"]
+
+[[test]]
+name = "analyst_live_tests"
+required-features = ["analyst"]
 
 [[test]]
 name = "memory_lancedb_tests"

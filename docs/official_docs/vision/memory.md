@@ -138,6 +138,23 @@ resources that name their source URI, never their bytes.
 with one observation per image (capture time, caption, artifact URI), related by `observed`
 to a `vision.label` entity for each label.
 
+## Video captions
+
+The video analyst (feature `analyst`, [The video analyst](video.md#the-video-analyst)) keeps a
+video in the same three places, one chunk of the video at a time:
+
+| Store | What a chunk leaves there |
+|-------|---------------------------|
+| `adk-rag` vector store | One chunk: the caption as its text, the caption and its labels embedded by any `EmbeddingProvider`, `startMs` and `endMs`, the keyframe's and the clip's references, the capture time, the run and the captioning backend as metadata, the keyframe's artifact URI as `source_uri` |
+| `adk-memory` | The entry `[m:ss.s–m:ss.s] caption`, its id and session the chunk id, with `Part::FileData` references to the keyframe (`image/png`) and the clip (`video/mp4`) |
+| Graph memory | One `vision.clip` entity per clip, an observation `[m:ss.s–m:ss.s] caption (chunk id)` per chunk, related by `observed` to a `vision.label` entity for each thing a caption names |
+| `VisualMemory` | With `visual_memory`, the keyframe's image embedding with the caption, so a moment is found by an example image. Build it without captions or a graph: the analyst writes those |
+
+Keyframes are each chunk's middle frame after the `FramePrivacy` hook, stored as image
+artifacts; the frames between them are never written. `VideoAnalyst::erase_source` deletes
+a clip's chunks, captions, graph entity, keyframes and keyframe vectors and writes
+`vision.analyst.erased`.
+
 ## With an `adk-rag` pipeline
 
 `SiglipTextEmbedding` adapts the runtime's embedder to `adk_rag::EmbeddingProvider`, and

@@ -529,6 +529,11 @@
 # adk-rag pipeline, erasure by source — and the S16 week corpus, with the doctests; the
 # SigLIP 2 run is ignored.
 6 adk-vision memory doc
+# The video analyst (spec 3.7 §7.13, §7.15, S17): an hour of the warehouse clip chunked,
+# captioned, indexed, answered and erased with an oracle captioner and with the recorded live
+# run replayed through the egress gate; scene cuts; the frame cap; captions in the video
+# conformance suite; the doctests. The live run is ignored.
+6 adk-vision analyst,conformance doc
 # Local cameras (spec 3.7 §7.13): the AVFoundation, v4l2 and DirectShow device listings on
 # recorded outputs, and capture with ffmpeg's testsrc2 standing in for a camera through the
 # frame source conformance check (skipping, saying so, without ffmpeg); the RF-DETR run on a

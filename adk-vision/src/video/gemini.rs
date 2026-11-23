@@ -328,7 +328,7 @@ impl VideoAnalyzer<ReleasedImage> for GeminiVideoAnalyzer {
                 .unwrap_or(start)
                 .clamp(start, info.duration_ms);
             let text = event.get("text").and_then(Value::as_str).unwrap_or_default();
-            analysis.events.push(VideoEvent { start_ms: start, end_ms: end, text: text.into() });
+            analysis.events.push(VideoEvent::new(start, end, text));
         }
         analysis.events.sort_by_key(|e| e.start_ms);
         Ok(analysis)

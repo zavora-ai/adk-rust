@@ -24,10 +24,11 @@ Local-first perception for Rust Agent Development Kit (ADK-Rust) agents.
 | Traits | `Detector`, `Segmenter`, `DocumentReader`, `Embedder`, `Describer`, `Tracker`, `VideoAnalyzer`, `Editor` | One contract per perception task, each with a conformance suite |
 | Runtime | `VisionRuntime` | Local-first routing, metering, cancellation, mapping to source pixels, crop escalation |
 | Egress | `EgressGate`, `ReleasedImage`, `ReleasedClip` | A remote backend only ever receives an image the gate cropped, redacted, approved and recorded, or a clip it checked and recorded |
-| Video | `SourceClip`, `VideoSource`, `FramesAnalyzer`, `VisibilityPass`, `SamVideoTracker` | `analyze_video` holds a call's frames before anything leaves; questions over sampled frames on any model (`cloud`), optionally only around the first frame that shows the question's subject; tracks through a clip with `sam-3.1` video (`sam`) |
+| Video | `SourceClip`, `VideoSource`, `FramesAnalyzer`, `VisibilityPass`, `SamVideoTracker` | `analyze_video` holds a call's frames before anything leaves; questions and chunk captions over sampled frames on any model (`cloud`), questions optionally only around the first frame that shows the question's subject; tracks through a clip with `sam-3.1` video (`sam`) |
 | Tools | `VisionToolset` | `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`, `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure`, and `vision_watch` over registered frame sources (`stream`), on the governed path; a remote call is held with the exact egress image and releases only that digest |
 | Watch | `WatchCondition`, `WatchEvaluator`, `WatchSink` | Conditions held on the device against tracked objects; one event per object, keyed for the kernel's `VisionWakeSource`, never carrying pixels |
 | Memory | `VisualMemory`, `VisualQuery`, `SiglipTextEmbedding` | Image embeddings as `adk-rag` chunks in any vector store, found by text or an example image; one embedding space per collection; captions with artifact references in `adk-memory`; erasure by source (`memory`) |
+| Video analyst | `VideoAnalyst`, `Chunking`, `WordHashEmbedding` | A video cut into fixed or scene chunks, each captioned through the video analyzer and indexed in any vector store with its time range; captions in `adk-memory`, the clip in graph memory, keyframes in visual memory; questions answered citing chunks; cost per hour of video; erasure by clip (`analyst`) |
 | Measurement | `Calibration`, `Measurement` | A fiducial of known size gives pixels per millimetre; maximum length and area from masks with their uncertainty, valid only in the fiducial's plane |
 | Privacy | `FaceRedactor`, `PersonRedactor`, `PersonalTextRedactor`, `ImagePrivacyGuardrail`, `RedactorPrivacy::blur_faces` | Faces and personal text filled solid black on the device before an image leaves — by default YuNet faces with RF-DETR Nano for people with no face found (`onnx`) and PP-OCRv6 (`ocr`), loaded on first use; the same gate on model requests, tool results and user input; faces blurred on streams before any write; the on-device profile (`on_device = true`) that releases nothing |
 
@@ -71,6 +72,7 @@ features — `fetch`, `cloud`, `nim`, `sam`, `guardrail` — as `adk_rust::visio
 | `gemini-video` | `GeminiVideoAnalyzer`: Gemini native video, uploading clips above 20 MB once through the File API, at an explicit frame rate and media resolution; implies `cloud` |
 | `memory` | `VisualMemory`: image embeddings as `adk-rag` chunks with the caption, artifact, digest, region, source, capture time and run; text and example-image search with day, kind and source filters; the collection's embedding space recorded and any other refused; captions in `adk-memory` and sources in its graph memory; `erase_source` with a `vision.memory.erased` record; the S16 week corpus |
 | `memory-lancedb` | The visual memory tests against `adk-rag`'s embedded LanceDB backend (needs `protoc`) |
+| `analyst` | `VideoAnalyst`: fixed-window or scene-cut chunks captioned by `VideoRequest::Caption` through the runtime, indexed as `adk-rag` chunks with their time range, keyframe and clip; captions with artifact references in `adk-memory`, the clip and what it shows in graph memory, keyframes through the privacy hook into a `VisualMemory`; `ask` from retrieved captions with chunk citations; cost per hour of video; `erase_source` with a `vision.analyst.erased` record; `WordHashEmbedding`; the S17 warehouse clip (implies `cloud`, `memory`, `stream`) |
 | `team` | `team`: the `Perceiver`, `Reasoner` and `Verifier` roles, each refusing at construction what it may not hold, and `VisionTeam`, which escalates a reasoner/verifier disagreement to a person on one card with both opinions and the frame; implies `guardrail` |
 
 ## Quick Start
@@ -319,6 +321,14 @@ a new embedder means a new collection. Captions go to `adk-memory` with a refere
 artifact, and `erase_source` removes a source's chunks, captions, graph entity and unshared
 artifacts. See [Visual memory](../docs/official_docs/vision/memory.md).
 
+`VideoAnalyst` (feature `analyst`) cuts a video into fixed windows or scene cuts, captions
+each chunk through the runtime's video analyzer — on the device, or remotely with every frame
+through the egress gate — and indexes the caption in any `adk-rag` vector store with the
+chunk's time range, in `adk-memory` with references to its keyframe and clip, and in graph
+memory under the clip. `ask` answers from the captions a retrieval finds and cites the chunks
+it rests on; `IndexedClip::cost_per_hour_micro_usd` is the captioning's cost per hour of
+video. See [The video analyst](../docs/official_docs/vision/video.md#the-video-analyst).
+
 ## Documentation
 
 - [Getting started: a Document desk](../docs/official_docs/vision/getting-started.md), from
@@ -336,6 +346,8 @@ artifacts. See [Visual memory](../docs/official_docs/vision/memory.md).
 - [Vision benchmarks](../docs/official_docs/vision/benchmarks.md)
 - [Streams](../docs/official_docs/vision/streams.md): sources, sampling, the frame governor,
   the privacy step, retention and the stream pipeline
+- [Video and tracking](../docs/official_docs/vision/video.md#the-video-analyst): the video
+  analyst — chunks captioned, indexed and answered with citations, cost per hour of video
 - [Visual memory](../docs/official_docs/vision/memory.md): image embeddings as `adk-rag`
   chunks, text and example-image queries, one embedding space per collection, captions in
   `adk-memory`, erasure by source
