@@ -34,6 +34,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 | `SigLip2` | `Embedder` | Images and texts | Unit-length vectors, `Metric::Cosine` | — |
 | `Sam3` (`sam3-local`) | `Segmenter`, `Detector` | Concept prompts and `DetectQuery`; point and box prompts with `Sam3::with_tracker` | Masks (segmenting) or boxes (detecting), labelled with the concept | `ModelInput` 1008×1008, stretched |
 | `Sam3Tracker` (`sam3-local`) | `Segmenter` | Point and box prompts | One mask per object, scored by predicted IoU | `ModelInput` 1008×1008, stretched |
+| `YuNet` | `Detector` | `DetectQuery::Classes` of its one label, `face` | Face boxes, for the privacy redactors only | `SentPixels` (run at the full 640×640 input and at half of it) |
 
 Each backend is built from a `VerifiedModel`, so a file loads only after its size and
 SHA-256 matched the manifest (V-I10). It reads its input size, letterbox, normalisation and
@@ -60,6 +61,7 @@ Every record pins a Hugging Face commit, each file's SHA-256 and size, and the l
 | `siglip2-base-patch16-256` | `SigLip2` | vision 372 MB, text 1.13 GB, tokenizer | `onnx-community/siglip2-base-patch16-256-ONNX` @ `d1114256` | Apache-2.0 | Record only |
 | `siglip2-base-patch16-256-quantized` | `SigLip2` | vision q4 63 MB, text int8 283 MB, tokenizer | `onnx-community/siglip2-base-patch16-256-ONNX` @ `d1114256` | Apache-2.0 | Yes |
 | `siglip2-so400m-patch16-256-quantized` | `SigLip2` | vision q4 278 MB, text int8 711 MB, tokenizer (1,152 dimensions, opt-in) | `onnx-community/siglip2-so400m-patch16-256-ONNX` @ `7881d8f2` | Apache-2.0 | Record only |
+| `yunet-2023mar` | `YuNet` | `face_detection_yunet_2023mar.onnx`, 232 KB, 640×640 top-left letterbox | `opencv/face_detection_yunet` @ `3cc26e7f` | MIT | Yes |
 
 RF-DETR's XL and 2XL checkpoints are PML 1.0 and are not built in. The RF-DETR records
 list COCO's 91 label columns, the 80 named classes among them.
@@ -233,6 +235,7 @@ with a manifest of its own. A `local` source points at the directory holding the
 | `SigLip2` | The `.onnx` file containing `vision`, the one containing `text`, and `tokenizer.json` | `input`, `mean`, `std` |
 | `Sam3` | The `.onnx` file containing `vision`, the one containing `text`, the one containing `decoder`, and `tokenizer.json`; licence `LicenseRef-SAM`, `useRestricted` | `input`, `mean`, `std` (1008×1008, stretch and 0.5 when absent) |
 | `Sam3Tracker` | As `Sam2`; licence `LicenseRef-SAM`, `useRestricted` | As `Sam3` |
+| `YuNet` | Exactly one `.onnx` file with `cls_<s>`, `obj_<s>` and `bbox_<s>` outputs for strides 8, 16 and 32 | `input` and exactly one label; it takes BGR values from 0 to 255, so `mean` and `std` are not read |
 
 RF-DETR's graph may name its outputs `pred_boxes` and `logits` (the Transformers.js
 export) or `dets` and `labels` (RF-DETR's own `export()`); an RF-DETR-Seg export's mask
@@ -444,6 +447,7 @@ cores, 24 GB, macOS 26.2), onnxruntime 1.28 on the CPU, one image at a time:
 | `efficientsam-ti` | A drawn disc and rectangle, 640×480 | Mask IoU 0.978–0.992 from boxes and a point | 633 ms first call, 21 ms per later prompt |
 | `sam2.1-hiera-tiny-q4` | The same | Mask IoU 0.997–0.9996 | 1.10 s first call, 50 ms per later prompt |
 | `siglip2-base-patch16-256-quantized` | Three COCO photos, three captions | Each caption ranks its photo first, and each photo its caption | 445 ms for three images, 34 ms for three texts |
+| `yunet-2023mar` | Drawn portraits (`stream::fixtures::draw_portrait`) 60 to 1,400 px tall in 640×360 and 1280×720 frames | Every face found, scores 0.64–0.91; none found again after the face blur | 38–41 ms per 640×360 frame and 63–82 ms per 1280×720 frame, both passes, onnxruntime 1.31 |
 
 The 4-bit RF-DETR export scores the same objects lower than the full-precision one (the bear
 at 0.43 against 0.97), so `rf-detr-n` is the default in the examples.

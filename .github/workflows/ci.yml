@@ -552,9 +552,10 @@ jobs:
       run: test -f website-scenarios.md && cat website-scenarios.md >> "$GITHUB_STEP_SUMMARY" || true
 
   # ── adk-vision: the spec 3.7 scenarios run ────────────────────
-  # examples/vision holds S1–S8 of spec 3.7 §5: PP-OCRv6 tiny and RF-DETR Nano on the device,
-  # fetched by revision and SHA-256 into a cached Hugging Face cache, and the cloud backends
-  # on recorded responses (§11); examples-compile only checks the crate.
+  # examples/vision holds S1–S8, S18 and S19 of spec 3.7 §5: PP-OCRv6 tiny, RF-DETR Nano and
+  # YuNet on the device, fetched by revision and SHA-256 into a cached Hugging Face cache, and
+  # the cloud backends on recorded responses (§11); S19 runs S1 again under bubblewrap with the
+  # network denied. examples-compile only checks the crate.
   vision-scenarios:
     needs: scope
     if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group' && github.event_name != 'push' && contains(fromJSON(needs.scope.outputs.jobs), 'vision-scenarios')
@@ -575,6 +576,19 @@ jobs:
       with:
         path: .hf-cache
         key: vision-weights-${{ hashFiles('adk-vision/manifests/builtin.json') }}
+
+    # S19's sandbox, as sandbox-linux.yml sets it up: bubblewrap, with the AppArmor
+    # restriction on unprivileged user namespaces lifted.
+    - name: Install bubblewrap
+      timeout-minutes: 10
+      uses: ./.github/actions/apt-install
+      with:
+        packages: bubblewrap
+
+    - name: Allow unprivileged user namespaces
+      run: |
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        bwrap --version
 
     - name: Run the vision example's scenarios
       timeout-minutes: 40

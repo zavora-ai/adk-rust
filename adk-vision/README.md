@@ -29,7 +29,7 @@ Local-first perception for Rust Agent Development Kit (ADK-Rust) agents.
 | Watch | `WatchCondition`, `WatchEvaluator`, `WatchSink` | Conditions held on the device against tracked objects; one event per object, keyed for the kernel's `VisionWakeSource`, never carrying pixels |
 | Memory | `VisualMemory`, `VisualQuery`, `SiglipTextEmbedding` | Image embeddings as `adk-rag` chunks in any vector store, found by text or an example image; one embedding space per collection; captions with artifact references in `adk-memory`; erasure by source (`memory`) |
 | Measurement | `Calibration`, `Measurement` | A fiducial of known size gives pixels per millimetre; maximum length and area from masks with their uncertainty, valid only in the fiducial's plane |
-| Privacy | `PersonRedactor`, `PersonalTextRedactor`, `ImagePrivacyGuardrail` | Faces and personal text filled solid black on the device — by default RF-DETR Nano (`onnx`) and PP-OCRv6 (`ocr`), loaded on first use; the same gate on model requests, tool results and user input |
+| Privacy | `FaceRedactor`, `PersonRedactor`, `PersonalTextRedactor`, `ImagePrivacyGuardrail`, `RedactorPrivacy::blur_faces` | Faces and personal text filled solid black on the device before an image leaves — by default YuNet faces with RF-DETR Nano for people with no face found (`onnx`) and PP-OCRv6 (`ocr`), loaded on first use; the same gate on model requests, tool results and user input; faces blurred on streams before any write; the on-device profile (`on_device = true`) that releases nothing |
 
 ```toml
 [dependencies]
@@ -42,12 +42,12 @@ features — `fetch`, `cloud`, `nim`, `sam`, `guardrail` — as `adk_rust::visio
 
 | Feature | Contents |
 |---------|----------|
-| (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor`, `VisionToolset`, `PersonRedactor`, the `vision.*` audit records, watch conditions, calibration and measurement, the verifier loop (`VerifierLoop`) |
+| (always) | media, geometry, manifests, the traits, `VisionRuntime`, the egress gate, the deterministic `Editor`, `VisionToolset`, `FaceRedactor`, `PersonRedactor`, the `vision.*` audit records, watch conditions, calibration and measurement, the verifier loop (`VerifierLoop`) |
 | `fetch` | `ModelFetcher`: Hugging Face downloads by revision through `hf-hub` 0.5, SHA-256 checked before load, `HF_HUB_OFFLINE` honoured |
 | `conformance` | The conformance suite and its per-trait test macros |
 | `eval` | `VisionEvalAgent`: any runtime task answering `adk-eval` cases in the vision tools' response form, in process or over the `cargo adk eval` protocol (`serve_eval_protocol`) |
 | `guardrail` | `ImagePrivacyGuardrail` (a `BeforeModelCallback`, an `adk-guardrail` `Guardrail` and `ToolGuardrail`) and `PersonalTextRedactor` over `PiiRedactor`'s byte ranges |
-| `onnx` | Local backends on ONNX Runtime: `RfDetr`, `EfficientSam`, `Sam2`, `SigLip2`; onnxruntime downloaded at build time |
+| `onnx` | Local backends on ONNX Runtime: `RfDetr`, `EfficientSam`, `Sam2`, `SigLip2`, `YuNet`; onnxruntime downloaded at build time |
 | `onnx-dynamic` | The same backends against an onnxruntime library loaded from `ORT_DYLIB_PATH` |
 | `onnx-coreml`, `onnx-cuda` | The CoreML and CUDA execution providers for the `onnx` backends |
 | `sam3-local` | `Sam3` (concept segmentation and detection) and `Sam3Tracker` (points and boxes): Meta's SAM 3 on ONNX Runtime from weights you supply with your own manifest under the SAM License, loaded only after a person accepts it; no weights or built-in record ship; in no `adk-rust` tier; implies `onnx` |
@@ -126,9 +126,10 @@ async fn main() -> adk_vision::Result<()> {
 ## Local Backends
 
 Feature `onnx` runs RF-DETR detection (and RF-DETR-Seg instance masks), EfficientSAM-Ti
-and SAM 2.1 Tiny point and box segmentation, and SigLIP 2 image and text embeddings on the
-device. Each backend loads a `VerifiedModel` from the built-in manifest (eleven Apache-2.0
-records pinned by commit and SHA-256) or your own, such as an RF-DETR fine-tune:
+and SAM 2.1 Tiny point and box segmentation, SigLIP 2 image and text embeddings, and YuNet
+face detection for the privacy redactors on the device. Each backend loads a `VerifiedModel`
+from the built-in manifest (eleven Apache-2.0 records and MIT-licensed YuNet, pinned by
+commit and SHA-256) or your own, such as an RF-DETR fine-tune:
 
 ```rust,no_run
 use std::sync::Arc;
@@ -192,12 +193,13 @@ An on-device backend implements its trait for `SentImage`; a remote backend impl
 for `ReleasedImage`, so handing a remote backend an unreleased image does not compile. Only
 `EgressGate::release` constructs a `ReleasedImage`, after six steps:
 
-1. **Destination** — the adk-core `EgressPolicy` decides each host.
+1. **Destination** — the on-device profile refuses every host; otherwise the adk-core
+   `EgressPolicy` decides each host.
 2. **Minimise** — crop to the region the call needs, downscale to the backend's limit.
 3. **Redact** — every class in the policy (`faces`, `personal_text`, ...) is filled with
    solid colour by its `Redactor`; a class with no redactor, or a redactor whose default
-   weights cannot load (`PersonRedactor::rf_detr`, `PersonalTextRedactor::pp_ocr`), refuses
-   the release.
+   weights cannot load (`FaceRedactor::on_device`'s person fallback, `PersonRedactor::rf_detr`,
+   `PersonalTextRedactor::pp_ocr`), refuses the release.
 4. **Decide** — the rule for the host and data class says `deny`, `ask` or `allow`; `ask`
    holds until a person approves that exact egress digest.
 5. **Record** — the receipt (source and egress digests, chain, redactions, decision) goes to
@@ -295,7 +297,8 @@ mod my_detector {
 
 `StreamPipeline` reads a camera, a file, a screen, a browser page or the web home's camera,
 holds it to a `FrameBudget` (lower the rate, stop escalating, pause, resume next period),
-redacts every frame through a required `PrivacyHook` before any other stage, detects and
+redacts every frame through a required `PrivacyHook` — `RedactorPrivacy::blur_faces` blurs
+faces — before any other stage, detects and
 tracks on the device, and hands each frame to an `ObservationSink`. Frames stay in memory
 unless a wake, a card or a person keeps them through `FrameKeeper`, which stores only
 redacted frames, for 30 days by default. `StreamWatch` holds watch conditions against the

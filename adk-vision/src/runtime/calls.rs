@@ -288,9 +288,17 @@ impl VisionRuntime {
         let mut additions = Vec::new();
         for (index, reason, bbox) in items {
             let crop = bbox.map(|b| b.expanded(escalation.margin).clamped(w, h));
-            let found = self
+            let found = match self
                 .regions_once(cx, task, &escalation.backend, image, crop, &esc_options, calls)
-                .await?;
+                .await
+            {
+                Ok(found) => found,
+                Err(err @ VisionError::EgressRefused { .. }) => {
+                    escalation_refused(escalation, &err);
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
             if let Some(last) = calls.last_mut() {
                 last.escalation = Some(reason.clone());
             }
@@ -403,7 +411,7 @@ impl VisionRuntime {
                             continue;
                         };
                         let crop = bbox.expanded(escalation.margin).clamped(w, h);
-                        let sub = self
+                        let sub = match self
                             .read_once(
                                 cx,
                                 &escalation.backend,
@@ -413,7 +421,15 @@ impl VisionRuntime {
                                 &esc_options,
                                 &mut calls,
                             )
-                            .await?;
+                            .await
+                        {
+                            Ok(sub) => sub,
+                            Err(err @ VisionError::EgressRefused { .. }) => {
+                                escalation_refused(escalation, &err);
+                                continue;
+                            }
+                            Err(err) => return Err(err),
+                        };
                         let reason = EscalationReason::LowConfidence { threshold: *threshold };
                         if let Some(last) = calls.last_mut() {
                             last.escalation = Some(reason.clone());
@@ -536,11 +552,22 @@ impl VisionRuntime {
                 }
                 _ => None,
             });
-            if let Some(reason) = reason {
-                let esc_options = escalation_options(escalation, options);
-                let mut escalated = self
+            let esc_options = escalation_options(escalation, options);
+            let escalated = match reason {
+                Some(reason) => match self
                     .describe_once(cx, &escalation.backend, images, spec, &esc_options, &mut calls)
-                    .await?;
+                    .await
+                {
+                    Ok(escalated) => Some((reason, escalated)),
+                    Err(err @ VisionError::EgressRefused { .. }) => {
+                        escalation_refused(escalation, &err);
+                        None
+                    }
+                    Err(err) => return Err(err),
+                },
+                None => None,
+            };
+            if let Some((reason, mut escalated)) = escalated {
                 if let Some(last) = calls.last_mut() {
                     last.escalation = Some(reason.clone());
                 }
@@ -928,4 +955,15 @@ fn normalize_page(
     let reading_order =
         raw.reading_order.iter().filter_map(|&i| index_map.get(i).copied().flatten()).collect();
     Ok(DocumentPage { blocks, reading_order, markdown: raw.markdown })
+}
+
+/// An escalation the egress gate refused — a deny rule, an unlisted host, the on-device
+/// profile — leaves the primary's answer standing; the gate has recorded the refusal and its
+/// reason. A hold is not a refusal: it stops the call until a person decides.
+fn escalation_refused(escalation: &Escalation, err: &VisionError) {
+    tracing::warn!(
+        vision.backend = %escalation.backend,
+        error = %err,
+        "escalation refused at the egress gate, the on-device answer stands"
+    );
 }

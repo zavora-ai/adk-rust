@@ -1,13 +1,16 @@
-//! Scenarios S1–S8 of spec 3.7 §5 for `adk-vision`: the Document desk and phase A.
+//! Scenarios S1–S8, S18 and S19 of spec 3.7 §5 for `adk-vision`: the Document desk, phase A,
+//! blur by default on streams and the on-device profile.
 //!
-//! On the device, for real: PP-OCRv6 tiny reads and RF-DETR Nano detects, each fetched by
-//! revision and SHA-256 through the model fetcher on the first run (`HF_HUB_CACHE`). In the
+//! On the device, for real: PP-OCRv6 tiny reads, RF-DETR Nano and YuNet detect, each fetched
+//! by revision and SHA-256 through the model fetcher on the first run (`HF_HUB_CACHE`). In the
 //! cloud, on recorded responses: Claude, Gemini, Meta `sam-3.1` and NVIDIA NIM answer
 //! through their real clients from a local server, so no key is needed. Every pass condition
 //! is asserted on stores, egress records, ledgers and audit records, never on model prose.
 
 mod fixtures;
 mod replay;
+mod s18;
+mod s19;
 mod s1_s2;
 mod s3_s4;
 mod s5;
@@ -64,6 +67,8 @@ const SCENARIOS: &[(&str, &str)] = &[
     ("s6_weights_you_can_trust", "S6 Weights you can trust"),
     ("s7_a_budget_per_image", "S7 A budget per image"),
     ("s8_same_tool_any_backend", "S8 Same tool, any backend"),
+    ("s18_blur_by_default_on_streams", "S18 Blur by default on streams"),
+    ("s19_off_the_network", "S19 Off the network"),
 ];
 
 async fn run(name: &str, desk: &s1_s2::Shared) -> Result<Checks> {
@@ -76,6 +81,8 @@ async fn run(name: &str, desk: &s1_s2::Shared) -> Result<Checks> {
         "s6_weights_you_can_trust" => s6::run().await,
         "s7_a_budget_per_image" => s7::run().await,
         "s8_same_tool_any_backend" => s8::run().await,
+        "s18_blur_by_default_on_streams" => s18::run().await,
+        "s19_off_the_network" => s19::run().await,
         other => bail!("no scenario `{other}`"),
     }
 }
@@ -91,6 +98,10 @@ fn verdict(result: &Result<Checks>) -> String {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // S19's sandboxed run of S1: this binary again, inside the operating system's sandbox.
+    if let Some(report) = s19::child_report(&args) {
+        return s19::child(std::path::Path::new(report)).await;
+    }
     let report = args
         .iter()
         .position(|arg| arg == "--report")

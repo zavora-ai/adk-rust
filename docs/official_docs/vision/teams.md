@@ -14,7 +14,8 @@ adk-vision = { version = "3.0.0", features = ["team"] }
 
 > **Note:** the spec's open-question defaults are in force: images leave only after
 > redaction, through the egress gate, and each remote host asks first unless a rule allows it
-> (Q1); until a face detector is chosen, every detected person's whole box is filled (Q3).
+> (Q1); faces are filled by the YuNet face detector, and a person it finds no face for whole
+> (Q3).
 
 ## The Three Roles
 

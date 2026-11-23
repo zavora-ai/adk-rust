@@ -146,9 +146,10 @@ async fn s4_a_remote_call_is_held_with_its_egress_image_and_releases_that_digest
         .iter()
         .map(|r| r["label"].as_str().unwrap())
         .collect();
+    // The person redactor covers the portrait as the whole person, drawn as `people`.
     assert_eq!(
         labels,
-        vec!["faces", "personal_text", "personal_text", "personal_text", "personal_text"]
+        vec!["people", "personal_text", "personal_text", "personal_text", "personal_text"]
     );
 
     // Approval released that digest, and the provider received exactly those bytes.

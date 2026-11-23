@@ -76,14 +76,22 @@ type RuntimeFactory =
 ///
 /// | Class | Feature `vision-local` | Without it |
 /// |-------|------------------------|------------|
-/// | `faces` | `PersonRedactor::rf_detr`: RF-DETR Nano covers each detected person | No redactor: every release is refused |
+/// | `faces` | `FaceRedactor::on_device`: YuNet covers each face, RF-DETR Nano each person it finds no face for | No redactor: every release is refused |
 /// | `personal_text` | `PersonalTextRedactor::pp_ocr` with PP-OCRv6 small and `PERSONAL_FIELD_LABELS` | No redactor: every release is refused |
 ///
 /// The default backends load on their first release through the pack's `model_fetcher`
 /// (feature `vision-local`), each file verified against adk-vision's built-in manifest. A
 /// load that fails — `HF_HUB_OFFLINE` with the weights not cached, a digest mismatch —
-/// refuses that release. Either way the image does not leave unredacted; perception on the
+/// refuses that release, except that the faces redactor covers whole persons when only
+/// YuNet is missing. Either way the image does not leave unredacted; perception on the
 /// device is unaffected.
+///
+/// # The on-device profile
+///
+/// With `on_device = true` in the `[egress]` table of `.adk/vision.toml`, the egress gate
+/// refuses every release at its destination step, with its reason, and the default fetcher
+/// works offline, as under `HF_HUB_OFFLINE=1`: models load from the cache and no socket is
+/// opened for them.
 ///
 /// # Example
 ///
@@ -244,9 +252,11 @@ impl VisionPack {
                 .collect();
         #[cfg(feature = "vision-local")]
         let defaults: Vec<Arc<dyn Redactor>> = {
+            let on_device = config.egress.on_device;
             let fetcher = self.fetcher.unwrap_or_else(|| {
+                let fetch = adk_vision::FetchConfig::from_env();
                 adk_vision::ModelFetcher::new(
-                    adk_vision::FetchConfig::from_env(),
+                    if on_device { fetch.with_offline(true) } else { fetch },
                     Arc::new(adk_vision::InMemoryAcceptanceStore::new()),
                 )
             });
@@ -255,7 +265,7 @@ impl VisionPack {
                 .map(|class| -> Arc<dyn Redactor> {
                     tracing::debug!(vision.redaction_class = %class, "vision pack installs its default redactor");
                     if class == RedactionClass::faces() {
-                        Arc::new(adk_vision::PersonRedactor::rf_detr(fetcher.clone()))
+                        Arc::new(adk_vision::FaceRedactor::on_device(fetcher.clone()))
                     } else {
                         Arc::new(
                             adk_vision::PersonalTextRedactor::pp_ocr(

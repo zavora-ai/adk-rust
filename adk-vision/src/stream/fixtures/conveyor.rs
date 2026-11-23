@@ -426,10 +426,10 @@ impl ConveyorClip {
     }
 }
 
-struct Canvas {
-    w: u32,
-    h: u32,
-    rgba: Vec<u8>,
+pub(super) struct Canvas {
+    pub(super) w: u32,
+    pub(super) h: u32,
+    pub(super) rgba: Vec<u8>,
 }
 
 impl Canvas {
@@ -443,7 +443,7 @@ impl Canvas {
     }
 
     /// Pixels whose centres fall in `[x0, x1) × [y0, y1)`, tested by `inside`.
-    fn fill(
+    pub(super) fn fill(
         &mut self,
         x0: f32,
         y0: f32,
@@ -464,7 +464,7 @@ impl Canvas {
         }
     }
 
-    fn rect(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, color: [u8; 3]) {
+    pub(super) fn rect(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, color: [u8; 3]) {
         self.fill(x0, y0, x1, y1, color, |x, y| x >= x0 && x < x1 && y >= y0 && y < y1);
     }
 
@@ -485,7 +485,7 @@ impl Canvas {
         });
     }
 
-    fn line(&mut self, ax: f32, ay: f32, bx: f32, by: f32, width: f32, color: [u8; 3]) {
+    pub(super) fn line(&mut self, ax: f32, ay: f32, bx: f32, by: f32, width: f32, color: [u8; 3]) {
         let half = width / 2.0;
         let (dx, dy) = (bx - ax, by - ay);
         let len2 = (dx * dx + dy * dy).max(f32::EPSILON);

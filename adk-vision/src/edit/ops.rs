@@ -44,6 +44,19 @@ pub(crate) fn blur(pixels: &mut DecodedImage, bbox: &BBox, sigma: f32) {
     imageops::replace(pixels.inner_mut(), &blurred, i64::from(x0), i64::from(y0));
 }
 
+/// Blurs the pixels inside `bbox` with an approximation of a Gaussian of `sigma`, in time
+/// that does not grow with `sigma`: for a blur as wide as the box itself.
+pub(crate) fn fast_blur(pixels: &mut DecodedImage, bbox: &BBox, sigma: f32) {
+    let (w, h) = pixels.size();
+    let (x0, y0, bw, bh) = bbox.pixel_bounds(w, h);
+    if bw == 0 || bh == 0 {
+        return;
+    }
+    let region = imageops::crop_imm(pixels.inner(), x0, y0, bw, bh).to_image();
+    let blurred = imageops::fast_blur(&region, sigma.max(0.1));
+    imageops::replace(pixels.inner_mut(), &blurred, i64::from(x0), i64::from(y0));
+}
+
 /// Replaces each `block`-pixel square the box touches with its average colour.
 pub(crate) fn pixelate(pixels: &mut DecodedImage, bbox: &BBox, block: u32) {
     let (w, h) = pixels.size();

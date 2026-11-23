@@ -452,6 +452,50 @@ async fn low_confidence_blocks_are_reread_from_their_crop() {
     assert_eq!(red.text, "red text from pp-ocr");
 }
 
+/// The on-device profile (spec 3.7 S19): each escalation is refused at the gate with its
+/// reason, and the on-device answers stand.
+#[tokio::test]
+async fn a_refused_escalation_leaves_the_on_device_answer() {
+    let recorder = arc(InMemoryEgressRecorder::new());
+    let config = EgressConfig::default().with_default(EgressAction::Allow).on_device();
+    let read_route = Route::to("pp-ocr")
+        .escalate(Escalation::to("cloud-reader").on(Trigger::LowConfidence { threshold: 0.5 }));
+    let describe_route = Route::to("qwen3-vl")
+        .escalate(Escalation::to("gemini").on(Trigger::LowConfidence { threshold: 0.6 }));
+    let runtime = VisionRuntime::builder()
+        .reader(arc(ColourReader::local("pp-ocr", 0.2)))
+        .remote_reader(arc(RemoteReader::new()))
+        .describer(arc(ColourDescriber::local("qwen3-vl", 0.4)))
+        .remote_describer(arc(ColourDescriber::remote("gemini", 0.95)))
+        .egress_gate(EgressGate::new(EgressPolicy::public_only(), config, recorder.clone()))
+        .route(VisionTask::Read, read_route)
+        .route(VisionTask::Describe, describe_route)
+        .build()
+        .unwrap();
+    let cx = VisionCx::new();
+
+    let read = runtime.read(&cx, &page(), &ReadOptions::default()).await.unwrap();
+    let image = page();
+    let spec = DescribeSpec::new("Which colours?").with_regions();
+    let described = runtime.describe(&cx, &[&image], &spec).await.unwrap();
+
+    let blue = read.value.blocks.iter().find(|b| b.text.starts_with("blue")).unwrap();
+    assert_eq!(blue.text, "blue text from pp-ocr");
+    assert!(blue.region.origin.escalated_from.is_none());
+    assert!(described.value.escalated_from.is_none());
+    assert!(read.calls.iter().chain(&described.calls).all(|c| c.locality == Locality::InProcess));
+    assert!(recorder.released().is_empty());
+    let refusals: Vec<_> = recorder
+        .records()
+        .into_iter()
+        .map(|r| match r {
+            EgressRecord::Refused(r) => (r.step, r.reason.contains("on-device profile")),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(refusals, vec![("destination".to_string(), true); 2]);
+}
+
 #[tokio::test]
 async fn describe_escalates_a_low_confidence_answer_with_provenance() {
     let recorder = arc(InMemoryEgressRecorder::new());

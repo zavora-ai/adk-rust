@@ -12,12 +12,13 @@ use crate::edit::{Rgba, ops};
 use crate::egress::Redactor;
 use crate::error::{Result, VisionError};
 use crate::geometry::{BBox, TransformChain};
-use crate::media::{DecodedImage, Frame, FrameMeta, FramePixels};
+use crate::media::{DecodedImage, Frame, FrameMeta, FramePixels, FrameSourceId};
 use crate::redact::REDACTION_MARGIN;
 use crate::sent::SentImage;
 
 /// Redacts a frame's pixels in place before any other stage sees them: the face blur of
-/// spec 3.7 phase C, or a person-box redactor until then (Q3).
+/// spec 3.7 S18 ([`RedactorPrivacy::blur_faces`]), any [`RedactorPrivacy`], or a hook of
+/// your own.
 ///
 /// A hook that fails fails closed: the pipeline drops the frame, so nothing downstream sees
 /// or stores it.
@@ -104,12 +105,27 @@ pub enum RedactionMethod {
         /// The block size.
         block: u32,
     },
+    /// Gaussian blur whose standard deviation is this share of each box's longer side, so a
+    /// face near the camera is blurred as hard as a far one. At
+    /// [`FACE_BLUR`](RedactionMethod::FACE_BLUR) YuNet no longer finds the face it blurred.
+    ScaledBlur {
+        /// The share of the box's longer side.
+        fraction: f32,
+    },
+}
+
+impl RedactionMethod {
+    /// The face blur of spec 3.7 S18: a standard deviation of a quarter of the face box.
+    pub const FACE_BLUR: Self = Self::ScaledBlur { fraction: 0.25 };
 }
 
 /// A [`PrivacyHook`] over any on-device egress [`Redactor`]: the boxes it finds, plus a
-/// two-pixel margin, are filled, blurred or pixelated. Over
-/// [`PersonRedactor`](crate::PersonRedactor) it is spec 3.7 Q3's interim: every detected
-/// person's whole box.
+/// two-pixel margin, are filled, blurred or pixelated.
+///
+/// Over [`FaceRedactor`](crate::FaceRedactor) with [`RedactionMethod::FACE_BLUR`] it is the
+/// face blur of spec 3.7 S18 ([`blur_faces`](Self::blur_faces)): each face blurred, each
+/// person the face detector finds no face for blurred whole. Over
+/// [`PersonRedactor`](crate::PersonRedactor) it covers every detected person whole.
 ///
 /// # Example
 ///
@@ -137,13 +153,20 @@ pub struct RedactorPrivacy {
     redactor: Arc<dyn Redactor>,
     method: RedactionMethod,
     name: String,
+    hold: u64,
+    /// Each source's boxes found in its latest frames, by frame index.
+    held: std::sync::Mutex<std::collections::HashMap<FrameSourceId, Vec<(u64, BBox)>>>,
 }
+
+/// How much a held box grows per frame it is held, as a share of its longer side.
+const HOLD_GROWTH: f32 = 0.25;
 
 impl std::fmt::Debug for RedactorPrivacy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RedactorPrivacy")
             .field("name", &self.name)
             .field("method", &self.method)
+            .field("hold", &self.hold)
             .finish_non_exhaustive()
     }
 }
@@ -152,7 +175,44 @@ impl RedactorPrivacy {
     /// Redacts what `redactor` finds with `method`.
     pub fn new(redactor: Arc<dyn Redactor>, method: RedactionMethod) -> Self {
         let name = format!("redactor:{}", redactor.class());
-        Self { redactor, method, name }
+        Self { redactor, method, name, hold: 0, held: std::sync::Mutex::default() }
+    }
+
+    /// Holds each box for `frames` more frames of its source: a box found in one of the
+    /// last `frames` frames that nothing found in this frame overlaps is redacted again,
+    /// widened by a quarter of its longer side per frame since, because a detector misses a
+    /// moving face for a frame now and then. Nothing is held by default.
+    pub fn with_hold(mut self, frames: u64) -> Self {
+        self.hold = frames;
+        self
+    }
+
+    /// Blurs faces on the device before anything is written (spec 3.7 S18, V-I9):
+    /// [`FaceRedactor::on_device`](crate::FaceRedactor::on_device) — YuNet, with RF-DETR
+    /// Nano covering each person it finds no face for — under
+    /// [`RedactionMethod::FACE_BLUR`] (feature `onnx`).
+    ///
+    /// Each face is held for two more frames ([`with_hold`](Self::with_hold)), so a frame in
+    /// which YuNet misses a face it found just before still has it blurred. The models load
+    /// on the first frame. A frame whose redactor fails is dropped, so no later stage sees,
+    /// and no keeper stores, a frame that was not redacted.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use adk_vision::stream::{PrivacyHook, RedactorPrivacy};
+    /// use adk_vision::{FetchConfig, InMemoryAcceptanceStore, ModelFetcher};
+    ///
+    /// let fetcher =
+    ///     ModelFetcher::new(FetchConfig::from_env(), Arc::new(InMemoryAcceptanceStore::new()));
+    /// let hook = RedactorPrivacy::blur_faces(fetcher);
+    /// assert_eq!(hook.name(), "redactor:faces");
+    /// ```
+    #[cfg(any(feature = "onnx", feature = "onnx-dynamic"))]
+    pub fn blur_faces(fetcher: crate::ModelFetcher) -> Self {
+        Self::new(Arc::new(crate::FaceRedactor::on_device(fetcher)), RedactionMethod::FACE_BLUR)
+            .with_hold(2)
     }
 }
 
@@ -165,7 +225,7 @@ impl PrivacyHook for RedactorPrivacy {
     async fn redact(
         &self,
         cx: &VisionCx,
-        _frame: &FrameMeta,
+        frame: &FrameMeta,
         pixels: &mut DecodedImage,
     ) -> Result<Vec<BBox>> {
         let (w, h) = pixels.size();
@@ -177,8 +237,25 @@ impl PrivacyHook for RedactorPrivacy {
             TransformChain::new(w, h),
         );
         let found = self.redactor.find(cx, &view).await?;
-        let mut redacted = Vec::with_capacity(found.len());
-        for bbox in found {
+        let mut boxes = found.clone();
+        if self.hold > 0 {
+            let mut held = self.held.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let recent = held.entry(frame.source.clone()).or_default();
+            // A source that starts again numbers its frames from zero: nothing carries over.
+            recent.retain(|(then, _)| frame.index > *then && frame.index - then <= self.hold);
+            for (then, bbox) in recent.iter() {
+                let age = (frame.index - then) as f32;
+                let grown = bbox
+                    .expanded(HOLD_GROWTH * age * bbox.width().max(bbox.height()))
+                    .clamped(w, h);
+                if !found.iter().any(|f| f.intersection(&grown).is_some()) {
+                    boxes.push(grown);
+                }
+            }
+            recent.extend(found.iter().map(|bbox| (frame.index, *bbox)));
+        }
+        let mut redacted = Vec::with_capacity(boxes.len());
+        for bbox in boxes {
             let padded = BBox::new(
                 bbox.x0 - REDACTION_MARGIN,
                 bbox.y0 - REDACTION_MARGIN,
@@ -191,6 +268,10 @@ impl PrivacyHook for RedactorPrivacy {
                 }
                 RedactionMethod::Blur { sigma } => ops::blur(pixels, &padded, sigma),
                 RedactionMethod::Pixelate { block } => ops::pixelate(pixels, &padded, block.max(2)),
+                RedactionMethod::ScaledBlur { fraction } => {
+                    let sigma = fraction * padded.width().max(padded.height());
+                    ops::fast_blur(pixels, &padded, sigma);
+                }
             }
             redacted.push(padded);
         }

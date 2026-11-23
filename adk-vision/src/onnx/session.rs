@@ -423,13 +423,17 @@ mod tests {
     #[test]
     fn every_built_in_onnx_backend_model_has_what_its_backend_reads() {
         let builtin = ManifestSet::builtin().unwrap();
-        let families = ["rf-detr-", "efficientsam-", "sam2.1-", "siglip2-"];
+        let families = ["rf-detr-", "efficientsam-", "sam2.1-", "siglip2-", "yunet-"];
         let ort: Vec<_> =
             builtin.iter().filter(|m| families.iter().any(|f| m.id.starts_with(f))).collect();
-        assert_eq!(ort.len(), 11, "the built-in RF-DETR, SAM-family and SigLIP 2 records");
+        assert_eq!(ort.len(), 12, "the built-in RF-DETR, SAM-family, SigLIP 2 and YuNet records");
         for m in ort {
             assert!(m.io.input.is_some(), "`{}` names no input", m.id);
             match m.task {
+                VisionTask::Detect if m.id.starts_with("yunet-") => {
+                    onnx_path(m, "", "").unwrap();
+                    assert_eq!(m.io.labels, ["face"], "`{}`", m.id);
+                }
                 VisionTask::Detect => {
                     onnx_path(m, "", "").unwrap();
                     assert_eq!(m.io.labels.len(), 91, "`{}`", m.id);
