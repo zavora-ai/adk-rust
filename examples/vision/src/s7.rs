@@ -3,11 +3,12 @@
 //! unit and the cap; the ledger holds twenty commits of 2,500 µUSD; an on-device call
 //! records its image at zero cost. `sam-3.1` answers from a recorded live response.
 //!
-//! The ledger's clock starts just before midnight UTC, so the run's commits fall on two
-//! calendar days and the run's spend is read over the ledger's lifetime.
+//! The ledger's clock reads just before midnight UTC until `sam-3.1` has answered ten
+//! requests and just after from then on, so the run's commits fall on two calendar days and
+//! the run's spend is read over the ledger's lifetime.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use adk_artifact::InMemoryArtifactService;
 use adk_core::{
@@ -20,34 +21,43 @@ use adk_vision::{SamConfig, SamSegmenter, VisionConfig, VisionRuntime};
 use anyhow::Result;
 use chrono::{DateTime, TimeDelta, TimeZone, Utc};
 use serde_json::{Value, json};
-use wiremock::MockServer;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 use crate::Checks;
 use crate::fixtures::{
     APP, DeskSpec, Factory, crate_fixtures, desk_with_ledger, models, save, tool_responses,
 };
-use crate::replay::{Recording, requests, serve_always};
+use crate::replay::{Recording, requests};
 
 const CAP: u64 = 20;
 const CALLS: usize = 30;
+/// The `sam-3.1` requests answered before midnight.
+const BEFORE_MIDNIGHT: usize = 10;
 
-/// A clock that starts five seconds before midnight UTC and moves 100 ms each time it is read.
+/// A second before midnight UTC until `sam-3.1` has answered [`BEFORE_MIDNIGHT`] requests, a
+/// second after from then on.
 #[derive(Debug)]
-struct NearMidnight {
-    start: DateTime<Utc>,
-    reads: AtomicI64,
-}
+struct Midnight(Arc<AtomicUsize>);
 
-impl NearMidnight {
-    fn new() -> Self {
+impl Clock for Midnight {
+    fn now(&self) -> DateTime<Utc> {
         let midnight = Utc.with_ymd_and_hms(2026, 11, 24, 0, 0, 0).single().unwrap_or_default();
-        Self { start: midnight - TimeDelta::seconds(5), reads: AtomicI64::new(0) }
+        if self.0.load(Ordering::SeqCst) < BEFORE_MIDNIGHT {
+            midnight - TimeDelta::seconds(1)
+        } else {
+            midnight + TimeDelta::seconds(1)
+        }
     }
 }
 
-impl Clock for NearMidnight {
-    fn now(&self) -> DateTime<Utc> {
-        self.start + TimeDelta::milliseconds(100 * self.reads.fetch_add(1, Ordering::Relaxed))
+/// The recorded `sam-3.1` answer, counting the requests it answers.
+struct Counted(ResponseTemplate, Arc<AtomicUsize>);
+
+impl Respond for Counted {
+    fn respond(&self, _request: &Request) -> ResponseTemplate {
+        self.1.fetch_add(1, Ordering::SeqCst);
+        self.0.clone()
     }
 }
 
@@ -60,8 +70,15 @@ pub async fn run() -> Result<Checks> {
     let part = std::fs::read(crate_fixtures().join("cloud/shapes-960x540.png"))?;
     save(&artifacts, "part.png", part).await?;
     let server = MockServer::start().await;
-    let recording = crate_fixtures().join("cloud/recorded/sam-3-1.shapes-red-rectangle.json");
-    serve_always(&server, &Recording::load(&recording)?).await;
+    let recording = Recording::load(
+        &crate_fixtures().join("cloud/recorded/sam-3-1.shapes-red-rectangle.json"),
+    )?;
+    let served = Arc::new(AtomicUsize::new(0));
+    Mock::given(method("POST"))
+        .and(path(recording.route()))
+        .respond_with(Counted(recording.template(), served.clone()))
+        .mount(&server)
+        .await;
     let sam = SamSegmenter::new(
         SamConfig::new("recorded").with_base_url(format!("{}/v1", server.uri())),
     )?
@@ -100,7 +117,7 @@ pub async fn run() -> Result<Checks> {
         ],
     );
     let ledger =
-        InMemorySpendLedger::new(SpendLimits::new()).with_clock(Arc::new(NearMidnight::new()));
+        InMemorySpendLedger::new(SpendLimits::new()).with_clock(Arc::new(Midnight(served)));
     let desk = desk_with_ledger(
         DeskSpec {
             planner: Arc::new(planner),
@@ -148,7 +165,7 @@ pub async fn run() -> Result<Checks> {
             "the run crossed midnight UTC: {} µUSD committed before it and {today} after, read as one run's spend",
             spent.saturating_sub(today)
         ),
-        today > 0 && today < spent,
+        today > 0 && today < spent && spent == CAP * 2_500,
     );
     let commits: Vec<u64> = desk
         .records("vision.call")
