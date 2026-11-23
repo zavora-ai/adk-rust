@@ -183,8 +183,9 @@ adk-kernel = { path = "../adk-kernel", features = ["channels", "conformance", "p
 # The kernel-hosted harness of the scenario tests; `vision` for the approve-with-image example.
 adk-harness = { path = "../adk-harness", features = ["kernel", "vision"] }
 # The vision pack's runtime, egress gate and redactors of `vision_home` (spec 3.7 §8.2); the
-# conveyor clip over the in-process RTSP server of `live_camera_home` and the camera tests.
-adk-vision = { path = "../adk-vision", features = ["rtsp", "stream-fixtures"] }
+# conveyor clip over the in-process RTSP server of `live_camera_home` and the camera tests; a
+# camera on this machine, or ffmpeg's test pattern, switched off and on (`device`).
+adk-vision = { path = "../adk-vision", features = ["rtsp", "stream-fixtures", "device"] }
 # Loads the labelled examples the annotated viewer saves, as `cargo adk eval` does.
 adk-eval = { path = "../adk-eval" }
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic", "openai", "gemini"] }

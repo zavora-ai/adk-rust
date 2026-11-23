@@ -32,6 +32,7 @@ import type {
   ViewerView,
   CameraView,
   CamerasView,
+  FrameTaken,
   CardRaised,
   StageView,
   ZoneSaved,
@@ -372,6 +373,12 @@ export class HttpClient implements HomeClient {
       camera: (id) => this.request<CameraView>(`${camera(id)}?${query}`),
       feed: (id, signal) => this.cameraFeed(camera(id), signal),
       switchTo: (id, on) => this.request<CameraView>(`${camera(id)}/${on ? "on" : "off"}?${query}`, { method: "POST" }),
+      sendFrame: (id, frame) =>
+        this.request<FrameTaken>(`${camera(id)}/frames?${query}`, {
+          method: "POST",
+          body: frame,
+          headers: { "content-type": frame.type || "image/jpeg" },
+        }),
       stop: (id) => this.request<CameraView>(`${camera(id)}/stop?${query}`, { method: "POST" }),
       retry: (id) => this.request<CameraView>(`${camera(id)}/retry?${query}`, { method: "POST" }),
       saveZone: (id, zone, change) =>

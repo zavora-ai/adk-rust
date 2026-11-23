@@ -1808,6 +1808,10 @@
             "description": "\"Try again now\".",
             "type": "boolean"
           },
+          "sendFrames": {
+            "description": "\"Use this browser's camera\": the camera takes the frames this screen captures\n(`POST /surface/cameras/{camera}/frames`), as the web home's own camera does.",
+            "type": "boolean"
+          },
           "stop": {
             "description": "\"Stop the stream\".",
             "type": "boolean"
@@ -6220,6 +6224,55 @@
         "required": [
           "sessionId",
           "forms"
+        ],
+        "type": "object"
+      },
+      "FrameDropped": {
+        "description": "Why the server dropped a frame a screen sent.",
+        "oneOf": [
+          {
+            "const": "off",
+            "description": "The camera is switched off.",
+            "type": "string"
+          },
+          {
+            "const": "stopped",
+            "description": "The camera's stream was stopped.",
+            "type": "string"
+          },
+          {
+            "const": "frozen",
+            "description": "Stop all paused every camera.",
+            "type": "string"
+          },
+          {
+            "const": "notReading",
+            "description": "The pipeline was not reading the camera when the frame came.",
+            "type": "string"
+          }
+        ]
+      },
+      "FrameTaken": {
+        "description": "`POST /surface/cameras/{camera}/frames` answer: what became of one frame this screen\ncaptured.",
+        "properties": {
+          "dropped": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FrameDropped"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it did not. While the camera is off, stopped or paused by Stop all, the screen stops\ncapturing: a camera switched off sends nothing."
+          },
+          "taken": {
+            "description": "The frame went on to the camera's pipeline.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "taken"
         ],
         "type": "object"
       },
@@ -11807,6 +11860,124 @@
           }
         },
         "summary": "A camera's picture after each frame that passes the server's gate, as server-sent events: `frame` carries a StageView, `changed` says to read the camera again"
+      }
+    },
+    "/api/surface/cameras/{camera}/frames": {
+      "post": {
+        "parameters": [
+          {
+            "description": "The camera's id, such as `line-2`",
+            "in": "path",
+            "name": "camera",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The surface asking",
+            "in": "query",
+            "name": "surface",
+            "required": false,
+            "schema": null
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "image/jpeg": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrameTaken"
+                }
+              }
+            },
+            "description": "What became of the frame"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "One frame this screen's camera captured, for a camera that takes them (`actions.sendFrames`), at most 10 a second: handed to the camera's pipeline through the server's gate, or dropped with the reason while the camera is off, stopped or paused by Stop all, when the screen stops capturing. Nothing is written. A paired phone needs the decide scope"
       }
     },
     "/api/surface/cameras/{camera}/frames/{frame}": {

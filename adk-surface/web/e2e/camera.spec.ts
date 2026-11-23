@@ -2,7 +2,8 @@
 // conveyor clip over RTSP, each camera through the stream pipeline. The overlays are the
 // pipeline's and draw within one frame interval; line 3's small quota steps its governor down
 // and the board says so from the governor's numbers; a zone edited here changes which cracks
-// fire; switching off drops frames on the server; a card raised from the frame holds the
+// fire; switching off closes the camera's RTSP connection, so nothing is captured, and the
+// server's gate drops anything still on its way; a card raised from the frame holds the
 // Inspector's line stop with that frame as its evidence.
 import { expect, test } from "@playwright/test";
 import type { APIRequestContext, Page } from "@playwright/test";
@@ -15,6 +16,7 @@ interface Counts {
   pipeline: { arrived: number; dropped: number; observed: number; fired: number };
   hubDropped: number;
   on: boolean;
+  capturing: boolean;
 }
 
 async function counts(request: APIRequestContext, camera: string): Promise<Counts> {
@@ -110,17 +112,20 @@ test("the live camera surface runs on the frame pipeline", async ({ page, reques
     await expect.poll(async () => (await counts(request, "line-2")).pipeline.fired, { timeout: 60_000 }).toBeGreaterThan(onWall);
   }
 
-  // Switched off, the server drops every frame before the pipeline looks at it.
+  // Switched off, the camera's source stops: its RTSP connection closes before Off answers, so no
+  // frame arrives and the pipeline looks at nothing.
   const cameraSwitch = page.getByRole("group", { name: "Line 2 camera: on or off" });
   await cameraSwitch.getByRole("button", { name: "Off" }).click();
   await expect(subbar).toContainText("Camera off");
   await expect(page.getByText("Nothing is captured or sent.").first()).toBeVisible();
   const off = await counts(request, "line-2");
   expect(off.on).toBe(false);
+  expect(off.capturing).toBe(false);
   await page.waitForTimeout(3_000);
   const later = await counts(request, "line-2");
   expect(later.pipeline.observed).toBe(off.pipeline.observed);
-  expect(later.pipeline.dropped).toBeGreaterThan(off.pipeline.dropped);
+  expect(later.pipeline.arrived).toBe(off.pipeline.arrived);
+  expect(later.capturing).toBe(false);
   await cameraSwitch.getByRole("button", { name: "Camera on" }).click();
   await expect(subbar).toContainText("Live", { timeout: 20_000 });
   await expect.poll(async () => (await counts(request, "line-2")).pipeline.observed, { timeout: 20_000 }).toBeGreaterThan(later.pipeline.observed);

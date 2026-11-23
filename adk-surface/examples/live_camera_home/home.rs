@@ -369,6 +369,7 @@ pub async fn serve(
                             "pipeline": live.counts(id),
                             "hubDropped": cameras.dropped(id).await,
                             "on": cameras.is_on(id).await,
+                            "capturing": live.is_capturing(id),
                         }),
                     );
                 }

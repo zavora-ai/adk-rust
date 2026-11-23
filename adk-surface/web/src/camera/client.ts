@@ -4,6 +4,7 @@ import type {
   CardRaised,
   Command,
   CommandOutcome,
+  FrameTaken,
   Origin,
   RaiseCard,
   StageView,
@@ -22,6 +23,8 @@ export interface CameraClient {
   feed?(id: string, signal: AbortSignal): AsyncIterable<CameraFeedMessage>;
   /** On, or off: off drops every frame on the server from then on. */
   switchTo(id: string, on: boolean): Promise<CameraView>;
+  /** One frame this browser's camera captured, for a camera that takes them (`actions.sendFrames`). */
+  sendFrame?(id: string, frame: Blob): Promise<FrameTaken>;
   stop(id: string): Promise<CameraView>;
   retry(id: string): Promise<CameraView>;
   saveZone?(id: string, zone: string, change: ZoneChange): Promise<ZoneSaved>;

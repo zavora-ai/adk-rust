@@ -111,9 +111,56 @@ dependencies at `opt-level = 1`, `MistralRsConfig::default()`; from the crate's 
 A release build, `isq` quantisation or `mistralrs-metal` shortens the calls; they were not
 measured here.
 
+## On Ollama
+
+A vision model served by Ollama on this machine is a second local route (spec 3.7 X19):
+`LlmDescriber::local` over adk-model's `OllamaModel`. Its `Llm::data_locality()` is `Loopback`
+at a loopback host, so the describer takes `SentImage`s and nothing passes the egress gate; a
+cloud model (`…-cloud`) or a server on another machine is `Remote`, and `LlmDescriber::local`
+refuses it. The image goes in the message's native `images`, so the model sees it.
+
+```toml
+[dependencies]
+adk-vision = { version = "3.0.0", features = ["cloud"] }
+adk-model = { version = "3.0.0", default-features = false, features = ["ollama"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+```rust
+use std::sync::Arc;
+
+use adk_model::ollama::{OllamaConfig, OllamaModel};
+use adk_vision::{DecodeLimits, DescribeSpec, LlmDescriber, SourceImage, VisionCx, VisionRuntime};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // `ollama pull qwen3-vl:4b` first; `ollama show qwen3-vl:4b` lists `vision`.
+    let model = OllamaModel::new(OllamaConfig::with_host("http://127.0.0.1:11434", "qwen3-vl:4b"))?;
+    // A thinking model reasons before it answers: leave room for both.
+    let describer = LlmDescriber::local(Arc::new(model))?.with_max_output_tokens(1_500);
+    let runtime = VisionRuntime::builder().describer(Arc::new(describer)).build()?;
+
+    let bytes = std::fs::read("shelf.jpg")?;
+    let photo = SourceImage::decode(&bytes, &DecodeLimits::default())?;
+    let spec = DescribeSpec::new("What is on the shelf?");
+    let answer = runtime.describe(&VisionCx::new(), &[&photo], &spec).await?;
+    println!("{}", answer.value.text.unwrap_or_default());
+    Ok(())
+}
+```
+
+A `qwen3-vl…` model name picks the Qwen3-VL adapter, so regions come back in its 0–1000 frame
+as over mistral.rs. Ollama 0.32 reads PNG, JPEG and GIF from `images` and refuses WebP; the
+runtime sends PNG.
+
+| Run | Result | Time |
+|-----|--------|------|
+| `qwen3-vl:4b` (Q4_K_M) on Ollama 0.32.13, Apple M4, the conformance shapes, "What coloured shapes are on this image?" | "The colored shapes on the image are red and blue." (`adk-vision/tests/ollama_describer_tests.rs`) | 14.1 s with the model loaded |
+
 ## Related
 
 - [Cloud vision backends](cloud.md) — `LlmDescriber` over remote models and the region adapters
 - [Vision overview](index.md)
 - [Local ONNX backends](onnx.md)
 - [mistral.rs](../models/mistralrs.md)
+- [Ollama](../models/ollama.md)

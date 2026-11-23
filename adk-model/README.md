@@ -460,8 +460,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 `OllamaConfig::new` targets `http://localhost:11434`; `OllamaConfig::with_host(host, model)`
-targets another server. Streaming works with tool calls. Ollama runs locally, so its responses
-cost zero.
+targets another server. Streaming works with tool calls. Inline PNG, JPEG and GIF images go out
+as the message's native `images`, so a vision model such as `qwen3-vl:4b` sees them. Ollama runs
+locally, so its responses cost zero.
 
 ### OpenRouter
 

@@ -10,7 +10,7 @@
 //! |---|---|---|
 //! | Line 2 | 5 a second, 500,000 frames a day | A crack inside the inspection window, 3 frames in a row |
 //! | Line 3 | 5 a second, `--line-3-quota` frames a day (2,000): the governor steps down at once | — |
-//! | This computer's camera | — | The voice screen's camera through `SurfaceCameraSource`, off |
+//! | This computer's camera | — | The web home's own camera through `SurfaceCameraSource`, off: the voice screen's, or this browser's from the camera page |
 //!
 //! The detector here is the belt detector below: a few lines of colour segmentation that find
 //! the clip's printed parts and the cracks across them, so the example needs no model weights.
@@ -25,8 +25,9 @@
 //! cargo run -p adk-surface --features web,vision-camera --example live_camera_home -- 8814
 //! ```
 //!
-//! Then open `http://127.0.0.1:8814/ui/cameras/line-2`. `GET /e2e/cameras` returns what each
-//! pipeline did with its frames.
+//! Then open `http://127.0.0.1:8814/ui/cameras/line-2`; `/ui/cameras/this-computer` takes this
+//! browser's camera through **Use this browser's camera**. `GET /e2e/cameras` returns what each
+//! pipeline did with its frames and whether its source is open.
 
 mod home;
 

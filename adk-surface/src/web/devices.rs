@@ -131,6 +131,8 @@ async fn stop(
 /// | Every `GET /surface/…` but the operator's phone reads | `read` |
 /// | `POST /surface/decisions/{id}/answer`, `…/confirm/options`, `…/confirm`, `…/take-over` | `decide` |
 /// | `POST /surface/stop` | `stop` |
+/// | `POST /surface/cameras/{camera}/off`, `…/stop` | `stop` |
+/// | `POST /surface/cameras/{camera}/on`, `…/frames`, `…/retry`, `…/freeze`, `…/cards` | `decide` |
 /// | The phone's own `/surface/phone` and `/surface/phone/push…` | `read` |
 /// | `/surface/phone/passkey…` | `decide` |
 /// | `POST /surface/commands`, `/surface/phone/qr`, `/surface/phone/devices`, `/surface/phone/push/deliveries` | closed |
@@ -166,10 +168,10 @@ pub fn device_scope_for(method: &Method, path: &str) -> Option<DeviceScope> {
         ) => Some(DeviceScope::Decide),
         ("POST", ["surface", "stop"]) => Some(DeviceScope::Stop),
         // A phone switches a camera off and stops its stream as it stops all; switching on,
-        // trying again and raising a card need the decide scope; zones are edited in the home
-        // (spec 3.7 §8.2, board choice C14).
+        // sending its own camera's frames, trying again and raising a card need the decide
+        // scope; zones are edited in the home (spec 3.7 §8.2, board choice C14).
         ("POST", ["surface", "cameras", _, "off" | "stop"]) => Some(DeviceScope::Stop),
-        ("POST", ["surface", "cameras", _, "on" | "retry" | "freeze" | "cards"]) => {
+        ("POST", ["surface", "cameras", _, "on" | "frames" | "retry" | "freeze" | "cards"]) => {
             Some(DeviceScope::Decide)
         }
         ("GET", ["surface", ..]) => Some(DeviceScope::Read),
@@ -225,6 +227,7 @@ mod tests {
             (Method::POST, "/api/surface/cameras/line-2/off", Some(DeviceScope::Stop)),
             (Method::POST, "/api/surface/cameras/line-2/stop", Some(DeviceScope::Stop)),
             (Method::POST, "/api/surface/cameras/line-2/on", Some(DeviceScope::Decide)),
+            (Method::POST, "/api/surface/cameras/this-computer/frames", Some(DeviceScope::Decide)),
             (Method::POST, "/api/surface/cameras/line-2/retry", Some(DeviceScope::Decide)),
             (Method::POST, "/api/surface/cameras/line-2/freeze", Some(DeviceScope::Decide)),
             (Method::POST, "/api/surface/cameras/line-2/cards", Some(DeviceScope::Decide)),
