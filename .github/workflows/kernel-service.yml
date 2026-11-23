@@ -115,7 +115,7 @@ jobs:
         enable-cache: 'false'
 
     - name: Install cmake
-      uses: lukka/get-cmake@a89e43e22a96abafcd7a62db652a65ecd33052c9 # v4.4.4
+      uses: lukka/get-cmake@16e8153a8b4918849d92aad131befe67a3705daa # v4.5.0
 
     - name: Build adk-rust with the scripted model
       run: cargo build -p adk-cli --bin adk-rust --features scripted-model
