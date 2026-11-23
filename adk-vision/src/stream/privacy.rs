@@ -12,7 +12,7 @@ use crate::edit::{Rgba, ops};
 use crate::egress::Redactor;
 use crate::error::{Result, VisionError};
 use crate::geometry::{BBox, TransformChain};
-use crate::media::{DecodedImage, Frame, FrameMeta, FramePixels};
+use crate::media::{DecodedImage, Frame, FrameMeta, FramePixels, FrameSourceId};
 use crate::redact::REDACTION_MARGIN;
 use crate::sent::SentImage;
 
@@ -153,13 +153,20 @@ pub struct RedactorPrivacy {
     redactor: Arc<dyn Redactor>,
     method: RedactionMethod,
     name: String,
+    hold: u64,
+    /// Each source's boxes found in its latest frames, by frame index.
+    held: std::sync::Mutex<std::collections::HashMap<FrameSourceId, Vec<(u64, BBox)>>>,
 }
+
+/// How much a held box grows per frame it is held, as a share of its longer side.
+const HOLD_GROWTH: f32 = 0.25;
 
 impl std::fmt::Debug for RedactorPrivacy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RedactorPrivacy")
             .field("name", &self.name)
             .field("method", &self.method)
+            .field("hold", &self.hold)
             .finish_non_exhaustive()
     }
 }
@@ -168,7 +175,16 @@ impl RedactorPrivacy {
     /// Redacts what `redactor` finds with `method`.
     pub fn new(redactor: Arc<dyn Redactor>, method: RedactionMethod) -> Self {
         let name = format!("redactor:{}", redactor.class());
-        Self { redactor, method, name }
+        Self { redactor, method, name, hold: 0, held: std::sync::Mutex::default() }
+    }
+
+    /// Holds each box for `frames` more frames of its source: a box found in one of the
+    /// last `frames` frames that nothing found in this frame overlaps is redacted again,
+    /// widened by a quarter of its longer side per frame since, because a detector misses a
+    /// moving face for a frame now and then. Nothing is held by default.
+    pub fn with_hold(mut self, frames: u64) -> Self {
+        self.hold = frames;
+        self
     }
 
     /// Blurs faces on the device before anything is written (spec 3.7 S18, V-I9):
@@ -176,8 +192,10 @@ impl RedactorPrivacy {
     /// Nano covering each person it finds no face for — under
     /// [`RedactionMethod::FACE_BLUR`] (feature `onnx`).
     ///
-    /// The models load on the first frame. A frame whose redactor fails is dropped, so no
-    /// later stage sees, and no keeper stores, a frame that was not redacted.
+    /// Each face is held for two more frames ([`with_hold`](Self::with_hold)), so a frame in
+    /// which YuNet misses a face it found just before still has it blurred. The models load
+    /// on the first frame. A frame whose redactor fails is dropped, so no later stage sees,
+    /// and no keeper stores, a frame that was not redacted.
     ///
     /// # Example
     ///
@@ -194,6 +212,7 @@ impl RedactorPrivacy {
     #[cfg(any(feature = "onnx", feature = "onnx-dynamic"))]
     pub fn blur_faces(fetcher: crate::ModelFetcher) -> Self {
         Self::new(Arc::new(crate::FaceRedactor::on_device(fetcher)), RedactionMethod::FACE_BLUR)
+            .with_hold(2)
     }
 }
 
@@ -206,7 +225,7 @@ impl PrivacyHook for RedactorPrivacy {
     async fn redact(
         &self,
         cx: &VisionCx,
-        _frame: &FrameMeta,
+        frame: &FrameMeta,
         pixels: &mut DecodedImage,
     ) -> Result<Vec<BBox>> {
         let (w, h) = pixels.size();
@@ -218,8 +237,25 @@ impl PrivacyHook for RedactorPrivacy {
             TransformChain::new(w, h),
         );
         let found = self.redactor.find(cx, &view).await?;
-        let mut redacted = Vec::with_capacity(found.len());
-        for bbox in found {
+        let mut boxes = found.clone();
+        if self.hold > 0 {
+            let mut held = self.held.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let recent = held.entry(frame.source.clone()).or_default();
+            // A source that starts again numbers its frames from zero: nothing carries over.
+            recent.retain(|(then, _)| frame.index > *then && frame.index - then <= self.hold);
+            for (then, bbox) in recent.iter() {
+                let age = (frame.index - then) as f32;
+                let grown = bbox
+                    .expanded(HOLD_GROWTH * age * bbox.width().max(bbox.height()))
+                    .clamped(w, h);
+                if !found.iter().any(|f| f.intersection(&grown).is_some()) {
+                    boxes.push(grown);
+                }
+            }
+            recent.extend(found.iter().map(|bbox| (frame.index, *bbox)));
+        }
+        let mut redacted = Vec::with_capacity(boxes.len());
+        for bbox in boxes {
             let padded = BBox::new(
                 bbox.x0 - REDACTION_MARGIN,
                 bbox.y0 - REDACTION_MARGIN,

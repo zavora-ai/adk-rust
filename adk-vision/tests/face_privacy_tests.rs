@@ -306,3 +306,43 @@ async fn the_on_device_profile_refuses_at_the_destination_before_any_redactor_ru
     assert!(refusal.egress.is_none(), "no egress copy was made");
     assert!(recorder.released().is_empty());
 }
+
+#[tokio::test]
+async fn a_held_face_is_blurred_again_in_the_frames_that_miss_it() {
+    let hook = RedactorPrivacy::new(
+        Arc::new(FaceRedactor::new(Arc::new(Colour::faces()))),
+        RedactionMethod::FACE_BLUR,
+    )
+    .with_hold(2);
+    let privacy = FramePrivacy::new(Arc::new(hook));
+    let frame = |source: &str, index: u64, faces: &[BBox]| Frame {
+        source: FrameSourceId(source.into()),
+        index,
+        pts: std::time::Duration::from_millis(index * 100),
+        captured_at: chrono::Utc::now(),
+        pixels: FramePixels::Ephemeral(Arc::new(scene(320, 240, &[], faces))),
+    };
+    let cx = VisionCx::new();
+    let mut seen = Vec::new();
+    for (source, index, faces) in [
+        ("desk", 0, vec![FACE]),
+        ("desk", 1, vec![]),
+        ("desk", 2, vec![]),
+        ("desk", 3, vec![]),
+        ("door", 1, vec![]),
+    ] {
+        let redacted = privacy.apply(&cx, frame(source, index, &faces)).await.unwrap();
+        seen.push(redacted.redacted().to_vec());
+    }
+
+    let found = seen[0][0];
+    assert_eq!(seen[0].len(), 1);
+    // Held for two frames, growing a quarter of its longer side a frame; then dropped.
+    for (held, age) in [(&seen[1], 1.0), (&seen[2], 2.0)] {
+        assert_eq!(held.len(), 1, "{held:?}");
+        assert!(held[0].contains(FACE.center()));
+        assert!(held[0].width() > found.width() + age * 0.4 * found.width(), "{held:?}");
+    }
+    assert!(seen[3].is_empty(), "held past its two frames: {:?}", seen[3]);
+    assert!(seen[4].is_empty(), "another source holds nothing of this one's");
+}

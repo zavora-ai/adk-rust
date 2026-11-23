@@ -200,7 +200,9 @@ frames record `none` as their privacy step. `RedactorPrivacy` runs any on-device
 `RedactorPrivacy::blur_faces(fetcher)` (feature `onnx`) is the face blur of spec 3.7 S18 and
 the hook a camera that can see people uses: `FaceRedactor::on_device` — YuNet for faces,
 RF-DETR Nano for each person YuNet finds no face for — under `FACE_BLUR`. A face is blurred
-and the rest of its person stays; a person seen from behind is blurred whole. Its name, and
+and the rest of its person stays; a person seen from behind is blurred whole. Each face is
+held for two frames (`RedactorPrivacy::with_hold`): a frame in which YuNet misses a face it
+found just before blurs the face's last place, widened a quarter of its size per frame. Its name, and
 the privacy step kept frames record, is `redactor:faces`. The models load on the first frame,
 each verified against its SHA-256; see [Image Privacy](../security/image-privacy.md#what-is-redacted)
 for the redactor and the face detector's licence.

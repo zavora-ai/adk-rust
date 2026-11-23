@@ -23,8 +23,8 @@ use adk_vision::stream::{
 use adk_vision::{
     BBox, DEFAULT_FACE_DETECTOR, DataClass, DecodeLimits, DecodedImage, DetectQuery, Digest,
     EgressAction, EgressConfig, EgressGate, FaceRedactor, Frame, FrameMeta, FramePixels,
-    FrameSourceId, InMemoryEgressRecorder, Locality, ManifestSet, MediaScope, PersonRedactor,
-    RedactionClass, Redactor, ReleaseRequest, Sampling, SourceImage, VisionCx, VisionRuntime,
+    FrameSourceId, InMemoryEgressRecorder, Locality, ManifestSet, MediaScope, RedactionClass,
+    Redactor, ReleaseRequest, Sampling, SourceImage, VisionCx, VisionRuntime,
 };
 use anyhow::{Context, Result};
 use futures::StreamExt;
@@ -44,8 +44,9 @@ struct Passer {
     face: BBox,
 }
 
-/// The conveyor with two people walking across it: one close (300 px tall) left to right
-/// over frames 0–39, one far (110 px) right to left over frames 20–59, nobody after.
+/// The conveyor with two people walking across it, one at a time so neither hides the
+/// other's face: one close (300 px tall) left to right over frames 0–29, one far (110 px)
+/// right to left over frames 30–59, nobody after.
 struct PassersBy {
     id: FrameSourceId,
     clip: ConveyorClip,
@@ -65,7 +66,7 @@ impl PassersBy {
         let (w, _) = frame.size();
         let mut passers = Vec::new();
         let walkers: [(u64, u64, f32, f32, bool, u32); 2] =
-            [(0, 40, 300.0, 30.0, true, 0), (20, 60, 110.0, 120.0, false, 2)];
+            [(0, 30, 300.0, 30.0, true, 0), (30, 60, 110.0, 120.0, false, 2)];
         for (from, to, height, top, rightwards, palette) in walkers {
             if !(from..to).contains(&index) {
                 continue;
@@ -195,15 +196,15 @@ impl ObservationSink for KeepAll {
 }
 
 /// The faces YuNet finds in `image` from [`CHECK_SCORE`].
-async fn faces(yunet: &Arc<YuNet>, image: &DecodedImage) -> Result<Vec<BBox>> {
+async fn faces(yunet: &Arc<YuNet>, image: &DecodedImage) -> Result<Vec<(BBox, f32)>> {
     let runtime = VisionRuntime::builder().detector(yunet.clone()).build()?;
     let source = SourceImage::from_pixels(image.clone())?;
     let query = DetectQuery::Classes(vec!["face".into()]);
     let found = runtime.detect(&VisionCx::new(), &source, &query).await?.value;
     Ok(found
         .iter()
-        .filter(|r| r.score.unwrap_or(1.0) >= CHECK_SCORE)
-        .filter_map(|r| r.shape.bbox())
+        .filter_map(|r| Some((r.shape.bbox()?, r.score.unwrap_or(1.0))))
+        .filter(|(_, score)| *score >= CHECK_SCORE)
         .collect())
 }
 
@@ -229,7 +230,12 @@ async fn stage(
     let request = ReleaseRequest::new(image, &backend, DataClass::new("desk_frame"));
     let staged = gate.stage(&VisionCx::new(), &request).await?;
     let (w, h) = image.size();
-    let area: f32 = staged.preview().filled().iter().map(|(_, b)| b.clamped(w, h).area()).sum();
+    let area = staged
+        .preview()
+        .filled()
+        .iter()
+        .map(|(_, b)| b.clamped(w, h).area())
+        .fold(0.0, |a, b| a + b);
     Ok((area / (w * h) as f32, staged.caption(), staged.preview().pixels().clone()))
 }
 
@@ -274,7 +280,8 @@ pub async fn run() -> Result<Checks> {
     );
     let redactor = FaceRedactor::new(yunet.clone()).with_person_fallback(people.clone());
     let hook = Watched {
-        inner: RedactorPrivacy::new(Arc::new(redactor), RedactionMethod::FACE_BLUR),
+        // As `RedactorPrivacy::blur_faces` builds it, over the scenario's own detectors.
+        inner: RedactorPrivacy::new(Arc::new(redactor), RedactionMethod::FACE_BLUR).with_hold(2),
         log: log.clone(),
     };
     let summary = StreamPipeline::builder(source.clone(), Arc::new(hook))
@@ -312,6 +319,7 @@ pub async fn run() -> Result<Checks> {
     // Every drawn face was found and covered by a blurred box.
     let mut faces_drawn = 0;
     let mut faces_covered = 0;
+    let mut missed = Vec::new();
     let mut face_share = Vec::new();
     for index in 0..FRAMES {
         let (_, passers) = source.render(index);
@@ -321,6 +329,18 @@ pub async fn run() -> Result<Checks> {
             let hit = boxes.iter().find(|b| b.contains(passer.face.center()));
             if hit.is_some_and(|b| covered(&passer.face, b) >= 0.6) {
                 faces_covered += 1;
+            } else {
+                let (raw, _) = source.render(index);
+                let seen: Vec<f32> = faces(&yunet, &raw)
+                    .await?
+                    .into_iter()
+                    .filter(|(b, _)| passer.face.contains(b.center()))
+                    .map(|(_, score)| score)
+                    .collect();
+                missed.push(format!(
+                    "frame {index}, {:.0} px figure, YuNet scores {seen:?}",
+                    passer.figure.height()
+                ));
             }
             if passer.figure.height() > 200.0
                 && let Some(b) = hit
@@ -328,6 +348,9 @@ pub async fn run() -> Result<Checks> {
                 face_share.push(b.area() / passer.figure.area());
             }
         }
+    }
+    if !missed.is_empty() {
+        checks.note(format!("faces not blurred: {}", missed.join("; ")));
     }
     checks.check(
         &format!("every drawn face was found and blurred ({faces_covered} of {faces_drawn})"),
@@ -354,12 +377,16 @@ pub async fn run() -> Result<Checks> {
         let (image, _) = DecodedImage::decode(&data, &DecodeLimits::default())?;
         let (_, passers) = source.render(*index);
         let found = faces(&yunet, &image).await?;
-        stored_faces += found
+        let left: Vec<&(BBox, f32)> = found
             .iter()
-            .filter(|f| {
+            .filter(|(f, _)| {
                 passers.iter().any(|p| p.face.contains(f.center()) || covered(f, &p.face) > 0.3)
             })
-            .count();
+            .collect();
+        if !left.is_empty() {
+            checks.note(format!("frame {index} still shows a face at {left:?}"));
+        }
+        stored_faces += left.len();
         checked.insert(*index);
     }
     checks.check(
@@ -428,26 +455,29 @@ pub async fn run() -> Result<Checks> {
         ),
         !face_share.is_empty() && largest < 0.5 && body_kept,
     );
-    let empty_untouched = (60..FRAMES).all(|i| redactions.get(&i).is_some_and(|r| r.1 == r.2));
-    checks.check("frames with nobody in them are stored as captured", empty_untouched);
+    // The last passer-by's face is held for two frames after it leaves.
+    let empty_untouched = (62..FRAMES).all(|i| redactions.get(&i).is_some_and(|r| r.1 == r.2));
+    checks.check(
+        "frames with nobody in them, once the last face's two-frame hold ends, are stored as captured",
+        empty_untouched,
+    );
 
     // The image privacy guardrail on a close desk frame: the face, not the frame.
+    let figure = BBox::new(186.0, 10.0, 454.0, 350.0);
     let (desk, face) = {
         let mut frame = DecodedImage::filled(640, 360, [126, 128, 132, 255]);
-        let figure = BBox::new(186.0, 10.0, 454.0, 350.0);
         let face = draw_portrait(&mut frame, figure, 1);
         (SourceImage::from_pixels(frame)?, face)
     };
     let face_first: Arc<dyn Redactor> =
         Arc::new(FaceRedactor::new(yunet.clone()).with_person_fallback(people.clone()));
     let (faces_share, faces_caption, egress) = stage(&desk, face_first).await?;
-    let (people_share, people_caption, _) =
-        stage(&desk, Arc::new(PersonRedactor::new(people.clone()))).await?;
-    let left = faces(&yunet, &egress).await?.iter().filter(|f| face.contains(f.center())).count();
+    let left =
+        faces(&yunet, &egress).await?.iter().filter(|(f, _)| face.contains(f.center())).count();
     checks.note(format!(
-        "close desk frame: faces first covers {:.0}% ({faces_caption}); the person redactor alone {:.0}% ({people_caption})",
+        "close desk frame: the face cover is {:.0}% of the frame ({faces_caption}); the figure a whole-person box covers is {:.0}%",
         faces_share * 100.0,
-        people_share * 100.0,
+        figure.area() / (640.0 * 360.0) * 100.0,
     ));
     checks.check(
         "the image privacy guardrail covers the face of a close desk frame, not the frame",
