@@ -101,7 +101,8 @@ A frame source's privacy hook runs before any other stage, so a stored frame was
 before its write (V-I9). `RedactorPrivacy::blur_faces(fetcher)` (feature `onnx`) is the face
 blur of spec 3.7 S18: `FaceRedactor::on_device` under `RedactionMethod::FACE_BLUR`, a
 Gaussian whose standard deviation is a quarter of each box's longer side, so a near face is
-blurred as hard as a far one. See [Streams](../vision/streams.md#the-privacy-step).
+blurred as hard as a far one, with each face held for two frames so a frame in which YuNet
+misses a moving face still blurs it. See [Streams](../vision/streams.md#the-privacy-step).
 
 ## The On-Device Profile
 

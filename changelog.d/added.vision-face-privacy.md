@@ -6,7 +6,7 @@
   frame is no longer blanked by one person's box. Approval cards draw whole persons as
   `people` and their captions say `1 face covered` or `1 face · the whole person is
   covered`. `RedactorPrivacy::blur_faces` blurs faces on a frame stream before any write,
-  with `RedactionMethod::ScaledBlur`, and `stream::fixtures::draw_portrait` draws a
+  with `RedactionMethod::ScaledBlur` and a two-frame hold (`RedactorPrivacy::with_hold`), and `stream::fixtures::draw_portrait` draws a
   generated face for tests (spec 3.7 Q3, S18).
 - **The on-device profile** (`adk-vision`, `adk-harness`, `adk-cli`): `on_device = true` in
   the `[egress]` table of `.adk/vision.toml` refuses every image release at the egress
