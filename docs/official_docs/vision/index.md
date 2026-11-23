@@ -6,11 +6,14 @@ contracts, with every region in source pixels, every weight file verified, and e
 that leaves the machine cropped, redacted and recorded first. It implements
 [spec 3.7](../../design/spec-3.7-vision.md).
 
-> **Note:** `adk-vision` is **Experimental**. This release holds the contracts, the runtime,
-> the egress boundary, the conformance suite, the [local ONNX backends](onnx.md), the
-> [document readers](document-readers.md) (`ocr`, `ocr-vl`, `nim`), the [cloud backends](cloud.md) —
-> Gemini, Claude, Muse and NVIDIA NIM describers and Meta `sam-3.1` — and a
-> [local describer](local-describer.md) over mistral.rs (`mistralrs`, Qwen3-VL).
+> **Note:** `adk-vision` is **Experimental**. This release holds phases A to C of spec 3.7:
+> the contracts, the runtime, the egress boundary, the conformance suite, the
+> [local ONNX backends](onnx.md), the [document readers](document-readers.md) (`ocr`, `ocr-vl`,
+> `nim`), the [cloud backends](cloud.md) and a [local describer](local-describer.md) (phase A);
+> [streams](streams.md), [video and tracking](video.md), [visual wakes](wake.md),
+> [measurement](measure.md) and the [live camera surface](../surfaces/live-camera.md) (phase B); [teams](teams.md),
+> [visual memory](memory.md) and [screen grounding](screen.md) (phase C). Phase D, spatial
+> perception, is planned.
 
 ```toml
 [dependencies]

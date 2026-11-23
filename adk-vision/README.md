@@ -335,9 +335,10 @@ video. See [The video analyst](../docs/official_docs/vision/video.md#the-video-a
   `cargo adk new <name> --template vision`
 - [The `adk-rust vision` CLI](../docs/official_docs/vision/cli.md): manifests, licences, one
   call through the egress gate, the egress log
-- [Scenarios S1–S13](../docs/official_docs/vision/scenarios.md) (`examples/vision`): the
-  Document desk on local backends and recorded cloud responses, and phase B's Inspector, wakes,
-  frame budgets, live camera surface and native video
+- [Scenarios S1–S19](../docs/official_docs/vision/scenarios.md) (`examples/vision`): the
+  Document desk on local backends and recorded cloud responses; phase B's Inspector, wakes,
+  frame budgets, live camera surface and native video; phase C's Screen copilot, team, visual
+  memory and video analyst; face blur on streams and the on-device profile
 - [Vision overview](../docs/official_docs/vision/index.md)
 - [Governed vision tools](../docs/official_docs/vision/governed-tools.md)
 - [Image privacy](../docs/official_docs/security/image-privacy.md)
