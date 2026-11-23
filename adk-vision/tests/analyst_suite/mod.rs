@@ -232,7 +232,9 @@ impl Llm for Recorder {
                 }
             }
             if let Some(u) = &response.usage_metadata {
-                usage = u.clone();
+                // The provider's raw usage is kept out of the recording; its counts and cost
+                // are in the standard fields.
+                usage = UsageMetadata { provider_usage: None, ..u.clone() };
             }
         }
         let mut recording = self.recording.lock().unwrap();

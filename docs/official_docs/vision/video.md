@@ -358,7 +358,28 @@ forklifts, a fire, and the lights going out. A worker pushing a cart now and the
 event. `WarehouseSpec::with_duration` scales the start times for a shorter clip and keeps
 how long each event lasts.
 
-S17_RESULTS
+The live run, recorded on 2026-11-23:
+
+| Item | Value |
+|------|-------|
+| Clip | `WarehouseClip`, one hour at 480×270, sampled every 2.5 s |
+| Chunks | 30-second fixed windows, six frames of each sent: 120 chunks, 720 frames |
+| Captioner | `claude-haiku-5-5` through `FramesAnalyzer::remote`, every frame released through the egress gate |
+| Store and embedding | `InMemoryVectorStore`, `WordHashEmbedding` |
+| Answerer | `claude-haiku-5-5`, the 8 nearest chunks, question expansion on |
+| Citations | 9 of 10 answers cite the chunk that holds the event's start: 8 with `supported` true, the near miss as the closest match with `supported` false; the spill is missed, because the captioner describes the drum and puddle as "a blue vehicle" |
+| Cost | Captioning 32,587 µUSD for the hour (193,320 input and 16,749 output tokens): $0.033 per hour of video. The ten answers, with their expansions, 3,334 µUSD |
+
+The PR tier replays that run through the egress gate (`adk-vision/tests/analyst_tests.rs`):
+the replay must cite as the live run did and report the same cost per hour. A second test
+runs the analyst's own steps over the whole hour with a captioner that reads the clip's
+truth, and checks every citation, the captions' artifact references, the graph entity and
+the erasure.
+
+```bash
+ANTHROPIC_API_KEY=... cargo test -p adk-vision --features analyst \
+    --test analyst_live_tests -- --ignored --nocapture
+```
 
 ## Tracking Through a Clip with `sam-3.1`
 

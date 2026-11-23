@@ -19,23 +19,7 @@
         "total_token_count": 1739,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000265275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 128,
-          "output_tokens_details": {
-            "thinking_tokens": 106
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000265275
       }
     },
     {
@@ -48,23 +32,7 @@
         "total_token_count": 1687,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000239275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 76,
-          "output_tokens_details": {
-            "thinking_tokens": 54
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000239275
       }
     },
     {
@@ -77,23 +45,7 @@
         "total_token_count": 1741,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00026627499999999995,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 130,
-          "output_tokens_details": {
-            "thinking_tokens": 108
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00026627499999999995
       }
     },
     {
@@ -106,23 +58,7 @@
         "total_token_count": 1691,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000241275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 80,
-          "output_tokens_details": {
-            "thinking_tokens": 58
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000241275
       }
     },
     {
@@ -135,23 +71,7 @@
         "total_token_count": 1712,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000251775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 101,
-          "output_tokens_details": {
-            "thinking_tokens": 79
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000251775
       }
     },
     {
@@ -164,23 +84,7 @@
         "total_token_count": 1633,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000212275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 22,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000212275
       }
     },
     {
@@ -193,23 +97,7 @@
         "total_token_count": 1790,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00029077499999999995,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 179,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00029077499999999995
       }
     },
     {
@@ -222,23 +110,7 @@
         "total_token_count": 1754,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000272775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 143,
-          "output_tokens_details": {
-            "thinking_tokens": 121
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000272775
       }
     },
     {
@@ -251,23 +123,7 @@
         "total_token_count": 1706,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000248775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 95,
-          "output_tokens_details": {
-            "thinking_tokens": 73
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000248775
       }
     },
     {
@@ -280,23 +136,7 @@
         "total_token_count": 1684,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000237775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 73,
-          "output_tokens_details": {
-            "thinking_tokens": 51
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000237775
       }
     },
     {
@@ -309,23 +149,7 @@
         "total_token_count": 1633,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000212275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 22,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000212275
       }
     },
     {
@@ -338,23 +162,7 @@
         "total_token_count": 1633,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000212275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 22,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000212275
       }
     },
     {
@@ -367,23 +175,7 @@
         "total_token_count": 1732,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00026177499999999995,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 121,
-          "output_tokens_details": {
-            "thinking_tokens": 99
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00026177499999999995
       }
     },
     {
@@ -396,23 +188,7 @@
         "total_token_count": 1779,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000285275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 168,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000285275
       }
     },
     {
@@ -425,23 +201,7 @@
         "total_token_count": 1714,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000252775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 103,
-          "output_tokens_details": {
-            "thinking_tokens": 81
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000252775
       }
     },
     {
@@ -454,23 +214,7 @@
         "total_token_count": 1692,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000241775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 81,
-          "output_tokens_details": {
-            "thinking_tokens": 59
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000241775
       }
     },
     {
@@ -483,23 +227,7 @@
         "total_token_count": 1731,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000261275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 120,
-          "output_tokens_details": {
-            "thinking_tokens": 98
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000261275
       }
     },
     {
@@ -512,23 +240,7 @@
         "total_token_count": 1633,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000212275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 22,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000212275
       }
     },
     {
@@ -541,23 +253,7 @@
         "total_token_count": 1680,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000235775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 69,
-          "output_tokens_details": {
-            "thinking_tokens": 47
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000235775
       }
     },
     {
@@ -570,23 +266,7 @@
         "total_token_count": 2218,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000504775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 607,
-          "output_tokens_details": {
-            "thinking_tokens": 480
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000504775
       }
     },
     {
@@ -599,23 +279,7 @@
         "total_token_count": 2003,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000397275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 392,
-          "output_tokens_details": {
-            "thinking_tokens": 271
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000397275
       }
     },
     {
@@ -628,23 +292,7 @@
         "total_token_count": 1633,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000212275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 22,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000212275
       }
     },
     {
@@ -657,23 +305,7 @@
         "total_token_count": 1682,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000236775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 71,
-          "output_tokens_details": {
-            "thinking_tokens": 49
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000236775
       }
     },
     {
@@ -686,23 +318,7 @@
         "total_token_count": 1745,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000268275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 134,
-          "output_tokens_details": {
-            "thinking_tokens": 112
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000268275
       }
     },
     {
@@ -715,23 +331,7 @@
         "total_token_count": 1633,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000212275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 22,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000212275
       }
     },
     {
@@ -744,23 +344,7 @@
         "total_token_count": 1633,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000212275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 22,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000212275
       }
     },
     {
@@ -773,23 +357,7 @@
         "total_token_count": 1757,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000274275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 146,
-          "output_tokens_details": {
-            "thinking_tokens": 124
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000274275
       }
     },
     {
@@ -802,23 +370,7 @@
         "total_token_count": 1694,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000242775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 83,
-          "output_tokens_details": {
-            "thinking_tokens": 61
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000242775
       }
     },
     {
@@ -831,23 +383,7 @@
         "total_token_count": 1700,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000245775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 89,
-          "output_tokens_details": {
-            "thinking_tokens": 67
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000245775
       }
     },
     {
@@ -860,23 +396,7 @@
         "total_token_count": 1676,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000233775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 65,
-          "output_tokens_details": {
-            "thinking_tokens": 43
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000233775
       }
     },
     {
@@ -889,23 +409,7 @@
         "total_token_count": 2114,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000452775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 503,
-          "output_tokens_details": {
-            "thinking_tokens": 388
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000452775
       }
     },
     {
@@ -918,23 +422,7 @@
         "total_token_count": 2163,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000477275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 552,
-          "output_tokens_details": {
-            "thinking_tokens": 445
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000477275
       }
     },
     {
@@ -947,23 +435,7 @@
         "total_token_count": 1743,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000267275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 132,
-          "output_tokens_details": {
-            "thinking_tokens": 110
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000267275
       }
     },
     {
@@ -976,23 +448,7 @@
         "total_token_count": 1633,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000212275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 22,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000212275
       }
     },
     {
@@ -1005,23 +461,7 @@
         "total_token_count": 1721,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000256275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 110,
-          "output_tokens_details": {
-            "thinking_tokens": 88
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000256275
       }
     },
     {
@@ -1034,23 +474,7 @@
         "total_token_count": 1674,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000232775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 63,
-          "output_tokens_details": {
-            "thinking_tokens": 41
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000232775
       }
     },
     {
@@ -1063,23 +487,7 @@
         "total_token_count": 1741,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00026627499999999995,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 130,
-          "output_tokens_details": {
-            "thinking_tokens": 108
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00026627499999999995
       }
     },
     {
@@ -1092,23 +500,7 @@
         "total_token_count": 1732,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00026177499999999995,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 121,
-          "output_tokens_details": {
-            "thinking_tokens": 99
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00026177499999999995
       }
     },
     {
@@ -1121,23 +513,7 @@
         "total_token_count": 1748,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000269775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 137,
-          "output_tokens_details": {
-            "thinking_tokens": 115
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000269775
       }
     },
     {
@@ -1150,23 +526,7 @@
         "total_token_count": 1692,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000241775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 81,
-          "output_tokens_details": {
-            "thinking_tokens": 59
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000241775
       }
     },
     {
@@ -1179,23 +539,7 @@
         "total_token_count": 1698,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00024477500000000003,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 87,
-          "output_tokens_details": {
-            "thinking_tokens": 65
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00024477500000000003
       }
     },
     {
@@ -1208,23 +552,7 @@
         "total_token_count": 1633,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000212275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 22,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000212275
       }
     },
     {
@@ -1237,23 +565,7 @@
         "total_token_count": 1789,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000290275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 178,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000290275
       }
     },
     {
@@ -1266,23 +578,7 @@
         "total_token_count": 1693,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000242275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 82,
-          "output_tokens_details": {
-            "thinking_tokens": 60
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000242275
       }
     },
     {
@@ -1295,23 +591,7 @@
         "total_token_count": 1709,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000250275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 98,
-          "output_tokens_details": {
-            "thinking_tokens": 76
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000250275
       }
     },
     {
@@ -1324,23 +604,7 @@
         "total_token_count": 1674,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000232775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 63,
-          "output_tokens_details": {
-            "thinking_tokens": 41
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000232775
       }
     },
     {
@@ -1353,23 +617,7 @@
         "total_token_count": 1735,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000263275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 124,
-          "output_tokens_details": {
-            "thinking_tokens": 102
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000263275
       }
     },
     {
@@ -1382,23 +630,7 @@
         "total_token_count": 1696,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000243775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 85,
-          "output_tokens_details": {
-            "thinking_tokens": 63
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000243775
       }
     },
     {
@@ -1411,23 +643,7 @@
         "total_token_count": 1767,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000279275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 156,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000279275
       }
     },
     {
@@ -1440,23 +656,7 @@
         "total_token_count": 1674,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000232775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 63,
-          "output_tokens_details": {
-            "thinking_tokens": 41
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000232775
       }
     },
     {
@@ -1469,23 +669,7 @@
         "total_token_count": 1693,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000242275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 82,
-          "output_tokens_details": {
-            "thinking_tokens": 60
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000242275
       }
     },
     {
@@ -1498,23 +682,7 @@
         "total_token_count": 1676,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000233775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 65,
-          "output_tokens_details": {
-            "thinking_tokens": 43
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000233775
       }
     },
     {
@@ -1527,23 +695,7 @@
         "total_token_count": 1730,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000260775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 119,
-          "output_tokens_details": {
-            "thinking_tokens": 97
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000260775
       }
     },
     {
@@ -1556,23 +708,7 @@
         "total_token_count": 2052,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000421775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 441,
-          "output_tokens_details": {
-            "thinking_tokens": 338
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000421775
       }
     },
     {
@@ -1585,23 +721,7 @@
         "total_token_count": 1851,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000321275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 240,
-          "output_tokens_details": {
-            "thinking_tokens": 218
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000321275
       }
     },
     {
@@ -1614,23 +734,7 @@
         "total_token_count": 1782,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00028677499999999996,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 171,
-          "output_tokens_details": {
-            "thinking_tokens": 149
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00028677499999999996
       }
     },
     {
@@ -1643,23 +747,7 @@
         "total_token_count": 1674,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000232775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 63,
-          "output_tokens_details": {
-            "thinking_tokens": 41
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000232775
       }
     },
     {
@@ -1672,23 +760,7 @@
         "total_token_count": 1633,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000212275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 22,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000212275
       }
     },
     {
@@ -1701,23 +773,7 @@
         "total_token_count": 1715,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000253275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 104,
-          "output_tokens_details": {
-            "thinking_tokens": 82
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000253275
       }
     },
     {
@@ -1730,23 +786,7 @@
         "total_token_count": 1684,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000237775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 73,
-          "output_tokens_details": {
-            "thinking_tokens": 51
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000237775
       }
     },
     {
@@ -1759,23 +799,7 @@
         "total_token_count": 1744,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000267775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 133,
-          "output_tokens_details": {
-            "thinking_tokens": 111
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000267775
       }
     },
     {
@@ -1788,23 +812,7 @@
         "total_token_count": 1680,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000235775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 69,
-          "output_tokens_details": {
-            "thinking_tokens": 47
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000235775
       }
     },
     {
@@ -1817,23 +825,7 @@
         "total_token_count": 1733,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00026227499999999996,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 122,
-          "output_tokens_details": {
-            "thinking_tokens": 100
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00026227499999999996
       }
     },
     {
@@ -1846,23 +838,7 @@
         "total_token_count": 1750,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00027077499999999995,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 139,
-          "output_tokens_details": {
-            "thinking_tokens": 117
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00027077499999999995
       }
     },
     {
@@ -1875,23 +851,7 @@
         "total_token_count": 1898,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00034477499999999996,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 287,
-          "output_tokens_details": {
-            "thinking_tokens": 168
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00034477499999999996
       }
     },
     {
@@ -1904,23 +864,7 @@
         "total_token_count": 2047,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000419275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 436,
-          "output_tokens_details": {
-            "thinking_tokens": 313
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000419275
       }
     },
     {
@@ -1933,23 +877,7 @@
         "total_token_count": 1633,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000212275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 22,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000212275
       }
     },
     {
@@ -1962,23 +890,7 @@
         "total_token_count": 1779,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000285275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 168,
-          "output_tokens_details": {
-            "thinking_tokens": 146
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000285275
       }
     },
     {
@@ -1991,23 +903,7 @@
         "total_token_count": 1732,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00026177499999999995,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 121,
-          "output_tokens_details": {
-            "thinking_tokens": 99
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00026177499999999995
       }
     },
     {
@@ -2020,23 +916,7 @@
         "total_token_count": 1633,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000212275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 22,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000212275
       }
     },
     {
@@ -2049,23 +929,7 @@
         "total_token_count": 1982,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00038677499999999996,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 371,
-          "output_tokens_details": {
-            "thinking_tokens": 232
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00038677499999999996
       }
     },
     {
@@ -2078,23 +942,7 @@
         "total_token_count": 1917,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000354275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 306,
-          "output_tokens_details": {
-            "thinking_tokens": 284
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000354275
       }
     },
     {
@@ -2107,23 +955,7 @@
         "total_token_count": 1702,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000246775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 91,
-          "output_tokens_details": {
-            "thinking_tokens": 69
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000246775
       }
     },
     {
@@ -2136,23 +968,7 @@
         "total_token_count": 1679,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000235275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 68,
-          "output_tokens_details": {
-            "thinking_tokens": 46
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000235275
       }
     },
     {
@@ -2165,23 +981,7 @@
         "total_token_count": 1681,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000236275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 70,
-          "output_tokens_details": {
-            "thinking_tokens": 48
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000236275
       }
     },
     {
@@ -2194,23 +994,7 @@
         "total_token_count": 1885,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00033827499999999997,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 274,
-          "output_tokens_details": {
-            "thinking_tokens": 252
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00033827499999999997
       }
     },
     {
@@ -2223,23 +1007,7 @@
         "total_token_count": 1745,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000268275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 134,
-          "output_tokens_details": {
-            "thinking_tokens": 112
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000268275
       }
     },
     {
@@ -2252,23 +1020,7 @@
         "total_token_count": 1787,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00028927499999999997,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 176,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00028927499999999997
       }
     },
     {
@@ -2281,23 +1033,7 @@
         "total_token_count": 1693,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000242275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 82,
-          "output_tokens_details": {
-            "thinking_tokens": 60
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000242275
       }
     },
     {
@@ -2310,23 +1046,7 @@
         "total_token_count": 1695,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00024327500000000002,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 84,
-          "output_tokens_details": {
-            "thinking_tokens": 62
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00024327500000000002
       }
     },
     {
@@ -2339,23 +1059,7 @@
         "total_token_count": 1702,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000246775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 91,
-          "output_tokens_details": {
-            "thinking_tokens": 69
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000246775
       }
     },
     {
@@ -2368,23 +1072,7 @@
         "total_token_count": 1633,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000212275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 22,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000212275
       }
     },
     {
@@ -2397,23 +1085,7 @@
         "total_token_count": 1737,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00026427499999999996,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 126,
-          "output_tokens_details": {
-            "thinking_tokens": 104
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00026427499999999996
       }
     },
     {
@@ -2426,23 +1098,7 @@
         "total_token_count": 1633,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000212275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 22,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000212275
       }
     },
     {
@@ -2455,23 +1111,7 @@
         "total_token_count": 1747,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00026927499999999997,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 136,
-          "output_tokens_details": {
-            "thinking_tokens": 114
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00026927499999999997
       }
     },
     {
@@ -2484,23 +1124,7 @@
         "total_token_count": 1737,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00026427499999999996,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 126,
-          "output_tokens_details": {
-            "thinking_tokens": 104
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00026427499999999996
       }
     },
     {
@@ -2513,23 +1137,7 @@
         "total_token_count": 1735,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000263275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 124,
-          "output_tokens_details": {
-            "thinking_tokens": 102
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000263275
       }
     },
     {
@@ -2542,23 +1150,7 @@
         "total_token_count": 1694,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000242775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 83,
-          "output_tokens_details": {
-            "thinking_tokens": 61
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000242775
       }
     },
     {
@@ -2571,23 +1163,7 @@
         "total_token_count": 2194,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000492775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 583,
-          "output_tokens_details": {
-            "thinking_tokens": 467
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000492775
       }
     },
     {
@@ -2600,23 +1176,7 @@
         "total_token_count": 1633,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000212275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 22,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000212275
       }
     },
     {
@@ -2629,23 +1189,7 @@
         "total_token_count": 1694,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000242775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 83,
-          "output_tokens_details": {
-            "thinking_tokens": 61
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000242775
       }
     },
     {
@@ -2658,23 +1202,7 @@
         "total_token_count": 1747,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00026927499999999997,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 136,
-          "output_tokens_details": {
-            "thinking_tokens": 114
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00026927499999999997
       }
     },
     {
@@ -2687,23 +1215,7 @@
         "total_token_count": 1742,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00026677499999999997,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 131,
-          "output_tokens_details": {
-            "thinking_tokens": 109
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00026677499999999997
       }
     },
     {
@@ -2716,23 +1228,7 @@
         "total_token_count": 1711,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000251275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 100,
-          "output_tokens_details": {
-            "thinking_tokens": 78
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000251275
       }
     },
     {
@@ -2745,23 +1241,7 @@
         "total_token_count": 1694,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000242775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 83,
-          "output_tokens_details": {
-            "thinking_tokens": 61
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000242775
       }
     },
     {
@@ -2774,23 +1254,7 @@
         "total_token_count": 1693,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000242275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 82,
-          "output_tokens_details": {
-            "thinking_tokens": 60
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000242275
       }
     },
     {
@@ -2803,23 +1267,7 @@
         "total_token_count": 1761,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000276275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 150,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000276275
       }
     },
     {
@@ -2832,23 +1280,7 @@
         "total_token_count": 1983,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00038727499999999997,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 372,
-          "output_tokens_details": {
-            "thinking_tokens": 252
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00038727499999999997
       }
     },
     {
@@ -2861,23 +1293,7 @@
         "total_token_count": 1679,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000235275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 68,
-          "output_tokens_details": {
-            "thinking_tokens": 46
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000235275
       }
     },
     {
@@ -2890,23 +1306,7 @@
         "total_token_count": 1692,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000241775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 81,
-          "output_tokens_details": {
-            "thinking_tokens": 59
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000241775
       }
     },
     {
@@ -2919,23 +1319,7 @@
         "total_token_count": 1803,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000297275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 192,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000297275
       }
     },
     {
@@ -2948,23 +1332,7 @@
         "total_token_count": 2062,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00042677499999999995,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 451,
-          "output_tokens_details": {
-            "thinking_tokens": 302
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00042677499999999995
       }
     },
     {
@@ -2977,23 +1345,7 @@
         "total_token_count": 1719,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000255275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 108,
-          "output_tokens_details": {
-            "thinking_tokens": 86
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000255275
       }
     },
     {
@@ -3006,23 +1358,7 @@
         "total_token_count": 1679,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000235275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 68,
-          "output_tokens_details": {
-            "thinking_tokens": 46
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000235275
       }
     },
     {
@@ -3035,23 +1371,7 @@
         "total_token_count": 1742,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00026677499999999997,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 131,
-          "output_tokens_details": {
-            "thinking_tokens": 109
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00026677499999999997
       }
     },
     {
@@ -3064,23 +1384,7 @@
         "total_token_count": 1721,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000256275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 110,
-          "output_tokens_details": {
-            "thinking_tokens": 88
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000256275
       }
     },
     {
@@ -3093,23 +1397,7 @@
         "total_token_count": 1704,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000247775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 93,
-          "output_tokens_details": {
-            "thinking_tokens": 71
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000247775
       }
     },
     {
@@ -3122,23 +1410,7 @@
         "total_token_count": 1703,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000247275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 92,
-          "output_tokens_details": {
-            "thinking_tokens": 70
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000247275
       }
     },
     {
@@ -3151,23 +1423,7 @@
         "total_token_count": 1744,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000267775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 133,
-          "output_tokens_details": {
-            "thinking_tokens": 111
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000267775
       }
     },
     {
@@ -3180,23 +1436,7 @@
         "total_token_count": 1750,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00027077499999999995,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 139,
-          "output_tokens_details": {
-            "thinking_tokens": 117
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00027077499999999995
       }
     },
     {
@@ -3209,23 +1449,7 @@
         "total_token_count": 1712,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000251775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 101,
-          "output_tokens_details": {
-            "thinking_tokens": 79
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000251775
       }
     },
     {
@@ -3238,23 +1462,7 @@
         "total_token_count": 2212,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000501775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 601,
-          "output_tokens_details": {
-            "thinking_tokens": 489
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000501775
       }
     },
     {
@@ -3267,23 +1475,7 @@
         "total_token_count": 2097,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000444275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 486,
-          "output_tokens_details": {
-            "thinking_tokens": 363
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000444275
       }
     },
     {
@@ -3296,23 +1488,7 @@
         "total_token_count": 1680,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000235775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 69,
-          "output_tokens_details": {
-            "thinking_tokens": 47
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000235775
       }
     },
     {
@@ -3325,23 +1501,7 @@
         "total_token_count": 1690,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000240775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 79,
-          "output_tokens_details": {
-            "thinking_tokens": 57
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000240775
       }
     },
     {
@@ -3354,23 +1514,7 @@
         "total_token_count": 1730,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000260775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 119,
-          "output_tokens_details": {
-            "thinking_tokens": 97
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000260775
       }
     },
     {
@@ -3383,23 +1527,7 @@
         "total_token_count": 1680,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000235775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 69,
-          "output_tokens_details": {
-            "thinking_tokens": 47
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000235775
       }
     },
     {
@@ -3412,23 +1540,7 @@
         "total_token_count": 1684,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000237775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 73,
-          "output_tokens_details": {
-            "thinking_tokens": 51
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000237775
       }
     },
     {
@@ -3441,23 +1553,7 @@
         "total_token_count": 1713,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.000252275,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 102,
-          "output_tokens_details": {
-            "thinking_tokens": 80
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000252275
       }
     },
     {
@@ -3470,23 +1566,7 @@
         "total_token_count": 1751,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1607,
-        "cost": 0.00027127499999999997,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1607
-          },
-          "cache_creation_input_tokens": 1607,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 140,
-          "output_tokens_details": {
-            "thinking_tokens": 118
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00027127499999999997
       }
     }
   ],
@@ -3500,23 +1580,7 @@
         "total_token_count": 370,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 0,
-        "cost": 0.000057,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 0
-          },
-          "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 320,
-          "output_tokens": 50,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 5.7e-05
       }
     },
     {
@@ -3528,23 +1592,7 @@
         "total_token_count": 366,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 0,
-        "cost": 0.0000566,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 0
-          },
-          "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 316,
-          "output_tokens": 50,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 5.66e-05
       }
     },
     {
@@ -3556,23 +1604,7 @@
         "total_token_count": 366,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 0,
-        "cost": 0.000056200000000000004,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 0
-          },
-          "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 317,
-          "output_tokens": 49,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 5.6200000000000004e-05
       }
     },
     {
@@ -3584,23 +1616,7 @@
         "total_token_count": 362,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 0,
-        "cost": 0.000051800000000000005,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 0
-          },
-          "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 323,
-          "output_tokens": 39,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 5.1800000000000005e-05
       }
     },
     {
@@ -3612,23 +1628,7 @@
         "total_token_count": 360,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 0,
-        "cost": 0.000054,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 0
-          },
-          "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 315,
-          "output_tokens": 45,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 5.4e-05
       }
     },
     {
@@ -3640,23 +1640,7 @@
         "total_token_count": 368,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 0,
-        "cost": 0.000058,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 0
-          },
-          "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 315,
-          "output_tokens": 53,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 5.8e-05
       }
     },
     {
@@ -3668,23 +1652,7 @@
         "total_token_count": 373,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 0,
-        "cost": 0.0000605,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 0
-          },
-          "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 315,
-          "output_tokens": 58,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 6.05e-05
       }
     },
     {
@@ -3696,23 +1664,7 @@
         "total_token_count": 365,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 0,
-        "cost": 0.000055700000000000005,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 0
-          },
-          "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 317,
-          "output_tokens": 48,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 5.5700000000000005e-05
       }
     },
     {
@@ -3724,23 +1676,7 @@
         "total_token_count": 351,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 0,
-        "cost": 0.0000511,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 0
-          },
-          "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 311,
-          "output_tokens": 40,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 5.11e-05
       }
     },
     {
@@ -3752,23 +1688,7 @@
         "total_token_count": 360,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 0,
-        "cost": 0.0000552,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 0
-          },
-          "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 312,
-          "output_tokens": 48,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 5.52e-05
       }
     }
   ],
@@ -3782,23 +1702,7 @@
         "total_token_count": 1565,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1465,
-        "cost": 0.000231525,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1465
-          },
-          "cache_creation_input_tokens": 1465,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 96,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000231525
       }
     },
     {
@@ -3810,23 +1714,7 @@
         "total_token_count": 1557,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1451,
-        "cost": 0.000232775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1451
-          },
-          "cache_creation_input_tokens": 1451,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 102,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000232775
       }
     },
     {
@@ -3838,23 +1726,7 @@
         "total_token_count": 1870,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1427,
-        "cost": 0.00039827499999999996,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1427
-          },
-          "cache_creation_input_tokens": 1427,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 439,
-          "output_tokens_details": {
-            "thinking_tokens": 310
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00039827499999999996
       }
     },
     {
@@ -3866,23 +1738,7 @@
         "total_token_count": 1722,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1623,
-        "cost": 0.000250775,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1623
-          },
-          "cache_creation_input_tokens": 1623,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 95,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000250775
       }
     },
     {
@@ -3894,23 +1750,7 @@
         "total_token_count": 1613,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1481,
-        "cost": 0.000249525,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1481
-          },
-          "cache_creation_input_tokens": 1481,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 128,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.000249525
       }
     },
     {
@@ -3922,23 +1762,7 @@
         "total_token_count": 1684,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1399,
-        "cost": 0.00031577499999999996,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1399
-          },
-          "cache_creation_input_tokens": 1399,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 281,
-          "output_tokens_details": {
-            "thinking_tokens": 186
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00031577499999999996
       }
     },
     {
@@ -3950,23 +1774,7 @@
         "total_token_count": 1633,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1544,
-        "cost": 0.00023590000000000001,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1544
-          },
-          "cache_creation_input_tokens": 1544,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 85,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00023590000000000001
       }
     },
     {
@@ -3978,23 +1786,7 @@
         "total_token_count": 1732,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1504,
-        "cost": 0.0003004,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1504
-          },
-          "cache_creation_input_tokens": 1504,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 224,
-          "output_tokens_details": {
-            "thinking_tokens": 125
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.0003004
       }
     },
     {
@@ -4006,23 +1798,7 @@
         "total_token_count": 1586,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1494,
-        "cost": 0.00023115,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1494
-          },
-          "cache_creation_input_tokens": 1494,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 88,
-          "output_tokens_details": {
-            "thinking_tokens": 0
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00023115
       }
     },
     {
@@ -4034,23 +1810,7 @@
         "total_token_count": 1686,
         "cache_read_input_token_count": 0,
         "cache_creation_input_token_count": 1382,
-        "cost": 0.00032314999999999997,
-        "provider_usage": {
-          "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 1382
-          },
-          "cache_creation_input_tokens": 1382,
-          "cache_read_input_tokens": 0,
-          "inference_geo": "global",
-          "input_tokens": 4,
-          "output_tokens": 300,
-          "output_tokens_details": {
-            "thinking_tokens": 217
-          },
-          "service_tier": "standard",
-          "speed": "standard"
-        }
+        "cost": 0.00032314999999999997
       }
     }
   ],
