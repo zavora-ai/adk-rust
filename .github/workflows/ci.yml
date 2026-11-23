@@ -552,12 +552,13 @@ jobs:
       run: test -f website-scenarios.md && cat website-scenarios.md >> "$GITHUB_STEP_SUMMARY" || true
 
   # ── adk-vision: the spec 3.7 scenarios run ────────────────────
-  # examples/vision holds S1–S13, S18 and S19 of spec 3.7 §5: PP-OCRv6 tiny, RF-DETR Nano,
+  # examples/vision holds S1–S14, S18 and S19 of spec 3.7 §5: PP-OCRv6 tiny, RF-DETR Nano,
   # SAM 2.1 Tiny and YuNet on the device, fetched by revision and SHA-256 into a cached Hugging
   # Face cache; the conveyor clip over the in-process RTSP server; the kernel, harness and live
-  # camera surface in process; and the cloud backends on recorded responses (§11). S19 runs S1
-  # again under bubblewrap with the network denied. No ffmpeg is needed: S11's clips are
-  # committed and S13 draws its frames from the clip's sprites without one.
+  # camera surface in process; and the cloud backends on recorded responses (§11). S14's CRM
+  # and desktop run in process behind a stand-in WebDriver server, so no browser is needed. S19
+  # runs S1 again under bubblewrap with the network denied. No ffmpeg is needed: S11's clips
+  # are committed and S13 draws its frames from the clip's sprites without one.
   # examples-compile only checks the crate.
   vision-scenarios:
     needs: scope

@@ -3,7 +3,7 @@ name = "vision-scenarios"
 version = "0.0.1"
 edition = "2024"
 publish = false
-description = "Spec 3.7 scenarios S1–S13, S18 and S19 for adk-vision: the Document desk on local backends, cloud backends on recorded responses, egress, approvals, frames, weights and budgets; the Inspector on a conveyor stream, visual wakes, frame budgets, the live camera surface and native video; face blur on streams and the on-device profile"
+description = "Spec 3.7 scenarios S1–S14, S18 and S19 for adk-vision: the Document desk on local backends, cloud backends on recorded responses, egress, approvals, frames, weights and budgets; the Inspector on a conveyor stream, visual wakes, frame budgets, the live camera surface and native video; the Screen copilot; face blur on streams and the on-device profile"
 
 [workspace]
 
@@ -35,7 +35,8 @@ adk-surface = { path = "../../adk-surface", features = ["vision-camera"] }
 # PP-OCRv6, RF-DETR, SAM 2.1 and YuNet run on the device, fetched by revision and SHA-256; the
 # cloud backends are the real clients against a local server. Phase B adds the conveyor clip
 # over the in-process RTSP server, the stream pipeline, Gemini native video, and S13's clip read
-# through a user-installed ffmpeg when there is one; S18 streams drawn passers-by.
+# through a user-installed ffmpeg when there is one; S18 streams drawn passers-by; S14 grounds a
+# copilot's targets through `computer-use`'s target evidence.
 adk-vision = { path = "../../adk-vision", features = ["fetch", "conformance", "guardrail", "onnx", "ocr", "cloud", "nim", "sam", "stream", "rtsp", "ffmpeg", "stream-fixtures", "gemini-video", "computer-use"] }
 anyhow = "1.0"
 async-trait = "0.1"

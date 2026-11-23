@@ -1,6 +1,7 @@
-//! Scenarios S1–S13, S18 and S19 of spec 3.7 §5 for `adk-vision`: the Document desk and phase A
+//! Scenarios S1–S14, S18 and S19 of spec 3.7 §5 for `adk-vision`: the Document desk and phase A
 //! (S1–S8); the Inspector, visual wakes, frame budgets, the live camera surface and native video
-//! of phase B (S9–S13); blur by default on streams and the on-device profile (S18, S19).
+//! of phase B (S9–S13); the Screen copilot of phase C (S14); blur by default on streams and the
+//! on-device profile (S18, S19).
 //!
 //! On the device, for real: PP-OCRv6 tiny reads, RF-DETR Nano and YuNet detect and SAM 2.1 Tiny
 //! segments, each fetched by revision and SHA-256 through the model fetcher on the first run

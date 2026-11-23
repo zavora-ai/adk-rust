@@ -1,10 +1,11 @@
 # vision
 
-Scenarios S1–S13, S18 and S19 of spec 3.7 §5 for `adk-vision`: the Document desk and the rest
+Scenarios S1–S14, S18 and S19 of spec 3.7 §5 for `adk-vision`: the Document desk and the rest
 of phase A (S1–S8); phase B's Inspector, visual wakes, frame budgets, live camera surface and
-native video (S9–S13); face blur on streams and the on-device profile (S18, S19). Every pass
-condition is asserted on egress records, audit records, approvals, the spend ledger, the frame
-governor's steps, stored frames and the pixels that left, never on model prose.
+native video (S9–S13); phase C's Screen copilot (S14); face blur on streams and the on-device
+profile (S18, S19). Every pass condition is asserted on egress records, audit records,
+approvals, the spend ledger, the frame governor's steps, stored frames, the pixels that left
+and what reached a browser or a desktop, never on model prose.
 
 | Runs | How |
 |------|-----|
@@ -12,6 +13,7 @@ governor's steps, stored frames and the pixels that left, never on model prose.
 | Streams | The conveyor clip (`adk_vision::stream::fixtures::ConveyorClip`) over the in-process RTSP server into the stream pipeline; the kernel, the harness and the live camera surface in process |
 | In a sandbox | S19 runs this binary again under Seatbelt (macOS) or bubblewrap (Linux, `bwrap` installed and unprivileged user namespaces allowed) with the network denied |
 | In the cloud | NVIDIA NIM, Claude, Gemini and Meta `sam-3.1` answer from recorded responses (`fixtures/recorded/`), served to their real clients from a local server, so no key is needed |
+| On a screen | S14's CRM is served in process over HTTP and read through `adk-browser`'s tools from a stand-in WebDriver server (`src/crm.rs`); its desktop is a stand-in display at device pixel ratio 2 whose form app draws what it is typed (`src/screen.rs`), read by PP-OCRv6 tiny and acted on only through the computer-use pack's governed graph |
 | The agent | A harness with the vision pack on a scripted planner |
 
 ```bash
@@ -40,6 +42,7 @@ clips are committed, and S13 draws its frames from the clip's sprites when there
 | `s11_a_budget_per_frame` | Thirty minutes of two cameras from 23:45 UTC at their capture times: line 2 escalates uncertain cracks to `sam-3.1` video through the governor — six granted, then refused at the 300-frame daily quota, resumed after midnight — each request billed 50 frames (10,000 µUSD) for its 30; line 3's 600-frame quota lowers its rate to the floor and stops escalation before the source pauses, and midnight resumes it; every change is a `vision.governor.step` record | `sam-3.1` video recorded live for each clip in `fixtures/conveyor/` |
 | `s12_live_camera_surface` | `PipelineCameras` and the surface engine without a browser: each frame shown with its detections as overlays within one frame interval of the detection; switched off, the server drops frames before the pipeline sees them; nothing stored until a card keeps exactly its frame; the Inspector's line stop is held on a decision card showing that frame, and the operator's approval stops the line once | The clip over RTSP in real time; a stand-in Inspector model |
 | `s13_native_video_two_ways` | "When does the forklift enter the aisle?" over twenty minutes (entry at 12:45): Gemini uploads the clip once through the File API and answers 12:40 from a file part, 79,309 tokens in, 61,230 µUSD; Qwen3-VL answers 12:50 after a visibility pass in 10 calls over 240 frames, at zero cost with nothing leaving the machine | Gemini `gemini-3.6-flash` recorded live; Qwen3-VL-4B on a scripted transcript (`fixtures/recorded/README.md`) |
+| `s14_screen_copilot` | A harness in Ask mode copies customer C-1042 from the CRM into the desktop's customer form. The browser half: `browser_elements` marks at ratio 2, the chosen mark clicked by selector, the record read with `browser_extract_text`. The desktop half: PP-OCRv6 marks per window, coordinates given in the 2380×1546 screenshot fitted to Claude's limits and grounded through `ScreenSpace`, eleven steps previewed as one `ScreenPlan` in the form's window, each held `computer_use_execute` approved, grounded again on a fresh screenshot and checked against its preview, then verified. Every click lands inside its target in pixels and in points; every desktop action happens inside an approved `computer_use_execute` and every browser action is a governed browser call; the copilot grounds "Save" by label and reading order and picks the notes' Save, identical to the footer's — the verifier sees no "Customer saved" and the copilot grounds it again on the footer's; the verifier reads each typed value back in its field; a step aimed at Mail's Send is blocked at preview and never runs; the saved customer matches the CRM's record field for field | PP-OCRv6 tiny on the device; the CRM, the browser tools, the harness and its packs, the governed graph, marks, plans, fitting and the verifier for real; the WebDriver server, the desktop and the planner (which names marks by their labels) are stand-ins |
 | `s18_blur_by_default_on_streams` | Two drawn passers-by cross the conveyor camera, one close and one far, for 70 frames, every one kept: every face is blurred before any other stage; YuNet from 0.3 finds no face in any stored frame; each image written is a frame's redacted pixels, written after its blur; no frame that showed a face reaches the store as captured; the close passer-by's blur covers under half the figure and the shirt is stored as captured; frames with nobody are stored as captured; on a close desk frame the image privacy guardrail covers the face, not the frame | YuNet and RF-DETR Nano on the device |
 | `s19_off_the_network` | S1 again inside the operating system's sandbox with `HF_HUB_OFFLINE=1`, a warm cache and `on_device = true`: a direct connection from inside is refused; the forty pages are read on the device; each of the five escalations is refused at the egress gate's destination step with its reason and nothing is released; run again behind an egress proxy that admits no host, the sandbox egress record is empty | PP-OCRv6 tiny on the device, Seatbelt or bubblewrap |
 
@@ -52,4 +55,5 @@ clips are committed, and S13 draws its frames from the clip's sprites when there
 | `fixtures/baselines.json` | The field accuracy each reader reached when the scenarios were accepted |
 | `fixtures/conveyor/` | S11's escalation clips, three seconds of each defective part, and `sam-3.1`'s recorded answers to them |
 | `fixtures/video/` | S13's twenty-minute aisle clip, its sprites and `labels.json`, made by `generate.sh` |
+| `fixtures/screen/` | S14's desktop at device pixel ratio 2 — the CRM's browser window, the customer form with two identical Save buttons, and a mail window — the glyph strip its form app draws typed text from, and `layout.json`, made by `generate.py`; every customer detail is invented |
 | `../../adk-vision/tests/fixtures/` | The S5 screen, the report page and adk-vision's own recordings |
