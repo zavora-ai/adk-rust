@@ -3,7 +3,7 @@ name = "vision-scenarios"
 version = "0.0.1"
 edition = "2024"
 publish = false
-description = "Spec 3.7 scenarios S1–S14, S18 and S19 for adk-vision: the Document desk on local backends, cloud backends on recorded responses, egress, approvals, frames, weights and budgets; the Inspector on a conveyor stream, visual wakes, frame budgets, the live camera surface and native video; the Screen copilot; face blur on streams and the on-device profile"
+description = "Spec 3.7 scenarios S1–S19 for adk-vision: the Document desk on local backends, cloud backends on recorded responses, egress, approvals, frames, weights and budgets; the Inspector on a conveyor stream, visual wakes, frame budgets, the live camera surface and native video; the Screen copilot, the Inspector as a team, visual memory and the video analyst; face blur on streams and the on-device profile"
 
 [workspace]
 
@@ -22,8 +22,12 @@ adk-core = { path = "../../adk-core" }
 adk-harness = { path = "../../adk-harness", features = ["vision", "vision-fixtures", "browser", "computer-use", "web-fixture"] }
 # S10: the kernel's `VisionWakeSource`, which wakes a sleeping process on a watch event.
 adk-kernel = { path = "../../adk-kernel", features = ["vision"] }
+# S16, S17: captions with artifact references and the clip in graph memory.
+adk-memory = { path = "../../adk-memory", features = ["graph-memory"] }
 # ScriptedLlm plans the tool calls; the Anthropic and Gemini clients replay recorded answers.
 adk-model = { path = "../../adk-model", default-features = false, features = ["anthropic", "gemini", "muse"] }
+# S16, S17: the vector store visual chunks and caption chunks are indexed in.
+adk-rag = { path = "../../adk-rag" }
 adk-runner = { path = "../../adk-runner" }
 # S10: the kernel's durable worker settings.
 adk-server = { path = "../../adk-server", features = ["background"] }
@@ -36,8 +40,9 @@ adk-surface = { path = "../../adk-surface", features = ["vision-camera"] }
 # cloud backends are the real clients against a local server. Phase B adds the conveyor clip
 # over the in-process RTSP server, the stream pipeline, Gemini native video, and S13's clip read
 # through a user-installed ffmpeg when there is one; S18 streams drawn passers-by; S14 grounds a
-# copilot's targets through `computer-use`'s target evidence.
-adk-vision = { path = "../../adk-vision", features = ["fetch", "conformance", "guardrail", "onnx", "ocr", "cloud", "nim", "sam", "stream", "rtsp", "ffmpeg", "stream-fixtures", "gemini-video", "computer-use"] }
+# copilot's targets through `computer-use`'s target evidence. Phase C adds the perceiver,
+# reasoner and verifier (S15), SigLIP 2 visual memory (S16) and the video analyst (S17).
+adk-vision = { path = "../../adk-vision", features = ["fetch", "conformance", "guardrail", "onnx", "ocr", "cloud", "nim", "sam", "stream", "rtsp", "ffmpeg", "stream-fixtures", "gemini-video", "computer-use", "team", "memory", "analyst"] }
 anyhow = "1.0"
 async-trait = "0.1"
 base64 = "0.22"
