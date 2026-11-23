@@ -1,6 +1,7 @@
-//! Scenarios S1–S13, S18 and S19 of spec 3.7 §5 for `adk-vision`: the Document desk and phase A
+//! Scenarios S1–S14, S18 and S19 of spec 3.7 §5 for `adk-vision`: the Document desk and phase A
 //! (S1–S8); the Inspector, visual wakes, frame budgets, the live camera surface and native video
-//! of phase B (S9–S13); blur by default on streams and the on-device profile (S18, S19).
+//! of phase B (S9–S13); the Screen copilot of phase C (S14); blur by default on streams and the
+//! on-device profile (S18, S19).
 //!
 //! On the device, for real: PP-OCRv6 tiny reads, RF-DETR Nano and YuNet detect and SAM 2.1 Tiny
 //! segments, each fetched by revision and SHA-256 through the model fetcher on the first run
@@ -10,12 +11,14 @@
 //! stores, egress records, ledgers, approvals and audit records, never on model prose.
 
 mod conveyor;
+mod crm;
 mod fixtures;
 mod replay;
 mod s10;
 mod s11;
 mod s12;
 mod s13;
+mod s14;
 mod s18;
 mod s19;
 mod s1_s2;
@@ -25,6 +28,7 @@ mod s6;
 mod s7;
 mod s8;
 mod s9;
+mod screen;
 
 use std::path::PathBuf;
 
@@ -80,6 +84,7 @@ const SCENARIOS: &[(&str, &str)] = &[
     ("s11_a_budget_per_frame", "S11 A budget per frame"),
     ("s12_live_camera_surface", "S12 Live camera surface"),
     ("s13_native_video_two_ways", "S13 Native video, two ways"),
+    ("s14_screen_copilot", "S14 Screen copilot"),
     ("s18_blur_by_default_on_streams", "S18 Blur by default on streams"),
     ("s19_off_the_network", "S19 Off the network"),
 ];
@@ -99,6 +104,7 @@ async fn run(name: &str, desk: &s1_s2::Shared) -> Result<Checks> {
         "s11_a_budget_per_frame" => s11::run().await,
         "s12_live_camera_surface" => s12::run().await,
         "s13_native_video_two_ways" => s13::run().await,
+        "s14_screen_copilot" => s14::run().await,
         "s18_blur_by_default_on_streams" => s18::run().await,
         "s19_off_the_network" => s19::run().await,
         other => bail!("no scenario `{other}`"),
