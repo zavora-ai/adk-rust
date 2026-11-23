@@ -5,32 +5,52 @@ use std::collections::HashSet;
 use crate::attachment;
 use adk_core::{Content, FinishReason, LlmResponse, Part, UsageMetadata};
 use ollama_rs::generation::chat::{ChatMessage, ChatMessageResponse};
+use ollama_rs::generation::images::Image;
 use serde_json::Value;
 
-/// Convert ADK Content to Ollama ChatMessage.
-pub fn content_to_chat_message(content: &Content) -> Option<ChatMessage> {
-    // Extract text from parts
-    let text: String = content
-        .parts
+/// Whether Ollama reads an image of `mime_type` from a message's `images`: PNG, JPEG and GIF.
+/// Ollama 0.32 refuses WebP there ("Failed to load image or audio file"), so a WebP image, like
+/// any other attachment, goes as text.
+fn is_native_image(mime_type: &str) -> bool {
+    let mime_type = mime_type.split(';').next().unwrap_or_default().trim();
+    ["image/png", "image/jpeg", "image/jpg", "image/gif"]
         .iter()
-        .filter_map(|p| match p {
-            Part::Text { text } => Some(text.clone()),
-            Part::Thinking { thinking, .. } => Some(thinking.clone()),
+        .any(|native| mime_type.eq_ignore_ascii_case(native))
+}
+
+/// Convert ADK Content to Ollama ChatMessage.
+///
+/// Inline PNG, JPEG and GIF images go out as the message's native `images`, base64-encoded, so
+/// a vision model on Ollama sees them; other attachments and file references are described in
+/// the text.
+pub fn content_to_chat_message(content: &Content) -> Option<ChatMessage> {
+    let mut texts = Vec::new();
+    let mut images = Vec::new();
+    for part in &content.parts {
+        match part {
+            Part::Text { text } => texts.push(text.clone()),
+            Part::Thinking { thinking, .. } => texts.push(thinking.clone()),
+            Part::InlineData { mime_type, data, .. } if is_native_image(mime_type) => {
+                images.push(Image::from_base64(attachment::encode_base64(data)));
+            }
             Part::InlineData { mime_type, data, .. } => {
-                Some(attachment::inline_attachment_to_text(mime_type, data))
+                texts.push(attachment::inline_attachment_to_text(mime_type, data));
             }
             Part::FileData { mime_type, file_uri, .. } => {
-                Some(attachment::file_attachment_to_text(mime_type, file_uri))
+                texts.push(attachment::file_attachment_to_text(mime_type, file_uri));
             }
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+            _ => {}
+        }
+    }
+    let text = texts.join("\n");
+    let with_images = |message: ChatMessage| {
+        if images.is_empty() { message } else { message.with_images(images.clone()) }
+    };
 
     match content.role.as_str() {
-        "user" => Some(ChatMessage::user(text)),
-        "model" | "assistant" => Some(ChatMessage::assistant(text)),
-        "system" => Some(ChatMessage::system(text)),
+        "user" => Some(with_images(ChatMessage::user(text))),
+        "model" | "assistant" => Some(with_images(ChatMessage::assistant(text))),
+        "system" => Some(with_images(ChatMessage::system(text))),
         "function" | "tool" => {
             // Handle function responses - combine all responses into one tool message
             let mut response_texts = Vec::new();
@@ -238,6 +258,46 @@ mod tests {
         let message = content_to_chat_message(&content).expect("message should be created");
         assert!(message.content.contains("application/pdf"));
         assert!(message.content.contains("encoding=\"base64\""));
+    }
+
+    #[test]
+    fn images_go_out_as_native_images_and_other_attachments_as_text() {
+        let png = vec![0x89, b'P', b'N', b'G', 1, 2, 3];
+        let jpeg = vec![0xFF, 0xD8, 0xFF, 4, 5];
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![
+                Part::text_part("What is on these?"),
+                Part::inline_data("image/png", png.clone()),
+                Part::inline_data("IMAGE/JPEG", jpeg.clone()),
+                Part::inline_data("image/webp", b"RIFF0000WEBP".to_vec()),
+                Part::inline_data("application/pdf", b"%PDF".to_vec()),
+            ],
+        };
+        let message = content_to_chat_message(&content).expect("message should be created");
+        let images: Vec<&str> =
+            message.images.iter().flatten().map(Image::to_base64).collect::<Vec<_>>();
+        assert_eq!(
+            images,
+            [attachment::encode_base64(&png), attachment::encode_base64(&jpeg)]
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        );
+        assert!(message.content.starts_with("What is on these?\n"), "{}", message.content);
+        assert!(!message.content.contains(&attachment::encode_base64(&png)));
+        assert!(message.content.contains("mime_type=\"image/webp\""));
+        assert!(message.content.contains("mime_type=\"application/pdf\""));
+        // On the wire: `images` beside `content`, as Ollama's `/api/chat` reads them.
+        let wire = serde_json::to_value(&message).unwrap();
+        assert_eq!(
+            wire["images"],
+            serde_json::json!([attachment::encode_base64(&png), attachment::encode_base64(&jpeg)])
+        );
+
+        // A message without images sends no `images` field.
+        let text = content_to_chat_message(&Content::new("user").with_text("hi")).unwrap();
+        assert!(serde_json::to_value(&text).unwrap().get("images").is_none());
     }
 
     #[test]

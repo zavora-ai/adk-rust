@@ -197,7 +197,8 @@ adk-vision = { path = ".", features = ["conformance"] }
 adk-agent = { path = "../adk-agent", features = ["team-tools"] }
 # The eval agent scored by `adk-eval`'s vision criteria, in process.
 adk-eval = { path = "../adk-eval" }
-adk-model = { path = "../adk-model", default-features = false, features = ["anthropic", "gemini", "muse", "openai"] }
+# `ollama`: a vision model on Ollama as a local describer (X19), replayed and live.
+adk-model = { path = "../adk-model", default-features = false, features = ["anthropic", "gemini", "muse", "ollama", "openai"] }
 adk-runner = { path = "../adk-runner" }
 adk-session = { path = "../adk-session" }
 futures = { workspace = true }

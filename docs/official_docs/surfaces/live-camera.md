@@ -52,8 +52,8 @@ frame is covered again before it is written, whatever the picture showed (V-I9).
 
 | Act | What happens |
 |---|---|
-| **Off** | The server closes the camera's gate first: every frame that arrives from then on is dropped, and the frames it held are forgotten. Then the act is recorded (`surface.camera.switch`) and the source is told to stop capturing. A source switched off sends nothing, as on the voice screen |
-| **Camera on** | Recorded first, then the gate opens |
+| **Off** | The server closes the camera's gate first: every frame that arrives from then on is dropped, and the frames it held are forgotten. Then the act is recorded (`surface.camera.switch`) and the source stops capturing: a camera on the frame pipeline closes its stream before the answer — a local camera's ffmpeg exits and its light goes out, an RTSP connection closes — recorded as `vision.source.stopped` with reason `switchedOff`; a page sending this browser's camera stops it. A source switched off sends nothing, as on the voice screen |
+| **Camera on** | Recorded first, then the gate opens and the source opens again (`vision.source.started`, reason `switchedOn`) |
 | **Stop the stream** | The gate closes for good and the camera's pipeline stops (`surface.camera.stop`) |
 | **Stop all** | Every camera's gate closes before the agents are stopped, and each camera's pipeline drops its frames before looking at them; **Resume all** opens them again (spec 3.7 V-I17) |
 | **Try again now** | The source is tried again (`surface.camera.retry`) |
@@ -112,7 +112,7 @@ fn main() -> adk_surface::Result<()> {
 |---|---|
 | `CameraFacts` | What a source reports: the stream's state (`Live`, `Paused`, `Lost`), the governor's numbers (`GovernorFacts`, its steps and escalation), tracks, watches and zones. Numbers and times, never sentences: the surface says them |
 | `Cameras::offer` | Every frame, with what was found on it (`Overlay`): dropped when the camera is off, stopped or paused by Stop all (`Offered::Dropped`), else held in memory and shown |
-| `Cameras::ingest` | A frame a screen captured, such as the voice screen's camera, handed to the camera's pipeline once it passes the same gate (`CameraSource::intake`) |
+| `Cameras::ingest` | A frame a screen captured — the voice screen's camera, or the camera page's **Use this browser's camera** — handed to the camera's pipeline once it passes the same gate (`CameraSource::intake`), at most `MAX_SCREEN_FPS` (10) a second |
 | `Cameras::freeze_all`, `thaw_all`, `with_governance` | Stop all and Resume all, which the engine calls; and a kill switch the gate also follows |
 | `CameraSource::keep_frame` | Keeps a card's frame: everyone in it covered first, written once, returned as the `ImageEvidence` a card and a held call carry |
 | `PipelineCameras` (`vision-camera`) | Each camera on adk-vision's frame pipeline, below |
@@ -134,8 +134,12 @@ With the `vision-camera` feature, `PipelineCameras` runs each camera through adk
 | **Watching for**, the zones | Each camera's `WatchCondition`s, held against every frame; a zone saved on the surface becomes the conditions' zone from the next frame, recorded as `vision.watch.registered`; each firing is `vision.watch.fired` |
 | **Can't reach the camera** | The source failing to open or ending: retried after 2 s, then twice as long each time up to 30 s, or at once from **Try again now**; the pipeline, and its governor's count, carry on through the reconnection |
 
-A camera switched off, or every camera under Stop all, has its frames dropped as they arrive,
-before the governor counts them or the detector sees them. A camera's frames are kept only as
+A stream camera switched off stops capturing at its source: its stream is dropped before the
+switch answers, so a `DeviceSource`'s ffmpeg exits and an `RtspSource`'s connection closes, and
+nothing opens it until the camera is on again; `PipelineCameras::is_capturing` says whether a
+camera's source is open. Under Stop all, and in the moment between a switch and the stream
+closing, frames are dropped as they arrive, before the governor counts them or the detector
+sees them. A camera's frames are kept only as
 a card's evidence or, with `PipelineCamerasBuilder::wakes`, as a watch event's wake payload,
 through adk-vision's `FrameKeeper` (`vision.evidence.kept`).
 
@@ -186,9 +190,27 @@ fn cameras(
 ```
 
 The hub `start` returns goes to `SurfaceEngineBuilder::cameras`. `LiveCamera::surface` is the
-voice screen's camera (spec 3.7 §7.13 `SurfaceCameraSource`): it starts off, its frames come from
-the voice view through `Cameras::ingest`, and switching the camera on the voice screen switches it
-here too, recorded as the person's act.
+web home's own camera (spec 3.7 §7.13 `SurfaceCameraSource`): it starts off, says it comes "from
+the web home", and its frames come through `Cameras::ingest` from the voice view or from the
+camera page, with no realtime model. Switching the camera on the voice screen switches it here
+too, recorded as the person's act.
+
+## This Browser's Camera
+
+A camera that takes a screen's frames — `LiveCamera::surface`, whose view sets
+`actions.sendFrames` — shows **Use this browser's camera** beside **Raise a card from this
+frame**. Choosing it switches the camera on, as the person's recorded act, opens this browser's
+camera and sends a JPEG of it five times a second to `POST /surface/cameras/{camera}/frames`,
+one at a time. Each frame passes the hub's gate and reaches the camera's pipeline, which shows
+what it makes of the frame like any other camera's: nothing is held or written on the way.
+
+| Rule | What happens |
+|---|---|
+| Off sends nothing | **Off** stops this browser's camera before the server is told, and its light goes out. Switched off anywhere else — another page, a phone, Stop all — the server answers the next frame `{"taken": false, "dropped": "off"}` (or `stopped`, `frozen`) and the page stops its camera. Leaving the page stops it too |
+| Owner only | Only the owner of the camera's session sends to it, from a screen (`surface.not_found` otherwise, `surface.not_here` from voice or chat); a paired phone needs the decide scope, as switching on does |
+| A screen's camera only | A camera that reads its own source — RTSP, a file, a local device — answers `surface.unsupported` |
+| Images only | `image/jpeg`, `image/png` or `image/webp`, its first bytes matching the type; up to `MAX_SENT_FRAME_BYTES` (2 MiB); anything else is `400 surface.invalid`, a larger body `413` |
+| At most 10 a second | A frame within a tenth of a second of the last one taken is `429 surface.rate_limited`; the page skips it and sends the next |
 
 ## The Web API
 
@@ -198,13 +220,15 @@ here too, recorded as the person's act.
 | `GET /surface/cameras/{camera}` | `CameraView`: one camera with its picture, decisions, watches, budget, tracks and sources |
 | `GET /surface/cameras/{camera}/frames/{frame}` | A frame the hub holds, served only when its bytes hash to the digest; `Cache-Control: private, no-store`; nothing while the camera is off |
 | `GET /surface/cameras/{camera}/feed` | Server-sent events: `frame` (a `StageView`) after each frame that passes the gate, `changed` when anything else changed |
+| `POST /surface/cameras/{camera}/frames` | One frame this screen's camera captured (`image/jpeg`, `image/png` or `image/webp`) → `FrameTaken`: `{"taken": true}`, or `{"taken": false, "dropped": "off"}` with the reason |
 | `POST /surface/cameras/{camera}/on`, `/off`, `/stop`, `/retry` | The act, recorded; answers the `CameraView` |
 | `PUT /surface/cameras/{camera}/zones/{zone}` | `ZoneChange` → `ZoneSaved`; closed to paired devices |
 | `POST /surface/cameras/{camera}/freeze` | `FreezeFrame` → the frozen frame's `StageView`, held in memory for its card |
 | `POST /surface/cameras/{camera}/cards` | `RaiseCard` → `CardRaised`: the kept frame's digest, its regions, until when it is kept, and what sending the card did |
 
 A paired phone switches a camera off and stops its stream with the stop scope, and switches it
-on, freezes a frame and raises a card with the decide scope; it edits no zone.
+on, sends its own camera's frames, freezes a frame and raises a card with the decide scope; it
+edits no zone.
 
 ## On the Phone
 
@@ -224,7 +248,9 @@ as the call's evidence, held for you beside the camera:
 cargo run -p adk-surface --features web,vision-camera --example live_camera_home -- 8814
 ```
 
-Open `http://127.0.0.1:8814/ui/cameras/line-2`. Its detector is a few lines of colour
+Open `http://127.0.0.1:8814/ui/cameras/line-2`. `/ui/cameras/this-computer` is the web
+home's own camera: **Use this browser's camera** feeds it from this browser, with no voice
+screen. Its detector is a few lines of colour
 segmentation that find the clip's parts and cracks, so it needs no model weights; any adk-vision
 `Detector`, such as RF-DETR, drops in the same way.
 

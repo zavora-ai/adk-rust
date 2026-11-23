@@ -460,11 +460,17 @@ async fn switching_off_drops_frames_on_the_server() {
     home.engine.switch_camera(&caller(), "line-2", false).await.unwrap();
     assert!(home.cameras.latest("line-2").await.is_none(), "off forgets the frames held");
     let before = home.counts();
-    home.belt(start() + chrono::Duration::seconds(1), 120, 4, chrono::Duration::milliseconds(200))
-        .await;
+    // The source is closed, so the test camera takes nothing; a frame offered from anywhere
+    // is dropped at the gate.
+    let later = start() + chrono::Duration::seconds(1);
+    assert!(!home.feed.push_frame(frame(120, false), later), "the source captures nothing");
+    let late =
+        adk_surface::camera::CameraFrame::new(frame(120, false), "image/png", WIDTH, HEIGHT, later);
+    assert_eq!(home.cameras.offer("line-2", late).await, Offered::Dropped(DropReason::Off));
+    tokio::time::sleep(StdDuration::from_millis(300)).await;
     let after = home.counts();
     assert_eq!(after.observed, before.observed, "the pipeline looked at nothing");
-    assert_eq!(after.dropped - before.dropped, 4, "every frame dropped on arrival");
+    assert_eq!(after.arrived, before.arrived, "nothing arrived");
     assert!(home.cameras.latest("line-2").await.is_none());
     let view = home.engine.camera_view(&caller(), "line-2").await.unwrap();
     assert_eq!(view.state, CameraState::Off);
@@ -625,7 +631,7 @@ async fn the_voice_screens_camera_goes_through_the_pipeline() {
     let cameras = &home.cameras;
     assert_eq!(cameras.voice_camera().as_deref(), Some("this-computer"));
     let facts = home.live.cameras().await.unwrap();
-    assert_eq!(facts[0].from.as_deref(), Some("from the voice screen"));
+    assert_eq!(facts[0].from.as_deref(), Some("from the web home"));
     assert!(!facts[0].on, "the voice screen's camera starts off");
     assert_eq!(
         cameras.ingest("this-computer", frame(100, false), start()).await,
@@ -713,4 +719,281 @@ async fn a_lost_source_is_retried_and_reported() {
         tokio::time::sleep(StdDuration::from_millis(20)).await;
     }
     until("live again", async || home.facts().await.state == StreamState::Live).await;
+}
+
+/// A stream camera's source that counts the streams it holds open and those it ever opened.
+struct Counted {
+    id: FrameSourceId,
+    inner: SurfaceCameraSource,
+    open: Arc<AtomicU32>,
+    opened: Arc<AtomicU32>,
+}
+
+/// One open stream of a [`Counted`] source, until it is dropped.
+struct Open(Arc<AtomicU32>);
+
+impl Drop for Open {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+#[async_trait]
+impl FrameSource for Counted {
+    fn id(&self) -> &FrameSourceId {
+        &self.id
+    }
+
+    async fn frames(&self, sampling: Sampling) -> adk_vision::Result<FrameStream> {
+        use futures::StreamExt as _;
+        let stream = self.inner.frames(sampling).await?;
+        self.opened.fetch_add(1, Ordering::SeqCst);
+        self.open.fetch_add(1, Ordering::SeqCst);
+        let open = Open(Arc::clone(&self.open));
+        Ok(stream
+            .map(move |frame| {
+                let _held = &open;
+                frame
+            })
+            .boxed())
+    }
+}
+
+/// The `reason` of every `action` record the cameras' trail holds.
+fn reasons(home: &Home, action: &str) -> Vec<serde_json::Value> {
+    home.audit
+        .records()
+        .into_iter()
+        .filter(|record| record.action == action)
+        .map(|record| record.ext.get("reason").cloned().unwrap_or_default())
+        .collect()
+}
+
+/// Off stops a stream camera's capture at its source — the stream is closed before the switch
+/// answers, so a device's ffmpeg exits — and nothing opens it until the camera is on again;
+/// each is recorded as `vision.source.stopped` and `.started`.
+#[tokio::test(flavor = "multi_thread")]
+async fn switching_off_closes_the_source_and_on_opens_it_again() {
+    let (inner, feed) = SurfaceCameraSource::new(FrameSourceId("line-2".into()));
+    feed.switch(true);
+    let open = Arc::new(AtomicU32::new(0));
+    let opened = Arc::new(AtomicU32::new(0));
+    let source = Counted {
+        id: FrameSourceId("line-2".into()),
+        inner,
+        open: Arc::clone(&open),
+        opened: Arc::clone(&opened),
+    };
+    let camera = LiveCamera::stream(facts(), Arc::new(source), Arc::new(NoRedaction))
+        .detector(runtime(), DetectQuery::Classes(vec!["part".into()]))
+        .sampling(Sampling { fps: 5.0, max_long_edge: None });
+    let home = home_with(camera, feed).await;
+    home.belt(start(), 100, 2, chrono::Duration::milliseconds(200)).await;
+    home.settle().await;
+    assert_eq!(home.live.is_capturing("line-2"), Some(true));
+    assert_eq!((open.load(Ordering::SeqCst), opened.load(Ordering::SeqCst)), (1, 1));
+
+    home.engine.switch_camera(&caller(), "line-2", false).await.unwrap();
+    assert_eq!(open.load(Ordering::SeqCst), 0, "closed before the switch answered");
+    assert_eq!(home.live.is_capturing("line-2"), Some(false));
+    assert!(!home.feed.push_frame(frame(120, false), start()), "nothing reads the source");
+    tokio::time::sleep(StdDuration::from_millis(500)).await;
+    assert_eq!(opened.load(Ordering::SeqCst), 1, "nothing opens it while the camera is off");
+    assert_eq!(
+        reasons(&home, adk_vision::stream::VISION_SOURCE_STOPPED),
+        [serde_json::json!("switchedOff")]
+    );
+    assert!(
+        reasons(&home, adk_vision::stream::VISION_SOURCE_STARTED)
+            .iter()
+            .all(|reason| reason.is_null())
+    );
+
+    home.engine.switch_camera(&caller(), "line-2", true).await.unwrap();
+    until("the source opened again", async || open.load(Ordering::SeqCst) == 1).await;
+    assert_eq!(opened.load(Ordering::SeqCst), 2);
+    let before = home.counts();
+    home.belt(start() + chrono::Duration::seconds(2), 140, 2, chrono::Duration::milliseconds(200))
+        .await;
+    until("frames again", async || home.counts().observed > before.observed).await;
+    assert_eq!(home.live.is_capturing("line-2"), Some(true));
+    let started = reasons(&home, adk_vision::stream::VISION_SOURCE_STARTED);
+    assert_eq!(started.iter().filter(|reason| *reason == "switchedOn").count(), 1, "{started:?}");
+
+    // Stopping the stream closes it for good.
+    home.engine.stop_camera(&caller(), "line-2").await.unwrap();
+    until("the source closed", async || open.load(Ordering::SeqCst) == 0).await;
+}
+
+fn api(engine: SurfaceEngine, device: bool) -> axum::Router {
+    let mut metadata = std::collections::HashMap::new();
+    if device {
+        metadata.insert(adk_kernel::pairing::DEVICE_ID_METADATA.to_string(), "phone-1".to_string());
+        metadata.insert(adk_kernel::pairing::DEVICE_KIND_METADATA.to_string(), "phone".to_string());
+    }
+    axum::Router::new().nest("/api", adk_surface::web::router(engine)).layer(axum::Extension(Some(
+        adk_core::RequestContext {
+            user_id: OWNER.into(),
+            scopes: vec!["owner".into()],
+            metadata: metadata.into_iter().collect(),
+        },
+    )))
+}
+
+/// Sends `bytes` as `mime` to `uri`; the status and the answer.
+async fn send(
+    app: &axum::Router,
+    uri: &str,
+    mime: &str,
+    bytes: Vec<u8>,
+) -> (axum::http::StatusCode, serde_json::Value) {
+    use tower::ServiceExt as _;
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", mime)
+        .body(axum::body::Body::from(bytes))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null))
+}
+
+/// The web home's own camera, fed from the camera page with no voice screen and no realtime
+/// model.
+async fn browser_home() -> Home {
+    let camera = LiveCamera::surface(
+        CameraFacts::new("this-computer", "This computer's camera", APP, SESSION)
+            .with_ingest(Ingest::this_computer(WIDTH, HEIGHT)),
+        Arc::new(NoRedaction),
+    )
+    .detector(runtime(), DetectQuery::Classes(vec!["part".into()]))
+    .sampling(Sampling { fps: 5.0, max_long_edge: None });
+    let (_unused, feed) = SurfaceCameraSource::new(FrameSourceId("unused".into()));
+    home_with(camera, feed).await
+}
+
+/// The browser's camera drives the camera's pipeline through `POST
+/// /surface/cameras/{camera}/frames`: only for a camera that takes a screen's frames, from its
+/// owner at a screen, as an image; switched off it sends nothing, and the answer says so.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_browsers_camera_feeds_its_camera_through_the_frames_route() {
+    let home = browser_home().await;
+    let view = home.engine.camera_view(&caller(), "this-computer").await.unwrap();
+    assert!(view.actions.send_frames, "the page offers this browser's camera");
+    let app = api(home.engine.clone(), false);
+    let uri = "/api/surface/cameras/this-computer/frames?surface=web";
+
+    // Off: dropped on the server, and the answer says why.
+    let (status, body) = send(&app, uri, "image/png", frame(100, false)).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body, serde_json::json!({ "taken": false, "dropped": "off" }));
+
+    // On: the frame reaches the pipeline and comes back with what it found.
+    home.engine.switch_camera(&caller(), "this-computer", true).await.unwrap();
+    let (status, body) = send(&app, uri, "image/png", frame(100, false)).await;
+    assert_eq!((status, body), (axum::http::StatusCode::OK, serde_json::json!({ "taken": true })));
+    until("the frame shown", async || home.cameras.latest("this-computer").await.is_some()).await;
+    let held = home.cameras.latest("this-computer").await.unwrap();
+    assert_eq!(held.frame.overlays[0].label, "part");
+    assert_eq!(home.live.counts("this-computer").unwrap().observed, 1);
+
+    // Not an image, or not the image its type says: refused before anything sees it.
+    let (status, body) = send(&app, uri, "text/plain", b"hello".to_vec()).await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "surface.invalid");
+    let (status, _) = send(&app, uri, "image/jpeg", frame(100, false)).await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "a PNG sent as a JPEG");
+    let (status, _) = send(&app, uri, "image/png", Vec::new()).await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "an empty frame");
+    // Over the size limit: the body is refused.
+    let mut huge = frame(100, false);
+    huge.resize(adk_surface::camera::MAX_SENT_FRAME_BYTES + 1, 0);
+    let (status, _) = send(&app, uri, "image/png", huge).await;
+    assert_eq!(status, axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+
+    // Switched off, it takes nothing again; a paired phone switches it on and sends with the
+    // decide scope.
+    home.engine.switch_camera(&caller(), "this-computer", false).await.unwrap();
+    let (_, body) = send(&app, uri, "image/png", frame(110, false)).await;
+    assert_eq!(body, serde_json::json!({ "taken": false, "dropped": "off" }));
+    assert_eq!(home.live.counts("this-computer").unwrap().observed, 1);
+}
+
+/// Frames come at most `MAX_SCREEN_FPS` a second from a screen; a camera that reads its own
+/// source takes none; another person's camera is not found.
+#[tokio::test(flavor = "multi_thread")]
+async fn sent_frames_are_paced_owned_and_only_for_a_screens_camera() {
+    let home = browser_home().await;
+    home.engine.switch_camera(&caller(), "this-computer", true).await.unwrap();
+    let at = start() + chrono::Duration::hours(1);
+    // The hub takes one frame per interval, whatever the screen sends.
+    let gap =
+        chrono::Duration::milliseconds(1_000 / i64::from(adk_surface::camera::MAX_SCREEN_FPS));
+    assert_ne!(
+        home.cameras.ingest("this-computer", frame(100, false), at).await,
+        Offered::Dropped(DropReason::TooSoon)
+    );
+    assert_eq!(
+        home.cameras.ingest("this-computer", frame(100, false), at + gap / 2).await,
+        Offered::Dropped(DropReason::TooSoon)
+    );
+    assert_ne!(
+        home.cameras.ingest("this-computer", frame(100, false), at + gap).await,
+        Offered::Dropped(DropReason::TooSoon)
+    );
+
+    // Over HTTP, a frame too soon is 429 surface.rate_limited: an engine on a still clock.
+    let clock = Arc::new(adk_core::ManualClock::new(at + gap * 4));
+    let local = LocalSource::builder(APP).sessions(Arc::clone(&home.sessions)).build().unwrap();
+    let still = SurfaceEngine::builder(Arc::new(local))
+        .places([Place::web(), Place::phone()])
+        .clock(clock)
+        .cameras(home.cameras.clone())
+        .build();
+    let uri = "/api/surface/cameras/this-computer/frames?surface=web";
+    let app = api(still.clone(), false);
+    let (status, body) = send(&app, uri, "image/png", frame(100, false)).await;
+    assert_eq!((status, body), (axum::http::StatusCode::OK, serde_json::json!({ "taken": true })));
+    let (status, body) = send(&app, uri, "image/png", frame(100, false)).await;
+    assert_eq!(status, axum::http::StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert_eq!(body["error"]["code"], "surface.rate_limited");
+
+    // A paired phone sends with the decide scope, which the server's device map requires.
+    let phone = api(still.clone(), true);
+    let (status, body) = send(
+        &phone,
+        "/api/surface/cameras/this-computer/frames?surface=phone",
+        "image/png",
+        frame(100, false),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::TOO_MANY_REQUESTS, "{body}");
+
+    // Another person's camera, or one that reads its own source.
+    let ben = Caller::human("ben", SurfaceKind::Web, Origin::Pointer);
+    let refused =
+        home.engine.send_camera_frame(&ben, "this-computer", "image/png", frame(100, false)).await;
+    assert!(matches!(refused, Err(adk_surface::SurfaceError::NotFound { .. })), "{refused:?}");
+    let spoken = Caller::human(OWNER, SurfaceKind::Voice, Origin::Voice);
+    let refused = home
+        .engine
+        .send_camera_frame(&spoken, "this-computer", "image/png", frame(100, false))
+        .await;
+    assert!(matches!(refused, Err(adk_surface::SurfaceError::NotHere(_))), "{refused:?}");
+    let stream = home_with(
+        LiveCamera::stream(
+            facts(),
+            Arc::new(SurfaceCameraSource::new(FrameSourceId("line-2".into())).0),
+            Arc::new(NoRedaction),
+        ),
+        SurfaceCameraSource::new(FrameSourceId("unused".into())).1,
+    )
+    .await;
+    let view = stream.engine.camera_view(&caller(), "line-2").await.unwrap();
+    assert!(!view.actions.send_frames);
+    let refused =
+        stream.engine.send_camera_frame(&caller(), "line-2", "image/png", frame(100, false)).await;
+    assert!(matches!(refused, Err(adk_surface::SurfaceError::Unsupported { .. })), "{refused:?}");
 }

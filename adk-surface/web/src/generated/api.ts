@@ -644,6 +644,11 @@ export interface CameraActions {
   raiseCard: boolean;
   /** "Try again now". */
   retry: boolean;
+  /**
+   * "Use this browser's camera": the camera takes the frames this screen captures
+   * (`POST /surface/cameras/{camera}/frames`), as the web home's own camera does.
+   */
+  sendFrames?: boolean;
   /** "Stop the stream". */
   stop: boolean;
   /** "Camera on / Off". */
@@ -2160,6 +2165,23 @@ export interface FormsResponse {
   forms: FormState[];
   /** The session. */
   sessionId: string;
+}
+
+/** Why the server dropped a frame a screen sent. */
+export type FrameDropped = "off" | "stopped" | "frozen" | "notReading";
+
+/**
+ * `POST /surface/cameras/{camera}/frames` answer: what became of one frame this screen
+ * captured.
+ */
+export interface FrameTaken {
+  /**
+   * Why it did not. While the camera is off, stopped or paused by Stop all, the screen stops
+   * capturing: a camera switched off sends nothing.
+   */
+  dropped?: FrameDropped | null;
+  /** The frame went on to the camera's pipeline. */
+  taken: boolean;
 }
 
 /** A frame the hub holds, served by its digest. */

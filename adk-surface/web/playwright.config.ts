@@ -179,16 +179,20 @@ const surfaces: Surface[] = [
   {
     // The live camera surface on the real frame pipeline (spec 3.7 §8.2, S12): the conveyor
     // clip over RTSP, two cameras through the stream pipeline, a zone edited, a camera switched
-    // off, and a card that holds the line stop with its frame. `CAMERA_E2E_BIN` names an example
-    // built with another detector, such as RF-DETR.
+    // off, and a card that holds the line stop with its frame; and this browser's camera, which
+    // Chromium's fake camera stands in for, feeding the web home's camera without the voice
+    // screen. `CAMERA_E2E_BIN` names an example built with another detector, such as RF-DETR.
     name: "camera",
     prefix: "CAMERA",
     example: "live_camera_home",
     features: "web,vision-camera",
     // 8791 to 8812 are taken.
     port: 8815,
-    testMatch: ["camera.spec.ts"],
+    testMatch: ["camera.spec.ts", "camera-browser.spec.ts"],
     ready: "/ui/",
+    use: {
+      launchOptions: { args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] },
+    },
   },
   {
     // Agent-drawn UI (spec 3.3 §6.1 `genui`, §12 "Governed form"): Finance draws the invoice

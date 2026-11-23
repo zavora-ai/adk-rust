@@ -7,9 +7,11 @@ use serde_json::json;
 
 use super::facts::{CameraFacts, ZoneFacts};
 use super::hub::Cameras;
+use super::hub::{DropReason, Offered};
 use super::project::{self, Camera, Ctx, Place};
 use super::view::{
-    CameraAgent, CameraView, CamerasView, CardRaised, RaiseCard, StageView, ZoneChange, ZoneSaved,
+    CameraAgent, CameraView, CamerasView, CardRaised, FrameDropped, FrameTaken, RaiseCard,
+    StageView, ZoneChange, ZoneSaved,
 };
 use super::{
     SURFACE_AUDIT_CAMERA_CARD, SURFACE_AUDIT_CAMERA_RETRY, SURFACE_AUDIT_CAMERA_STOP,
@@ -22,6 +24,9 @@ use crate::origin::{Caller, Origin};
 
 /// The words "Nothing is waiting for you." under Decisions.
 const NOTHING_WAITING: &str = "Nothing is waiting for you.";
+
+/// The largest frame a screen may send a camera: a 1280 × 720 JPEG is about a tenth of it.
+pub const MAX_SENT_FRAME_BYTES: usize = 2 * 1024 * 1024;
 
 impl SurfaceEngine {
     fn hub(&self) -> Result<&Cameras> {
@@ -67,7 +72,12 @@ impl SurfaceEngine {
                 stopped: None,
                 frozen: hub.is_frozen(),
             });
-            cameras.push(Camera { facts: camera, gate, recent: hub.recent(&camera.id).await });
+            cameras.push(Camera {
+                facts: camera,
+                gate,
+                recent: hub.recent(&camera.id).await,
+                takes_frames: hub.takes_frames(&camera.id),
+            });
         }
         Ok(cameras)
     }
@@ -329,6 +339,79 @@ impl SurfaceEngine {
         .await?;
         stopped?;
         self.camera_view(caller, camera).await
+    }
+
+    /// Takes one frame `caller`'s screen captured for `camera` — the web home's or the phone's
+    /// own camera — and hands it to the camera's frame pipeline through the hub's gate
+    /// ([`Cameras::ingest`]): while the camera is off, stopped or paused by Stop all the frame is
+    /// dropped and the answer says why, so the screen stops capturing. A camera switched off
+    /// sends nothing. Nothing is held or written here; the pipeline shows what it makes of the
+    /// frame. Frames are not recorded one by one: switching the camera is.
+    ///
+    /// # Errors
+    ///
+    /// `surface.not_found` when the camera is not `caller`'s; `surface.not_here` from anything
+    /// but a person at a screen; `surface.invalid` for an empty frame, one over
+    /// [`MAX_SENT_FRAME_BYTES`], or one that is not the JPEG, PNG or WebP `mime_type` says;
+    /// `surface.unsupported` for a camera that reads its own source; `surface.rate_limited`
+    /// for a frame sooner than [`MAX_SCREEN_FPS`](super::MAX_SCREEN_FPS) allows.
+    pub async fn send_camera_frame(
+        &self,
+        caller: &Caller,
+        camera: &str,
+        mime_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<FrameTaken> {
+        at_a_screen(caller)?;
+        if bytes.is_empty() || bytes.len() > MAX_SENT_FRAME_BYTES {
+            return Err(SurfaceError::Invalid(format!(
+                "a camera frame is 1 byte to {} MiB; this one is {} bytes",
+                MAX_SENT_FRAME_BYTES / (1024 * 1024),
+                bytes.len()
+            )));
+        }
+        let mime = mime_type.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
+        let matches = match mime.as_str() {
+            "image/jpeg" => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
+            "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+            "image/webp" => bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
+            _ => {
+                return Err(SurfaceError::Invalid(format!(
+                    "a camera frame is image/jpeg, image/png or image/webp, not '{mime_type}'"
+                )));
+            }
+        };
+        if !matches {
+            return Err(SurfaceError::Invalid(format!(
+                "the frame's bytes are not the {mime} its content type says"
+            )));
+        }
+        self.owned_camera(caller, camera).await?;
+        let hub = self.hub()?;
+        if !hub.takes_frames(camera) {
+            return Err(SurfaceError::unsupported(format!(
+                "sending frames to camera '{camera}', which reads its own source"
+            )));
+        }
+        let dropped = match hub.ingest(camera, bytes, self.clock_now()).await {
+            Offered::Forwarded | Offered::Shown { .. } => None,
+            Offered::Dropped(DropReason::Off) => Some(FrameDropped::Off),
+            Offered::Dropped(DropReason::Stopped) => Some(FrameDropped::Stopped),
+            Offered::Dropped(DropReason::Frozen) => Some(FrameDropped::Frozen),
+            Offered::Dropped(DropReason::Unknown) => Some(FrameDropped::NotReading),
+            Offered::Dropped(DropReason::TooSoon) => {
+                return Err(SurfaceError::Source(adk_core::AdkError::new(
+                    adk_core::ErrorComponent::Server,
+                    adk_core::ErrorCategory::RateLimited,
+                    "surface.rate_limited",
+                    format!(
+                        "camera '{camera}' takes at most {} frames a second from a screen; send them further apart",
+                        super::MAX_SCREEN_FPS
+                    ),
+                )));
+            }
+        };
+        Ok(FrameTaken { taken: dropped.is_none(), dropped })
     }
 
     /// Tries a lost `camera` again now (board choice C6).

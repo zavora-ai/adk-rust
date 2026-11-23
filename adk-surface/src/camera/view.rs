@@ -149,6 +149,10 @@ pub struct CameraActions {
     pub zone: bool,
     /// "Raise a card from this frame".
     pub raise_card: bool,
+    /// "Use this browser's camera": the camera takes the frames this screen captures
+    /// (`POST /surface/cameras/{camera}/frames`), as the web home's own camera does.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub send_frames: bool,
 }
 
 /// The picture and what is drawn over it.
@@ -559,6 +563,33 @@ pub struct RaiseCard {
     pub frame: String,
     /// "What should it look at?"
     pub note: String,
+}
+
+/// `POST /surface/cameras/{camera}/frames` answer: what became of one frame this screen
+/// captured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameTaken {
+    /// The frame went on to the camera's pipeline.
+    pub taken: bool,
+    /// Why it did not. While the camera is off, stopped or paused by Stop all, the screen stops
+    /// capturing: a camera switched off sends nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dropped: Option<FrameDropped>,
+}
+
+/// Why the server dropped a frame a screen sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum FrameDropped {
+    /// The camera is switched off.
+    Off,
+    /// The camera's stream was stopped.
+    Stopped,
+    /// Stop all paused every camera.
+    Frozen,
+    /// The pipeline was not reading the camera when the frame came.
+    NotReading,
 }
 
 /// `POST /surface/cameras/{camera}/cards` answer.

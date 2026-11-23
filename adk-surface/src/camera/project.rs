@@ -29,6 +29,8 @@ pub(crate) struct Camera<'a> {
     pub(crate) facts: &'a CameraFacts,
     pub(crate) gate: Gate,
     pub(crate) recent: Vec<HeldFrame>,
+    /// The camera takes the frames a screen captures.
+    pub(crate) takes_frames: bool,
 }
 
 /// Where a picture is drawn: large, a tile of the grid, or the strip under a camera.
@@ -217,6 +219,7 @@ pub(crate) fn actions(camera: &Camera<'_>) -> CameraActions {
         zone: matches!(state, CameraState::Live | CameraState::SavingFrames | CameraState::Paused)
             && !camera.facts.zones.is_empty(),
         raise_card: camera.watching() && camera.latest().is_some(),
+        send_frames: camera.takes_frames && !stopped,
     }
 }
 

@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ApiError } from "../client";
 import type { CameraView, CamerasView, DecisionCard, Origin, StageView } from "../generated/api";
 import { problemText } from "../client";
 import type { Box } from "../viewer/Stage";
 import { CameraStage } from "./CameraStage";
 import type { Layers } from "./CameraStage";
+import { browserCapture } from "./capture";
+import type { CameraCapture } from "./capture";
 import type { CameraClient } from "./client";
-import { CheckIcon, ChevronIcon, FlagIcon, StopIcon, ZoneIcon } from "./icons";
+import { CameraIcon, CheckIcon, ChevronIcon, FlagIcon, StopIcon, ZoneIcon } from "./icons";
 import { cameraLabels as words } from "./labels";
 import { AgentHead, Budget, DecisionMini, Notice, Sources, StatePill, Switch, Tracks, Watch } from "./parts";
 import { RaiseCard } from "./RaiseCard";
@@ -19,6 +22,8 @@ const READ_AGAIN_MS = 3_000;
 const STAGE_MAX = 940;
 /** The gap between the grid's tiles, as `.cam-grid` sets it. */
 const TILE_GAP = 14;
+/** How often this browser's camera sends a frame: five a second, half what the server takes. */
+const SEND_EVERY_MS = 200;
 
 /** What opens over the camera. */
 export type Opened =
@@ -40,6 +45,7 @@ export function Camera({
   onOpenDecision,
   onMemory,
   initialOpened,
+  capture,
 }: {
   client: CameraClient;
   place: CameraPlace;
@@ -50,6 +56,8 @@ export function Camera({
   onMemory: () => void;
   /** A zone editor or a card open on arrival (fixtures). */
   initialOpened?: Opened;
+  /** This browser's camera; the browser's own by default. */
+  capture?: CameraCapture;
 }) {
   if (!place.camera) {
     return <Grid client={client} onNavigate={onNavigate} onOpenThread={onOpenThread} onOpenDecision={onOpenDecision} />;
@@ -65,6 +73,7 @@ export function Camera({
       onOpenDecision={onOpenDecision}
       onMemory={onMemory}
       initialOpened={initialOpened}
+      capture={capture}
     />
   );
 }
@@ -94,6 +103,7 @@ function One({
   onOpenDecision,
   onMemory,
   initialOpened,
+  capture,
 }: {
   client: CameraClient;
   id: string;
@@ -103,6 +113,7 @@ function One({
   onOpenDecision: (card: DecisionCard) => void;
   onMemory: () => void;
   initialOpened?: Opened;
+  capture?: CameraCapture;
 }) {
   const [view, setView] = useState<CameraView>();
   const [problem, setProblem] = useState("");
@@ -111,6 +122,18 @@ function One({
   const [opened, setOpened] = useState<Opened | undefined>(initialOpened);
   const [busy, setBusy] = useState(false);
   const { ref, width } = useStageWidth(STAGE_MAX, view !== undefined);
+  // This browser's camera while it sends frames: the stream and what stops its frames.
+  const sending = useRef<{ stream: MediaStream; stop: () => void } | undefined>(undefined);
+  const [browserOn, setBrowserOn] = useState(false);
+
+  /** Stops this browser's camera: no frame is grabbed or sent, and its light goes out. */
+  const stopBrowser = useCallback(() => {
+    const now = sending.current;
+    sending.current = undefined;
+    now?.stop();
+    now?.stream.getTracks().forEach((track) => track.stop());
+    setBrowserOn(false);
+  }, []);
 
   const read = useCallback(async () => {
     try {
@@ -149,6 +172,52 @@ function One({
     })();
     return () => abort.abort();
   }, [client, id, read]);
+
+  // A camera switched off, stopped or paused by Stop all sends nothing: this browser stops
+  // capturing. Leaving the page stops it too.
+  const quiet = view !== undefined && (!view.on || view.state === "stopped" || view.state === "frozen");
+  useEffect(() => {
+    if (quiet) stopBrowser();
+  }, [quiet, stopBrowser]);
+  useEffect(() => stopBrowser, [stopBrowser]);
+
+  async function startBrowser() {
+    const send = client.sendFrame;
+    if (!send || sending.current) return;
+    setProblem("");
+    try {
+      // The camera is switched on first, as the person's act; off, the server drops every frame.
+      if (!view?.on) setView(await client.switchTo(id, true));
+      const device = capture ?? browserCapture();
+      const stream = await device.open();
+      let waiting = false;
+      const stop = device.frames(stream, SEND_EVERY_MS, (frame) => {
+        // One frame in flight at a time: a slow server gets fewer, never a queue.
+        if (waiting || sending.current?.stream !== stream) return;
+        waiting = true;
+        send(id, frame)
+          .then((taken) => {
+            if (!taken.taken && taken.dropped !== "notReading") {
+              stopBrowser();
+              void read();
+            }
+          })
+          .catch((error: unknown) => {
+            if (error instanceof ApiError && error.status === 429) return;
+            stopBrowser();
+            setProblem(problemText(error));
+          })
+          .finally(() => {
+            waiting = false;
+          });
+      });
+      sending.current = { stream, stop };
+      setBrowserOn(true);
+    } catch (error) {
+      stopBrowser();
+      setProblem(problemText(error));
+    }
+  }
 
   async function act(run: () => Promise<CameraView>) {
     setBusy(true);
@@ -203,7 +272,11 @@ function One({
           on={view.on}
           disabled={busy || !view.actions.switch}
           label={words.cameraSwitch(view.name)}
-          onSwitch={(on) => void act(() => client.switchTo(id, on))}
+          onSwitch={(on) => {
+            // Off stops this browser's camera before the server is told.
+            if (!on) stopBrowser();
+            void act(() => client.switchTo(id, on));
+          }}
         />
         <button type="button" className="cam-btn cam-btn-sm" disabled={busy || !view.actions.stop} onClick={() => void act(() => client.stop(id))}>
           <StopIcon />
@@ -230,6 +303,18 @@ function One({
               <FlagIcon />
               {words.raiseCard}
             </button>
+            {view.actions.sendFrames && client.sendFrame && (
+              <button
+                type="button"
+                className="cam-btn cam-btn-sm cam-btn-surface"
+                aria-pressed={browserOn}
+                disabled={busy}
+                onClick={() => (browserOn ? stopBrowser() : void startBrowser())}
+              >
+                {browserOn ? <StopIcon /> : <CameraIcon />}
+                {browserOn ? words.stopBrowserCamera : words.useBrowserCamera}
+              </button>
+            )}
             <span className="cam-spacer" />
             <span className="cam-seg cam-layers" role="group" aria-label="Layers">
               {(
@@ -252,9 +337,9 @@ function One({
               ))}
             </span>
           </div>
-          {(problem || note) && (
+          {(problem || note || browserOn) && (
             <p className={problem ? "cam-problem" : "cam-note"} role={problem ? "alert" : "status"} style={{ width: `${width}px` }}>
-              {problem || note}
+              {problem || note || words.browserCameraOn}
             </p>
           )}
           <Sources sources={view.sources} onSelect={(camera) => onNavigate({ camera })} />

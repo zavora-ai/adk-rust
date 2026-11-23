@@ -4,6 +4,10 @@ export const cameraLabels = {
   on: "On",
   off: "Off",
   stopStream: "Stop the stream",
+  // The web home's own camera feeding a camera that takes a screen's frames.
+  useBrowserCamera: "Use this browser's camera",
+  stopBrowserCamera: "Stop this browser's camera",
+  browserCameraOn: "This browser's camera is sending frames. Off, or leaving this page, stops it.",
   drawZone: "Draw a zone",
   editZone: "Edit the zone",
   raiseCard: "Raise a card from this frame",

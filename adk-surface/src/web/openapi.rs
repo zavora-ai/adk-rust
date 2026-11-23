@@ -167,6 +167,7 @@ pub fn openapi() -> Value {
     let stage_view = schema_ref::<crate::camera::StageView>(&mut out);
     let zone_saved = schema_ref::<crate::camera::ZoneSaved>(&mut out);
     let card_raised = schema_ref::<crate::camera::CardRaised>(&mut out);
+    let frame_taken = schema_ref::<crate::camera::FrameTaken>(&mut out);
     let mut schemas = out.take_definitions(true);
 
     let mut input = generator(Contract::Deserialize);
@@ -359,6 +360,29 @@ pub fn openapi() -> Value {
                     "description": "`text/event-stream`; a `frame` event's data is a StageView",
                     "content": { "text/event-stream": { "schema": stage_view.clone() } },
                 }));
+                ok
+            }),
+        } }),
+    );
+    routes.insert(
+        with(paths::CAMERA_FRAMES),
+        json!({ "post": {
+            "summary": "One frame this screen's camera captured, for a camera that takes them (`actions.sendFrames`), at most 10 a second: handed to the camera's pipeline through the server's gate, or dropped with the reason while the camera is off, stopped or paused by Stop all, when the screen stops capturing. Nothing is written. A paired phone needs the decide scope",
+            "parameters": [camera_param.clone(), query("surface", "The surface asking", surface.clone())],
+            "requestBody": {
+                "required": true,
+                "content": {
+                    "image/jpeg": { "schema": { "type": "string", "format": "binary" } },
+                    "image/png": { "schema": { "type": "string", "format": "binary" } },
+                    "image/webp": { "schema": { "type": "string", "format": "binary" } }
+                }
+            },
+            "responses": errors({
+                let mut ok = Map::new();
+                ok.insert("200".into(), answer("What became of the frame", frame_taken));
+                ok.insert("400".into(), problem());
+                ok.insert("413".into(), problem());
+                ok.insert("429".into(), problem());
                 ok
             }),
         } }),

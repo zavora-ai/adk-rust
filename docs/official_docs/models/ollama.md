@@ -173,6 +173,7 @@ fn build() -> anyhow::Result<LlmAgent> {
 | Calls without IDs | Ollama sends calls without IDs; the agent assigns each an `adk-call-` ID and leaves it out of the next request |
 | Calls written as text | Tool-call markup a model writes into its text (the Qwen/Hermes, Llama, Mistral Nemo, DeepSeek, DeepSeek-V3, Gemma 4, and action-tag formats) becomes a call when it names a declared tool, streamed or not |
 | Tool images | Images a tool returns are sent in a user message after the tool messages |
+| Images | Inline PNG, JPEG and GIF parts go out as the message's native `images`, base64-encoded, so a vision model (`ollama show <model>` lists `vision`) sees them; other attachments, WebP included, which Ollama 0.32 refuses there, are described in the text |
 
 ---
 

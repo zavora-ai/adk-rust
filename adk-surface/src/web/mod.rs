@@ -138,6 +138,8 @@ pub mod paths {
     pub const CAMERA_FRAME: &str = "/surface/cameras/{camera}/frames/{frame}";
     /// `GET`: a camera's picture after each frame, as server-sent events.
     pub const CAMERA_FEED: &str = "/surface/cameras/{camera}/feed";
+    /// `POST`: one frame this screen's camera captured, for a camera that takes them.
+    pub const CAMERA_FRAMES: &str = "/surface/cameras/{camera}/frames";
     /// `POST`: switch a camera on (board choice C2).
     pub const CAMERA_ON: &str = "/surface/cameras/{camera}/on";
     /// `POST`: switch a camera off: its frames are dropped on the server from then on.
@@ -244,6 +246,10 @@ pub fn router(engine: SurfaceEngine) -> Router {
         .route(paths::CAMERA, get(camera))
         .route(paths::CAMERA_FRAME, get(camera_frame))
         .route(paths::CAMERA_FEED, get(camera_feed))
+        .route(
+            paths::CAMERA_FRAMES,
+            post(camera_frames).layer(DefaultBodyLimit::max(crate::camera::MAX_SENT_FRAME_BYTES)),
+        )
         .route(paths::CAMERA_ON, post(camera_on))
         .route(paths::CAMERA_OFF, post(camera_off))
         .route(paths::CAMERA_STOP, post(camera_stop))
@@ -753,6 +759,27 @@ fn camera_updates(
             }
         }
     })
+}
+
+/// One frame this screen's camera captured, its type from `Content-Type`: handed to the camera's
+/// pipeline through the server's gate, or dropped with the reason while the camera is off.
+async fn camera_frames(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    headers: HeaderMap,
+    Path(camera): Path<String>,
+    Query(query): Query<SurfaceQuery>,
+    body: axum::body::Bytes,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    let mime_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    match engine.send_camera_frame(&caller, &camera, mime_type, body.to_vec()).await {
+        Ok(taken) => Json(taken).into_response(),
+        Err(error) => failed(error),
+    }
 }
 
 /// Switches a camera on.

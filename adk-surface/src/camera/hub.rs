@@ -29,6 +29,11 @@ pub const FROZEN_FRAMES: usize = 4;
 /// How long a frozen frame is held for its card, in minutes.
 pub const FROZEN_MINUTES: i64 = 15;
 
+/// The most frames a second a screen hands one camera through [`Cameras::ingest`]: twice the
+/// rate a camera's pipeline looks by default. A frame sooner after the last one taken is
+/// dropped ([`DropReason::TooSoon`]).
+pub const MAX_SCREEN_FPS: u32 = 10;
+
 /// Where the live camera surface reads cameras and acts on them (spec 3.7 §8.2): the seam
 /// between the surface and a frame pipeline.
 ///
@@ -202,6 +207,8 @@ struct Feed {
     frozen: VecDeque<(HeldFrame, DateTime<Utc>)>,
     /// Frames dropped at the gate.
     dropped: u64,
+    /// When a screen last handed this camera a frame that was taken.
+    last_ingest: Option<DateTime<Utc>>,
 }
 
 /// What became of a frame offered to the hub.
@@ -230,6 +237,8 @@ pub enum DropReason {
     Frozen,
     /// No source serves a camera of that id, or none takes its frames.
     Unknown,
+    /// A screen sent it within a [`MAX_SCREEN_FPS`] interval of the last frame taken.
+    TooSoon,
 }
 
 /// What the hub tells the surfaces watching a camera.
@@ -409,13 +418,31 @@ impl Cameras {
         self.inner.source.voice_camera()
     }
 
+    /// Whether `camera` takes the frames a screen captures ([`ingest`](Self::ingest)): its
+    /// source has a pipeline's push side for it, as the web home's own camera does.
+    pub fn takes_frames(&self, camera: &str) -> bool {
+        self.inner.source.intake(camera).is_some()
+    }
+
     /// Hands a frame a screen captured for `camera` to the camera's frame pipeline, once it
     /// passes the gate: dropped when the camera is off, stopped, paused by Stop all or unknown,
-    /// or when no pipeline takes its frames. The pipeline offers what it makes of the frame —
-    /// redacted, with what it found — to [`offer`](Self::offer); nothing is held here.
+    /// when it comes within a [`MAX_SCREEN_FPS`] interval of the last frame taken, or when no
+    /// pipeline takes its frames. The pipeline offers what it makes of the frame — redacted,
+    /// with what it found — to [`offer`](Self::offer); nothing is held here.
     pub async fn ingest(&self, camera: &str, bytes: Vec<u8>, at: DateTime<Utc>) -> Offered {
         if let Err(reason) = self.admit(camera).await {
             return Offered::Dropped(reason);
+        }
+        {
+            let gap = chrono::Duration::milliseconds(1_000 / i64::from(MAX_SCREEN_FPS));
+            let mut feeds = self.inner.feeds.write().await;
+            if let Some(feed) = feeds.get_mut(camera) {
+                if feed.last_ingest.is_some_and(|last| at >= last && at - last < gap) {
+                    feed.dropped += 1;
+                    return Offered::Dropped(DropReason::TooSoon);
+                }
+                feed.last_ingest = Some(at);
+            }
         }
         match self.inner.source.intake(camera) {
             Some(intake) if intake.push(bytes, at) => Offered::Forwarded,

@@ -15,9 +15,14 @@
 //! | "Watching for", zones | Each camera's [`WatchCondition`]s, held against every frame here; a zone a person edits becomes the conditions' zone from the next frame |
 //! | "Can't reach the camera" | The source failing, retried with a growing wait or at once from "Try again now" |
 //!
-//! The voice screen's camera is a [`LiveCamera::surface`]: its frames reach the hub through
-//! [`Cameras::ingest`], which drops them while the camera is off, and enter the pipeline through
-//! adk-vision's [`SurfaceCameraSource`].
+//! Switching a stream camera off stops capture at its source: the stream is dropped — a
+//! [`DeviceSource`](adk_vision::stream::DeviceSource)'s ffmpeg exits, an RTSP connection
+//! closes — recorded as `vision.source.stopped`, and on opens it again (`vision.source.started`).
+//!
+//! The web home's own camera is a [`LiveCamera::surface`]: frames the voice screen or the camera
+//! page ("Use this browser's camera") capture reach the hub through [`Cameras::ingest`], which
+//! drops them while the camera is off, and enter the pipeline through adk-vision's
+//! [`SurfaceCameraSource`].
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -26,11 +31,14 @@ use std::time::Duration as StdDuration;
 
 use adk_artifact::ArtifactService;
 use adk_core::ImageEvidence;
-use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditTrail};
+use adk_core::audit_log::{
+    AuditActor, AuditRecordDraft, AuditRecordKind, AuditRecordOutcome, AuditTrail,
+};
 use adk_vision::stream::{
     CameraFeed, EscalationVerdict, FrameBudget, FrameKeeper, FramePrivacy, FrameSource,
     FrameStream, GovernorChange, GovernorHandle, KeepReason, Observation, ObservationSink,
     PrivacyHook, RedactedFrame, SourceEvent, StreamPipeline, SurfaceCameraSource,
+    VISION_SOURCE_STARTED, VISION_SOURCE_STOPPED,
 };
 use adk_vision::{
     BBox, CallOptions, DecodeLimits, DecodedImage, DetectQuery, Frame, FrameMeta, FramePixels,
@@ -41,7 +49,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use futures::StreamExt;
 use serde_json::json;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 use tokio_util::sync::CancellationToken;
 
 use super::facts::{
@@ -61,6 +69,9 @@ const PEOPLE: [&str; 2] = ["person", "face"];
 /// How long a camera waits before trying a lost source again, at first and at most.
 const RETRY_FIRST: StdDuration = StdDuration::from_secs(2);
 const RETRY_MOST: StdDuration = StdDuration::from_secs(30);
+
+/// How long switching a stream camera off waits for its source to close before answering.
+const STOP_WAIT: StdDuration = StdDuration::from_secs(3);
 
 fn vision(error: VisionError) -> SurfaceError {
     SurfaceError::Source(error.into())
@@ -196,14 +207,16 @@ impl LiveCamera {
         Self::with_input(facts, Input::Stream(source), privacy)
     }
 
-    /// The voice screen's camera (spec 3.7 §7.13 `SurfaceCameraSource`): frames the web home
-    /// captures reach it through [`Cameras::ingest`]. It starts off, says it comes "from the
-    /// voice screen", and captures nothing until a person switches it on.
+    /// The web home's own camera (spec 3.7 §7.13 `SurfaceCameraSource`): frames the voice
+    /// screen or the camera page captures reach it through [`Cameras::ingest`] — the camera
+    /// page sends them to `POST /surface/cameras/{camera}/frames` — with no realtime model. It
+    /// starts off, says it comes "from the web home", and takes nothing until a person
+    /// switches it on.
     pub fn surface(facts: CameraFacts, privacy: Arc<dyn PrivacyHook>) -> Self {
         let (source, feed) = SurfaceCameraSource::new(FrameSourceId(facts.id.clone()));
         let facts = match facts.from {
             Some(_) => facts,
-            None => facts.from("from the voice screen"),
+            None => facts.from("from the web home"),
         }
         .switched(false);
         Self::with_input(facts, Input::Screen { source: Arc::new(source), feed }, privacy)
@@ -322,7 +335,10 @@ struct Run {
     sampling: Option<Sampling>,
     watches: Vec<LiveWatch>,
     escalation: Option<(String, u64)>,
-    on: AtomicBool,
+    /// The camera's switch: a stream camera's source captures only while it is on.
+    switch: watch::Sender<bool>,
+    /// Whether the camera's source holds an open stream: a device captures, a connection reads.
+    capturing: watch::Sender<bool>,
     stopped: AtomicBool,
     arrived: AtomicU64,
     dropped: AtomicU64,
@@ -336,6 +352,10 @@ struct Run {
 impl Run {
     fn lock(&self) -> std::sync::MutexGuard<'_, RunState> {
         self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn is_on(&self) -> bool {
+        *self.switch.borrow()
     }
 
     fn feed(&self) -> Option<&CameraFeed> {
@@ -376,7 +396,7 @@ impl Run {
         };
         facts.governor = self.governor_facts(&state, now);
         facts.tracks = match facts.state {
-            StreamState::Live if self.on.load(Ordering::SeqCst) => state.tracks.clone(),
+            StreamState::Live if self.is_on() => state.tracks.clone(),
             StreamState::Live | StreamState::Paused { .. } | StreamState::Lost { .. } => Vec::new(),
         };
         let today = now.date_naive();
@@ -624,7 +644,8 @@ impl PipelineCamerasBuilder {
             let zones = camera.facts.zones.clone();
             let mut run = Run {
                 id: FrameSourceId(camera.facts.id.clone()),
-                on: AtomicBool::new(camera.facts.on),
+                switch: watch::Sender::new(camera.facts.on),
+                capturing: watch::Sender::new(false),
                 base: camera.facts,
                 input: camera.input,
                 privacy: camera.privacy,
@@ -665,7 +686,7 @@ impl PipelineCamerasBuilder {
             state.evaluator = WatchEvaluator::new(conditions).map_err(vision)?;
             state.zones = zones;
             if let Some(feed) = run.feed() {
-                feed.switch(run.on.load(Ordering::SeqCst));
+                feed.switch(run.is_on());
             }
             runs.push(Arc::new(run));
         }
@@ -718,6 +739,12 @@ impl PipelineCameras {
             observed: run.observed.load(Ordering::SeqCst),
             fired: run.fired.load(Ordering::SeqCst),
         })
+    }
+
+    /// Whether camera `camera`'s source holds an open stream now: a device capturing, a
+    /// connection reading. A stream camera switched off holds none.
+    pub fn is_capturing(&self, camera: &str) -> Option<bool> {
+        Some(*self.run(camera).ok()?.capturing.borrow())
     }
 
     /// Camera `camera`'s frame governor, once its pipeline runs.
@@ -775,17 +802,31 @@ impl CameraSource for PipelineCameras {
         Ok(self.runs.iter().map(|run| run.facts(now)).collect())
     }
 
+    /// Off stops a stream camera's capture at its source: its stream is dropped — a
+    /// [`DeviceSource`](adk_vision::stream::DeviceSource)'s ffmpeg exits, a connection closes —
+    /// and nothing opens it until the camera is on again; the answer comes once the stream is
+    /// closed, or after [`STOP_WAIT`] whatever the source does. On opens it again. The hub's
+    /// gate and the pipeline's own check still drop any frame on its way.
     async fn switch(&self, camera: &str, on: bool) -> Result<()> {
         let run = self.run(camera)?;
-        run.on.store(on, Ordering::SeqCst);
+        run.switch.send_replace(on);
         if let Some(feed) = run.feed() {
             feed.switch(on);
         }
         if !on {
-            let mut state = run.lock();
-            state.tracks.clear();
-            state.centres.clear();
-            state.streaks.clear();
+            {
+                let mut state = run.lock();
+                state.tracks.clear();
+                state.centres.clear();
+                state.streaks.clear();
+            }
+            if run.feed().is_none() {
+                let mut capturing = run.capturing.subscribe();
+                if tokio::time::timeout(STOP_WAIT, capturing.wait_for(|open| !*open)).await.is_err()
+                {
+                    tracing::warn!(camera.id = %camera, "the camera's source did not close in time; its frames are still dropped");
+                }
+            }
         }
         Ok(())
     }
@@ -793,7 +834,7 @@ impl CameraSource for PipelineCameras {
     async fn stop(&self, camera: &str) -> Result<()> {
         let run = self.run(camera)?;
         run.stopped.store(true, Ordering::SeqCst);
-        run.on.store(false, Ordering::SeqCst);
+        run.switch.send_replace(false);
         if let Some(feed) = run.feed() {
             feed.switch(false);
         }
@@ -1045,6 +1086,7 @@ async fn drive(run: Arc<Run>, shared: Arc<Shared>, hub: WeakCameras) {
     };
     let watched: Arc<dyn FrameSource> = Arc::new(Watched {
         id: run.id.clone(),
+        stops: matches!(run.input, Input::Stream(_)),
         inner: source,
         run: Arc::clone(&run),
         shared: Arc::clone(&shared),
@@ -1144,12 +1186,28 @@ async fn lost(run: &Run, hub: &WeakCameras, error: &str) -> StdDuration {
     wait
 }
 
+/// The `vision.source.stopped` or `.started` record of a person's switch closing or opening a
+/// camera's source (spec 3.7 §9.3); the person's own act is `surface.camera.switch`.
+fn switch_draft(action: &str, source: &FrameSourceId, reason: &str) -> AuditRecordDraft {
+    AuditRecordDraft::new(
+        AuditRecordKind::Other(adk_vision::audit::VISION_AUDIT_KIND.to_string()),
+        action,
+    )
+    .outcome(AuditRecordOutcome::Succeeded)
+    .ext("source", json!(source.0))
+    .ext("reason", json!(reason))
+}
+
 /// A camera's source as its pipeline reads it: reopened with a growing wait when it fails or
-/// ends, so the pipeline — and its governor's count — outlives a lost connection; frames
-/// dropped while the camera is off or Stop all is in force, before anything looks at them; and
-/// numbered on across reconnections, so watch conditions keep counting.
+/// ends, so the pipeline — and its governor's count — outlives a lost connection; closed while
+/// a stream camera is off and opened again when it is on; frames dropped while the camera is
+/// off or Stop all is in force, before anything looks at them; and numbered on across
+/// reconnections, so watch conditions keep counting.
 struct Watched {
     id: FrameSourceId,
+    /// Off closes the source: a stream camera's. The voice screen's camera captures in the
+    /// browser, which stops its own track; its source only queues what the browser sends.
+    stops: bool,
     inner: Arc<dyn FrameSource>,
     run: Arc<Run>,
     shared: Arc<Shared>,
@@ -1158,6 +1216,10 @@ struct Watched {
 
 struct Reading {
     inner: Arc<dyn FrameSource>,
+    stops: bool,
+    switch: watch::Receiver<bool>,
+    /// The switch closed the source; opening it again is recorded.
+    switched_off: bool,
     sampling: Sampling,
     current: Option<FrameStream>,
     next_index: u64,
@@ -1178,6 +1240,9 @@ impl FrameSource for Watched {
         adk_vision::stream::Sampler::new(sampling)?;
         let reading = Reading {
             inner: Arc::clone(&self.inner),
+            stops: self.stops,
+            switch: self.run.switch.subscribe(),
+            switched_off: false,
             sampling,
             current: None,
             next_index: 0,
@@ -1189,11 +1254,27 @@ impl FrameSource for Watched {
         };
         let frames = futures::stream::unfold(reading, |mut reading| async move {
             loop {
+                // Off stops capture at the source: the stream is dropped, and with it any
+                // process or connection it holds, until the camera is on again.
+                if reading.stops && !*reading.switch.borrow_and_update() {
+                    reading.close(true).await;
+                    tokio::select! {
+                        () = reading.run.cancel.cancelled() => return None,
+                        changed = reading.switch.wait_for(|on| *on) => {
+                            if changed.is_err() {
+                                return None;
+                            }
+                        }
+                    }
+                    continue;
+                }
                 if reading.current.is_none() {
                     match reading.inner.frames(reading.sampling).await {
                         Ok(stream) => {
                             reading.current = Some(stream);
                             reading.pts_base = reading.last_pts;
+                            reading.run.capturing.send_replace(true);
+                            reading.opened().await;
                         }
                         Err(error) => {
                             wait_after(&reading.run, &reading.hub, &error.to_string()).await;
@@ -1202,6 +1283,11 @@ impl FrameSource for Watched {
                     }
                 }
                 let next = match reading.current.as_mut() {
+                    Some(stream) if reading.stops => tokio::select! {
+                        next = stream.next() => next,
+                        // Switched off while waiting for a frame: closed at the top.
+                        _ = reading.switch.wait_for(|on| !*on) => continue,
+                    },
                     Some(stream) => stream.next().await,
                     None => continue,
                 };
@@ -1209,9 +1295,7 @@ impl FrameSource for Watched {
                     Some(Ok(mut frame)) => {
                         reading.arrived(frame.captured_at);
                         reading.run.arrived.fetch_add(1, Ordering::SeqCst);
-                        if !reading.run.on.load(Ordering::SeqCst)
-                            || reading.shared.frozen.load(Ordering::SeqCst)
-                        {
+                        if !reading.run.is_on() || reading.shared.frozen.load(Ordering::SeqCst) {
                             reading.run.dropped.fetch_add(1, Ordering::SeqCst);
                             continue;
                         }
@@ -1222,11 +1306,11 @@ impl FrameSource for Watched {
                         return Some((Ok(frame), reading));
                     }
                     Some(Err(error)) => {
-                        reading.current = None;
+                        reading.close(false).await;
                         wait_after(&reading.run, &reading.hub, &error.to_string()).await;
                     }
                     None => {
-                        reading.current = None;
+                        reading.close(false).await;
                         wait_after(&reading.run, &reading.hub, "the camera's stream ended").await;
                     }
                 }
@@ -1236,7 +1320,38 @@ impl FrameSource for Watched {
     }
 }
 
+impl Drop for Reading {
+    fn drop(&mut self) {
+        self.run.capturing.send_replace(false);
+    }
+}
+
 impl Reading {
+    /// Drops the source's stream, if one is open; `switched`, because the camera was switched
+    /// off, which is recorded as `vision.source.stopped`.
+    async fn close(&mut self, switched: bool) {
+        let Some(stream) = self.current.take() else { return };
+        drop(stream);
+        self.run.capturing.send_replace(false);
+        if switched {
+            self.switched_off = true;
+            tracing::info!(camera.id = %self.run.base.id, "camera switched off: its source stopped capturing");
+            self.shared
+                .audit(switch_draft(VISION_SOURCE_STOPPED, &self.run.id, "switchedOff"))
+                .await;
+        }
+    }
+
+    /// The source opened: after a switch off, that is recorded as `vision.source.started`.
+    async fn opened(&mut self) {
+        if std::mem::take(&mut self.switched_off) {
+            tracing::info!(camera.id = %self.run.base.id, "camera switched on: its source captures again");
+            self.shared
+                .audit(switch_draft(VISION_SOURCE_STARTED, &self.run.id, "switchedOn"))
+                .await;
+        }
+    }
+
     /// A frame arrived: the camera is live again.
     fn arrived(&self, at: DateTime<Utc>) {
         let was_lost = {

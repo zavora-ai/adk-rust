@@ -6,6 +6,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Camera } from "../src/camera/Camera";
+import type { CameraCapture } from "../src/camera/capture";
 import type { CameraClient } from "../src/camera/client";
 import { PhoneCamera } from "../src/camera/PhoneCamera";
 import { cameraOf, cameraPath } from "../src/camera/route";
@@ -211,6 +212,86 @@ describe("the live camera surface", () => {
     expect(camera.switchTo).toHaveBeenCalledWith("this-computer", true);
     await userEvent.click(screen.getAllByText("Packing bench")[0].closest("button")!);
     expect(onNavigate).toHaveBeenCalledWith({ camera: "packing-bench" });
+  });
+});
+
+describe("this browser's camera", () => {
+  /** A camera that takes this browser's frames, its switch as the server keeps it. */
+  function browserCamera(dropped?: "off") {
+    let current: CameraView = { ...views.switchedOff, actions: { ...views.switchedOff.actions, sendFrames: true } };
+    const camera = client(current);
+    camera.camera = vi.fn(async () => current);
+    camera.switchTo = vi.fn(async (_id: string, on: boolean) => {
+      current = on
+        ? { ...views.live, actions: { ...views.live.actions, sendFrames: true } }
+        : { ...views.switchedOff, actions: { ...views.switchedOff.actions, sendFrames: true } };
+      return current;
+    });
+    camera.sendFrame = vi.fn(async () => (dropped ? { taken: false, dropped } : { taken: true }));
+    const track = { stop: vi.fn() };
+    const stream = { getTracks: () => [track] } as unknown as MediaStream;
+    const grabbed: { jpeg?: (frame: Blob) => void; stop: ReturnType<typeof vi.fn<() => void>> } = { stop: vi.fn<() => void>() };
+    const capture = {
+      open: vi.fn(async () => stream),
+      frames: vi.fn((_stream: MediaStream, _every: number, jpeg: (frame: Blob) => void) => {
+        grabbed.jpeg = jpeg;
+        return grabbed.stop;
+      }),
+    };
+    return { camera, capture, track, grabbed };
+  }
+
+  function openWith(camera: CameraClient, capture: CameraCapture) {
+    render(
+      <ImageLoaderContext.Provider value={loader}>
+        <Camera
+          client={camera}
+          place={{ camera: "line-2" }}
+          onNavigate={vi.fn()}
+          onOpenThread={vi.fn()}
+          onOpenDecision={vi.fn()}
+          onMemory={vi.fn()}
+          capture={capture}
+        />
+      </ImageLoaderContext.Provider>,
+    );
+  }
+
+  it("switches the camera on, sends its frames, and off stops the browser's camera first", async () => {
+    const { camera, capture, track, grabbed } = browserCamera();
+    openWith(camera, capture);
+    await userEvent.click(await screen.findByRole("button", { name: "Use this browser's camera" }));
+    expect(camera.switchTo).toHaveBeenCalledWith("line-2", true);
+    expect(capture.open).toHaveBeenCalled();
+    expect(capture.frames.mock.calls[0][1]).toBe(200);
+    expect(await screen.findByText("This browser's camera is sending frames. Off, or leaving this page, stops it.")).toBeTruthy();
+    const frame = new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: "image/jpeg" });
+    grabbed.jpeg!(frame);
+    await waitFor(() => expect(camera.sendFrame).toHaveBeenCalledWith("line-2", frame));
+
+    await userEvent.click(screen.getByRole("button", { name: "Off" }));
+    expect(track.stop).toHaveBeenCalled();
+    expect(grabbed.stop).toHaveBeenCalled();
+    expect(camera.switchTo).toHaveBeenLastCalledWith("line-2", false);
+    expect(await screen.findByRole("button", { name: "Use this browser's camera" })).toBeTruthy();
+    // A frame grabbed after the stop is never sent.
+    grabbed.jpeg!(frame);
+    expect(camera.sendFrame).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops capturing when the server says the camera is off", async () => {
+    const { camera, capture, track, grabbed } = browserCamera("off");
+    openWith(camera, capture);
+    await userEvent.click(await screen.findByRole("button", { name: "Use this browser's camera" }));
+    grabbed.jpeg!(new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: "image/jpeg" }));
+    await waitFor(() => expect(track.stop).toHaveBeenCalled());
+    expect(grabbed.stop).toHaveBeenCalled();
+  });
+
+  it("is offered only for a camera that takes this browser's frames", async () => {
+    open(views.live);
+    await screen.findByText("Live · 10:41:09");
+    expect(screen.queryByRole("button", { name: "Use this browser's camera" })).toBeNull();
   });
 });
 
