@@ -6,6 +6,8 @@ mod changeset;
 pub mod matcher;
 mod prompt;
 mod rule;
+#[cfg(feature = "computer-use")]
+mod screen_plan;
 mod store;
 
 pub use changeset::{
@@ -13,6 +15,10 @@ pub use changeset::{
     ChangeSetPrompt, RenderedChangeSet,
 };
 pub(crate) use prompt::rule_audit_fields;
+#[cfg(feature = "computer-use")]
+pub use screen_plan::{
+    RenderedScreenPlan, SCREEN_PLAN_MAX_BYTES, ScreenPlanAnswer, ScreenPlanPrompt,
+};
 pub use prompt::{
     ApprovalPrompt, ApprovalPrompter, DEFAULT_PROMPTS_PER_TURN, PromptAnswer,
     PromptingConfirmationHandler, RENDERED_CALL_MAX_BYTES, RenderedCall, RuleHit, escape_control,
