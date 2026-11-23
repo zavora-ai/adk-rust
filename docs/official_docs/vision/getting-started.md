@@ -136,9 +136,11 @@ provider receives nothing. It needs no key and no model download.
 
 ## The Scenarios Behind It
 
-`examples/vision` (package `vision-scenarios`) runs spec 3.7's scenarios S1–S8 on forty
-generated pages with invented data: PP-OCRv6 and RF-DETR on the device, NVIDIA NIM, Claude,
-Gemini and Meta `sam-3.1` on recorded responses through their real clients.
+`examples/vision` (package `vision-scenarios`) runs spec 3.7's scenarios S1–S13. S1–S8, the
+Document desk, run on forty generated pages with invented data: PP-OCRv6 and RF-DETR on the
+device, NVIDIA NIM, Claude, Gemini and Meta `sam-3.1` on recorded responses through their real
+clients. S9–S13 — the Inspector on a conveyor stream, visual wakes, frame budgets, the live
+camera surface and native video — are in [The vision scenarios](scenarios.md).
 
 ```bash
 cargo run --manifest-path examples/vision/Cargo.toml
@@ -158,6 +160,7 @@ cargo run --manifest-path examples/vision/Cargo.toml -- s3_redact_before_it_leav
 
 ## Related
 
+- [The vision scenarios](scenarios.md)
 - [Vision overview](index.md)
 - [The `adk-rust vision` CLI](cli.md)
 - [Local ONNX backends](onnx.md)

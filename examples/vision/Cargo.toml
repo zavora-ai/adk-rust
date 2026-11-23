@@ -3,28 +3,39 @@ name = "vision-scenarios"
 version = "0.0.1"
 edition = "2024"
 publish = false
-description = "Spec 3.7 scenarios S1–S8, S18 and S19 for adk-vision: the Document desk on local backends, cloud backends on recorded responses, egress, approvals, frames, weights, budgets, face blur on streams and the on-device profile"
+description = "Spec 3.7 scenarios S1–S13, S18 and S19 for adk-vision: the Document desk on local backends, cloud backends on recorded responses, egress, approvals, frames, weights and budgets; the Inspector on a conveyor stream, visual wakes, frame budgets, the live camera surface and native video; face blur on streams and the on-device profile"
 
 [workspace]
 
 [dependencies]
+# S12's Inspector: an LlmAgent whose line stop waits for the person.
+adk-agent = { path = "../../adk-agent" }
 adk-artifact = { path = "../../adk-artifact" }
 adk-core = { path = "../../adk-core" }
-# The vision pack: governed vision tools, egress rules and the privacy guardrail (spec 3.7 X15).
-adk-harness = { path = "../../adk-harness", features = ["vision"] }
+# The vision pack: governed vision tools, egress rules and the privacy guardrail (spec 3.7 X15);
+# `vision-fixtures` adds the kernel that hosts S10's sleeping Inspector.
+adk-harness = { path = "../../adk-harness", features = ["vision", "vision-fixtures"] }
+# S10: the kernel's `VisionWakeSource`, which wakes a sleeping process on a watch event.
+adk-kernel = { path = "../../adk-kernel", features = ["vision"] }
 # ScriptedLlm plans the tool calls; the Anthropic and Gemini clients replay recorded answers.
 adk-model = { path = "../../adk-model", default-features = false, features = ["anthropic", "gemini", "muse"] }
 adk-runner = { path = "../../adk-runner" }
+# S10: the kernel's durable worker settings.
+adk-server = { path = "../../adk-server", features = ["background"] }
 adk-session = { path = "../../adk-session" }
-# PP-OCRv6, RF-DETR and YuNet run on the device, fetched by revision and SHA-256; the cloud
-# backends are the real clients against a local server; S18 streams drawn passers-by.
-adk-vision = { path = "../../adk-vision", features = ["fetch", "conformance", "guardrail", "onnx", "ocr", "cloud", "nim", "sam", "stream", "stream-fixtures"] }
 # S19 runs S1 again inside the operating system's sandbox, the network denied.
 adk-sandbox = { path = "../../adk-sandbox", features = ["sandbox-native", "egress-proxy"] }
+# S12: the live camera surface on the frame pipeline, driven without a browser.
+adk-surface = { path = "../../adk-surface", features = ["vision-camera"] }
+# PP-OCRv6, RF-DETR, SAM 2.1 and YuNet run on the device, fetched by revision and SHA-256; the
+# cloud backends are the real clients against a local server. Phase B adds the conveyor clip
+# over the in-process RTSP server, the stream pipeline, Gemini native video, and S13's clip read
+# through a user-installed ffmpeg when there is one; S18 streams drawn passers-by.
+adk-vision = { path = "../../adk-vision", features = ["fetch", "conformance", "guardrail", "onnx", "ocr", "cloud", "nim", "sam", "stream", "rtsp", "ffmpeg", "stream-fixtures", "gemini-video"] }
 anyhow = "1.0"
 async-trait = "0.1"
 base64 = "0.22"
-# S18's frames carry their capture time.
+# Frames carry their capture time (S11, S13, S18).
 chrono = "0.4"
 futures = "0.3"
 jsonschema = { version = "0.47", default-features = false }

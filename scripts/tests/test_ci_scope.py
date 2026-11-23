@@ -112,7 +112,11 @@ class CiScopeTests(unittest.TestCase):
         self.assertEqual(jobs("adk-core/src/lib.rs"), SCOPED_JOBS)
 
     def test_a_surface_change_skips_the_jobs_that_do_not_build_it(self) -> None:
-        self.assertEqual(jobs("adk-surface/src/lib.rs"), ["templates", "windows", "surface-e2e"])
+        # examples/vision drives the live camera surface (spec 3.7 S12).
+        self.assertEqual(
+            jobs("adk-surface/src/lib.rs"),
+            ["templates", "vision-scenarios", "windows", "surface-e2e"],
+        )
 
     def test_an_example_change_runs_only_that_examples_scenarios(self) -> None:
         self.assertEqual(jobs("examples/website/src/main.rs"), ["website-scenarios"])
@@ -123,7 +127,7 @@ class CiScopeTests(unittest.TestCase):
     def test_an_example_runs_when_a_crate_it_names_by_path_changes(self) -> None:
         self.assertEqual(
             jobs("adk-website/src/lib.rs"),
-            ["templates", "website-scenarios", "windows", "surface-e2e"],
+            ["templates", "website-scenarios", "vision-scenarios", "windows", "surface-e2e"],
         )
 
     def test_every_scoped_job_has_a_row_and_a_workflow_condition(self) -> None:

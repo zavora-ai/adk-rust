@@ -1,0 +1,14 @@
+{
+  "aisle-forklift-20min.mp4": {
+    "durationMs": 1200000,
+    "frames": 6000,
+    "fps": 5,
+    "width": 640,
+    "height": 360,
+    "question": "When does the forklift enter the aisle?",
+    "event": "the orange forklift crosses the yellow entrance line (x = 200) into aisle 3; its forks cross at 12:45.0 and the whole forklift is inside at 12:50.0",
+    "startMs": 765000,
+    "toleranceMs": 5000,
+    "sprite": { "y": 135, "hiddenUntilS": 760, "fromX": -200, "pxPerS": 40 }
+  }
+}

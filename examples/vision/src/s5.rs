@@ -180,7 +180,7 @@ impl Rng {
 /// Random chains of crops, resizes, pads and rotations: a box mapped to the target and back
 /// lands within 0.5 px of where it started.
 fn round_trips(cases: usize) -> Result<(usize, f32)> {
-    let mut rng = Rng(0x5eed_0f_5c7_u64);
+    let mut rng = Rng(0x0005_eed0_f5c7_u64);
     let mut worst = 0f32;
     for _ in 0..cases {
         let (w, h) = (16 + rng.next() % 4000, 16 + rng.next() % 4000);

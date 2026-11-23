@@ -380,7 +380,7 @@ pub async fn s1(shared: &Shared) -> Result<Checks> {
     let attempted: BTreeSet<Digest> = run
         .calls
         .iter()
-        .filter(|c| c.ext.get("escalation").is_some())
+        .filter(|c| c.ext.contains_key("escalation"))
         .filter_map(|c| c.ext["imageDigests"][0].as_str()?.parse().ok())
         .collect();
     let local_pages: Vec<&(Page, Digest)> =
@@ -478,7 +478,7 @@ pub async fn s2(shared: &Shared) -> Result<Checks> {
                 a.ext["sourceDigest"] == json!(r.source)
                     && a.ext["egressDigest"] == json!(r.egress)
                     && a.ext["destination"] == json!([NIM_HOST])
-                    && a.ext.get("redactions").is_some()
+                    && a.ext.contains_key("redactions")
             })
     });
     checks.check(
