@@ -11,7 +11,10 @@
 //! window (`MarkSet`); the copilot's coordinates, in the pixels of the screenshot fitted to
 //! Claude's limits (`FittedActuator`), are grounded on those candidates and mapped through
 //! `ScreenSpace` into `TargetEvidence`; each window's previewed steps form a `ScreenPlan`, and
-//! every step is checked against it on a fresh screenshot before it runs; after every action
+//! every step is checked against it on a fresh screenshot before it runs. A step previewed
+//! again — as the reference graph does before it executes one — is grounded again on a fresh
+//! screenshot, so the harness can check the fresh target against the one its screen plan
+//! showed (spec 3.7 Q8); after every action
 //! a fresh screenshot goes to the verifier (`check_change`), which compares regions with the
 //! change the action declared.
 
@@ -28,7 +31,9 @@ use adk_core::{
     ActuationOutput, AdkError, ComputerAction, ComputerActionKind, ComputerActuator, MouseButton,
     ScreenPoint, Screenshot,
 };
-use adk_vision::screen::{CandidateSource, FittedActuator, GroundedTarget, MarkSet, ScreenPlan};
+use adk_vision::screen::{
+    CandidateSource, FittedActuator, GroundedTarget, MarkSet, PreviewedTarget, ScreenPlan,
+};
 use adk_vision::{
     BBox, DecodeLimits, DecodedImage, Digest, DocumentReader, ExpectedChange, ReadOptions, Region,
     RegionExpectation, RegionSet, ScreenSpace, SourceImage, VerificationReport, VisionCx,
@@ -435,6 +440,9 @@ pub enum ScreenEvent {
 
 struct Kept {
     preview: ActionPreview,
+    /// The target the step was previewed against, grounded again at each later preview.
+    target: Option<PreviewedTarget>,
+    app: String,
     step: String,
     window: String,
     plan: (Digest, String),
@@ -642,8 +650,27 @@ impl ComputerUseRuntime for ScreenRuntime {
 
     async fn preview_action(&self, action: Value) -> Result<ActionPreview, ComputerUseError> {
         let args_digest = Digest::of_json(&action).to_string();
-        if let Some(kept) = lock(&self.state).kept.get(&args_digest) {
-            return Ok(kept.preview.clone());
+        let again = lock(&self.state).kept.get(&args_digest).map(|kept| {
+            (kept.preview.clone(), kept.target.clone(), kept.window.clone(), kept.app.clone())
+        });
+        if let Some((mut preview, target, window, app)) = again {
+            // The same step previewed again: its target grounded on a fresh screenshot, or
+            // none when nothing with its label covers the previewed point any more.
+            if let Some(shown) = target {
+                let fresh = self.observe().await?;
+                let now = chrono::Utc::now().to_rfc3339();
+                preview.envelope.target = fresh
+                    .marks
+                    .get(&window)
+                    .and_then(|marks| shown.reground(marks).ok())
+                    .map(|mut found| {
+                        // `reground` matched the label ignoring case and spacing; the
+                        // evidence names the label the plan showed.
+                        found.label = shown.label.clone();
+                        found.target_evidence("stand-in", &app, &fresh.screenshot.to_string(), &now)
+                    });
+            }
+            return Ok(preview);
         }
         let field = |name: &str| action.get(name).and_then(Value::as_str).unwrap_or_default();
         let operation = field("operation").to_string();
@@ -777,6 +804,7 @@ impl ComputerUseRuntime for ScreenRuntime {
             capability: Self::capability(&operation),
         };
         let route = if refusal.is_some() { "blocked" } else { "approval" };
+        let shown = target.as_ref().map(PreviewedTarget::from);
         let mut state = lock(&self.state);
         state.events.push(ScreenEvent::Previewed {
             step: step.clone(),
@@ -789,6 +817,8 @@ impl ComputerUseRuntime for ScreenRuntime {
             args_digest,
             Kept {
                 preview: preview.clone(),
+                target: shown,
+                app,
                 step,
                 window,
                 plan: plan_key,

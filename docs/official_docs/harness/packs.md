@@ -132,7 +132,7 @@ API takes.
 | Tool | Declaration | Class | Behaviour |
 |---|---|---|---|
 | `computer_use_observe` | `{}` | `Read` | The runtime's capabilities, a visual frame and a semantic frame, captured together |
-| `computer_use_preview` | `{ action }` | `Read` | Observation, then the runtime's preview of `action`; returns `actionDigest`, `policyDigest`, `route` (`allowed`, `approval`, `blocked`) and a summary of the action; the preview is kept for the session |
+| `computer_use_preview` | `{ action }` or `{ actions }` | `Read` | Observation, then the runtime's preview of `action`; returns `actionDigest`, `policyDigest`, `route` (`allowed`, `approval`, `blocked`) and a summary of the action; the preview is kept for the session. With `actions` (up to 64, in the order they run), previews each one and returns `previews` in that order, each naming its `plan` and `step`, and `plans`: the [screen plans](#screen-plans-one-approval-per-plan) they form |
 | `computer_use_execute` | `{ actionDigest, policyDigest, action }` | `ComputerUse` | `Deny` in `read_only` and `plan`; a non-waivable one-shot approval in `ask` and `auto`. Runs the reference graph; a `request_approval` interrupt whose digests equal the approved arguments is resumed with the harness decision as the runtime-held authority; the graph checks the digests again before its single `execute_action`. Returns `status`, `receiptId`, `verified`, `committed` |
 
 ### Approvals
@@ -150,12 +150,56 @@ echoed `action` with the kept preview and refuses a difference as
 process does not hold, is refused the same way. A standing rule, a `tool_approvals` entry or a hook
 never authorizes a desktop action, and a team member never gets a `computer_use_*` tool.
 
+### Screen plans: one approval per plan
+
+A copilot that fills a form makes a dozen desktop actions, and no standing rule may cover
+`computer_use_execute`. A screen plan lets a person approve up to N previewed actions in one
+window with one answer, as a [change set](modes-and-approvals.md#change-sets) does for edits (spec 3.7 Q8).
+
+1. The model previews the actions together: `computer_use_preview { actions }`. Consecutive
+   actions the runtime holds for approval, in one window, join one plan of at most N actions
+   (`ComputerUsePack::with_plan_max_actions`, 10 by default). The window is the application,
+   window and display of each step's target evidence; a step without a target, such as typing,
+   joins the step before it. A longer run, a change of window, or an action the runtime allows
+   or blocks starts a new plan; a lone step is approved on its own.
+2. The plan's digest is its fingerprint: SHA-256 over the canonical JSON of its window and its
+   steps — each step's action and policy digests, action summary, proposed action and previewed
+   target.
+3. The model runs the steps in order with `computer_use_execute`. At the first step, the
+   prompter shows the plan's card (`ApprovalPrompter::prompt_screen_plan`): the window, then
+   each step's operation, target in points and proposed action, escaped. One answer approves or
+   denies every step; `harness.computer_use.plan_decided` records it.
+4. Each later step whose arguments are exactly the plan's next step is answered from that
+   decision, once. The approval adds `plan: { digest, step }` to the call's arguments, so the
+   call's fingerprint and its execution bind the plan that was shown.
+5. Before each step runs, the reference graph previews it again on a fresh observation, and at
+   its approval interrupt the pack checks the fresh target against the previewed one: same
+   window, same label, and each box covers the other's centre.
+
+A step the plan's approval does not cover is held on its own and needs a fresh approval:
+
+| Case | What happens |
+|---|---|
+| The fresh target moved, changed label, left the window or is gone | The step runs nothing (`harness.computer_use.plan_deviation`), the plan ends, and the step, previewed again, is held for a fresh approval |
+| A step fails, does not verify, or runs without the graph's approval interrupt | The plan ends after it |
+| A step out of order, a step already taken, or arguments that differ from the previewed step | Held on its own; a step asked about before the plan's first one ends the plan |
+| An action of another plan, another window or another target | Held on its own, or shown in its own plan's card |
+| A call whose `plan` names a plan it is not a step of | Refused, `harness.computer_use.plan_deviation`; nothing runs |
+| The same actions previewed again | A new plan instance: its card is shown again |
+| The person denies the plan | Every step is refused with the person's message; the turn's remaining calls are denied |
+
+A prompter that shows one call at a time keeps the default `prompt_screen_plan`, which returns
+`None`: each step is then asked about on its own. A surface without a live prompter parks each
+held step, as it parks any held call. A plan is never a standing rule, a `tool_approvals`
+entry or a hook decision.
+
 ### Audit records
 
 | Record | Fields (`ext`) | When |
 |---|---|---|
-| `harness.computer_use.previewed` | `functionCallId`, `actionDigest`, `policyDigest`, `route`, `actionClass`, `requestedMode` | After each preview |
-| `harness.computer_use.executed` | `functionCallId`, `actionDigest`, `policyDigest`, `receiptId`, `status`, `verified`, `committed`; or `refusal`, `reason` | After the graph ran, or at a refusal |
+| `harness.computer_use.previewed` | `functionCallId`, `actionDigest`, `policyDigest`, `route`, `actionClass`, `requestedMode`; `planDigest`, `step` for a plan's step | After each preview |
+| `harness.computer_use.plan_decided` | `planDigest`, `window`, `steps` (action digests), `functionCallId`, `answer` (`approve`, `deny`) | When a person answers a screen plan's card |
+| `harness.computer_use.executed` | `functionCallId`, `actionDigest`, `policyDigest`, `receiptId`, `status`, `verified`, `committed`, and `planDigest`, `step` for a step run under a plan; or `refusal` (`previewMismatch`, `planDeviation` with `deviation`), `reason` | After the graph ran, or at a refusal |
 
 ### Known limits
 

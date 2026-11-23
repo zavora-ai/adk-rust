@@ -15,10 +15,6 @@ pub use changeset::{
     ChangeSetPrompt, RenderedChangeSet,
 };
 pub(crate) use prompt::rule_audit_fields;
-#[cfg(feature = "computer-use")]
-pub use screen_plan::{
-    RenderedScreenPlan, SCREEN_PLAN_MAX_BYTES, ScreenPlanAnswer, ScreenPlanPrompt,
-};
 pub use prompt::{
     ApprovalPrompt, ApprovalPrompter, DEFAULT_PROMPTS_PER_TURN, PromptAnswer,
     PromptingConfirmationHandler, RENDERED_CALL_MAX_BYTES, RenderedCall, RuleHit, escape_control,
@@ -26,6 +22,10 @@ pub use prompt::{
 pub use rule::{
     ArgSpec, OriginPin, RuleOwner, RulePredicate, RuleScope, RuleSuggestion,
     SHELL_PREFIX_SUGGESTION_DENYLIST, StandingDecision, StandingRule, SuggestedScope,
+};
+#[cfg(feature = "computer-use")]
+pub use screen_plan::{
+    RenderedScreenPlan, SCREEN_PLAN_MAX_BYTES, ScreenPlanAnswer, ScreenPlanPrompt,
 };
 #[cfg(feature = "postgres")]
 pub use store::PostgresStandingRuleStore;

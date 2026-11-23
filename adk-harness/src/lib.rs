@@ -160,7 +160,9 @@ pub use approvals::{
     ChangeSetPrompt, RenderedChangeSet,
 };
 #[cfg(feature = "computer-use")]
-pub use approvals::{RenderedScreenPlan, SCREEN_PLAN_MAX_BYTES, ScreenPlanAnswer, ScreenPlanPrompt};
+pub use approvals::{
+    RenderedScreenPlan, SCREEN_PLAN_MAX_BYTES, ScreenPlanAnswer, ScreenPlanPrompt,
+};
 #[cfg(feature = "observe")]
 pub use builder::LoopGuard;
 pub use builder::{HarnessAgentBuilder, Pack};

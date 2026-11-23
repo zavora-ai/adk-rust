@@ -531,11 +531,10 @@ impl Tool for PreviewTool {
         if let Some(actions) = args.get("actions") {
             return self.preview_plans(ctx.as_ref(), actions).await;
         }
-        let action = args
-            .get("action")
-            .filter(|action| action.is_object())
-            .cloned()
-            .ok_or_else(|| invalid("computer_use_preview needs an action object or `actions`"))?;
+        let action =
+            args.get("action").filter(|action| action.is_object()).cloned().ok_or_else(|| {
+                invalid("computer_use_preview needs an action object or `actions`")
+            })?;
         let observation = self.shared.observe().await?;
         let preview = self
             .shared

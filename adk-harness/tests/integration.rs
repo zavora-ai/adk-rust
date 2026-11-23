@@ -72,6 +72,7 @@ mod remote_shell_tests;
 mod requested_call_tests;
 mod review_board_tests;
 mod rule_hit_tests;
+mod screen_plan_tests;
 mod self_knowledge_tests;
 mod shared_store_postgres_tests;
 mod shared_store_redis_tests;

@@ -201,7 +201,8 @@ impl PreviewedPlan {
             self.digest
         );
         for (i, step) in self.steps.iter().enumerate() {
-            let operation = step.action.get("operation").and_then(Value::as_str).unwrap_or("action");
+            let operation =
+                step.action.get("operation").and_then(Value::as_str).unwrap_or("action");
             out.push_str(&format!("\n{}. {}", i + 1, escape_control(operation)));
             match step.target.as_ref().and_then(|target| target.bounds.as_ref()) {
                 Some(bounds) => {
@@ -258,7 +259,10 @@ pub(super) fn deviation(
             ));
         }
         (Some(_), None) => {
-            return Some(Deviation::new("missing", "the previewed target is no longer on the screen"));
+            return Some(Deviation::new(
+                "missing",
+                "the previewed target is no longer on the screen",
+            ));
         }
         (Some(planned), Some(fresh)) => (planned, fresh),
     };
@@ -287,9 +291,10 @@ pub(super) fn deviation(
                 )
             })
         }
-        (Some(_), None) | (None, Some(_)) => {
-            Some(Deviation::new("wrongTarget", "the target's bounds differ from the previewed ones"))
-        }
+        (Some(_), None) | (None, Some(_)) => Some(Deviation::new(
+            "wrongTarget",
+            "the target's bounds differ from the previewed ones",
+        )),
     }
 }
 
@@ -408,7 +413,11 @@ impl ScreenPlans {
         for step in &plan.steps {
             book.steps.insert((scope.to_string(), step.action_digest.clone()), plan.digest.clone());
         }
-        if book.plans.insert(key.clone(), Record { plan, state: PlanState::Previewed, instance }).is_none() {
+        if book
+            .plans
+            .insert(key.clone(), Record { plan, state: PlanState::Previewed, instance })
+            .is_none()
+        {
             book.order.push_back(key);
         }
         while book.order.len() > PLANS_CAP {
@@ -438,7 +447,13 @@ impl ScreenPlans {
 
     /// Sets the state of the plan `digest`, when it is still the instance a decision was
     /// taken on.
-    pub(crate) fn settle(&self, scope: &str, digest: &str, instance: u64, state: PlanState) -> bool {
+    pub(crate) fn settle(
+        &self,
+        scope: &str,
+        digest: &str,
+        instance: u64,
+        state: PlanState,
+    ) -> bool {
         let mut book = self.book();
         match book.plans.get_mut(&(scope.to_string(), digest.to_string())) {
             Some(record) if record.instance == instance => {
@@ -616,8 +631,15 @@ mod tests {
         assert_eq!(plans.len(), 2);
         assert_eq!(plans[0].steps.len(), 4);
         assert_eq!(plans[1].steps.len(), 2);
-        let expected =
-            [Some((0, 0)), Some((0, 1)), Some((0, 2)), Some((0, 3)), Some((1, 0)), Some((1, 1)), None];
+        let expected = [
+            Some((0, 0)),
+            Some((0, 1)),
+            Some((0, 2)),
+            Some((0, 3)),
+            Some((1, 0)),
+            Some((1, 1)),
+            None,
+        ];
         assert_eq!(at, expected);
 
         // A change of window starts a new plan; a lone step forms none.

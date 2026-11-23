@@ -164,9 +164,7 @@ impl PromptingConfirmationHandler {
         let answered = match &member.state {
             PlanState::Approved { answered, .. } => *answered,
             PlanState::Denied { message } => {
-                return Ok(Some(refuse(
-                    message.clone().unwrap_or_else(|| denied_message(plan)),
-                )));
+                return Ok(Some(refuse(message.clone().unwrap_or_else(|| denied_message(plan)))));
             }
             PlanState::Ended { .. } => return Ok(None),
             PlanState::Previewed if !is_step(0) => {
@@ -176,10 +174,15 @@ impl PromptingConfirmationHandler {
             }
             PlanState::Previewed if *prompts >= self.per_turn_cap => return Ok(None),
             PlanState::Previewed => {
-                let agent = super::RenderedCall::render(request, policy.isolation_status(), 0).agent;
+                let agent =
+                    super::RenderedCall::render(request, policy.isolation_status(), 0).agent;
                 let rendered = RenderedScreenPlan::render(plan, SCREEN_PLAN_MAX_BYTES);
-                let prompt =
-                    ScreenPlanPrompt { plan: plan.clone(), mode, agent, rendered: rendered.clone() };
+                let prompt = ScreenPlanPrompt {
+                    plan: plan.clone(),
+                    mode,
+                    agent,
+                    rendered: rendered.clone(),
+                };
                 let answer = tokio::select! {
                     answer = self.prompter.prompt_screen_plan(prompt) => answer?,
                     error = super::batch::frozen(&context.governance) => {
@@ -193,11 +196,13 @@ impl PromptingConfirmationHandler {
                 };
                 *prompts += 1;
                 let answer = match answer {
-                    ScreenPlanAnswer::Approve if !rendered.can_approve() => ScreenPlanAnswer::Deny {
-                        message: Some(
-                            "the screen plan was approved without showing all of it".into(),
-                        ),
-                    },
+                    ScreenPlanAnswer::Approve if !rendered.can_approve() => {
+                        ScreenPlanAnswer::Deny {
+                            message: Some(
+                                "the screen plan was approved without showing all of it".into(),
+                            ),
+                        }
+                    }
                     answer => answer,
                 };
                 let (state, label) = match &answer {
