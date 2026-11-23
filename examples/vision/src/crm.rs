@@ -61,13 +61,6 @@ pub struct Element {
     pub interactive: bool,
 }
 
-impl Element {
-    pub fn contains(&self, point: [f32; 2]) -> bool {
-        let [x, y, w, h] = self.rect;
-        point[0] >= x && point[0] <= x + w && point[1] >= y && point[1] <= y + h
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Page {
     title: String,
@@ -114,20 +107,32 @@ fn record_page(customer: &Customer) -> Page {
     back.href = Some("/customers".into());
     let mut elements = vec![
         back,
-        element("#name", "heading", "h1", customer.get("Name").unwrap_or_default(), [
-            32.0, 64.0, 600.0, 40.0,
-        ]),
+        element(
+            "#name",
+            "heading",
+            "h1",
+            customer.get("Name").unwrap_or_default(),
+            [32.0, 64.0, 600.0, 40.0],
+        ),
     ];
     for (i, (label, value)) in customer.fields.iter().enumerate() {
         let y = 128.0 + 44.0 * i as f32;
         let n = i + 1;
-        let mut dt = element(&format!("#record dt:nth-of-type({n})"), "term", "dt", label, [
-            32.0, y, 140.0, 28.0,
-        ]);
+        let mut dt = element(
+            &format!("#record dt:nth-of-type({n})"),
+            "term",
+            "dt",
+            label,
+            [32.0, y, 140.0, 28.0],
+        );
         dt.matches = vec!["#record dt".into(), "dt".into()];
-        let mut dd = element(&format!("#record dd:nth-of-type({n})"), "definition", "dd", value, [
-            200.0, y, 600.0, 28.0,
-        ]);
+        let mut dd = element(
+            &format!("#record dd:nth-of-type({n})"),
+            "definition",
+            "dd",
+            value,
+            [200.0, y, 600.0, 28.0],
+        );
         dd.matches = vec!["#record dd".into(), "dd".into()];
         elements.extend([dt, dd]);
     }
@@ -152,9 +157,8 @@ fn html(page: &Page) -> String {
         }
         in_record = record;
         let [x, y, w, h] = e.rect;
-        let style = format!(
-            "position:absolute;margin:0;left:{x}px;top:{y}px;width:{w}px;height:{h}px"
-        );
+        let style =
+            format!("position:absolute;margin:0;left:{x}px;top:{y}px;width:{w}px;height:{h}px");
         let id = e.selector.strip_prefix('#').filter(|s| !s.contains(' '));
         let id = id.map(|id| format!(" id=\"{id}\"")).unwrap_or_default();
         let href = e.href.as_ref().map(|h| format!(" href=\"{}\"", escape(h))).unwrap_or_default();
@@ -193,12 +197,14 @@ impl Crm {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
         let requests = Arc::new(Mutex::new(Vec::new()));
-        let pages: BTreeMap<String, String> = std::iter::once((
-            "/customers".to_string(),
-            html(&list_page(&customers)),
-        ))
-        .chain(customers.iter().map(|c| (format!("/customers/{}", c.id), html(&record_page(c)))))
-        .collect();
+        let pages: BTreeMap<String, String> =
+            std::iter::once(("/customers".to_string(), html(&list_page(&customers))))
+                .chain(
+                    customers
+                        .iter()
+                        .map(|c| (format!("/customers/{}", c.id), html(&record_page(c)))),
+                )
+                .collect();
         let log = requests.clone();
         tokio::spawn(async move {
             while let Ok((mut stream, _)) = listener.accept().await {
@@ -267,7 +273,6 @@ async fn respond(stream: &mut TcpStream, status: &str, kind: &str, body: &str) -
 pub struct Click {
     pub selector: String,
     pub rect: [f32; 4],
-    pub url: String,
 }
 
 #[derive(Default)]
@@ -415,22 +420,21 @@ async fn handle(
     let command = parts.get(2..).map(|rest| rest.join("/")).unwrap_or_default();
     lock(state).log.push(format!("{method} /{command}"));
     match (method, command.as_str()) {
-        ("POST", "") if parts.len() == 1 => (
-            "200 OK",
-            json!({ "sessionId": "s14", "capabilities": { "browserName": "stand-in" } }),
-        ),
+        ("POST", "") if parts.len() == 1 => {
+            ("200 OK", json!({ "sessionId": "s14", "capabilities": { "browserName": "stand-in" } }))
+        }
         ("POST", "url") => {
             let url = body["url"].as_str().unwrap_or("about:blank").to_string();
             load(state, &url).await
         }
         ("GET", "url") => ("200 OK", json!(lock(state).url)),
-        ("GET", "title") => {
-            ("200 OK", json!(lock(state).page.as_ref().map(|p| p.title.clone()).unwrap_or_default()))
-        }
-        ("GET", "window/rect") | ("POST", "window/rect") => (
+        ("GET", "title") => (
             "200 OK",
-            json!({ "x": 0, "y": 0, "width": VIEWPORT.0, "height": VIEWPORT.1 }),
+            json!(lock(state).page.as_ref().map(|p| p.title.clone()).unwrap_or_default()),
         ),
+        ("GET", "window/rect") | ("POST", "window/rect") => {
+            ("200 OK", json!({ "x": 0, "y": 0, "width": VIEWPORT.0, "height": VIEWPORT.1 }))
+        }
         ("GET", "screenshot") => ("200 OK", json!(screenshot(lock(state).page.as_ref()))),
         ("POST", "element") => {
             let selector = body["value"].as_str().unwrap_or_default();
@@ -455,8 +459,7 @@ async fn handle(
                 ("POST", "click") => {
                     let url = {
                         let mut s = lock(state);
-                        let url = s.url.clone();
-                        s.clicks.push(Click { selector: e.selector.clone(), rect: e.rect, url });
+                        s.clicks.push(Click { selector: e.selector.clone(), rect: e.rect });
                         s.url.clone()
                     };
                     match &e.href {

@@ -70,12 +70,6 @@ pub struct Widget {
     pub id: String,
     pub window: String,
     pub kind: String,
-    #[serde(default)]
-    pub label: Option<String>,
-    #[serde(default)]
-    pub placeholder: Option<String>,
-    #[serde(default)]
-    pub text: Option<String>,
     #[serde(rename = "box")]
     pub bbox: [f32; 4],
 }
@@ -195,7 +189,8 @@ impl Desktop {
         let layout = Layout::load()?;
         let read = |name: &str| -> Result<DecodedImage> {
             let path = screen_dir().join(name);
-            let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+            let bytes =
+                std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
             Ok(SourceImage::decode(&bytes, &DecodeLimits::default())?.pixels().clone())
         };
         let base = read("desktop.png")?;
@@ -282,7 +277,13 @@ impl Desktop {
         }
     }
 
-    fn record(&self, state: &mut FormState, kind: &'static str, pixel: Option<[f32; 2]>, text: Option<String>) {
+    fn record(
+        &self,
+        state: &mut FormState,
+        kind: &'static str,
+        pixel: Option<[f32; 2]>,
+        text: Option<String>,
+    ) {
         let (window, widget) = match pixel {
             Some(p) => (
                 self.layout.window_at(p).map(|w| w.title.clone()),
@@ -414,15 +415,11 @@ pub enum ScreenEvent {
     /// A step previewed: its route, and for a pointing step the target it was grounded to.
     Previewed {
         step: String,
-        operation: String,
-        window: Option<String>,
         route: &'static str,
         reason: Option<String>,
         target: Option<Box<GroundedTarget>>,
         /// Whether the target evidence binds the screenshot and states points at its ratio.
         evidence_bound: bool,
-        screenshot: Digest,
-        plan: Option<Digest>,
     },
     /// A step checked against its plan on a fresh screenshot and run, or held.
     Executed {
@@ -433,7 +430,7 @@ pub enum ScreenEvent {
         actions: std::ops::Range<usize>,
     },
     /// The verifier's check after a step.
-    Verified { step: String, action_id: String, report: Box<VerificationReport> },
+    Verified { step: String, report: Box<VerificationReport> },
 }
 
 struct Kept {
@@ -703,7 +700,6 @@ impl ComputerUseRuntime for ScreenRuntime {
             ));
         }
         let plan_key = (screenshot, window.clone());
-        let mut plan_digest = None;
         if refusal.is_none() {
             let mut state = lock(&self.state);
             let plan = state.plans.entry(plan_key.clone()).or_insert_with(|| {
@@ -713,9 +709,10 @@ impl ComputerUseRuntime for ScreenRuntime {
                 });
                 ScreenPlan::new(&marks).with_max_actions(12)
             });
-            match plan.push(step.clone(), operation.clone(), args.clone(), target.as_ref()) {
-                Ok(()) => plan_digest = Some(plan.digest()),
-                Err(refused) => refusal = Some(("plan_refused", refused.to_string())),
+            if let Err(refused) =
+                plan.push(step.clone(), operation.clone(), args.clone(), target.as_ref())
+            {
+                refusal = Some(("plan_refused", refused.to_string()));
             }
         }
 
@@ -783,14 +780,10 @@ impl ComputerUseRuntime for ScreenRuntime {
         let mut state = lock(&self.state);
         state.events.push(ScreenEvent::Previewed {
             step: step.clone(),
-            operation,
-            window: Some(window.clone()),
             route,
             reason: refusal.map(|r| r.1),
             target: target.map(Box::new),
             evidence_bound,
-            screenshot,
-            plan: plan_digest,
         });
         state.kept.insert(
             args_digest,
@@ -854,7 +847,8 @@ impl ComputerUseRuntime for ScreenRuntime {
         };
         let plan = plan.ok_or_else(|| decode_error("the action's plan is gone"))?;
         let layout = &self.desktop.layout;
-        let frame = layout.window(&window).map(Window::frame).unwrap_or(BBox::new(0.0, 0.0, 0.0, 0.0));
+        let frame =
+            layout.window(&window).map(Window::frame).unwrap_or(BBox::new(0.0, 0.0, 0.0, 0.0));
 
         // Grounded again on a fresh screenshot and checked against the previewed step (Q8).
         let fresh = self.observe().await?;
@@ -866,9 +860,12 @@ impl ComputerUseRuntime for ScreenRuntime {
         let checked = plan.check_call(&step, &args, &marks);
         let first = self.desktop.actions().len();
         let (status, error, target, deviation) = match checked {
-            Err(deviation) => {
-                (ReceiptStatus::Rejected, Some(json!(deviation.to_string())), None, Some(deviation.to_string()))
-            }
+            Err(deviation) => (
+                ReceiptStatus::Rejected,
+                Some(json!(deviation.to_string())),
+                None,
+                Some(deviation.to_string()),
+            ),
             Ok(target) => {
                 self.desktop.govern(Some(envelope.action_id.clone()));
                 let acted = match (&target, args.get("text").and_then(Value::as_str)) {
@@ -935,7 +932,12 @@ impl ComputerUseRuntime for ScreenRuntime {
         });
         state.pending.insert(
             receipt.receipt_id.clone(),
-            Pending { step, window: window.clone(), before: fresh.regions_in(frame, layout.size()), expected },
+            Pending {
+                step,
+                window: window.clone(),
+                before: fresh.regions_in(frame, layout.size()),
+                expected,
+            },
         );
         state.receipts.insert(envelope.action_id.clone(), receipt.clone());
         Ok(receipt)
@@ -955,7 +957,10 @@ impl ComputerUseRuntime for ScreenRuntime {
             .remove(&receipt.receipt_id)
             .ok_or_else(|| decode_error("nothing to verify for this receipt"))?;
         let layout = &self.desktop.layout;
-        let frame = layout.window(&pending.window).map(Window::frame).unwrap_or(BBox::new(0.0, 0.0, 0.0, 0.0));
+        let frame = layout
+            .window(&pending.window)
+            .map(Window::frame)
+            .unwrap_or(BBox::new(0.0, 0.0, 0.0, 0.0));
         let after = self.observe().await?.regions_in(frame, layout.size());
         let report = check_change(&pending.before, &after, &pending.expected);
         let outcome = if report.passed {
@@ -969,11 +974,9 @@ impl ComputerUseRuntime for ScreenRuntime {
             }
             VerificationOutcome::Failed { reason }
         };
-        lock(&self.state).events.push(ScreenEvent::Verified {
-            step: pending.step,
-            action_id: receipt.action_id.clone(),
-            report: Box::new(report),
-        });
+        lock(&self.state)
+            .events
+            .push(ScreenEvent::Verified { step: pending.step, report: Box::new(report) });
         Ok(outcome)
     }
 }

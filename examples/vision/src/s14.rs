@@ -23,16 +23,13 @@ use adk_browser::{BrowserConfig, BrowserSession};
 use adk_computer_use::ScopeAuthorizer;
 use adk_core::audit_log::{AuditRecordDraft, InMemoryAuditRecorder};
 use adk_core::{
-    Content, FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part, SessionId,
-    UserId,
+    Content, FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part, SessionId, UserId,
 };
 use adk_harness::packs::browser::{BROWSER_AUDIT_ACTED, BROWSER_AUDIT_NAVIGATED, BrowserPack};
 use adk_harness::packs::computer_use::{
     COMPUTER_USE_AUDIT_EXECUTED, COMPUTER_USE_EXECUTE, ComputerUsePack,
 };
-use adk_harness::{
-    Harness, HarnessAgent, HarnessMode, InstructionsConfig, WebConfig, Workspace,
-};
+use adk_harness::{Harness, HarnessAgent, HarnessMode, InstructionsConfig, WebConfig, Workspace};
 use adk_vision::screen::{BrowserElements, GroundedTarget, MarkSet, ScreenshotScale};
 use adk_vision::{BBox, DecodeLimits, Digest, ScreenSpace, SourceImage};
 use anyhow::{Context, Result};
@@ -61,8 +58,8 @@ fn customers(record: &BTreeMap<String, String>) -> Vec<Customer> {
             (label.to_string(), value)
         })
         .collect();
-    let other = |id: &str, name: &str, email: &str, phone: &str, company: &str, account: &str| {
-        Customer {
+    let other =
+        |id: &str, name: &str, email: &str, phone: &str, company: &str, account: &str| Customer {
             id: id.into(),
             fields: [
                 ("Name", name),
@@ -74,8 +71,7 @@ fn customers(record: &BTreeMap<String, String>) -> Vec<Customer> {
             .iter()
             .map(|(l, v)| (l.to_string(), v.to_string()))
             .collect(),
-        }
-    };
+        };
     vec![
         Customer { id: CUSTOMER.into(), fields: first },
         other(
@@ -279,9 +275,8 @@ impl Copilot {
     /// After the verifier failed the first Save: the other "Save" on a fresh observation.
     fn reground_save(plan: &mut Plan, visual: &Value) -> Option<()> {
         let tried = plan.failed_save?;
-        let (_, save) = marks_of(visual, FORM)
-            .into_iter()
-            .find(|(l, b)| l == "Save" && !b.contains(tried))?;
+        let (_, save) =
+            marks_of(visual, FORM).into_iter().find(|(l, b)| l == "Save" && !b.contains(tried))?;
         plan.steps.push(Step {
             action: json!({
                 "tool": "computer",
@@ -306,11 +301,9 @@ impl Copilot {
             plan.next = i;
             return self.call(plan, "computer_use_preview", json!({ "action": action }));
         }
-        if let Some(i) = plan
-            .steps
-            .iter()
-            .position(|s| s.result.is_none() && s.preview.as_ref().is_some_and(|p| p["route"] == "approval"))
-        {
+        if let Some(i) = plan.steps.iter().position(|s| {
+            s.result.is_none() && s.preview.as_ref().is_some_and(|p| p["route"] == "approval")
+        }) {
             let preview = plan.steps[i].preview.clone().unwrap_or_default();
             plan.next = i;
             return self.call(
@@ -397,9 +390,8 @@ impl Llm for Copilot {
                 json!({ "selector": "#record dt", "all": true }),
             ),
             "browser_extract_text" if plan.labels.is_empty() => {
-                plan.labels = untrusted_json(&answer)
-                    .map(|v| strings(&v["texts"]))
-                    .unwrap_or_default();
+                plan.labels =
+                    untrusted_json(&answer).map(|v| strings(&v["texts"])).unwrap_or_default();
                 self.call(
                     plan,
                     "browser_extract_text",
@@ -407,9 +399,8 @@ impl Llm for Copilot {
                 )
             }
             "browser_extract_text" => {
-                let values = untrusted_json(&answer)
-                    .map(|v| strings(&v["texts"]))
-                    .unwrap_or_default();
+                let values =
+                    untrusted_json(&answer).map(|v| strings(&v["texts"])).unwrap_or_default();
                 plan.record = plan.labels.iter().cloned().zip(values).collect();
                 self.call(plan, "computer_use_observe", json!({}))
             }
@@ -515,7 +506,10 @@ pub async fn run() -> Result<Checks> {
         Arc::new(adk_session::InMemorySessionService::new());
     let runner = agent
         .configure_runner(
-            adk_runner::Runner::builder().app_name(APP).agent(agent.clone()).session_service(sessions),
+            adk_runner::Runner::builder()
+                .app_name(APP)
+                .agent(agent.clone())
+                .session_service(sessions),
         )
         .audit_log(Arc::new(audit.clone()))
         .build()?;
@@ -558,11 +552,11 @@ pub async fn run() -> Result<Checks> {
         && link.browser_click_args() == Some(json!({ "selector": clicks[0].selector }))
         && {
             let [x, y, w, h] = clicks[0].rect;
-            link.points.contains(link.click)
-                && BBox::from_xywh(x, y, w, h).contains(link.click)
+            link.points.contains(link.click) && BBox::from_xywh(x, y, w, h).contains(link.click)
         };
     let mut desktop_clicks = 0;
     let mut inside = 0;
+    let mut hit = Vec::new();
     for event in &screen_events {
         let ScreenEvent::Executed { target: Some(target), actions: range, .. } = event else {
             continue;
@@ -570,17 +564,22 @@ pub async fn run() -> Result<Checks> {
         for action in &actions[range.clone()] {
             let Some(pixel) = action.pixel else { continue };
             desktop_clicks += 1;
+            hit.push(action.widget.clone().unwrap_or_default());
             if target.pixels.contains(pixel) && target.points.contains(screen.to_points(pixel)) {
                 inside += 1;
             }
         }
     }
+    let inputs = ["name", "email", "phone", "company", "account"];
     checks.check(
         &format!(
-            "every click lands inside its target: the CRM link by selector inside its element at device pixel ratio {}, and {inside}/{desktop_clicks} desktop clicks, given in the fitted 2380×1546 screenshot's pixels, inside their targets in pixels and in points",
+            "every click lands inside its target: the CRM link by selector inside its element at device pixel ratio {}, and {inside}/{desktop_clicks} desktop clicks, given in the fitted 2380×1546 screenshot's pixels, inside their targets in pixels and in points, each field's click in its input",
             link.screen.device_pixel_ratio
         ),
-        link_inside && desktop_clicks >= 7 && inside == desktop_clicks,
+        link_inside
+            && desktop_clicks == inputs.len() + 2
+            && inside == desktop_clicks
+            && hit.iter().take(inputs.len()).map(String::as_str).eq(inputs),
     );
 
     // Every action is a governed browser or computer_use_execute call.
@@ -605,7 +604,8 @@ pub async fn run() -> Result<Checks> {
         && actions.len() == executed.len();
     let log = browser.log();
     let navigations = log.iter().filter(|l| l.as_str() == "POST /url").count();
-    let browser_clicks = log.iter().filter(|l| l.starts_with("POST /element/") && l.ends_with("/click")).count();
+    let browser_clicks =
+        log.iter().filter(|l| l.starts_with("POST /element/") && l.ends_with("/click")).count();
     let navigated = records(&audit, BROWSER_AUDIT_NAVIGATED)
         .iter()
         .filter(|r| r.ext.get("phase").and_then(Value::as_str) == Some("response"))
@@ -637,9 +637,9 @@ pub async fn run() -> Result<Checks> {
         screen_events
             .iter()
             .filter_map(|e| match e {
-                ScreenEvent::Executed { step: s, actions: range, .. } if s == step => {
-                    Some(actions[range.clone()].iter().map(|a| a.widget.clone()).collect::<Vec<_>>())
-                }
+                ScreenEvent::Executed { step: s, actions: range, .. } if s == step => Some(
+                    actions[range.clone()].iter().map(|a| a.widget.clone()).collect::<Vec<_>>(),
+                ),
                 _ => None,
             })
             .flatten()
@@ -668,6 +668,43 @@ pub async fn run() -> Result<Checks> {
         checks.note(format!("verifier on the first Save: {}", r.missing.join("; ")));
     }
 
+    // The verifier read every typed value back on a fresh screenshot.
+    let typed: Vec<(String, String)> = plan
+        .steps
+        .iter()
+        .filter(|s| s.action["operation"] == "type")
+        .map(|s| {
+            let step = s.action["step"].as_str().unwrap_or_default().to_string();
+            (step, s.action["text"].as_str().unwrap_or_default().to_string())
+        })
+        .collect();
+    let read_back = typed
+        .iter()
+        .filter(|(step, value)| {
+            report(step).is_some_and(|r| {
+                r.passed
+                    && r.diff.appeared.iter().any(|a| a.label.as_deref() == Some(&*norm(value)))
+                    && r.diff.disappeared.len() == 1
+            })
+        })
+        .count();
+    let verified =
+        screen_events.iter().filter(|e| matches!(e, ScreenEvent::Verified { .. })).count();
+    let failed: Vec<&str> = screen_events
+        .iter()
+        .filter_map(|e| match e {
+            ScreenEvent::Verified { step, report } if !report.passed => Some(step.as_str()),
+            _ => None,
+        })
+        .collect();
+    checks.check(
+        &format!(
+            "the verifier checked all {verified} steps on fresh screenshots: PP-OCRv6 read each typed value back in its field with its placeholder gone ({read_back}/{}), the field clicks changed nothing else, and only the first Save failed",
+            typed.len()
+        ),
+        verified == executed.len() && typed.len() == inputs.len() && read_back == typed.len() && failed == ["c11"],
+    );
+
     // No action outside the two allowed windows.
     let crm_origin = crm.url("/");
     let probe = screen_events.iter().find_map(|e| match e {
@@ -679,10 +716,10 @@ pub async fn run() -> Result<Checks> {
     let probe_ran = screen_events
         .iter()
         .any(|e| matches!(e, ScreenEvent::Executed { step, .. } if step == "m1"));
-    let in_allowed = actions
-        .iter()
-        .all(|a| matches!(a.window.as_deref(), Some(FORM) | Some(BROWSER)));
+    let in_allowed =
+        actions.iter().all(|a| matches!(a.window.as_deref(), Some(FORM) | Some(BROWSER)));
     let loads = browser.loads();
+    let served = crm.requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
     checks.check(
         &format!(
             "no action outside the two allowed windows: the desktop's {} actions were all in {FORM}, the browser loaded only the CRM's {} pages, and the step aimed at Mail's Send was blocked at preview and never ran",
@@ -692,7 +729,10 @@ pub async fn run() -> Result<Checks> {
         in_allowed
             && !actions.iter().any(|a| a.window.as_deref() == Some(MAIL))
             && !loads.is_empty()
-            && loads.iter().all(|u| u.starts_with(&crm_origin))
+            && loads.iter().all(|u| {
+                u.strip_prefix(crm_origin.trim_end_matches('/'))
+                    .is_some_and(|path| served.iter().any(|p| p == path))
+            })
             && probe.as_ref().is_some_and(|(route, reason)| {
                 *route == "blocked" && reason.contains("not one of the windows")
             })
@@ -706,9 +746,9 @@ pub async fn run() -> Result<Checks> {
     let pointing: Vec<_> = screen_events
         .iter()
         .filter_map(|e| match e {
-            ScreenEvent::Previewed { route: "approval", target: Some(_), evidence_bound, .. } => {
-                Some(*evidence_bound)
-            }
+            ScreenEvent::Previewed {
+                route: "approval", target: Some(_), evidence_bound, ..
+            } => Some(*evidence_bound),
             _ => None,
         })
         .collect();
@@ -742,7 +782,10 @@ pub async fn run() -> Result<Checks> {
         })
         .count();
     checks.check(
-        &format!("the form's saved customer matches the CRM's record field for field ({matched}/{})", fields.len()),
+        &format!(
+            "the form's saved customer matches the CRM's record field for field ({matched}/{})",
+            fields.len()
+        ),
         matched == fields.len() && saved.len() == fields.len(),
     );
 
