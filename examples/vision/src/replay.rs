@@ -44,11 +44,11 @@ impl Recording {
         files.iter().map(|f| Self::load(f)).collect()
     }
 
-    fn route(&self) -> &str {
+    pub fn route(&self) -> &str {
         self.path.split('?').next().unwrap_or_default()
     }
 
-    fn template(&self) -> ResponseTemplate {
+    pub fn template(&self) -> ResponseTemplate {
         match &self.response {
             Value::String(text) => ResponseTemplate::new(self.status)
                 .insert_header("content-type", "text/event-stream")

@@ -360,6 +360,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "sqlx",
  "tokio",
  "tracing",
  "uuid",
@@ -396,6 +397,19 @@ version = "3.0.0"
 dependencies = [
  "adk-core",
  "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "adk-rag"
+version = "3.0.0"
+dependencies = [
+ "adk-core",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror",
  "tokio",
  "tracing",
 ]
@@ -586,7 +600,9 @@ dependencies = [
  "adk-computer-use",
  "adk-core",
  "adk-guardrail",
+ "adk-memory",
  "adk-model",
+ "adk-rag",
  "async-trait",
  "base64 0.22.1",
  "chrono",
@@ -5972,7 +5988,9 @@ dependencies = [
  "adk-core",
  "adk-harness",
  "adk-kernel",
+ "adk-memory",
  "adk-model",
+ "adk-rag",
  "adk-runner",
  "adk-sandbox",
  "adk-server",

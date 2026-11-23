@@ -239,6 +239,15 @@ pub type Factory =
     Box<dyn FnOnce(Arc<EgressGate>, MediaStore) -> adk_vision::Result<VisionRuntime> + Send>;
 
 pub async fn desk(spec: DeskSpec, factory: Factory) -> Result<Desk> {
+    desk_with_ledger(spec, factory, Arc::new(InMemorySpendLedger::new(SpendLimits::new()))).await
+}
+
+/// A desk whose spend goes to `ledger`, such as one on a clock of the scenario's choosing.
+pub async fn desk_with_ledger(
+    spec: DeskSpec,
+    factory: Factory,
+    ledger: Arc<InMemorySpendLedger>,
+) -> Result<Desk> {
     let dir = tempfile::tempdir()?;
     let recorder = Arc::new(InMemoryEgressRecorder::new());
     let mut pack = VisionPack::new(MediaStore::new(spec.artifacts.clone()), factory)
@@ -251,7 +260,6 @@ pub async fn desk(spec: DeskSpec, factory: Factory) -> Result<Desk> {
     }
     let approver = Arc::new(Approver::default());
     let audit = InMemoryAuditRecorder::new();
-    let ledger = Arc::new(InMemorySpendLedger::new(SpendLimits::new()));
     let mut builder = HarnessAgent::builder("desk")
         .model(spec.planner)
         .workspace(Workspace::new(dir.path()))
@@ -301,10 +309,14 @@ impl Desk {
 
     /// What the vision calls committed to the ledger. The scripted planner's own model calls
     /// are committed at the harness's estimate for an unpriced model, under vendor `unknown`.
+    /// The ledger is this desk's own, so its lifetime is the run, which a run crossing midnight
+    /// UTC would split between two calendar days.
     pub async fn vision_spend(&self) -> Result<u64> {
-        let all = self.ledger.spent(&SpendKey::org(APP), SpendPeriod::Day).await?;
-        let planner =
-            self.ledger.spent(&SpendKey::org(APP).with_vendor("unknown"), SpendPeriod::Day).await?;
+        let all = self.ledger.spent(&SpendKey::org(APP), SpendPeriod::Lifetime).await?;
+        let planner = self
+            .ledger
+            .spent(&SpendKey::org(APP).with_vendor("unknown"), SpendPeriod::Lifetime)
+            .await?;
         Ok(all - planner)
     }
 

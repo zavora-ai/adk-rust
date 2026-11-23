@@ -13,8 +13,9 @@ cargo run --manifest-path examples/vision/Cargo.toml -- s9_inspector          # 
 cargo run --manifest-path examples/vision/Cargo.toml -- --report scenarios.md # the pass table
 ```
 
-The first run fetches PP-OCRv6 tiny, RF-DETR Nano and SAM 2.1 Tiny q4 (about 165 MB) by
-revision and SHA-256 into the Hugging Face cache; set `HF_HUB_CACHE` to keep them elsewhere.
+The first run fetches PP-OCRv6 tiny, RF-DETR Nano, SAM 2.1 Tiny q4, YuNet and SigLIP 2 base
+quantized (about 545 MB, 381 MB of it SigLIP 2) by revision and SHA-256 into the Hugging Face
+cache; set `HF_HUB_CACHE` to keep them elsewhere.
 [Getting started](getting-started.md) walks through S1–S8, the Document desk.
 
 ## Phase B: the Inspector, Wakes, Budgets, Cameras and Video
@@ -89,6 +90,23 @@ committed, so the scenario needs no encoder:
 cargo run --manifest-path examples/vision/Cargo.toml -- --write-s11-clips
 ```
 
+## Phase C: the Inspector as a Team, Visual Memory and the Video Analyst
+
+| Scenario | What passes | Runs on |
+|----------|-------------|---------|
+| S15 Perceiver, reasoner, verifier | The Inspector as a `VisionTeam` on a conveyor frame with a seeded crack, a short scratch and an operator above the belt. The perceiver holds only local vision tools, each declaring no network use, and is refused a cloud model, vision tools with a cloud backend and a tool that uploads. Only the ambiguous scratch leaves, as one crop to each model, cut and screened for faces by the egress gate, never the frame; YuNet finds the operator's face in the frame and none in what left. The reasoner and the verifier disagree, so one card holds both opinions, the stored frame with the claimed region and the crop; one approval resolves it on the resumed run with no provider asked again, and the audit records bind the card and the approval to both digests | The Inspector's detector and YuNet on the device; Claude Haiku 5.5 as the reasoner and NVIDIA NIM `nemotron-3.5-super-vl` as the verifier's model, through their real clients |
+| S16 Visual memory | A week of Inspector frames and document pages, stored by one run a day, embedded with SigLIP 2 into an `adk-rag` store, captions in `adk-memory` and cameras in graph memory. "Torn seals from Tuesday" by text and by an example image each reach Recall@5 at or above the baseline in `fixtures/baselines.json` (3/3 and 2/3); every hit loads from its artifact with its digest, its caption names that artifact, and the `vision.memory.indexed` record of the run it names holds its digest | SigLIP 2 base quantized on the device |
+| S17 Video analyst | An hour of warehouse video with ten labelled events, cut into 30-second chunks, each captioned from six frames, indexed in `adk-rag`, kept in `adk-memory` with its keyframe, the clip in graph memory. Every frame sent is an egress gate release; at least eight of ten answers cite a chunk whose time range holds the labelled event (nine, as the live run); the cost per hour of video is reported (32,587 µUSD) and the ledger holds the captions' and answers' cost | `VideoAnalyst` with `FramesAnalyzer`; Claude Haiku 5.5 recorded live, replayed through the real Anthropic client |
+
+### What Stands In for What in Phase C
+
+| Spec 3.7 asks for | The scenario uses | Why |
+|-------------------|-------------------|-----|
+| Live answers from the reasoner's and the verifier's models (S15) | Answers scripted in each provider's wire format, served to the real Anthropic and OpenAI-compatible clients; each fixture holds the request its client sent and says `scripted: true` | The session that wrote the scenario could not reach the provider keys. `VISION_RECORD_ANTHROPIC` and `VISION_RECORD_NIM_VLM` record both in one run (`examples/vision/fixtures/recorded/README.md`) |
+| The fine-tune's crack class (S15) | `BeltDetector`, as in S9; the verifier runs it with a 0.75 score floor | COCO weights cannot see a crack |
+| An hour of recorded warehouse video (S17) | `WarehouseClip`, drawn frame by frame from its time at 480×270 | The fixture needs no file and its truth is exact |
+| Captioned locally (S17) | Claude Haiku 5.5, every frame through the egress gate | Qwen3-VL-4B's 8.9 GB of weights need 14 GiB free; `VideoAnalyst` takes a local `FramesAnalyzer` the same way |
+
 ## Related
 
 - [Getting started: a Document desk](getting-started.md)
@@ -97,4 +115,6 @@ cargo run --manifest-path examples/vision/Cargo.toml -- --write-s11-clips
 - [Calibration and measurement](measure.md)
 - [Video and tracking](video.md)
 - [Screen grounding](screen.md)
+- [Teams: perceiver, reasoner, verifier](teams.md)
+- [Visual memory](memory.md)
 - [The live camera surface](../surfaces/live-camera.md)

@@ -1,0 +1,54 @@
+{
+  "scripted": true,
+  "note": "Scripted, not recorded: written in the provider's wire format for scenario S15, because the session that wrote the scenario could not reach the provider's key. The request is the one the real client sent, its image reduced to SHA-256 and size; the token counts are estimates. Record it live with VISION_RECORD_ANTHROPIC and VISION_RECORD_NIM_VLM (fixtures/recorded/README.md).",
+  "path": "/v1/messages",
+  "request": {
+    "cache_control": {
+      "type": "ephemeral"
+    },
+    "max_tokens": 400,
+    "messages": [
+      {
+        "content": [
+          {
+            "source": {
+              "data": "{{image:base64:sha256:65ed966e5cc85c8cb3e6d1604507e1e0a501fc901309b819607784fc3bd37e78:564}}",
+              "media_type": "image/png",
+              "type": "base64"
+            },
+            "type": "image"
+          },
+          {
+            "text": "You are the reasoner of a vision team. You hold no tools and never see the whole image: you see the regions a perceiver on the device found, measurements, and 1 crop(s) of the image around those regions, redacted before they were sent.\n\nQuestion: This is a crop of a 3D-printed part on an inspection line, around a dark mark the camera found. Is the mark a crack that makes the part defective, or a surface mark that needs no action?\nAnswer with one verdict from: \"defect\", \"no_defect\".\n\nRegions, in source pixels: {\"image\":\"sha256:cbe234a87b5431f9c2841e1391c9b564c00501362055cb9e52364795f04ccc83\",\"width\":1280,\"height\":720,\"regions\":[{\"image\":\"sha256:cbe234a87b5431f9c2841e1391c9b564c00501362055cb9e52364795f04ccc83\",\"shape\":{\"kind\":\"box\",\"x0\":73.0,\"y0\":359.0,\"x1\":172.0,\"y1\":419.0},\"label\":\"crack\",\"score\":0.97,\"origin\":{\"backend\":\"inspector-defects\",\"frame\":{\"kind\":\"sentPixels\"},\"chain\":{\"sourceWidth\":1280,\"sourceHeight\":720,\"steps\":[]}}},{\"image\":\"sha256:cbe234a87b5431f9c2841e1391c9b564c00501362055cb9e52364795f04ccc83\",\"shape\":{\"kind\":\"box\",\"x0\":957.0,\"y0\":388.0,\"x1\":981.0,\"y1\":401.0},\"label\":\"crack\",\"score\":0.6779438,\"origin\":{\"backend\":\"inspector-defects\",\"frame\":{\"kind\":\"sentPixels\"},\"chain\":{\"sourceWidth\":1280,\"sourceHeight\":720,\"steps\":[]}}}]}\n\nAnswer with JSON only: {\"verdict\": <one of the verdicts>, \"label\": <the class you judged>, \"confidence\": <0 to 1>, \"rationale\": <one sentence>}.",
+            "type": "text"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "model": "claude-haiku-5-5",
+    "stream": false
+  },
+  "status": 200,
+  "contentType": "application/json",
+  "response": {
+    "model": "claude-haiku-5-5",
+    "id": "msg_s15_scripted",
+    "type": "message",
+    "role": "assistant",
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"verdict\": \"defect\", \"label\": \"crack\", \"confidence\": 0.62, \"rationale\": \"A thin dark line crosses the printed layer lines at an angle, which fits a short crack more than a layer artefact, though it is too short to be sure.\"}"
+      }
+    ],
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "usage": {
+      "input_tokens": 431,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 64
+    }
+  }
+}

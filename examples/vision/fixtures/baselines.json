@@ -3,5 +3,16 @@
   "s1FieldAccuracy": {
     "pp-ocrv6-tiny": 0.97,
     "nim-document-reader": 0.0
+  },
+  "s16": {
+    "model": "siglip2-base-patch16-256-quantized",
+    "revision": "d1114256522a37ffa257a0a58017348ab0058db2",
+    "textQuery": "a cardboard box with a torn tape seal",
+    "imageQuery": "WeekCorpus::example(Some(Defect::TornSeal))",
+    "filter": "captured on Tuesday 2026-11-17",
+    "relevant": 3,
+    "textHitsAt5": 3,
+    "imageHitsAt5": 2,
+    "recorded": "2026-11-23, Apple Silicon CPU, ort 2.0.0-rc.15, in-memory store"
   }
 }

@@ -371,7 +371,10 @@ The live run, recorded on 2026-11-23:
 | Cost | Captioning 32,587 µUSD for the hour (193,320 input and 16,749 output tokens): $0.033 per hour of video. The ten answers, with their expansions, 3,334 µUSD |
 
 The PR tier replays that run through the egress gate (`adk-vision/tests/analyst_tests.rs`):
-the replay must cite as the live run did and report the same cost per hour. A second test
+the replay must cite as the live run did and report the same cost per hour. `examples/vision`
+(`s17_video_analyst`) replays it through the real Anthropic client from a local server and
+checks the frames the server received against the gate's releases and the spend ledger
+against the captions' and answers' cost. A second test
 runs the analyst's own steps over the whole hour with a captioner that reads the clip's
 truth, and checks every citation, the captions' artifact references, the graph entity and
 the erasure.
