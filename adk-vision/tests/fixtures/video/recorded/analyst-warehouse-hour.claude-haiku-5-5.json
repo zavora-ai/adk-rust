@@ -1,6 +1,6 @@
 {
   "model": "claude-haiku-5-5",
-  "recordedAt": "2026-11-23T00:03:16Z",
+  "recordedAt": "2026-11-23T00:16:59Z",
   "durationMs": 3600000,
   "width": 480,
   "height": 270,
@@ -13,977 +13,4054 @@
       "fromMs": 0,
       "toMs": 30000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 136
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 86,
+        "total_token_count": 1697,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000244275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 86,
+          "output_tokens_details": {
+            "thinking_tokens": 64
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 30000,
       "toMs": 60000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 63
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 113,
+        "total_token_count": 1724,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00025777499999999996,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 113,
+          "output_tokens_details": {
+            "thinking_tokens": 91
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 60000,
       "toMs": 90000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 170
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 98,
+        "total_token_count": 1709,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000250275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 98,
+          "output_tokens_details": {
+            "thinking_tokens": 76
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 90000,
       "toMs": 120000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 123
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 85,
+        "total_token_count": 1696,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000243775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 85,
+          "output_tokens_details": {
+            "thinking_tokens": 63
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 120000,
       "toMs": 150000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 108
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 116,
+        "total_token_count": 1727,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000259275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 116,
+          "output_tokens_details": {
+            "thinking_tokens": 94
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 150000,
       "toMs": 180000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 75
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 22,
+        "total_token_count": 1633,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000212275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 22,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 180000,
       "toMs": 210000,
-      "text": "{\"caption\": \"A forklift carrying a brown cardboard box enters from the right edge near the floor at about 3:10 and moves left toward the center of the aisle area. By about 3:17 it is in front of the Aisle 1 and Aisle 2 racks, and it stays in the center of the frame through about 3:27, with its load lifted slightly and its position shifting only slightly up and down.\", \"objects\": [\"forklift\", \"cardboard box load\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 149
+      "text": "{\"caption\": \"A forklift carrying a brown cardboard box enters from the right edge near the floor at about 3:10, then moves left in front of the aisle racks, appearing centered at about 3:17 and then at about 3:22 and 3:27 it stays in the middle of the frame with its load lowered near the ground, moving slightly left and up. Otherwise the dock, racks, and exit door remain unchanged.\", \"objects\": [\"forklift\", \"cardboard box load\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 157,
+        "total_token_count": 1768,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00027977499999999996,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 157,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 210000,
       "toMs": 240000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 125
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 123,
+        "total_token_count": 1734,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000262775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 123,
+          "output_tokens_details": {
+            "thinking_tokens": 101
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 240000,
       "toMs": 270000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 101
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 92,
+        "total_token_count": 1703,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000247275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 92,
+          "output_tokens_details": {
+            "thinking_tokens": 70
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 270000,
       "toMs": 300000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 119
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 73,
+        "total_token_count": 1684,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000237775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 73,
+          "output_tokens_details": {
+            "thinking_tokens": 51
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 300000,
       "toMs": 330000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 150
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 148,
+        "total_token_count": 1759,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00027527499999999996,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 148,
+          "output_tokens_details": {
+            "thinking_tokens": 126
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 330000,
       "toMs": 360000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 84,
+        "total_token_count": 1695,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00024327500000000002,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 84,
+          "output_tokens_details": {
+            "thinking_tokens": 62
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 360000,
       "toMs": 390000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 82
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 129,
+        "total_token_count": 1740,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000265775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 129,
+          "output_tokens_details": {
+            "thinking_tokens": 107
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 390000,
       "toMs": 420000,
-      "text": "{\"caption\": \"A worker in a blue shirt and dark pants appears at the left side of the warehouse floor near Dock 1 at about 6:40, pushing a grey hand cart. By 6:47.5 the worker has moved right to the center of the floor in front of Aisle 2, and by 6:52.5 has moved further right near Aisle 3 with the cart. In the 6:57.5 frame the worker and cart are gone, and the scene is empty again.\", \"objects\": [\"worker in blue shirt\", \"grey hand cart\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 177
+      "text": "{\"caption\": \"A worker in a blue shirt and dark pants appears at the left near the dock area around 6:40, pushing a grey cart. By 6:47.5 the worker has moved to the center of the warehouse floor in front of Aisle 2, and by 6:52.5 has moved right toward Aisle 3 with the cart. At 6:57.5 the worker and cart are gone from the floor, leaving the scene empty.\", \"objects\": [\"worker in blue shirt\", \"grey cart\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 165,
+        "total_token_count": 1776,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000283775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 165,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 420000,
       "toMs": 450000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 87
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 68,
+        "total_token_count": 1679,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000235275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 68,
+          "output_tokens_details": {
+            "thinking_tokens": 46
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 450000,
       "toMs": 480000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 131
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 116,
+        "total_token_count": 1727,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000259275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 116,
+          "output_tokens_details": {
+            "thinking_tokens": 94
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 480000,
       "toMs": 510000,
-      "text": "{\"caption\":\"Nothing happens.\",\"objects\":[]}",
-      "inputTokens": 1611,
-      "outputTokens": 83
+      "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 125,
+        "total_token_count": 1736,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000263775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 125,
+          "output_tokens_details": {
+            "thinking_tokens": 103
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 510000,
       "toMs": 540000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 22,
+        "total_token_count": 1633,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000212275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 22,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 540000,
       "toMs": 570000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 124
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 114,
+        "total_token_count": 1725,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000258275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 114,
+          "output_tokens_details": {
+            "thinking_tokens": 92
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 570000,
       "toMs": 600000,
-      "text": "{\"caption\": \"Between about 9:40 and 9:47.5 the gray roll-up shutter of Dock 1 opens, revealing a light blue opening. From about 9:47.5 to 9:57.5 a white truck with a trailer backs toward Dock 1, its rear wheels and bumper visible at the dock and growing larger in the frame. The aisle racks and Exit door stay unchanged.\", \"objects\": [\"Dock 1 roll-up door\", \"white truck with trailer\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 487
+      "text": "{\"caption\": \"Between 9:47.5 and 9:52.5 the dock 1 roll-up door opens, changing from grey to a light-blue opening. A white truck with a yellow-and-black bumper and red lights backs into dock 1 and is still at the dock at 9:57.5.\", \"objects\": [\"dock 1 roll-up door\", \"white truck\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 663,
+        "total_token_count": 2274,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000532775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 663,
+          "output_tokens_details": {
+            "thinking_tokens": 542
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 600000,
       "toMs": 630000,
-      "text": "{\"caption\": \"A white box truck parked at Dock 1 in the first two frames (10:00 to 10:05) pulls away between 10:05 and 10:10. After it leaves, the dock is closed by a grey roll-up door that stays down through 10:27.\", \"objects\": [\"white box truck at Dock 1\", \"grey roll-up dock door\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 362
+      "text": "{\"caption\": \"Between about 10:05 and 10:10, the white truck trailer at DOCK 1 leaves the bay and is gone from the frame. The dock's roll-up door, open in the first two frames, is shown fully closed from 10:10 onward. The aisle racks, pallets, and exit door do not change.\", \"objects\": [\"white truck trailer at DOCK 1\", \"DOCK 1 roll-up dock door\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 530,
+        "total_token_count": 2141,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000466275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 530,
+          "output_tokens_details": {
+            "thinking_tokens": 386
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 630000,
       "toMs": 660000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 82
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 126,
+        "total_token_count": 1737,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00026427499999999996,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 126,
+          "output_tokens_details": {
+            "thinking_tokens": 104
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 660000,
       "toMs": 690000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 144
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 76,
+        "total_token_count": 1687,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000239275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 76,
+          "output_tokens_details": {
+            "thinking_tokens": 54
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 690000,
       "toMs": 720000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 134
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 114,
+        "total_token_count": 1725,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000258275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 114,
+          "output_tokens_details": {
+            "thinking_tokens": 92
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 720000,
       "toMs": 750000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 22,
+        "total_token_count": 1633,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000212275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 22,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 750000,
       "toMs": 780000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 22,
+        "total_token_count": 1633,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000212275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 22,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 780000,
       "toMs": 810000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 103
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 206,
+        "total_token_count": 1817,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00030427499999999996,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 206,
+          "output_tokens_details": {
+            "thinking_tokens": 184
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 810000,
       "toMs": 840000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 93,
+        "total_token_count": 1704,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000247775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 93,
+          "output_tokens_details": {
+            "thinking_tokens": 71
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 840000,
       "toMs": 870000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 123
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 129,
+        "total_token_count": 1740,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000265775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 129,
+          "output_tokens_details": {
+            "thinking_tokens": 107
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 870000,
       "toMs": 900000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 75,
+        "total_token_count": 1686,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00023877500000000002,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 75,
+          "output_tokens_details": {
+            "thinking_tokens": 53
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 900000,
       "toMs": 930000,
-      "text": "{\"caption\": \"Between 15:22.5 and 15:27.5, several cardboard boxes on the upper shelf of Aisle 3 tumble or slide off to the right, toward the EXIT door, while the rest of the scene stays the same. The earlier frames show no change.\", \"objects\": [\"cardboard boxes on Aisle 3 upper shelf\", \"Aisle 3 shelving unit\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 525
+      "text": "{\"caption\": \"In the final frame at 15:27.5, cardboard boxes on the right end of the Aisle 3 middle shelf, near the EXIT side, appear tilted and shifted out of place, as if sliding or tumbling off the shelf. The other frames from 15:00.0 to 15:22.5 show no change.\", \"objects\": [\"cardboard boxes on Aisle 3 shelf\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 524,
+        "total_token_count": 2135,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00046327499999999997,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 524,
+          "output_tokens_details": {
+            "thinking_tokens": 388
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 930000,
       "toMs": 960000,
-      "text": "{\"caption\": \"Between about 15:40 and 15:47, the small pile of cardboard boxes on the floor at the lower right disappears. Around 15:47 a cardboard box appears on top of the Aisle 3 shelving at the upper right, and it remains there through 15:57.\", \"objects\": [\"pile of cardboard boxes on floor\", \"cardboard box on top of Aisle 3 shelf\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 547
+      "text": "{\"caption\": \"Several cardboard boxes lying on the floor at the lower right of the scene are visible from 15:30 to 15:40, then are gone by 15:47.5. Over the same period, a cardboard box appears on top of the right side of the Aisle 3 shelving and remains there through 15:57.5.\", \"objects\": [\"cardboard boxes on the floor\", \"cardboard box on top of Aisle 3 shelving\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 577,
+        "total_token_count": 2188,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000489775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 577,
+          "output_tokens_details": {
+            "thinking_tokens": 433
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 960000,
       "toMs": 990000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 130
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 73,
+        "total_token_count": 1684,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000237775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 73,
+          "output_tokens_details": {
+            "thinking_tokens": 51
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 990000,
       "toMs": 1020000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 22,
+        "total_token_count": 1633,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000212275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 22,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1020000,
       "toMs": 1050000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 73
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 105,
+        "total_token_count": 1716,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00025377500000000003,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 105,
+          "output_tokens_details": {
+            "thinking_tokens": 83
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1050000,
       "toMs": 1080000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 22,
+        "total_token_count": 1633,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000212275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 22,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1080000,
       "toMs": 1110000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 98
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 105,
+        "total_token_count": 1716,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00025377500000000003,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 105,
+          "output_tokens_details": {
+            "thinking_tokens": 83
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1110000,
       "toMs": 1140000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 138
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 126,
+        "total_token_count": 1737,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00026427499999999996,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 126,
+          "output_tokens_details": {
+            "thinking_tokens": 104
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1140000,
       "toMs": 1170000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 102
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 126,
+        "total_token_count": 1737,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00026427499999999996,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 126,
+          "output_tokens_details": {
+            "thinking_tokens": 104
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1170000,
       "toMs": 1200000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 69
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 90,
+        "total_token_count": 1701,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000246275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 90,
+          "output_tokens_details": {
+            "thinking_tokens": 68
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1200000,
       "toMs": 1230000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 140
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 85,
+        "total_token_count": 1696,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000243775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 85,
+          "output_tokens_details": {
+            "thinking_tokens": 63
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1230000,
       "toMs": 1260000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 123
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 22,
+        "total_token_count": 1633,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000212275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 22,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1260000,
       "toMs": 1290000,
-      "text": "{\"caption\": \"A worker in a yellow hi-vis vest and white hard hat appears in the warehouse aisle floor, first at about 21:10 near the left of the frame beside the aisle 1 racking, then walks right to the center by 21:17.5, and reaches the right side near the aisle 3 racking and the exit door by 21:22.5. The worker is gone by 21:27.5, when the scene is empty again; the racks, dock door and lighting stay unchanged.\", \"objects\": [\"worker in yellow hi-vis vest and white hard hat\", \"exit door\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 190
+      "text": "{\"caption\": \"A worker in a yellow hi-vis vest and white hard hat appears on the warehouse floor in front of the aisle racks. In image 3 (21:10) he stands near the left at about x=117, in image 4 (21:17.5) he is center-right in front of Aisle 2 near x=300, and in image 5 (21:22.5) he is at the far right near the EXIT door at x=422, then he is gone by image 6 (21:27.5). The lighting and racks stay unchanged.\", \"objects\": [\"worker in yellow hi-vis vest and white hard hat\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 194,
+        "total_token_count": 1805,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00029827499999999997,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 194,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1290000,
       "toMs": 1320000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 69
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 73,
+        "total_token_count": 1684,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000237775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 73,
+          "output_tokens_details": {
+            "thinking_tokens": 51
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1320000,
       "toMs": 1350000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 99
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 85,
+        "total_token_count": 1696,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000243775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 85,
+          "output_tokens_details": {
+            "thinking_tokens": 63
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1350000,
       "toMs": 1380000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 71
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 108,
+        "total_token_count": 1719,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000255275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 108,
+          "output_tokens_details": {
+            "thinking_tokens": 86
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1380000,
       "toMs": 1410000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 132
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 132,
+        "total_token_count": 1743,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000267275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 132,
+          "output_tokens_details": {
+            "thinking_tokens": 110
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1410000,
       "toMs": 1440000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 81
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 132,
+        "total_token_count": 1743,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000267275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 132,
+          "output_tokens_details": {
+            "thinking_tokens": 110
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1440000,
       "toMs": 1470000,
-      "text": "{\"caption\": \"A worker in a blue shirt pushing a grey hand cart appears at the left of the floor near the dock at 24:10, then walks rightward across the floor past Aisle 2 at 24:17 and reaches the area in front of Aisle 3 at 24:22. By 24:27 both the worker and the cart have left the scene.\", \"objects\": [\"worker in blue shirt\", \"grey hand cart\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 388
+      "text": "{\"caption\": \"A worker in a blue shirt and dark pants pushes a grey hand cart from the left side of the floor in front of the racks at 24:10, then walks rightward across the floor, appearing near the center at 24:17.5 and further right near Aisle 3 at 24:22.5, and is gone by 24:27.5. The worker is not visible in the first two frames at 24:00 and 24:05.\", \"objects\": [\"worker in blue shirt\", \"grey hand cart\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 160,
+        "total_token_count": 1771,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000281275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 160,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1470000,
       "toMs": 1500000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 96
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 70,
+        "total_token_count": 1681,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000236275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 70,
+          "output_tokens_details": {
+            "thinking_tokens": 48
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1500000,
       "toMs": 1530000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 137
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 154,
+        "total_token_count": 1765,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000278275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 154,
+          "output_tokens_details": {
+            "thinking_tokens": 132
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1530000,
       "toMs": 1560000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 110
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 134,
+        "total_token_count": 1745,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000268275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 134,
+          "output_tokens_details": {
+            "thinking_tokens": 112
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1560000,
       "toMs": 1590000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 70
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 167,
+        "total_token_count": 1778,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00028477499999999997,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 167,
+          "output_tokens_details": {
+            "thinking_tokens": 145
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1590000,
       "toMs": 1620000,
-      "text": "{\"caption\": \"Nothing happens until about 26:52.5, when a small blue object appears on the grey floor in front of Aisle 1 and Aisle 2, near the centre-left of the frame. By 26:57.5 the blue object is much larger and closer to the camera, still on the floor in the same area.\", \"objects\": [\"small blue object on floor\", \"larger blue object on floor\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 464
+      "text": "{\"caption\": \"Nothing happens in the first four frames. At 26:52.5 a small blue object appears on the floor near the center-left of the warehouse aisle, and by 26:57.5 it is larger and lower in the frame, closer to the camera.\", \"objects\": [\"small blue object on the floor\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 320,
+        "total_token_count": 1931,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000361275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 320,
+          "output_tokens_details": {
+            "thinking_tokens": 219
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1620000,
       "toMs": 1650000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 218
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 112,
+        "total_token_count": 1723,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00025727499999999995,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 112,
+          "output_tokens_details": {
+            "thinking_tokens": 90
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1650000,
       "toMs": 1680000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 177
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 163,
+        "total_token_count": 1774,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000282775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 163,
+          "output_tokens_details": {
+            "thinking_tokens": 141
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1680000,
       "toMs": 1710000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 81
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 79,
+        "total_token_count": 1690,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000240775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 79,
+          "output_tokens_details": {
+            "thinking_tokens": 57
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1710000,
       "toMs": 1740000,
-      "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "text": "{\"caption\": \"Nothing happens. The warehouse scene with the dock door, the three aisle racks loaded with boxes, and the exit door stays unchanged across all six frames, with no people, vehicles, or lighting changes visible; only the timestamp in the top-left corner advances.\", \"objects\": []}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 101,
+        "total_token_count": 1712,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000251775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 101,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1740000,
       "toMs": 1770000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 99
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 71,
+        "total_token_count": 1682,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000236775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 71,
+          "output_tokens_details": {
+            "thinking_tokens": 49
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1770000,
       "toMs": 1800000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 94
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 91,
+        "total_token_count": 1702,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000246775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 91,
+          "output_tokens_details": {
+            "thinking_tokens": 69
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1800000,
       "toMs": 1830000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 130
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 134,
+        "total_token_count": 1745,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000268275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 134,
+          "output_tokens_details": {
+            "thinking_tokens": 112
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1830000,
       "toMs": 1860000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 129
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 80,
+        "total_token_count": 1691,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000241275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 80,
+          "output_tokens_details": {
+            "thinking_tokens": 58
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1860000,
       "toMs": 1890000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 87
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 22,
+        "total_token_count": 1633,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000212275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 22,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1890000,
       "toMs": 1920000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 101
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 70,
+        "total_token_count": 1681,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000236275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 70,
+          "output_tokens_details": {
+            "thinking_tokens": 48
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1920000,
       "toMs": 1950000,
-      "text": "{\"caption\": \"Between about 32:17.5 and 32:22.5, a stack of red boxes on a wooden pallet appears in front of the EXIT door on the right, and it remains there through 32:27.5. The rest of the scene does not change.\", \"objects\": [\"stack of red boxes\", \"wooden pallet\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 362
+      "text": "{\"caption\": \"Between about 32:17 and 32:22, a stack of red boxes on a wooden pallet appears in front of the EXIT door on the right side of the scene. It remains there through 32:27, while the racks and dock stay unchanged.\", \"objects\": [\"stack of red boxes\", \"wooden pallet\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 374,
+        "total_token_count": 1985,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000388275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 374,
+          "output_tokens_details": {
+            "thinking_tokens": 267
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1950000,
       "toMs": 1980000,
-      "text": "{\"caption\": \"The stack of red crates and the wooden pallet under them, at the right near the EXIT door, are present in the first three frames (32:30 to 32:40) and are gone from the floor by 32:47.5 and stay absent through 32:57.5. Nothing else visibly changes.\", \"objects\": [\"stack of red crates\", \"wooden pallet\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 461
+      "text": "{\"caption\": \"Between about 32:40 and 32:47.5, the stack of red boxes on a wooden pallet beside the EXIT door disappears, leaving the floor empty there. The rest of the scene, including the racks and dock, stays unchanged through 32:57.5.\", \"objects\": [\"stack of red boxes\", \"wooden pallet\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 430,
+        "total_token_count": 2041,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00041627499999999997,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 430,
+          "output_tokens_details": {
+            "thinking_tokens": 313
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 1980000,
       "toMs": 2010000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 87
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 79,
+        "total_token_count": 1690,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000240775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 79,
+          "output_tokens_details": {
+            "thinking_tokens": 57
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2010000,
       "toMs": 2040000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 129
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 79,
+        "total_token_count": 1690,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000240775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 79,
+          "output_tokens_details": {
+            "thinking_tokens": 57
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2040000,
       "toMs": 2070000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 84
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 133,
+        "total_token_count": 1744,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000267775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 133,
+          "output_tokens_details": {
+            "thinking_tokens": 111
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2070000,
       "toMs": 2100000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 22,
+        "total_token_count": 1633,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000212275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 22,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2100000,
       "toMs": 2130000,
-      "text": "{\"caption\": \"A worker in a blue shirt pushes a grey hand cart rightward across the warehouse floor in front of the racks, moving from near the left dock area at 35:00 to mid-floor by 35:10. The worker and cart are gone from view by 35:17.5, and the scene stays empty through 35:27.5.\", \"objects\": [\"worker in blue shirt\", \"grey hand cart\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 496
+      "text": "{\"caption\": \"A worker in a blue shirt pushes a gray hand cart left to right across the warehouse floor from about 35:00 to 35:10, moving from near the dock toward Aisle 3. By 35:17.5 the worker and cart have left the floor and do not reappear through 35:27.5.\", \"objects\": [\"worker in blue shirt\", \"gray hand cart\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 482,
+        "total_token_count": 2093,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000442275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 482,
+          "output_tokens_details": {
+            "thinking_tokens": 355
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2130000,
       "toMs": 2160000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 132
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 291,
+        "total_token_count": 1902,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00034677499999999996,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 291,
+          "output_tokens_details": {
+            "thinking_tokens": 269
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2160000,
       "toMs": 2190000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 76
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 122,
+        "total_token_count": 1733,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00026227499999999996,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 122,
+          "output_tokens_details": {
+            "thinking_tokens": 100
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2190000,
       "toMs": 2220000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 133
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 112,
+        "total_token_count": 1723,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00025727499999999995,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 112,
+          "output_tokens_details": {
+            "thinking_tokens": 90
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2220000,
       "toMs": 2250000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 70
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 75,
+        "total_token_count": 1686,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00023877500000000002,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 75,
+          "output_tokens_details": {
+            "thinking_tokens": 53
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2250000,
       "toMs": 2280000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 77
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 184,
+        "total_token_count": 1795,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00029327499999999996,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 184,
+          "output_tokens_details": {
+            "thinking_tokens": 162
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2280000,
       "toMs": 2310000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 107,
+        "total_token_count": 1718,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000254775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 107,
+          "output_tokens_details": {
+            "thinking_tokens": 85
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2310000,
       "toMs": 2340000,
-      "text": "{\"caption\": \"A worker in an orange vest and white hard hat climbs a silver ladder in Aisle 1 between frames at 38:35 and 38:40, then is seen near the top of the ladder at Aisle 1 by 38:47.5, and by 38:52.5 the worker and ladder are gone from view. The worker is absent again in the final frame at 38:57.5, with the aisle empty and the lighting unchanged.\", \"objects\": [\"worker in orange vest and white hard hat\", \"silver ladder\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 172
+      "text": "{\"caption\": \"A worker in an orange vest and white hard hat appears on a metal ladder in front of the Aisle 1 racking at about 38:35, climbs up the ladder, and is near the top of the racking by 38:47. By 38:52 the worker and ladder are no longer visible, and the aisle is empty again at 38:57.\", \"objects\": [\"worker in orange vest and white hard hat\", \"metal ladder in Aisle 1\", \"Aisle 1 racking with cardboard boxes\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 167,
+        "total_token_count": 1778,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00028477499999999997,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 167,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2340000,
       "toMs": 2370000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 119
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 130,
+        "total_token_count": 1741,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00026627499999999995,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 130,
+          "output_tokens_details": {
+            "thinking_tokens": 108
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2370000,
       "toMs": 2400000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 109
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 74,
+        "total_token_count": 1685,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000238275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 74,
+          "output_tokens_details": {
+            "thinking_tokens": 52
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2400000,
       "toMs": 2430000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 205
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 109,
+        "total_token_count": 1720,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000255775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 109,
+          "output_tokens_details": {
+            "thinking_tokens": 87
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2430000,
       "toMs": 2460000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 22,
+        "total_token_count": 1633,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000212275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 22,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2460000,
       "toMs": 2490000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 101
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 74,
+        "total_token_count": 1685,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000238275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 74,
+          "output_tokens_details": {
+            "thinking_tokens": 52
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2490000,
       "toMs": 2520000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 83,
+        "total_token_count": 1694,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000242775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 83,
+          "output_tokens_details": {
+            "thinking_tokens": 61
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2520000,
       "toMs": 2550000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 100
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 100,
+        "total_token_count": 1711,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000251275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 100,
+          "output_tokens_details": {
+            "thinking_tokens": 78
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2550000,
       "toMs": 2580000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 80
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 22,
+        "total_token_count": 1633,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000212275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 22,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2580000,
       "toMs": 2610000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 145
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 82,
+        "total_token_count": 1693,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000242275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 82,
+          "output_tokens_details": {
+            "thinking_tokens": 60
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2610000,
       "toMs": 2640000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 130
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 78,
+        "total_token_count": 1689,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000240275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 78,
+          "output_tokens_details": {
+            "thinking_tokens": 56
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2640000,
       "toMs": 2670000,
-      "text": "{\"caption\": \"Between 44:05 and 44:10 a blue forklift and an orange forklift appear on the warehouse floor in front of the racks, the blue one on the left and the orange one on the right. By 44:17.5 both have moved toward the center closer to the camera, with a raised fork frame between them, and by 44:22.5 both have left the view, leaving the scene empty.\", \"objects\": [\"blue forklift\", \"orange forklift\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 573
+      "text": "{\"caption\": \"Between 44:05 and 44:10, a blue forklift and an orange forklift appear on the floor in front of the racks, the blue one near Aisle 1 and the orange one near Aisle 3. By 44:17.5 both have moved toward the center of the floor, and by 44:22.5 they have left, leaving the aisles empty.\", \"objects\": [\"blue forklift\", \"orange forklift\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 636,
+        "total_token_count": 2247,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.0005192749999999999,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 636,
+          "output_tokens_details": {
+            "thinking_tokens": 498
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2670000,
       "toMs": 2700000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 22,
+        "total_token_count": 1633,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000212275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 22,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2700000,
       "toMs": 2730000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 129
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 116,
+        "total_token_count": 1727,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000259275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 116,
+          "output_tokens_details": {
+            "thinking_tokens": 94
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2730000,
       "toMs": 2760000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 89
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 72,
+        "total_token_count": 1683,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000237275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 72,
+          "output_tokens_details": {
+            "thinking_tokens": 50
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2760000,
       "toMs": 2790000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 135
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 132,
+        "total_token_count": 1743,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000267275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 132,
+          "output_tokens_details": {
+            "thinking_tokens": 110
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2790000,
       "toMs": 2820000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 88
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 82,
+        "total_token_count": 1693,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000242275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 82,
+          "output_tokens_details": {
+            "thinking_tokens": 60
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2820000,
       "toMs": 2850000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 141,
+        "total_token_count": 1752,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000271775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 141,
+          "output_tokens_details": {
+            "thinking_tokens": 119
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2850000,
       "toMs": 2880000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 119
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 22,
+        "total_token_count": 1633,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000212275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 22,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2880000,
       "toMs": 2910000,
-      "text": "{\"caption\": \"A worker in a blue shirt pushing a grey hand cart enters from the left and walks across the warehouse floor in front of the Aisle 1 racks between about 48:22 and 48:27, moving from left toward the center, with the cart following at their side. The worker and cart are absent in the earlier frames at 48:00 to 48:17, when the floor is empty.\", \"objects\": [\"worker in blue shirt\", \"grey hand cart\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 150
+      "text": "{\"caption\": \"A worker in a blue shirt pushing a grey cart enters from the left side of the warehouse floor between frames at 48:17.5 and 48:22.5, walking right across the aisle area. By 48:27.5 the worker has moved to the center foreground, closer to the camera, with the cart still beside them. Otherwise the scene, lighting and shelving stay unchanged.\", \"objects\": [\"worker in blue shirt\", \"grey cart\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 153,
+        "total_token_count": 1764,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00027777499999999996,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 153,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2910000,
       "toMs": 2940000,
-      "text": "{\"caption\": \"A worker in a blue shirt, with a two-wheeled hand cart, stands on the floor in front of the aisle racks at 48:30. By 48:35 both have left the frame, and the rest of the scene stays unchanged through 48:57.\", \"objects\": [\"worker in blue shirt\", \"two-wheeled hand cart\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 379
+      "text": "{\"caption\": \"A worker in a blue shirt stands on the warehouse floor in front of the aisle racks at 48:30, beside a gray hand truck with wheels. By 48:35 both have left the scene, and they stay absent through 48:57 while the racks, dock door and exit door remain unchanged.\", \"objects\": [\"worker in blue shirt\", \"gray hand truck\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 384,
+        "total_token_count": 1995,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00039327499999999995,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 384,
+          "output_tokens_details": {
+            "thinking_tokens": 257
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2940000,
       "toMs": 2970000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 124
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 89,
+        "total_token_count": 1700,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000245775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 89,
+          "output_tokens_details": {
+            "thinking_tokens": 67
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 2970000,
       "toMs": 3000000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 82
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 93,
+        "total_token_count": 1704,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000247775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 93,
+          "output_tokens_details": {
+            "thinking_tokens": 71
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3000000,
       "toMs": 3030000,
-      "text": "{\"caption\": \"Starting around 50:17.5, a fire breaks out on the middle rack in Aisle 2 near the top shelves, with orange flames and a dark smoke plume rising. By 50:22.5 the flames and smoke have spread upward and the smoke plume is near Aisle 2's top shelf, and at 50:27.5 the fire is still burning on the Aisle 2 rack with smoke rising toward the top of the frame. Nothing else in the warehouse moves.\", \"objects\": [\"fire on Aisle 2 rack\", \"smoke plume above Aisle 2\", \"cardboard boxes on Aisle 2 rack\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 216
+      "text": "{\"caption\": \"Between 50:17.5 and 50:22.5, a fire with orange flames and a grey smoke plume appears on the aisle 2 rack, near the middle shelf, and the smoke obscures the AISLE 2 sign. By 50:27.5 the flames and smoke are still at the aisle 2 rack, with the smoke rising toward the top of the rack. Nothing else changes, and the scene is otherwise unchanged.\", \"objects\": [\"fire at aisle 2 rack\", \"smoke plume above aisle 2 rack\", \"AISLE 2 sign\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 616,
+        "total_token_count": 2227,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000509275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 616,
+          "output_tokens_details": {
+            "thinking_tokens": 420
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3030000,
       "toMs": 3060000,
-      "text": "{\"caption\": \"Orange flames and a gray smoke plume rise from the middle of the Aisle 2 shelving in the first three frames, with the smoke fading and the flames shrinking through 50:40. By 50:47.5 the fire and smoke are gone and stay absent through 50:57.5.\", \"objects\": [\"flames on Aisle 2 shelving\", \"gray smoke plume above Aisle 2\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 449
+      "text": "{\"caption\": \"Near Aisle 2, a fire with flames and a gray smoke plume is visible above the shelving at 50:30 and 50:35, with the flames and smoke appearing smaller by 50:40. By 50:47.5 the fire and smoke are gone, and the aisle stays clear through 50:57.5.\", \"objects\": [\"fire\", \"smoke plume\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 364,
+        "total_token_count": 1975,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000383275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 364,
+          "output_tokens_details": {
+            "thinking_tokens": 237
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3060000,
       "toMs": 3090000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 86
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 180,
+        "total_token_count": 1791,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00029127499999999996,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 180,
+          "output_tokens_details": {
+            "thinking_tokens": 158
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3090000,
       "toMs": 3120000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 22,
+        "total_token_count": 1633,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000212275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 22,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3120000,
       "toMs": 3150000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 86
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 147,
+        "total_token_count": 1758,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000274775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 147,
+          "output_tokens_details": {
+            "thinking_tokens": 125
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3150000,
       "toMs": 3180000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 107
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 132,
+        "total_token_count": 1743,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000267275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 132,
+          "output_tokens_details": {
+            "thinking_tokens": 110
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3180000,
       "toMs": 3210000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 97
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 100,
+        "total_token_count": 1711,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000251275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 100,
+          "output_tokens_details": {
+            "thinking_tokens": 78
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3210000,
       "toMs": 3240000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 107
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 95,
+        "total_token_count": 1706,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000248775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 95,
+          "output_tokens_details": {
+            "thinking_tokens": 73
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3240000,
       "toMs": 3270000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 121
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 119,
+        "total_token_count": 1730,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000260775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 119,
+          "output_tokens_details": {
+            "thinking_tokens": 97
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3270000,
       "toMs": 3300000,
-      "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 125
+      "text": "{\"caption\": \"Nothing happens. The warehouse aisles, dock door, exit door and boxes on the shelves stay in the same positions across all six frames, with only the timestamp in the top-left corner advancing from 06:54:30 to 06:54:57.\", \"objects\": [\"timestamp overlay\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 103,
+        "total_token_count": 1714,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000252775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 103,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3300000,
       "toMs": 3330000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 79
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 89,
+        "total_token_count": 1700,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000245775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 89,
+          "output_tokens_details": {
+            "thinking_tokens": 67
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3330000,
       "toMs": 3360000,
-      "text": "{\"caption\": \"The room lighting dims sharply between the 55:40 and 55:47 frames and stays dark through 55:57. No people or vehicles appear, and nothing moves.\", \"objects\": [\"room lighting\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 552
+      "text": "{\"caption\": \"The scene is bright in the first three frames, then the picture grows progressively darker from about 55:47 until it is very dim by 55:57, with the shelving, boxes, dock door and exit door all fading into shadow. No people or vehicles appear, and no objects visibly move.\", \"objects\": [\"ambient warehouse lighting\", \"stacked cardboard boxes on shelves\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 418,
+        "total_token_count": 2029,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000410275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 418,
+          "output_tokens_details": {
+            "thinking_tokens": 287
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3360000,
       "toMs": 3390000,
-      "text": "{\"caption\": \"The first frame at 56:00 is darker than the rest, and the picture brightens by 56:05, after which the scene stays the same. No people, vehicles, or objects move, appear, or disappear in Dock 1, Aisle 1 to 3, or at the Exit.\", \"objects\": [\"scene lighting\"]}",
-      "inputTokens": 1611,
-      "outputTokens": 483
+      "text": "{\"caption\": \"The camera view of the dock, aisles and exit stays static across all frames with no people or vehicles moving. The scene is noticeably darker in the first frame at 56:00 and brightens by 56:05, after which the lighting stays steady.\", \"objects\": [\"scene lighting\"]}",
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 378,
+        "total_token_count": 1989,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000390275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 378,
+          "output_tokens_details": {
+            "thinking_tokens": 280
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3390000,
       "toMs": 3420000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 111
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 132,
+        "total_token_count": 1743,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000267275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 132,
+          "output_tokens_details": {
+            "thinking_tokens": 110
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3420000,
       "toMs": 3450000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 117
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 122,
+        "total_token_count": 1733,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00026227499999999996,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 122,
+          "output_tokens_details": {
+            "thinking_tokens": 100
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3450000,
       "toMs": 3480000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 86
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 102,
+        "total_token_count": 1713,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000252275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 102,
+          "output_tokens_details": {
+            "thinking_tokens": 80
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3480000,
       "toMs": 3510000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 123,
+        "total_token_count": 1734,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000262775,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 123,
+          "output_tokens_details": {
+            "thinking_tokens": 101
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3510000,
       "toMs": 3540000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 22
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 22,
+        "total_token_count": 1633,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000212275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 22,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3540000,
       "toMs": 3570000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 93
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 87,
+        "total_token_count": 1698,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.00024477500000000003,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 87,
+          "output_tokens_details": {
+            "thinking_tokens": 65
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "fromMs": 3570000,
       "toMs": 3600000,
       "text": "{\"caption\": \"Nothing happens.\", \"objects\": []}",
-      "inputTokens": 1611,
-      "outputTokens": 101
+      "usage": {
+        "prompt_token_count": 1611,
+        "candidates_token_count": 128,
+        "total_token_count": 1739,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1607,
+        "cost": 0.000265275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1607
+          },
+          "cache_creation_input_tokens": 1607,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 128,
+          "output_tokens_details": {
+            "thinking_tokens": 106
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     }
   ],
   "expansions": [
     {
       "question": "When does the forklift drive up to aisle 2?",
-      "text": "{\"caption\": \"A forklift drives down the warehouse floor and pulls up to the entrance of aisle 2 between the tall shelving racks.\"}",
-      "inputTokens": 320,
-      "outputTokens": 50
+      "text": "{\"caption\": \"A forklift drives down the warehouse floor and pulls up to the entrance of aisle 2 between tall pallet racks.\"}",
+      "usage": {
+        "prompt_token_count": 320,
+        "candidates_token_count": 49,
+        "total_token_count": 369,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 0,
+        "cost": 0.0000565,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 320,
+          "output_tokens": 49,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When does a truck back into the dock door?",
-      "text": "{\"caption\": \"A large semi-truck reverses slowly toward a loading dock, backing its trailer into the dock door while a worker guides it in.\"}",
-      "inputTokens": 316,
-      "outputTokens": 50
+      "text": "{\"caption\": \"A large semi-truck reverses slowly toward a loading dock, backing its trailer into the dock door while a worker guides the driver.\"}",
+      "usage": {
+        "prompt_token_count": 316,
+        "candidates_token_count": 51,
+        "total_token_count": 367,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 0,
+        "cost": 0.0000571,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 316,
+          "output_tokens": 51,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When do boxes fall off the shelf?",
-      "text": "{\"caption\": \"A worker stacks cardboard boxes on a warehouse shelf, and several boxes slide and fall off the edge of the shelf onto the floor.\"}",
-      "inputTokens": 317,
-      "outputTokens": 57
+      "text": "{\"caption\": \"A worker bumps a shelving unit and several cardboard boxes slide off the edge of the shelf and tumble down onto the warehouse floor.\"}",
+      "usage": {
+        "prompt_token_count": 317,
+        "candidates_token_count": 56,
+        "total_token_count": 373,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 0,
+        "cost": 0.0000597,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 317,
+          "output_tokens": 56,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When does the worker in the yellow vest walk across the floor?",
-      "text": "{\"caption\": \"A worker wearing a yellow safety vest walks across the factory floor past rows of machinery while another employee works nearby.\"}",
-      "inputTokens": 323,
-      "outputTokens": 47
+      "text": "{\"caption\": \"A worker in a yellow safety vest walks slowly across the factory floor past the rows of machinery.\"}",
+      "usage": {
+        "prompt_token_count": 323,
+        "candidates_token_count": 41,
+        "total_token_count": 364,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 0,
+        "cost": 0.0000528,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 323,
+          "output_tokens": 41,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When is there a spill on the floor?",
-      "text": "{\"caption\": \"A liquid spill spreads across the tile floor, with a person pausing beside the puddle and reaching for a towel to clean it up.\"}",
-      "inputTokens": 315,
-      "outputTokens": 51
+      "text": "{\"caption\": \"A liquid spill spreads across the tile floor, with a person quickly moving to clean up the puddle.\"}",
+      "usage": {
+        "prompt_token_count": 315,
+        "candidates_token_count": 42,
+        "total_token_count": 357,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 0,
+        "cost": 0.0000525,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 315,
+          "output_tokens": 42,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When is the fire exit blocked?",
-      "text": "{\"caption\": \"A hallway with a marked fire exit door is shown, and a stack of boxes and a cart are placed in front of it, blocking the exit.\"}",
-      "inputTokens": 315,
-      "outputTokens": 53
+      "text": "{\"caption\": \"A hallway with a marked fire exit door is shown, and a stack of boxes and a cart are placed in front of the door, blocking it from being opened.\"}",
+      "usage": {
+        "prompt_token_count": 315,
+        "candidates_token_count": 56,
+        "total_token_count": 371,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 0,
+        "cost": 0.0000595,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 315,
+          "output_tokens": 56,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When does someone climb a ladder?",
-      "text": "{\"caption\": \"A worker in a yellow helmet climbs up a metal ladder leaning against the side of a building, grabbing each rung as they ascend to reach the roof.\"}",
-      "inputTokens": 315,
-      "outputTokens": 59
+      "text": "{\"caption\": \"A worker climbs a metal ladder up the side of a building, pulling themselves up one rung at a time to reach the roof.\"}",
+      "usage": {
+        "prompt_token_count": 315,
+        "candidates_token_count": 48,
+        "total_token_count": 363,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 0,
+        "cost": 0.0000555,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 315,
+          "output_tokens": 48,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When do two forklifts nearly collide?",
-      "text": "{\"caption\": \"Two forklifts approach each other in a warehouse aisle and nearly collide, swerving or braking just before they would hit.\"}",
-      "inputTokens": 317,
-      "outputTokens": 48
+      "text": "{\"caption\": \"Two forklifts in a warehouse aisle come close to colliding as one swerves sharply to avoid the other while a worker watches nearby.\"}",
+      "usage": {
+        "prompt_token_count": 317,
+        "candidates_token_count": 54,
+        "total_token_count": 371,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 0,
+        "cost": 0.000058700000000000004,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 317,
+          "output_tokens": 54,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When is there a fire?",
-      "text": "{\"caption\": \"Flames spread across a building as smoke rises and firefighters respond to the blaze.\"}",
-      "inputTokens": 311,
-      "outputTokens": 36
+      "text": "{\"caption\": \"Flames spread across the building as smoke rises and firefighters arrive to fight the blaze.\"}",
+      "usage": {
+        "prompt_token_count": 311,
+        "candidates_token_count": 39,
+        "total_token_count": 350,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 0,
+        "cost": 0.000050600000000000003,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 311,
+          "output_tokens": 39,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When do the lights go out?",
-      "text": "{\"caption\": \"The room's overhead lights switch off, plunging the scene into darkness as the lights go out.\"}",
-      "inputTokens": 312,
-      "outputTokens": 38
+      "text": "{\"caption\": \"The room's overhead lights switch off and the space goes dark as the lights go out.\"}",
+      "usage": {
+        "prompt_token_count": 312,
+        "candidates_token_count": 34,
+        "total_token_count": 346,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 0,
+        "cost": 0.000048200000000000006,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 312,
+          "output_tokens": 34,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     }
   ],
   "answers": [
     {
       "question": "When does the forklift drive up to aisle 2?",
-      "text": "{\"answer\": \"At about 3:17, the forklift arrives in front of the Aisle 1 and Aisle 2 racks, after entering from the right at about 3:10.\", \"chunks\": [1]}",
-      "inputTokens": 1472,
-      "outputTokens": 288
+      "text": "{\"answer\": \"No caption shows a forklift driving up to aisle 2. The forklift in chunk 1 (around 3:10–3:27) moves in front of the aisle racks but is not identified as aisle 2, and the forklifts in chunk 7 are near Aisles 1 and 3.\", \"chunks\": []}",
+      "usage": {
+        "prompt_token_count": 1522,
+        "candidates_token_count": 558,
+        "total_token_count": 2080,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1518,
+        "cost": 0.00046915,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1518
+          },
+          "cache_creation_input_tokens": 1518,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 558,
+          "output_tokens_details": {
+            "thinking_tokens": 452
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When does a truck back into the dock door?",
-      "text": "{\"answer\": \"A white truck with a trailer backs toward Dock 1 from about 9:47.5 to 9:57.5 (around 9:47–9:57 in the video).\", \"chunks\": [2]}",
-      "inputTokens": 1481,
-      "outputTokens": 69
+      "text": "{\"answer\": \"A white truck backs into dock 1 between about 9:47.5 and 9:52.5, after the roll-up door opens, and is still at the dock at 9:57.5.\", \"chunks\": [2]}",
+      "usage": {
+        "prompt_token_count": 1310,
+        "candidates_token_count": 72,
+        "total_token_count": 1382,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1306,
+        "cost": 0.00019965,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1306
+          },
+          "cache_creation_input_tokens": 1306,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 72,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When do boxes fall off the shelf?",
-      "text": "{\"answer\": \"Boxes fall off the upper shelf of Aisle 3 between about 15:22.5 and 15:27.5, tumbling or sliding to the right toward the EXIT door.\", \"chunks\": [3]}",
-      "inputTokens": 1392,
-      "outputTokens": 76
+      "text": "{\"answer\": \"Boxes fall off the Aisle 3 middle shelf at about 15:27 (around 15:27.5), as shown in chunk 3.\", \"chunks\": [3]}",
+      "usage": {
+        "prompt_token_count": 1408,
+        "candidates_token_count": 64,
+        "total_token_count": 1472,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1404,
+        "cost": 0.0002079,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1404
+          },
+          "cache_creation_input_tokens": 1404,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 64,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When does the worker in the yellow vest walk across the floor?",
-      "text": "{\"answer\": \"The worker in the yellow hi-vis vest walks across the floor around 21:10 to 21:22.5, moving from the left beside the aisle 1 racking to the right near the aisle 3 racking and exit door.\", \"chunks\": [3]}",
-      "inputTokens": 1509,
-      "outputTokens": 87
+      "text": "{\"answer\": \"The worker in the yellow vest walks across the floor from left to right between about 21:10 and 21:22, moving from the left past Aisle 2 to the far right near the EXIT door, then leaves by 21:27.5.\", \"chunks\": [3]}",
+      "usage": {
+        "prompt_token_count": 1507,
+        "candidates_token_count": 224,
+        "total_token_count": 1731,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1503,
+        "cost": 0.00030027499999999997,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1503
+          },
+          "cache_creation_input_tokens": 1503,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 224,
+          "output_tokens_details": {
+            "thinking_tokens": 136
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When is there a spill on the floor?",
-      "text": "{\"answer\": \"No caption clearly describes a spill. The closest is a small blue object that appears on the grey floor in front of Aisle 1 and Aisle 2 at about 26:52.5 and grows larger by 26:57.5, but it is not described as liquid.\", \"chunks\": [6]}",
-      "inputTokens": 1427,
-      "outputTokens": 542
+      "text": "{\"answer\": \"No caption describes a spill on the floor, so the video does not show one.\", \"chunks\": []}",
+      "usage": {
+        "prompt_token_count": 1398,
+        "candidates_token_count": 254,
+        "total_token_count": 1652,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1394,
+        "cost": 0.00030165,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1394
+          },
+          "cache_creation_input_tokens": 1394,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 254,
+          "output_tokens_details": {
+            "thinking_tokens": 217
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When is the fire exit blocked?",
-      "text": "{\"answer\": \"The exit is blocked from about 32:17.5 until about 32:45, when a stack of red crates on a wooden pallet sits in front of the EXIT door on the right. The stack is gone by 32:47.5.\", \"chunks\": [4, 5]}",
-      "inputTokens": 1451,
-      "outputTokens": 299
+      "text": "{\"answer\": \"The fire exit is blocked from about 32:17 until about 32:40 to 32:47, when a stack of red boxes on a wooden pallet stands in front of the EXIT door.\", \"chunks\": [4, 5]}",
+      "usage": {
+        "prompt_token_count": 1305,
+        "candidates_token_count": 203,
+        "total_token_count": 1508,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1301,
+        "cost": 0.000264525,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1301
+          },
+          "cache_creation_input_tokens": 1301,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 203,
+          "output_tokens_details": {
+            "thinking_tokens": 124
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When does someone climb a ladder?",
-      "text": "{\"answer\": \"A worker climbs a silver ladder in Aisle 1 between about 38:35 and 38:40 in the video.\", \"chunks\": [6]}",
-      "inputTokens": 1528,
-      "outputTokens": 55
+      "text": "{\"answer\": \"A worker climbs a metal ladder in front of the Aisle 1 racking at about 38:35, reaching near the top by 38:47 (38:30–39:00).\", \"chunks\": [6]}",
+      "usage": {
+        "prompt_token_count": 1492,
+        "candidates_token_count": 71,
+        "total_token_count": 1563,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1488,
+        "cost": 0.0002219,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1488
+          },
+          "cache_creation_input_tokens": 1488,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 71,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When do two forklifts nearly collide?",
-      "text": "{\"answer\": \"Around 44:05 to 44:22: a blue and an orange forklift converge toward the center in front of the racks, with a raised fork frame between them, before both leave the view. The captions don't explicitly describe a collision, so this is the closest match.\", \"chunks\": [5]}",
-      "inputTokens": 1513,
-      "outputTokens": 349
+      "text": "{\"answer\": \"No caption describes two forklifts nearly colliding. Chunk 5 (44:00.0–44:30.0) shows a blue and an orange forklift both moving toward the center of the floor by 44:17.5, but it does not describe a near collision.\", \"chunks\": []}",
+      "usage": {
+        "prompt_token_count": 1532,
+        "candidates_token_count": 531,
+        "total_token_count": 2063,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1528,
+        "cost": 0.0004569,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1528
+          },
+          "cache_creation_input_tokens": 1528,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 531,
+          "output_tokens_details": {
+            "thinking_tokens": 436
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When is there a fire?",
-      "text": "{\"answer\": \"A fire breaks out on the middle rack in Aisle 2 starting around 50:17.5, burning with flames and smoke through about 50:40, and it is gone by 50:47.5.\", \"chunks\": [7, 8]}",
-      "inputTokens": 1477,
-      "outputTokens": 81
+      "text": "{\"answer\": \"A fire is visible from about 50:17.5 to about 50:47.5 in the video, appearing on the Aisle 2 rack, growing in the 50:17.5–50:30 window, shrinking by 50:40, and gone by 50:47.5.\", \"chunks\": [5, 6]}",
+      "usage": {
+        "prompt_token_count": 1433,
+        "candidates_token_count": 102,
+        "total_token_count": 1535,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1429,
+        "cost": 0.000230025,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1429
+          },
+          "cache_creation_input_tokens": 1429,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 102,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     },
     {
       "question": "When do the lights go out?",
-      "text": "{\"answer\": \"The lights go out around 55:40 to 55:47, stay dark through about 55:57, and begin to brighten by 56:05.\", \"chunks\": [7, 8]}",
-      "inputTokens": 1436,
-      "outputTokens": 238
+      "text": "{\"answer\": \"The lights dim progressively starting around 55:47 and are very dim by 55:57, within the 55:30–56:00 segment; the scene is darkest around 56:00 before brightening by 56:05.\", \"chunks\": [7, 8]}",
+      "usage": {
+        "prompt_token_count": 1343,
+        "candidates_token_count": 85,
+        "total_token_count": 1428,
+        "cache_read_input_token_count": 0,
+        "cache_creation_input_token_count": 1339,
+        "cost": 0.000210275,
+        "provider_usage": {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 1339
+          },
+          "cache_creation_input_tokens": 1339,
+          "cache_read_input_tokens": 0,
+          "inference_geo": "global",
+          "input_tokens": 4,
+          "output_tokens": 85,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "speed": "standard"
+        }
+      }
     }
   ],
   "scored": [
     {
       "event": "forklift-aisle-2",
       "atMs": 190000,
-      "cited": [
-        180000,
-        210000
-      ],
-      "hit": true,
-      "answer": "At about 3:17, the forklift arrives in front of the Aisle 1 and Aisle 2 racks, after entering from the right at about 3:10."
+      "cited": null,
+      "hit": false,
+      "answer": "No caption shows a forklift driving up to aisle 2. The forklift in chunk 1 (around 3:10–3:27) moves in front of the aisle racks but is not identified as aisle 2, and the forklifts in chunk 7 are near Aisles 1 and 3."
     },
     {
       "event": "truck-docks",
@@ -993,7 +4070,7 @@
         600000
       ],
       "hit": true,
-      "answer": "A white truck with a trailer backs toward Dock 1 from about 9:47.5 to 9:57.5 (around 9:47–9:57 in the video)."
+      "answer": "A white truck backs into dock 1 between about 9:47.5 and 9:52.5, after the roll-up door opens, and is still at the dock at 9:57.5."
     },
     {
       "event": "boxes-fall",
@@ -1003,7 +4080,7 @@
         930000
       ],
       "hit": true,
-      "answer": "Boxes fall off the upper shelf of Aisle 3 between about 15:22.5 and 15:27.5, tumbling or sliding to the right toward the EXIT door."
+      "answer": "Boxes fall off the Aisle 3 middle shelf at about 15:27 (around 15:27.5), as shown in chunk 3."
     },
     {
       "event": "vest-worker-crosses",
@@ -1013,17 +4090,14 @@
         1290000
       ],
       "hit": true,
-      "answer": "The worker in the yellow hi-vis vest walks across the floor around 21:10 to 21:22.5, moving from the left beside the aisle 1 racking to the right near the aisle 3 racking and exit door."
+      "answer": "The worker in the yellow vest walks across the floor from left to right between about 21:10 and 21:22, moving from the left past Aisle 2 to the far right near the EXIT door, then leaves by 21:27.5."
     },
     {
       "event": "spill",
       "atMs": 1612000,
-      "cited": [
-        1590000,
-        1620000
-      ],
-      "hit": true,
-      "answer": "No caption clearly describes a spill. The closest is a small blue object that appears on the grey floor in front of Aisle 1 and Aisle 2 at about 26:52.5 and grows larger by 26:57.5, but it is not described as liquid."
+      "cited": null,
+      "hit": false,
+      "answer": "No caption describes a spill on the floor, so the video does not show one."
     },
     {
       "event": "exit-blocked",
@@ -1033,7 +4107,7 @@
         1950000
       ],
       "hit": true,
-      "answer": "The exit is blocked from about 32:17.5 until about 32:45, when a stack of red crates on a wooden pallet sits in front of the EXIT door on the right. The stack is gone by 32:47.5."
+      "answer": "The fire exit is blocked from about 32:17 until about 32:40 to 32:47, when a stack of red boxes on a wooden pallet stands in front of the EXIT door."
     },
     {
       "event": "ladder-climb",
@@ -1043,17 +4117,14 @@
         2340000
       ],
       "hit": true,
-      "answer": "A worker climbs a silver ladder in Aisle 1 between about 38:35 and 38:40 in the video."
+      "answer": "A worker climbs a metal ladder in front of the Aisle 1 racking at about 38:35, reaching near the top by 38:47 (38:30–39:00)."
     },
     {
       "event": "near-miss",
       "atMs": 2647000,
-      "cited": [
-        2640000,
-        2670000
-      ],
-      "hit": true,
-      "answer": "Around 44:05 to 44:22: a blue and an orange forklift converge toward the center in front of the racks, with a raised fork frame between them, before both leave the view. The captions don't explicitly describe a collision, so this is the closest match."
+      "cited": null,
+      "hit": false,
+      "answer": "No caption describes two forklifts nearly colliding. Chunk 5 (44:00.0–44:30.0) shows a blue and an orange forklift both moving toward the center of the floor by 44:17.5, but it does not describe a near collision."
     },
     {
       "event": "fire",
@@ -1063,7 +4134,7 @@
         3030000
       ],
       "hit": true,
-      "answer": "A fire breaks out on the middle rack in Aisle 2 starting around 50:17.5, burning with flames and smoke through about 50:40, and it is gone by 50:47.5."
+      "answer": "A fire is visible from about 50:17.5 to about 50:47.5 in the video, appearing on the Aisle 2 rack, growing in the 50:17.5–50:30 window, shrinking by 50:40, and gone by 50:47.5."
     },
     {
       "event": "lights-out",
@@ -1073,8 +4144,8 @@
         3360000
       ],
       "hit": true,
-      "answer": "The lights go out around 55:40 to 55:47, stay dark through about 55:57, and begin to brighten by 56:05."
+      "answer": "The lights dim progressively starting around 55:47 and are very dim by 55:57, within the 55:30–56:00 segment; the scene is darkest around 56:00 before brightening by 56:05."
     }
   ],
-  "costPerHourMicroUsd": 32688
+  "costPerHourMicroUsd": 32904
 }

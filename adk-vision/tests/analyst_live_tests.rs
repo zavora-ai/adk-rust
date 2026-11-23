@@ -139,18 +139,23 @@ async fn s17_an_hour_of_warehouse_video_answered_from_captions() {
         answer_cost += answer.usage.cost_micro_usd.unwrap_or(0);
         let s = score(event, &answer);
         println!(
-            "{} {:<20} at {:>8} ms cited {:?}: {} [searched with: {}]",
+            "{} {:<20} at {:>8} ms cited {:?} supported {:?}: {} [searched with: {}]",
             if s.hit { "HIT " } else { "MISS" },
             s.event,
             s.at_ms,
             s.cited,
+            s.supported,
             s.answer,
             answer.expanded.as_deref().unwrap_or_default()
         );
         scored.push(s);
     }
     let hits = scored.iter().filter(|s| s.hit).count();
-    println!("{hits}/10 answers cite the chunk of their event; answers cost {answer_cost} µUSD");
+    let supported = scored.iter().filter(|s| s.hit && s.supported == Some(true)).count();
+    println!(
+        "{hits}/10 answers cite the chunk of their event ({supported} found in the captions); \
+         answers cost {answer_cost} µUSD"
+    );
 
     let mut recording = recorder.recording.lock().unwrap().clone();
     recording.width = clip.spec().width;

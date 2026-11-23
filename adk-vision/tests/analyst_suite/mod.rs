@@ -83,6 +83,7 @@ pub struct Scored {
     pub at_ms: u64,
     pub cited: Option<(u64, u64)>,
     pub hit: bool,
+    pub supported: Option<bool>,
     pub answer: String,
 }
 
@@ -93,6 +94,7 @@ pub fn score(event: &WarehouseEvent, answer: &AnalystAnswer) -> Scored {
         at_ms: event.at_ms,
         cited: primary.map(|c| (c.start_ms, c.end_ms)),
         hit: primary.is_some_and(|c| c.contains(event.at_ms)),
+        supported: answer.supported,
         answer: answer.answer.clone(),
     }
 }
@@ -135,16 +137,21 @@ pub fn prompt_of(req: &LlmRequest) -> String {
         .join("\n")
 }
 
-fn respond(text: &str, input: u64, output: u64) -> LlmResponseStream {
+fn respond(text: &str, usage: UsageMetadata) -> LlmResponseStream {
     let mut response = LlmResponse::new(Content::new("model").with_text(text));
-    response.usage_metadata = Some(UsageMetadata {
-        prompt_token_count: i32::try_from(input).unwrap_or(i32::MAX),
-        candidates_token_count: i32::try_from(output).unwrap_or(i32::MAX),
-        total_token_count: i32::try_from(input + output).unwrap_or(i32::MAX),
-        ..Default::default()
-    });
+    response.usage_metadata = Some(usage);
     response.turn_complete = true;
     Box::pin(futures::stream::iter([Ok(response)]))
+}
+
+/// Usage of `input` prompt and `output` candidate tokens.
+fn tokens(input: i32, output: i32) -> UsageMetadata {
+    UsageMetadata {
+        prompt_token_count: input,
+        candidates_token_count: output,
+        total_token_count: input + output,
+        ..Default::default()
+    }
 }
 
 /// A recorded model call.
@@ -154,8 +161,8 @@ pub struct RecordedCaption {
     pub from_ms: u64,
     pub to_ms: u64,
     pub text: String,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
+    /// The usage the provider reported, thinking and cache tokens included.
+    pub usage: UsageMetadata,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -163,8 +170,8 @@ pub struct RecordedCaption {
 pub struct RecordedAnswer {
     pub question: String,
     pub text: String,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
+    /// The usage the provider reported, thinking and cache tokens included.
+    pub usage: UsageMetadata,
 }
 
 /// A live S17 run: what was asked of the model and what it answered, and the result.
@@ -215,7 +222,7 @@ impl Llm for Recorder {
         let mut responses: Vec<adk_core::Result<LlmResponse>> =
             self.inner.generate_content(req, stream).await?.collect().await;
         let mut text = String::new();
-        let (mut input, mut output) = (0, 0);
+        let mut usage = UsageMetadata::default();
         for response in responses.iter().flatten() {
             if !response.partial {
                 for part in response.content.iter().flat_map(|c| c.parts.iter()) {
@@ -225,35 +232,18 @@ impl Llm for Recorder {
                 }
             }
             if let Some(u) = &response.usage_metadata {
-                input = u64::try_from(u.prompt_token_count).unwrap_or(0);
-                output = u64::try_from(u.candidates_token_count).unwrap_or(0);
+                usage = u.clone();
             }
         }
         let mut recording = self.recording.lock().unwrap();
         if let Some(question) = expansion_of(&prompt) {
-            recording.expansions.push(RecordedAnswer {
-                question,
-                text,
-                input_tokens: input,
-                output_tokens: output,
-            });
+            recording.expansions.push(RecordedAnswer { question, text, usage });
         } else if let Some((from_ms, to_ms)) =
             caption_range(&prompt).filter(|_| !prompt.contains("Question:"))
         {
-            recording.captions.push(RecordedCaption {
-                from_ms,
-                to_ms,
-                text,
-                input_tokens: input,
-                output_tokens: output,
-            });
+            recording.captions.push(RecordedCaption { from_ms, to_ms, text, usage });
         } else if let Some(question) = question_of(&prompt) {
-            recording.answers.push(RecordedAnswer {
-                question,
-                text,
-                input_tokens: input,
-                output_tokens: output,
-            });
+            recording.answers.push(RecordedAnswer { question, text, usage });
         }
         drop(recording);
         Ok(Box::pin(futures::stream::iter(std::mem::take(&mut responses))))
@@ -297,7 +287,7 @@ impl Llm for Replay {
                 .iter()
                 .find(|a| a.question == question)
                 .unwrap_or_else(|| panic!("no recorded expansion of {question:?}"));
-            return Ok(respond(&found.text, found.input_tokens, found.output_tokens));
+            return Ok(respond(&found.text, found.usage.clone()));
         }
         if let Some(question) = question_of(&prompt) {
             let found = self
@@ -306,7 +296,7 @@ impl Llm for Replay {
                 .iter()
                 .find(|a| a.question == question)
                 .unwrap_or_else(|| panic!("no recorded answer to {question:?}"));
-            return Ok(respond(&found.text, found.input_tokens, found.output_tokens));
+            return Ok(respond(&found.text, found.usage.clone()));
         }
         let (from, to) =
             caption_range(&prompt).unwrap_or_else(|| panic!("an unexpected prompt: {prompt}"));
@@ -318,7 +308,7 @@ impl Llm for Replay {
             .max_by_key(|c| overlap(c))
             .filter(|c| overlap(c) > 0)
             .unwrap_or_else(|| panic!("no recorded caption for {from}–{to} ms"));
-        Ok(respond(&found.text, found.input_tokens, found.output_tokens))
+        Ok(respond(&found.text, found.usage.clone()))
     }
 
     fn data_locality(&self) -> DataLocality {
@@ -352,7 +342,7 @@ impl Llm for Oracle {
         if let Some(question) = expansion_of(&prompt) {
             let event = self.clip.events().iter().find(|e| e.question == question).unwrap();
             let caption = serde_json::json!({"caption": capitalised(&event.description)});
-            return Ok(respond(&caption.to_string(), 60, 20));
+            return Ok(respond(&caption.to_string(), tokens(60, 20)));
         }
         if let Some(question) = question_of(&prompt) {
             let event = self.clip.events().iter().find(|e| e.question == question).unwrap();
@@ -361,9 +351,8 @@ impl Llm for Oracle {
                 .find(|l| l.ends_with(&format!(": {}.", capitalised(&event.description))))
                 .and_then(|l| l.strip_prefix('[')?.split_once(']')?.0.parse::<u64>().ok());
             let chunks: Vec<u64> = line.into_iter().chain([99]).collect();
-            let answer =
-                serde_json::json!({"answer": format!("{}.", event.description), "chunks": chunks});
-            return Ok(respond(&answer.to_string(), 400, 30));
+            let answer = serde_json::json!({"answer": format!("{}.", event.description), "supported": true, "chunks": chunks});
+            return Ok(respond(&answer.to_string(), tokens(400, 30)));
         }
         let (from, to) = caption_range(&prompt).unwrap();
         let starting: Vec<&WarehouseEvent> =
@@ -378,7 +367,7 @@ impl Llm for Oracle {
                 "objects": events.iter().map(|e| e.id.clone()).collect::<Vec<_>>()
             }),
         };
-        Ok(respond(&caption.to_string(), 900, 40))
+        Ok(respond(&caption.to_string(), tokens(900, 40)))
     }
 
     fn data_locality(&self) -> DataLocality {

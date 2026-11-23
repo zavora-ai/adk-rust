@@ -124,7 +124,7 @@ const EVENTS: [(&str, u64, u64, &str, &str); 10] = [
         "spill",
         1_612,
         25,
-        "a blue liquid spill spreads on the floor in front of aisle 1",
+        "a blue drum lies on its side and its liquid spills across the floor in front of aisle 1",
         "When is there a spill on the floor?",
     ),
     (
@@ -424,6 +424,11 @@ impl WarehouseClip {
             c.worker(x, 220.0, [245, 225, 40], true, t_ms);
         }
         if let Some(d) = self.during("spill", t_ms) {
+            // A blue drum on its side, its liquid spreading from the open end.
+            c.rect(116.0, 188.0, 146.0, 206.0, [40, 80, 170]);
+            c.ellipse(146.0, 197.0, 4.0, 9.0, [25, 50, 120]);
+            c.rect(120.0, 188.0, 122.0, 206.0, [70, 110, 200]);
+            c.rect(138.0, 188.0, 140.0, 206.0, [70, 110, 200]);
             let r = 6.0 + 40.0 * (d as f32 / 8_000.0).min(1.0);
             c.ellipse(158.0, 214.0, r, r * 0.32, [50, 110, 220]);
             c.ellipse(158.0 + r * 0.4, 216.0, r * 0.5, r * 0.18, [80, 140, 235]);

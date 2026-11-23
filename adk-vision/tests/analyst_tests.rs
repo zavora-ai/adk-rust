@@ -197,6 +197,11 @@ async fn an_hour_of_warehouse_video_is_chunked_captioned_indexed_answered_and_er
             "the oracle's citation of a line it was not shown is dropped"
         );
         assert_eq!(answer.answered_by.as_deref(), Some("qwen3-vl-4b-instruct"));
+        assert_eq!(answer.supported, Some(true));
+        assert_eq!(
+            answer.expanded.as_deref(),
+            Some(analyst_suite::capitalised(&event.description).as_str())
+        );
         assert!(answer.retrieved.len() <= 8);
         hits += usize::from(scored.hit);
     }

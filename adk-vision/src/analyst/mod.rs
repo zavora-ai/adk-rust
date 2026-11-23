@@ -488,9 +488,12 @@ pub struct AnalystAnswer {
     pub question: String,
     /// The answer in words.
     pub answer: String,
-    /// The chunks the answer cites, the one that answers best first; empty when no caption
-    /// answers the question.
+    /// The chunks the answer cites, the one that answers best first: when no caption shows
+    /// the answer ([`supported`](Self::supported) is false), the closest matches.
     pub citations: Vec<VideoChunk>,
+    /// Whether the answerer found the answer in the captions; `None` without an answerer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supported: Option<bool>,
     /// The chunks the answerer was shown, nearest first.
     pub retrieved: Vec<ChunkHit>,
     /// The caption the answerer expected the answer's chunk to have, searched for with the
@@ -1035,7 +1038,8 @@ impl VideoAnalyst {
     /// (the default), the answerer first writes the caption it expects the answer's chunk to
     /// have, and the retrieval searches for the question and that caption. The answerer
     /// sees each retrieved chunk's number, time range and caption, in time order, and cites
-    /// by number; a number it was not shown is dropped.
+    /// by number — the closest chunks when no caption shows the answer, with
+    /// [`supported`](AnalystAnswer::supported) false; a number it was not shown is dropped.
     /// Without an answerer, the nearest chunk is the answer. Writes `vision.analyst.asked`.
     ///
     /// # Errors
@@ -1068,6 +1072,7 @@ impl VideoAnalyst {
             citations: Vec::new(),
             retrieved,
             expanded,
+            supported: None,
             usage,
             answered_by: None,
         };
@@ -1123,12 +1128,13 @@ impl VideoAnalyst {
             "You answer questions about a video from captions of its chunks. Each line is one \
              chunk: its number, its time range from the start of the video, and its caption.\n\n\
              {}\n\nQuestion: {}\n\nAnswer with JSON only: {{\"answer\": <the answer in words, \
-             naming the time>, \"chunks\": [<the numbers of the chunks that show it, the one \
-             where it is first seen first>]}}. Cite only chunks listed above. The captions \
-             come from a model that saw a few frames of each chunk and can be imprecise about \
-             details such as positions and colours: when a caption describes the asked event \
-             approximately, cite it. If no caption answers the question, say so and give no \
-             chunks.",
+             naming the time>, \"supported\": <true when the captions show what the question \
+             asks, false when none does>, \"chunks\": [<the numbers of the chunks that show it, \
+             the one where it is first seen first; when no caption shows it, the closest \
+             matches>]}}. Cite only chunks listed above. The captions come from a model that saw \
+             a few frames of each chunk and can be imprecise about details such as positions \
+             and colours, so a caption that describes the asked event in other words or \
+             approximately shows it.",
             if lines.is_empty() { "(no chunks)".to_string() } else { lines.join("\n") },
             answer.question
         );
@@ -1136,13 +1142,15 @@ impl VideoAnalyst {
             "type": "object",
             "properties": {
                 "answer": {"type": "string"},
+                "supported": {"type": "boolean"},
                 "chunks": {"type": "array", "items": {"type": "integer"}}
             },
-            "required": ["answer", "chunks"]
+            "required": ["answer", "supported", "chunks"]
         });
         let root = Self::text_call(cx, answerer, prompt, schema, &mut answer.usage).await?;
         answer.answer =
             root.get("answer").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+        answer.supported = root.get("supported").and_then(Value::as_bool);
         for n in root.get("chunks").and_then(Value::as_array).into_iter().flatten() {
             let Some(n) =
                 n.as_u64().or_else(|| n.as_str()?.trim().trim_matches(['[', ']']).parse().ok())
