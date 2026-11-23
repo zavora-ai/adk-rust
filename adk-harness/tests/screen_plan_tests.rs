@@ -413,6 +413,10 @@ async fn one_approval_runs_a_plan_and_a_deviation_is_held_again() {
         ]
     );
     assert_eq!(executed[2]["deviation"], "wrongTarget");
+
+    // The plan's approval is a decision on the steps it showed, never a standing rule.
+    let rules = fixture.harness.standing_rules().list(common::APP, "alice").await.unwrap();
+    assert!(rules.is_empty(), "{rules:?}");
 }
 
 #[tokio::test]
