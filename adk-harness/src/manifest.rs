@@ -598,38 +598,58 @@ impl HarnessManifest {
     /// timestamp and no session data, so it is byte-identical for every build with the
     /// same configuration; at most [`HARNESS_BLOCK_MAX_BYTES`], ending with the sections
     /// it cut and `harness_help <topic>` when longer.
+    ///
+    /// A longer block cuts the flags first, then the setup lines, then the commands; the
+    /// class lines, what each safety mechanism covers and the `harness_help` line are kept
+    /// whatever the surface lists.
     pub fn render(&self) -> String {
         let header = format!(
             "<harness version=\"{}\" surface=\"{} {}\">\n",
             self.harness_version, self.surface.name, self.surface.version
         );
         let footer = "</harness>";
-        let mut sections: Vec<(&str, String)> = vec![("classes", self.render_classes())];
-        sections.push(("commands", self.render_commands(false)));
-        sections.push(("setup", self.render_setup()));
-        sections.push(("safety", self.render_safety()));
-        sections.push(("flags", self.render_commands(true)));
-        sections.push((
-            "help",
-            format!(
-                "harness_help explains the harness on demand; topics: {}, or a page name.\n",
-                self.help_topics.join(", ")
+        // In reading order, each with its rank: sections are kept from rank 0 up, so the
+        // commands a surface adds never push out what the model must not over-promise.
+        let sections = [
+            ("classes", 0, self.render_classes()),
+            ("commands", 3, self.render_commands(false)),
+            ("setup", 4, self.render_setup()),
+            ("safety", 1, self.render_safety()),
+            ("flags", 5, self.render_commands(true)),
+            (
+                "help",
+                2,
+                format!(
+                    "harness_help explains the harness on demand; topics: {}, or a page name.\n",
+                    self.help_topics.join(", ")
+                ),
             ),
-        ));
+        ];
         // Room for the line naming every section, should all of them be cut.
         let reserve = "Cut for length: . harness_help <topic> returns them.\n".len()
-            + sections.iter().map(|(name, _)| name.len() + ", ".len()).sum::<usize>();
+            + sections.iter().map(|(name, ..)| name.len() + ", ".len()).sum::<usize>();
+        let mut room =
+            HARNESS_BLOCK_MAX_BYTES.saturating_sub(header.len() + footer.len() + reserve);
+        let mut ranked: Vec<&(&str, u8, String)> = sections.iter().collect();
+        ranked.sort_by_key(|(_, rank, _)| *rank);
+        let mut kept = Vec::new();
+        for (name, _, text) in ranked {
+            // A section that does not fit is cut; the smaller ones ranked after it still go in.
+            if text.len() <= room {
+                room -= text.len();
+                kept.push(*name);
+            }
+        }
         let mut out = header;
         let mut cut = Vec::new();
-        for (name, text) in sections {
+        for (name, _, text) in &sections {
             if text.is_empty() {
                 continue;
             }
-            // A section that does not fit is cut; the smaller ones after it still go in.
-            if out.len() + text.len() + footer.len() + reserve <= HARNESS_BLOCK_MAX_BYTES {
-                out.push_str(&text);
+            if kept.contains(name) {
+                out.push_str(text);
             } else {
-                cut.push(name);
+                cut.push(*name);
             }
         }
         if !cut.is_empty() {
@@ -839,6 +859,14 @@ impl HarnessManifest {
                     None => format!("{} {}: {}", self.surface.name, entry.name, entry.summary),
                 }
             }
+            // The sections the block names when it cuts them.
+            Some("classes") => self.render_classes(),
+            Some("setup") => self.render_setup(),
+            Some("safety") => self.render_safety(),
+            Some("flags") => {
+                let flags = self.render_commands(true);
+                if flags.is_empty() { "This surface lists no flags.".to_string() } else { flags }
+            }
             Some(page) => pages.get(page)?.clone(),
         };
         let topic = topic.unwrap_or("");
@@ -929,6 +957,13 @@ mod tests {
                 .commands((0..commands).map(|n| {
                     CommandEntry::flag(format!("--flag-{n:04}"), "a flag with a summary")
                 }));
+        manifest_for(surface, snapshots)
+    }
+
+    fn manifest_for(
+        surface: SurfaceManifest,
+        snapshots: Option<crate::snapshot::SnapshotConfig>,
+    ) -> HarnessManifest {
         HarnessManifest::generate(ManifestInputs {
             surface,
             default_mode: HarnessMode::Ask,
@@ -1010,6 +1045,71 @@ mod tests {
             "classes are never cut"
         );
         assert!(block.ends_with("</harness>"));
+    }
+
+    /// However many subcommands a surface lists, the block keeps its class lines, what each
+    /// safety mechanism covers and the `harness_help` line, and every section it cuts is a
+    /// `harness_help` topic (spec 3.1 §7.25).
+    #[test]
+    fn the_commands_never_push_out_the_safety_lines() {
+        let pages = BTreeMap::new();
+        for count in 0..=120 {
+            let surface = SurfaceManifest::new("adk-rust", "3.0.0")
+                .commands((0..count).map(|n| {
+                    CommandEntry::subcommand(format!("command-{n:03}"), "a subcommand", None)
+                }))
+                .commands(
+                    (0..count).map(|n| CommandEntry::flag(format!("--flag-{n:03}"), "a flag")),
+                );
+            let manifest = manifest_for(surface, None);
+            let block = manifest.render();
+            assert!(block.len() <= HARNESS_BLOCK_MAX_BYTES, "{count}: {} bytes", block.len());
+            assert!(
+                block.contains("edit (edit_file): deny | deny | ask | allow"),
+                "{count}: {block}"
+            );
+            assert!(
+                block.contains("Safety (promise only what these cover):\n"),
+                "{count}: {block}"
+            );
+            assert!(block.contains("\nharness_help explains the harness"), "{count}: {block}");
+            let cut = block.lines().find_map(|line| line.strip_prefix("Cut for length: "));
+            let names = cut.and_then(|line| line.split_once(". ")).map_or("", |(names, _)| names);
+            for name in names.split(", ").filter(|name| !name.is_empty()) {
+                assert!(
+                    manifest.help(Some(name), &pages).is_some(),
+                    "{count}: harness_help {name}"
+                );
+            }
+        }
+        let crowded = manifest_for(
+            SurfaceManifest::new("adk-rust", "3.0.0").commands((0..200).map(|n| {
+                CommandEntry::subcommand(format!("command-{n:03}"), "a subcommand", None)
+            })),
+            None,
+        )
+        .render();
+        assert!(crowded.contains("Cut for length: commands."), "{crowded}");
+        assert!(crowded.contains("Safety (promise only what these cover):\n"), "{crowded}");
+    }
+
+    #[test]
+    fn harness_help_returns_each_section_the_block_can_cut() {
+        let manifest = manifest(400);
+        let pages = BTreeMap::new();
+        assert!(manifest.render().contains("Cut for length: flags."));
+        let flags = manifest.help(Some("flags"), &pages).unwrap();
+        assert!(flags.contains("adk-rust --flag-0399  a flag with a summary"), "{flags}");
+        for (topic, line) in [
+            ("classes", "  edit (edit_file): deny | deny | ask | allow\n"),
+            ("setup", "Packs: "),
+            ("safety", "  rewind: covers nothing: no rewind in this build"),
+        ] {
+            let help = manifest.help(Some(topic), &pages).unwrap();
+            assert!(help.contains(line), "harness_help {topic}: {help}");
+        }
+        let none = manifest_for(SurfaceManifest::library(), None);
+        assert!(none.help(Some("flags"), &pages).unwrap().contains("This surface lists no flags."));
     }
 
     #[test]
