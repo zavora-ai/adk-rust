@@ -220,6 +220,7 @@ impl SurfaceEngine {
 
     /// Camera `camera`'s picture for a feed that already checked the caller may see it: the
     /// sessions are not read again for every frame.
+    #[cfg(feature = "web")]
     pub(crate) async fn camera_stage_after_check(
         &self,
         caller: &Caller,
