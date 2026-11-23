@@ -1,14 +1,15 @@
 //! S15 (perceiver, reasoner, verifier): the Inspector as a `VisionTeam` on one conveyor frame.
 //!
-//! The frame shows two whole parts: one with a seeded crack the perceiver is sure of, and one
-//! with a short scratch it is not, and above the belt an operator, a generated portrait. The
+//! The frame shows parts on the belt — one with a seeded crack the perceiver is sure of, one
+//! with a short scratch it is not — and above the belt an operator, a generated portrait. The
 //! perceiver runs the Inspector's detector on the device and holds only local tools. The
 //! ambiguous scratch goes, as a crop the egress gate cut and screened for faces, to the
 //! reasoner, Claude Haiku 5.5; the verifier re-checks it with a stricter on-device detector
-//! and decides on NVIDIA NIM's `nemotron-3.5-super-vl`, another provider. Both answer from
-//! responses recorded live, through their real clients. They disagree, so the team holds one
-//! card with both opinions, the frame and the crop; the person's approval resolves it on the
-//! resumed run.
+//! and decides on NVIDIA NIM's `nemotron-3.5-super-vl`, another provider. Both are reached
+//! through their real clients at a local server, which answers in each provider's wire format
+//! (`fixtures/recorded/README.md` says whether an answer was recorded live or scripted). They
+//! disagree, so the team holds one card with both opinions, the frame and the crop; the
+//! person's approval resolves it on the resumed run.
 
 use std::sync::Arc;
 
@@ -31,8 +32,8 @@ use adk_vision::team::{
 };
 use adk_vision::{
     BBox, DEFAULT_FACE_DETECTOR, DecodedImage, DetectQuery, DeterministicEditor, Digest,
-    EgressGate, FaceRedactor, InMemoryEgressRecorder, LlmDescriber, ManifestSet, MediaStore,
-    SourceImage, VisionConfig, VisionCx, VisionRuntime, VisionToolset,
+    EgressGate, EgressReceipt, FaceRedactor, InMemoryEgressRecorder, LlmDescriber, ManifestSet,
+    MediaStore, RedactionClass, SourceImage, VisionConfig, VisionCx, VisionRuntime, VisionToolset,
 };
 use anyhow::{Context, Result};
 use futures::StreamExt;
@@ -158,7 +159,7 @@ impl Tool for Upload {
     }
 }
 
-/// A recorded provider behind a local server, or behind the recording proxy `name` names.
+/// A provider's answer behind a local server, or behind the recording proxy `name` names.
 async fn provider(name: &str, key: &str, file: &str) -> Result<(String, String, MockServer)> {
     let server = MockServer::start().await;
     Ok(match recording_proxy(name) {
@@ -170,10 +171,17 @@ async fn provider(name: &str, key: &str, file: &str) -> Result<(String, String, 
     })
 }
 
-/// The digest of the image a recorded request carried, as the proxy reduced it.
-fn recorded_image(file: &str) -> Result<Option<String>> {
-    let text = read_json(&fixtures().join("recorded").join(file))?["request"].to_string();
-    Ok(text.split_once("sha256:").map(|(_, rest)| format!("sha256:{}", &rest[..64])))
+/// Whether a fixture's answer was scripted rather than recorded live, and the digest of the
+/// image its request carried, as the recording proxy reduces an image.
+fn fixture(file: &str) -> Result<(bool, Option<String>)> {
+    let value = read_json(&fixtures().join("recorded").join(file))?;
+    let request = value["request"].to_string();
+    let image = request
+        .split_once("{{image:")
+        .and_then(|(_, rest)| rest.split_once("sha256:"))
+        .and_then(|(_, rest)| rest.get(..64))
+        .map(|hex| format!("sha256:{hex}"));
+    Ok((value["scripted"].as_bool().unwrap_or(false), image))
 }
 
 /// The faces YuNet finds in `image`.
@@ -207,10 +215,16 @@ fn cards(events: &[Event]) -> Vec<ToolConfirmationRequest> {
 
 pub async fn run() -> Result<Checks> {
     let mut checks = Checks::default();
-    checks.note(
-        "the Inspector's detector and YuNet on the device; Claude Haiku 5.5 and NIM \
-         nemotron-3.5-super-vl on responses recorded live",
-    );
+    let (claude_file, nim_file) = ("claude/s15-haiku-crop.json", "nim-vlm/s15-nemotron-crop.json");
+    let ((claude_scripted, claude_image), (nim_scripted, nim_image)) =
+        (fixture(claude_file)?, fixture(nim_file)?);
+    let answers = |scripted: bool| if scripted { "a scripted answer" } else { "a live recording" };
+    checks.note(format!(
+        "the Inspector's detector and YuNet on the device; Claude Haiku 5.5 on {} and NIM \
+         nemotron-3.5-super-vl on {}, through their real clients",
+        answers(claude_scripted),
+        answers(nim_scripted)
+    ));
     let scene = scene()?;
     let frame = scene.source.digest();
     let artifacts = Arc::new(InMemoryArtifactService::new());
@@ -240,13 +254,12 @@ pub async fn run() -> Result<Checks> {
     );
 
     let (claude_base, claude_key, claude_server) =
-        provider("ANTHROPIC", "ANTHROPIC_API_KEY", "claude/s15-haiku-crop.json").await?;
+        provider("ANTHROPIC", "ANTHROPIC_API_KEY", claude_file).await?;
     let config = adk_model::anthropic::AnthropicConfig::new(claude_key, REASONER)
         .allow_insecure_http()
         .with_base_url(claude_base);
     let claude: Arc<dyn Llm> = Arc::new(adk_model::AnthropicClient::new(config)?);
-    let (nim_base, nim_key, nim_server) =
-        provider("NIM_VLM", "NVIDIA_API_KEY", "nim-vlm/s15-nemotron-crop.json").await?;
+    let (nim_base, nim_key, nim_server) = provider("NIM_VLM", "NVIDIA_API_KEY", nim_file).await?;
     let nim = NimConfig::new(format!("{nim_base}/v1"), nim_key, VERIFIER).client()?;
     let nemotron: Arc<dyn Llm> = Arc::new(Hosted(Arc::new(nim)));
 
@@ -354,25 +367,24 @@ pub async fn run() -> Result<Checks> {
 
     // What left the machine: one crop for each of the two models, both of the scratch.
     let released = recorder.released();
-    let sent: Vec<Vec<u8>> = [&claude_server, &nim_server]
-        .iter()
-        .map(|server| async move { requests(server).await })
-        .collect::<futures::future::JoinAll<_>>()
-        .await
-        .iter()
-        .flatten()
-        .flat_map(images_in)
-        .collect();
+    let mut sent: Vec<Vec<u8>> = Vec::new();
+    for server in [&claude_server, &nim_server] {
+        sent.extend(requests(server).await.iter().flat_map(images_in));
+    }
     let egress: Vec<Digest> = released.iter().map(|r| r.egress).collect();
-    let crop_of_scratch = |r: &adk_vision::EgressReceipt| {
+    // A crop of the frame that holds the whole scratch and not the seeded crack, screened for
+    // faces.
+    let crop_of_scratch = |r: &EgressReceipt| {
         let (w, h) = r.chain.output_size();
+        let inside = |b: BBox| b.x0 >= 0.0 && b.y0 >= 0.0 && b.x1 <= w as f32 && b.y1 <= h as f32;
         r.source == frame
-            && (w, h) < scene.source.size()
-            && r.redactions.contains_key(&adk_vision::RedactionClass::faces())
+            && inside(r.chain.bbox_to_target(&scene.scratch))
+            && !inside(r.chain.bbox_to_target(&scene.crack))
+            && r.redactions.contains_key(&RedactionClass::faces())
     };
     checks.check(
         &format!(
-            "the reasoner and the verifier were each sent one crop, {}, the egress gate's copy after its face redactor; never the frame",
+            "the reasoner and the verifier were each sent one crop of the scratch, {}, the egress gate's copy after its face redactor; never the frame",
             released
                 .first()
                 .map(|r| format!("{}×{} px", r.chain.output_size().0, r.chain.output_size().1))
@@ -397,13 +409,13 @@ pub async fn run() -> Result<Checks> {
         in_frame.iter().any(|f| scene.face.contains(f.center())) && faces_sent == 0,
     );
     if recording_proxy("ANTHROPIC").is_none() && recording_proxy("NIM_VLM").is_none() {
-        let live = [
-            recorded_image("claude/s15-haiku-crop.json")?,
-            recorded_image("nim-vlm/s15-nemotron-crop.json")?,
-        ];
+        let answered = [claude_image, nim_image];
         checks.check(
-            "the crops sent now are the bytes Claude and NIM were sent when their answers were recorded",
-            live.iter().zip(&egress).all(|(live, now)| live.as_deref() == Some(&*now.to_string())),
+            "the crops sent now are the ones the answers in the fixtures were given for",
+            answered
+                .iter()
+                .zip(&egress)
+                .all(|(then, now)| then.as_deref() == Some(&*now.to_string())),
         );
     }
 
@@ -488,7 +500,7 @@ pub async fn run() -> Result<Checks> {
             && findings.len() == 2
             && found(&scene.scratch, FindingSource::Person, &reasoner.verdict)
             && found(&scene.crack, FindingSource::Perceiver, "defect")
-            && (recording_proxy("ANTHROPIC").is_some() || asked == 2),
+            && asked == 2,
     );
     let decisions: Vec<(Option<AuditDecision>, Value)> = audit
         .records()
