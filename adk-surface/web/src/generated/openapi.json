@@ -4127,7 +4127,7 @@
         "oneOf": [
           {
             "const": "face",
-            "description": "A face: until a face detector is chosen, the whole person (spec 3.7 Q3).",
+            "description": "A face, or the whole person where no face was found (spec 3.7 Q3).",
             "type": "string"
           },
           {
@@ -5851,7 +5851,7 @@
             "type": "string"
           },
           "tag": {
-            "description": "The region's tag on a large picture: \"face · whole person\".",
+            "description": "The region's tag on a large picture: \"face\", or \"face · whole person\" for a person\ncovered whole.",
             "type": "string"
           },
           "x0": {
