@@ -114,7 +114,11 @@ static site. `adk-website` runs the site with a team of agents inside its owner'
 ## Local-First Vision
 
 `adk-vision` detects, segments and reads on the device, and sends an image to a cloud model only
-through an egress gate.
+through an egress gate. 3.0.0 ships phases A to C of [spec 3.7](../design/spec-3.7-vision.md);
+`examples/vision` runs their scenarios, S1–S19, with no API key
+([The vision scenarios](vision/scenarios.md)).
+
+### Phase A: the Document Desk
 
 | What you get | Where |
 |--------------|-------|
@@ -124,8 +128,32 @@ through an egress gate.
 | Vision fields in evaluation cases (`Turn::expected_vision`) | [Vision evals](vision/evals.md) |
 | Approve with the image that would leave, and an annotated viewer of what an agent saw | [Approve with image](surfaces/approve-with-image.md), [Annotated viewer](surfaces/annotated-viewer.md) |
 
-`vision` (in `full`) is pure Rust; `vision-local` (in no tier) adds the on-device backends on
-ONNX Runtime and Candle.
+### Phase B: Video, Streams and the Inspector
+
+| What you get | Where |
+|--------------|-------|
+| Frames from RTSP and local cameras, video files, screens, browser pages and the web home's camera, through one pipeline with the frame governor and a privacy step | [Streams](vision/streams.md) |
+| Anonymous tracks across frames, questions about a clip — Gemini native video or sampled frames on any model — and `sam-3.1` video | [Video and tracking](vision/video.md) |
+| Watch conditions that wake a sleeping agent once per tracked object | [Visual wakes](vision/wake.md) |
+| Lengths and areas in millimetres from a fiducial's calibration, and the `vision_measure` tool | [Calibration and measurement](vision/measure.md) |
+| The live camera surface on the web home and the phone: frames with what was found, tracks, zones, the frame governor's state and the source switch | [Live camera](surfaces/live-camera.md) |
+
+### Phase C: Teams and the Screen Copilot
+
+| What you get | Where |
+|--------------|-------|
+| Perceiver, reasoner and verifier teams; a disagreement reaches a person with both opinions and the image on one card | [Teams](vision/teams.md) |
+| Visual memory in any `adk-rag` vector store, found by a text question or an example image, and erased by source | [Visual memory](vision/memory.md) |
+| The video analyst: chunks captioned and indexed, and answers that cite chunks by time range | [The video analyst](vision/video.md#the-video-analyst) |
+| Screen grounding: numbered marks in a browser or on a desktop, clicks in logical points through `ScreenSpace`, and Claude's computer-use toolset | [Screen grounding](vision/screen.md) |
+| Faces blurred on streams before any write, and the on-device profile, which keeps every image on the machine | [Faces on streams](security/image-privacy.md#faces-on-streams), [The on-device profile](security/image-privacy.md#the-on-device-profile) |
+| A vision model on Ollama as a second local describer | [On Ollama](vision/local-describer.md#on-ollama) |
+| SAM 3 on the device under the SAM License: the backends, with weights from Meta's access request | [SAM 3](vision/onnx.md#sam-3-under-the-sam-license) |
+
+`vision` (in `full`) is pure Rust and includes streams, tracking and Gemini video;
+`vision-local` (in no tier) adds the on-device backends on ONNX Runtime and Candle.
+Teams (`team`), visual memory (`memory`), the video analyst (`analyst`) and `sam3-local` are
+features of `adk-vision` itself, and the live camera surface is `adk-surface`'s `vision-camera`.
 
 ## Models and Protocols
 
@@ -163,7 +191,7 @@ ONNX Runtime and Candle.
 | Design | Status |
 |--------|--------|
 | The self-improving harness's maintenance loop ([spec 3.4](../design/spec-3.4-self-improving-harness.md)) | Designed. 3.0.0 ships its protected-path set and the instruction-trust check only |
-| Vision phases B to D: video, the Inspector, the Screen copilot, spatial ([spec 3.7](../design/spec-3.7-vision.md)) | Planned; 3.0.0 ships phase A |
+| Vision phase D: spatial perception — depth, 3D regions and pose, ROS 2 and VLA bridges ([spec 3.7](../design/spec-3.7-vision.md)) | Planned; the [phase D research spike](../design/spec-3.7-phase-d.md) holds its recommendations. 3.0.0 ships phases A to C |
 
 ---
 

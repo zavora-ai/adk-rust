@@ -272,7 +272,7 @@ pub enum EvidenceKept {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum CoverClass {
-    /// A face: until a face detector is chosen, the whole person (spec 3.7 Q3).
+    /// A face, or the whole person where no face was found (spec 3.7 Q3).
     Face,
     /// Personal text: names, emails, phone numbers and numbers like them.
     PersonalText,
@@ -290,7 +290,8 @@ pub enum CoverClass {
 pub struct EvidenceRegion {
     /// The class.
     pub class: CoverClass,
-    /// The region's tag on a large picture: "face · whole person".
+    /// The region's tag on a large picture: "face", or "face · whole person" for a person
+    /// covered whole.
     pub tag: String,
     /// The tag on a small picture: "face".
     pub short_tag: String,
@@ -1140,12 +1141,38 @@ mod tests {
         assert_eq!(image.digest_short, "sha256:c52ca5…ce7550");
         assert_eq!(image.size_text, "1012 × 638 PNG");
         assert_eq!(image.href.as_deref(), Some("/api/surface/decisions/dec-7c41e0/evidence/0"));
-        assert_eq!(image.regions[0].tag, "face · whole person");
+        assert_eq!(image.regions[0].tag, "face");
         assert_eq!(image.regions[0].short_tag, "face");
         assert!(!media.covered_all);
         assert!(media.sendable());
         assert!(media.can_change);
         assert_eq!(media.fixed_line, words::IMAGES_LEAVE_ONLY_COVERED);
+    }
+
+    #[test]
+    fn a_face_reads_face_and_a_person_covered_whole_reads_whole_person() {
+        let request = request(vec![card_image(vec![
+            boxed("faces", [48.0, 150.0, 300.0, 468.0]),
+            boxed("people", [600.0, 100.0, 900.0, 630.0]),
+        ])]);
+        let media = project(&request, &input(&[EvidenceKept::Kept])).unwrap();
+        let face = |tag: &str, [x0, y0, x1, y1]: [f64; 4]| EvidenceRegion {
+            class: CoverClass::Face,
+            tag: tag.into(),
+            short_tag: "face".into(),
+            x0,
+            y0,
+            x1,
+            y1,
+        };
+        assert_eq!(
+            media.images[0].regions,
+            [
+                face("face", [48.0, 150.0, 300.0, 468.0]),
+                face("face · whole person", [600.0, 100.0, 900.0, 630.0]),
+            ]
+        );
+        assert_eq!(media.covered[0].text, "2 faces");
     }
 
     #[test]

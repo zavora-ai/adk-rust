@@ -1456,7 +1456,8 @@ pub fn covered_class(class: crate::CoverClass, count: u32) -> String {
     }
 }
 
-/// A region's tag over a large picture: "face · whole person" (spec 3.7 Q3, board choice A4),
+/// A region's tag over a large picture: "face" for a face the redactor found, "face · whole
+/// person" for a person covered whole because no face was found (spec 3.7 Q3, board choice A4),
 /// "personal text", "schema field", "your redaction", or the feature's own label.
 ///
 /// # Example
@@ -1464,11 +1465,16 @@ pub fn covered_class(class: crate::CoverClass, count: u32) -> String {
 /// ```rust
 /// use adk_surface::CoverClass;
 ///
-/// assert_eq!(adk_surface::words::region_tag(CoverClass::Face, "faces"), "face · whole person");
+/// assert_eq!(adk_surface::words::region_tag(CoverClass::Face, "faces"), "face");
+/// assert_eq!(adk_surface::words::region_tag(CoverClass::Face, "people"), "face · whole person");
 /// ```
 pub fn region_tag(class: crate::CoverClass, label: &str) -> String {
     match class {
-        crate::CoverClass::Face => "face · whole person".to_string(),
+        crate::CoverClass::Face => match label {
+            "faces" | "face" => "face".to_string(),
+            // `person` and `people` cover the whole person; an unknown label keeps the wider tag.
+            _ => "face · whole person".to_string(),
+        },
         crate::CoverClass::PersonalText => "personal text".to_string(),
         crate::CoverClass::SchemaField => "schema field".to_string(),
         crate::CoverClass::Marked => "your redaction".to_string(),

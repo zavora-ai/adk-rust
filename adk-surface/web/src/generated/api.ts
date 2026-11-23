@@ -2055,7 +2055,10 @@ export interface EvidenceRegion {
   class: CoverClass;
   /** The tag on a small picture: "face". */
   shortTag: string;
-  /** The region's tag on a large picture: "face · whole person". */
+  /**
+   * The region's tag on a large picture: "face", or "face · whole person" for a person
+   * covered whole.
+   */
   tag: string;
   /** Left edge, pixels. */
   x0: number;
