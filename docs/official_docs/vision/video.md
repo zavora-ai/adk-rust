@@ -270,7 +270,7 @@ is answered from the chunks a retrieval finds, citing them with their time range
 | Index | The caption and its labels are embedded by any `adk_rag::EmbeddingProvider` and stored as one chunk in any `VectorStore`, with `startMs`, `endMs`, the keyframe and the clip in its metadata |
 | Remember | With `captions`, each caption is an `adk-memory` entry `[m:ss.s–m:ss.s] caption` with `Part::FileData` references to its keyframe and clip; with `graph`, the clip is a `vision.clip` entity whose observations are the captions, related to a `vision.label` entity for each thing they name |
 | Keyframes | With `keyframes`, each chunk's middle frame passes the `FramePrivacy` hook and is stored as an image artifact; with `visual_memory`, it is also embedded in a `VisualMemory`, so a moment can be found by an example image |
-| Ask | `ask` retrieves the `top_k` nearest chunks and asks the `answerer` model — which sees caption text and time ranges, never frames — for JSON naming the chunks that show the answer, earliest first; a number it was not shown is dropped. Without an answerer, the nearest chunk is the answer |
+| Ask | `ask` has the `answerer` model write the caption it expects the answer's chunk to have, retrieves the `top_k` chunks nearest the question and that caption, and asks the answerer — which sees caption text and time ranges, never frames — for JSON naming the chunks that show the answer, earliest first; a number it was not shown is dropped. Without an answerer, the chunk nearest the question is the answer |
 | Erase | `erase_source` deletes a clip's chunks, captions, graph entity, keyframes and their visual-memory vectors, and writes `vision.analyst.erased`; indexing a clip again erases its earlier chunks first |
 
 ```rust,no_run
@@ -330,6 +330,7 @@ if let Some(chunk) = answer.primary() {
 | `captions`, `graph` | off | `adk-memory` entries per chunk; the clip in graph memory |
 | `keyframes`, `visual_memory` | off | Middle frames through the privacy hook into artifacts; their embeddings in a `VisualMemory` built without captions or a graph |
 | `answerer` | none | The model that answers from captions; any `LlmDescriber`, local or remote, metered by its token price |
+| `expand_questions` | on | Search for the question together with the caption the answerer expects, so a question in other words than the captions — "when do the lights go out?" over "the picture turns dark" — still finds its chunk |
 
 No backend is assumed. The captioner is whatever video analyzer the runtime routes to, the
 store any `adk-rag` backend, and the text embedding any `EmbeddingProvider`.

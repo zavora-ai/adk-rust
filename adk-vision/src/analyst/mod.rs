@@ -1172,9 +1172,11 @@ impl VideoAnalyst {
         usage: &mut VideoUsage,
     ) -> Result<String> {
         let prompt = format!(
-            "A question about a video: {question}\n\nWrite the caption that a chunk of the video \
-             showing the answer would have: one sentence naming what is seen and what happens, \
-             in plain words. Answer with JSON only: {{\"caption\": <the sentence>}}."
+            "A question about a video: {question}\n\nThe video is searched by captions of its \
+             chunks, each written by a model that watched that chunk. You do not see the \
+             video: write the caption that the chunk showing the answer would most likely \
+             have, in the same video, as one sentence naming what is seen and what happens, in \
+             plain words. Answer with JSON only: {{\"caption\": <the sentence>}}."
         );
         let schema = json!({
             "type": "object",
