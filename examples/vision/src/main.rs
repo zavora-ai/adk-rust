@@ -10,12 +10,14 @@
 //! stores, egress records, ledgers, approvals and audit records, never on model prose.
 
 mod conveyor;
+mod crm;
 mod fixtures;
 mod replay;
 mod s10;
 mod s11;
 mod s12;
 mod s13;
+mod s14;
 mod s18;
 mod s19;
 mod s1_s2;
@@ -25,6 +27,7 @@ mod s6;
 mod s7;
 mod s8;
 mod s9;
+mod screen;
 
 use std::path::PathBuf;
 
@@ -80,6 +83,7 @@ const SCENARIOS: &[(&str, &str)] = &[
     ("s11_a_budget_per_frame", "S11 A budget per frame"),
     ("s12_live_camera_surface", "S12 Live camera surface"),
     ("s13_native_video_two_ways", "S13 Native video, two ways"),
+    ("s14_screen_copilot", "S14 Screen copilot"),
     ("s18_blur_by_default_on_streams", "S18 Blur by default on streams"),
     ("s19_off_the_network", "S19 Off the network"),
 ];
@@ -99,6 +103,7 @@ async fn run(name: &str, desk: &s1_s2::Shared) -> Result<Checks> {
         "s11_a_budget_per_frame" => s11::run().await,
         "s12_live_camera_surface" => s12::run().await,
         "s13_native_video_two_ways" => s13::run().await,
+        "s14_screen_copilot" => s14::run().await,
         "s18_blur_by_default_on_streams" => s18::run().await,
         "s19_off_the_network" => s19::run().await,
         other => bail!("no scenario `{other}`"),

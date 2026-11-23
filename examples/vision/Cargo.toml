@@ -11,10 +11,15 @@ description = "Spec 3.7 scenarios S1–S13, S18 and S19 for adk-vision: the Docu
 # S12's Inspector: an LlmAgent whose line stop waits for the person.
 adk-agent = { path = "../../adk-agent" }
 adk-artifact = { path = "../../adk-artifact" }
+# S14: the browser tools the harness governs, over a WebDriver.
+adk-browser = { path = "../../adk-browser" }
+# S14: the governed computer-use graph's runtime boundary and wire contracts.
+adk-computer-use = { path = "../../adk-computer-use" }
 adk-core = { path = "../../adk-core" }
 # The vision pack: governed vision tools, egress rules and the privacy guardrail (spec 3.7 X15);
-# `vision-fixtures` adds the kernel that hosts S10's sleeping Inspector.
-adk-harness = { path = "../../adk-harness", features = ["vision", "vision-fixtures"] }
+# `vision-fixtures` adds the kernel that hosts S10's sleeping Inspector. S14 adds the browser
+# and computer-use packs, and `web-fixture` so the browser may open the CRM on loopback.
+adk-harness = { path = "../../adk-harness", features = ["vision", "vision-fixtures", "browser", "computer-use", "web-fixture"] }
 # S10: the kernel's `VisionWakeSource`, which wakes a sleeping process on a watch event.
 adk-kernel = { path = "../../adk-kernel", features = ["vision"] }
 # ScriptedLlm plans the tool calls; the Anthropic and Gemini clients replay recorded answers.
@@ -31,7 +36,7 @@ adk-surface = { path = "../../adk-surface", features = ["vision-camera"] }
 # cloud backends are the real clients against a local server. Phase B adds the conveyor clip
 # over the in-process RTSP server, the stream pipeline, Gemini native video, and S13's clip read
 # through a user-installed ffmpeg when there is one; S18 streams drawn passers-by.
-adk-vision = { path = "../../adk-vision", features = ["fetch", "conformance", "guardrail", "onnx", "ocr", "cloud", "nim", "sam", "stream", "rtsp", "ffmpeg", "stream-fixtures", "gemini-video"] }
+adk-vision = { path = "../../adk-vision", features = ["fetch", "conformance", "guardrail", "onnx", "ocr", "cloud", "nim", "sam", "stream", "rtsp", "ffmpeg", "stream-fixtures", "gemini-video", "computer-use"] }
 anyhow = "1.0"
 async-trait = "0.1"
 base64 = "0.22"
