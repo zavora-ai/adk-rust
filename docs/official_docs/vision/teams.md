@@ -171,3 +171,4 @@ match VerifierLoop::new(screen_observer).run(&cx, &click_save).await? {
 | Under an `ask` rule the crop is held first with the staged redacted image, and after approval the reasoner receives exactly that digest | `team_tests.rs` |
 | A harness perceiver on a remote model or with a remote tool does not build | `adk-harness/tests/pack_vision_team_tests.rs` |
 | Live: `claude-haiku-5-5` reasoner and NVIDIA NIM `nemotron-3.5-super-vl` verifier on a generated part with an ambiguous mark | `adk-vision/tests/team_live_tests.rs` (`#[ignore]`, needs `ANTHROPIC_API_KEY`, `NVIDIA_API_KEY`) |
+| Scenario S15: the Inspector's detector as the perceiver on a conveyor frame, Claude and NIM through their real clients, YuNet screening each crop; one card, resolved on the resumed run, bound to the frame's and the crop's digests in the audit records | `examples/vision` (`s15_perceiver_reasoner_verifier`), run by the PR tier's `vision-scenarios` job; [the scenarios](scenarios.md) |

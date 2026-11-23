@@ -155,7 +155,7 @@ cargo run --manifest-path examples/vision/Cargo.toml -- s3_redact_before_it_leav
 | S4 Approve with the image | The held call carries the exact egress image; approval releases that digest; a swapped image is held again |
 | S5 One region, four frames | Claude, Gemini, `sam-3.1` and RF-DETR answers for twelve targets land within 2 px |
 | S6 Weights you can trust | Offline fetch opens no socket; a tampered file is refused; a restricted model waits for acceptance |
-| S7 A budget per image | A run capped at 20 images makes 20 `sam-3.1` calls of 30; the rest are refused before any request |
+| S7 A budget per image | A run capped at 20 images makes 20 `sam-3.1` calls of 30; the rest are refused before any request; the run's spend is read whole while the ledger's clock crosses midnight UTC |
 | S8 Same tool, any backend | One tool call shape across PP-OCRv6, PaddleOCR-VL-1.6 and NIM, and RF-DETR and `sam-3.1` |
 
 ## Related

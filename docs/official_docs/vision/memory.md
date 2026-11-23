@@ -236,4 +236,9 @@ HF_HUB_CACHE=/path/to/models cargo test -p adk-vision --features memory,onnx \
     --test memory_live_tests -- --ignored --nocapture
 ```
 
+The PR tier's `vision-scenarios` job runs the same week in `examples/vision`
+(`s16_visual_memory`), each day stored by its own run, against the baseline in
+`examples/vision/fixtures/baselines.json`; each hit's run is checked against the
+`vision.memory.indexed` record that stored its digest. See [the scenarios](scenarios.md).
+
 Add `memory-lancedb` to repeat the run on LanceDB; the answer must be the same.
