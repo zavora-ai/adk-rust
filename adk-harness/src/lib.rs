@@ -39,6 +39,7 @@
 //! | `packs::payments::{PaymentsPack, PaymentMandate}` (feature `payments`) | §7.16 |
 //! | `packs::browser::BrowserPack` (feature `browser`) | §7.24 |
 //! | `packs::computer_use::ComputerUsePack` (feature `computer-use`) | §7.24 |
+//! | `packs::computer_use::PreviewedPlan`, `ScreenPlanPrompt`, `ScreenPlanAnswer` (feature `computer-use`) | spec 3.7 Q8 |
 //! | `packs::voice::{VoiceSurface, VoiceConfig, VoiceEvent, SpokenDecision}` (feature `voice`) | §7.17 |
 //! | `website::*`, `Preset::Website` (feature `website`) | spec 3.5 §7.1, §7.3, §7.10, §7.11, §7.18 |
 //! | [`snapshot::Snapshots`], [`SnapshotConfig`], [`RewindTarget`], [`RewindPlan`], [`RewindReport`], `Harness::{rewind_plan, rewind, redo_plan, rewind_turns, snapshot_now}` | §7.27 |
@@ -157,6 +158,10 @@ pub use approvals::{
 pub use approvals::{
     CHANGE_SET_MAX_BYTES, ChangeSet, ChangeSetAnswer, ChangeSetCall, ChangeSetFile,
     ChangeSetPrompt, RenderedChangeSet,
+};
+#[cfg(feature = "computer-use")]
+pub use approvals::{
+    RenderedScreenPlan, SCREEN_PLAN_MAX_BYTES, ScreenPlanAnswer, ScreenPlanPrompt,
 };
 #[cfg(feature = "observe")]
 pub use builder::LoopGuard;

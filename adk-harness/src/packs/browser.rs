@@ -693,7 +693,7 @@ mod tests {
         for (name, _) in browser_classes() {
             assert!(seen.insert(name), "{name} is listed twice");
         }
-        assert_eq!(seen.len(), 44, "every tool of BrowserProfile::Full is classed");
+        assert_eq!(seen.len(), 45, "every tool of BrowserProfile::Full is classed");
         for name in BROWSER_NEVER_ATTACHED {
             assert_eq!(browser_class(name), None);
             assert!(is_browser_tool(name));

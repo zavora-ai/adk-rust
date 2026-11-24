@@ -12,7 +12,8 @@ use adk_core::{
 };
 use adk_harness::packs::vision::VisionPack;
 use adk_harness::{
-    ApprovalPrompt, ApprovalPrompter, Harness, HarnessAgent, HarnessMode, PromptAnswer, Workspace,
+    ApprovalPrompt, ApprovalPrompter, Harness, HarnessAgent, HarnessMode, PromptAnswer,
+    ScreenPlanAnswer, ScreenPlanPrompt, Workspace,
 };
 use adk_vision::onnx::{OnnxOptions, RfDetr};
 use adk_vision::{
@@ -193,11 +194,17 @@ pub async fn save(artifacts: &InMemoryArtifactService, name: &str, data: Vec<u8>
 #[derive(Default)]
 pub struct Approver {
     prompts: Mutex<Vec<ApprovalPrompt>>,
+    plans: Mutex<Vec<ScreenPlanPrompt>>,
 }
 
 impl Approver {
     pub fn prompts(&self) -> Vec<ApprovalPrompt> {
         self.prompts.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// The screen-plan cards the person answered.
+    pub fn plans(&self) -> Vec<ScreenPlanPrompt> {
+        self.plans.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 
@@ -212,6 +219,14 @@ impl ApprovalPrompter for Approver {
     async fn prompt(&self, prompt: ApprovalPrompt) -> adk_core::Result<PromptAnswer> {
         self.prompts.lock().unwrap_or_else(|e| e.into_inner()).push(prompt);
         Ok(PromptAnswer::ApproveOnce)
+    }
+
+    async fn prompt_screen_plan(
+        &self,
+        prompt: ScreenPlanPrompt,
+    ) -> adk_core::Result<Option<ScreenPlanAnswer>> {
+        self.plans.lock().unwrap_or_else(|e| e.into_inner()).push(prompt);
+        Ok(Some(ScreenPlanAnswer::Approve))
     }
 }
 

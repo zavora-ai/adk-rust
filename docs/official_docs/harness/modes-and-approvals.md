@@ -148,6 +148,19 @@ A prompter that does not override `prompt_change_set` asks about each call on it
 `ChangeSet::compose` is public, so a surface that groups held edits itself — spec 3.3's
 decision card — computes the same change set and the same `expect_sha256` per call.
 
+### Screen plans
+
+Desktop actions get the same treatment through the computer-use pack (spec 3.7 Q8). Up to N
+actions previewed together in one window form a screen plan; at its first step
+`ApprovalPrompter::prompt_screen_plan` shows the whole plan and returns one
+`ScreenPlanAnswer` (`Approve`, or `Deny { message }`), and the handler answers each later step
+from that decision, once and in order, with `plan: { digest, step }` added to the step's
+arguments. Before each step runs it is previewed again and its fresh target checked against
+the previewed one; a deviation runs nothing and ends the plan, and the step is held for a fresh
+approval. `computer_use_execute` stays outside every standing rule. A prompter that does not
+override `prompt_screen_plan` asks about each step on its own. See
+[Screen plans](packs.md#screen-plans-one-approval-per-plan).
+
 ### Held calls
 
 Without a prompter nothing waits in the run: the call is recorded in the approval store,

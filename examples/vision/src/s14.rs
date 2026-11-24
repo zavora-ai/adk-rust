@@ -8,9 +8,13 @@
 //! acts only through `computer_use_preview` and the held `computer_use_execute`, whose
 //! reference graph drives `ScreenRuntime`: PP-OCRv6 marks on each screenshot, coordinates in
 //! the fitted screenshot's pixels grounded through `ScreenSpace`, one `ScreenPlan` per window
-//! checked again before every step, and the verifier after every step. The form has two
-//! identical "Save" buttons; the copilot grounds "Save" by label and reading order and picks
-//! the notes' one, the verifier sees no "Customer saved", and the copilot grounds it again.
+//! checked again before every step, and the verifier after every step. The copilot previews
+//! the form's eleven steps together, so the harness shows them as one screen plan and the
+//! person approves them once (spec 3.7 Q8); each step is grounded again and checked against
+//! its previewed target before it runs. The form has two identical "Save" buttons; the
+//! copilot grounds "Save" by label and reading order and picks the notes' one, the verifier
+//! sees no "Customer saved", and the copilot grounds it again on the footer's — a target the
+//! plan did not show, so it is held again for a second approval.
 //!
 //! Stand-ins: the WebDriver server and the desktop (`crm.rs`, `screen.rs`), and the planner,
 //! which names marks by their labels. The CRM, the browser tools, the harness and its
@@ -21,13 +25,16 @@ use std::sync::{Arc, Mutex};
 
 use adk_browser::{BrowserConfig, BrowserSession};
 use adk_computer_use::ScopeAuthorizer;
-use adk_core::audit_log::{AuditRecordDraft, InMemoryAuditRecorder};
+use adk_core::audit_log::{
+    AuditDecision, AuditRecordDraft, AuditRecordKind, InMemoryAuditRecorder,
+};
 use adk_core::{
     Content, FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part, SessionId, UserId,
 };
 use adk_harness::packs::browser::{BROWSER_AUDIT_ACTED, BROWSER_AUDIT_NAVIGATED, BrowserPack};
 use adk_harness::packs::computer_use::{
-    COMPUTER_USE_AUDIT_EXECUTED, COMPUTER_USE_EXECUTE, ComputerUsePack,
+    COMPUTER_USE_AUDIT_EXECUTED, COMPUTER_USE_AUDIT_PLAN_DECIDED, COMPUTER_USE_EXECUTE,
+    ComputerUsePack,
 };
 use adk_harness::{Harness, HarnessAgent, HarnessMode, InstructionsConfig, WebConfig, Workspace};
 use adk_vision::screen::{BrowserElements, GroundedTarget, MarkSet, ScreenshotScale};
@@ -141,6 +148,8 @@ struct Plan {
     record: Vec<(String, String)>,
     steps: Vec<Step>,
     next: usize,
+    /// The steps previewed together in the last `computer_use_preview { actions }`.
+    batch: Vec<usize>,
     /// The scale between the screenshot and the fitted copy the copilot sees.
     scale: Option<ScreenshotScale>,
     /// Where the first Save was clicked, in screenshot pixels, once it failed.
@@ -293,13 +302,28 @@ impl Copilot {
         Some(())
     }
 
-    /// The next call: preview every planned step not yet previewed, then execute every
-    /// approved one in order.
+    /// The next call: preview the planned steps not yet previewed — several together, so
+    /// the harness shows them as one screen plan — then execute every approved one in order.
     fn next_desktop(&self, plan: &mut Plan) -> LlmResponseStream {
-        if let Some(i) = plan.steps.iter().position(|s| s.preview.is_none()) {
-            let action = plan.steps[i].action.clone();
-            plan.next = i;
-            return self.call(plan, "computer_use_preview", json!({ "action": action }));
+        let unpreviewed: Vec<usize> = plan
+            .steps
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.preview.is_none())
+            .map(|(i, _)| i)
+            .collect();
+        match unpreviewed.as_slice() {
+            [] => {}
+            [i] => {
+                let action = plan.steps[*i].action.clone();
+                plan.next = *i;
+                return self.call(plan, "computer_use_preview", json!({ "action": action }));
+            }
+            many => {
+                let actions: Vec<Value> = many.iter().map(|i| plan.steps[*i].action.clone()).collect();
+                plan.batch = many.to_vec();
+                return self.call(plan, "computer_use_preview", json!({ "actions": actions }));
+            }
         }
         if let Some(i) = plan.steps.iter().position(|s| {
             s.result.is_none() && s.preview.as_ref().is_some_and(|p| p["route"] == "approval")
@@ -419,8 +443,17 @@ impl Llm for Copilot {
                 self.next_desktop(plan)
             }
             "computer_use_preview" => {
-                let i = plan.next;
-                plan.steps[i].preview = Some(answer);
+                match answer["previews"].as_array() {
+                    Some(previews) => {
+                        for (i, preview) in std::mem::take(&mut plan.batch).into_iter().zip(previews) {
+                            plan.steps[i].preview = Some(preview.clone());
+                        }
+                    }
+                    None => {
+                        let i = plan.next;
+                        plan.steps[i].preview = Some(answer);
+                    }
+                }
                 self.next_desktop(plan)
             }
             COMPUTER_USE_EXECUTE => {
@@ -495,10 +528,13 @@ pub async fn run() -> Result<Checks> {
             .audit_log(Arc::new(audit.clone()))
             .web(WebConfig { allowed_domains: vec!["127.0.0.1".into()], ..WebConfig::default() })
             .pack_browser(BrowserPack::new(session.clone()).with_private_network_access(true))
-            .pack_computer_use(ComputerUsePack::new(
-                runtime.clone(),
-                ScopeAuthorizer::new(["computer:plan", "computer:execute:background"]),
-            ))
+            .pack_computer_use(
+                ComputerUsePack::new(
+                    runtime.clone(),
+                    ScopeAuthorizer::new(["computer:plan", "computer:execute:background"]),
+                )
+                .with_plan_max_actions(12),
+            )
             .without_compaction()
             .build()?,
     );
@@ -616,15 +652,25 @@ pub async fn run() -> Result<Checks> {
         .count();
     let prompts = approver.prompts();
     let approved = |tool: &str| prompts.iter().filter(|p| p.request.tool_name == tool).count();
+    // The governed path's approval records: one per computer_use_execute that ran.
+    let approvals: Vec<AuditRecordDraft> = audit
+        .records()
+        .into_iter()
+        .filter(|r| {
+            r.kind == AuditRecordKind::Approval
+                && r.action == COMPUTER_USE_EXECUTE
+                && r.decision == Some(AuditDecision::Approved)
+        })
+        .collect();
     checks.check(
         &format!(
             "every action is a governed browser or computer_use_execute call: {} desktop actions, each inside one of {} approved computer_use_execute calls; {navigations} navigation and {browser_clicks} click in the browser, each a governed browser call ({} approved)",
             actions.len(),
-            approved(COMPUTER_USE_EXECUTE),
+            approvals.len(),
             approved("browser_click")
         ),
         desktop_governed
-            && approved(COMPUTER_USE_EXECUTE) == executed.len()
+            && approvals.len() == executed.len()
             && navigations == 1
             && navigated == navigations
             && browser_clicks == 1
@@ -666,6 +712,67 @@ pub async fn run() -> Result<Checks> {
     );
     if let Some(r) = &first {
         checks.note(format!("verifier on the first Save: {}", r.missing.join("; ")));
+    }
+
+    // One approval for the form's steps; the re-grounded Save held again (spec 3.7 Q8).
+    let cards = approver.plans();
+    let card = cards.first();
+    let plan_digest = card.map(|c| c.plan.digest.clone()).unwrap_or_default();
+    let decided = records(&audit, COMPUTER_USE_AUDIT_PLAN_DECIDED);
+    let bound_steps: Vec<u64> = executed_records
+        .iter()
+        .filter(|r| r.ext.get("planDigest").and_then(Value::as_str) == Some(plan_digest.as_str()))
+        .filter_map(|r| r.ext.get("step").and_then(Value::as_u64))
+        .collect();
+    let resave = plan
+        .steps
+        .iter()
+        .find(|s| s.action["step"] == "c12")
+        .and_then(|s| s.preview.as_ref())
+        .and_then(|p| p["actionDigest"].as_str());
+    let reheld: Vec<_> =
+        prompts.iter().filter(|p| p.request.tool_name == COMPUTER_USE_EXECUTE).collect();
+    let resave_record = executed_records
+        .iter()
+        .find(|r| r.ext.get("actionDigest").and_then(Value::as_str) == resave);
+    let previewed = |step: &str| {
+        screen_events.iter().find_map(|e| match e {
+            ScreenEvent::Previewed { step: s, target: Some(t), .. } if s == step => Some(t.clone()),
+            _ => None,
+        })
+    };
+    let elsewhere = match (previewed("c11"), previewed("c12")) {
+        (Some(shown), Some(again)) => {
+            shown.label == again.label && !shown.pixels.contains(again.pixels.center())
+        }
+        _ => false,
+    };
+    let bound_approvals =
+        approvals.iter().filter(|r| r.ext.contains_key("editedArgsDigest")).count();
+    checks.check(
+        &format!(
+            "one approval for the eleven form steps (spec 3.7 Q8): one screen-plan card for {} steps in {FORM}, its harness.computer_use.plan_decided record approved, and steps 1–{} each run bound to the plan's digest in order ({bound_approvals} approval records carry the binding); the re-grounded Save, aimed at the footer's Save rather than the previewed notes' Save, is not covered by it: held again, it took a second approval and ran on its own; {} approvals by the person for {} desktop executions",
+            card.map_or(0, |c| c.plan.steps.len()),
+            bound_steps.len(),
+            cards.len() + reheld.len(),
+            executed.len()
+        ),
+        cards.len() == 1
+            && card.is_some_and(|c| {
+                c.plan.steps.len() == 11 && c.plan.window.window_id == Some(json!(FORM))
+            })
+            && decided.len() == 1
+            && decided[0].ext.get("planDigest") == Some(&json!(plan_digest))
+            && decided[0].ext.get("answer") == Some(&json!("approve"))
+            && bound_steps == (1..=11).collect::<Vec<u64>>()
+            && bound_approvals == 11
+            && reheld.len() == 1
+            && reheld[0].request.args["actionDigest"].as_str() == resave
+            && resave_record.is_some_and(|r| !r.ext.contains_key("planDigest"))
+            && elsewhere,
+    );
+    if let Some(card) = card {
+        checks.note(format!("{}; plan {}", card.rendered.title, card.plan.digest));
     }
 
     // The verifier read every typed value back on a fresh screenshot.
@@ -791,8 +898,10 @@ pub async fn run() -> Result<Checks> {
 
     let answered = tool_responses(&events, COMPUTER_USE_EXECUTE).len();
     checks.note(format!(
-        "{} desktop actions through {answered} computer_use_execute calls; {} approvals",
+        "{} desktop actions through {answered} computer_use_execute calls; {} approvals by the person ({} screen plan, {} calls)",
         actions.len(),
+        prompts.len() + cards.len(),
+        cards.len(),
         prompts.len()
     ));
     Ok(checks)

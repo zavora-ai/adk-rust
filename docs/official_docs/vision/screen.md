@@ -286,10 +286,35 @@ fn main() {
 `ScreenPlan::from_toolset_calls` previews a batch of Claude's toolset calls — a batch action —
 on the screenshot it was given, grounding each `coordinate` to the candidate under it.
 
-> **Note:** `ScreenPlan` is the plan, its digest and the per-call re-check. The harness card
-> that shows a plan and answers its calls from one decision, as the change-set card of spec 3.1
-> §7.26 does for edits, is not wired yet; until then each held `computer_use_execute` is
-> approved on its own.
+### In the Harness
+
+`ScreenPlan` is the plan, its digest and the per-call re-check inside a runtime. The harness's
+computer-use pack makes the one approval a governance decision, for any `ComputerUseRuntime`:
+
+1. The copilot previews the steps together with `computer_use_preview { actions }`. Consecutive
+   steps the runtime holds for approval, in one window, form one plan of at most N actions
+   (`ComputerUsePack::with_plan_max_actions`); the window and the targets come from each step's
+   `TargetEvidence`.
+2. At the plan's first `computer_use_execute`, the person sees the whole plan on one card
+   (`ApprovalPrompter::prompt_screen_plan`) and answers once. The decision binds the plan's
+   digest — its window, steps and previewed targets — and answers each later step once, in
+   order, adding `plan: { digest, step }` to the step's arguments.
+3. Before each step runs, the reference graph previews it again on a fresh screenshot, and the
+   pack checks the fresh target against the previewed one: same window, same label, and each
+   box covers the other's centre. A runtime grounds the previewed target again there, as S14's
+   does with `PreviewedTarget::reground`.
+4. A deviation runs nothing and ends the plan; the step, previewed again, is held for a fresh
+   approval. A step that fails or does not verify also ends the plan.
+
+| Approval needed | When |
+|-----------------|------|
+| One | Up to N steps in one window, each still matching its preview when it runs |
+| One more per plan | A run longer than N, or one that changes window |
+| One more per step | A step whose target moved or that the plan did not show — such as a "Save" grounded again on another button — and every step after a deviation |
+
+No standing rule, `tool_approvals` entry or hook decision covers `computer_use_execute`; a plan
+is a person's decision on the steps it showed, never a rule. See
+[Screen plans](../harness/packs.md#screen-plans-one-approval-per-plan).
 
 ## Tests
 
@@ -298,5 +323,6 @@ on the screenshot it was given, grounding each `coordinate` to the candidate und
 | `adk-vision/tests/screen_tests.rs` | On the 3024×1964 DPR-2 screenshot, browser, OCR and toolset candidates for the twelve S5 targets map to click points inside their targets in points; the two-Save mis-grounding is caught and grounded again; a plan stays in one window and holds at most N actions; `FittedActuator` sends 2380×1546 screenshots and scales clicks and zoom regions back |
 | `adk-vision/tests/screen_property_tests.rs` | `ScreenSpace` round trips within 0.01 px; a grounded click lies inside its target in both spaces; fitted screenshots fit the limits and map back within a pixel |
 | `adk-vision/tests/screen_live_tests.rs` | `claude-sonnet-5-5` with `computer_toolset_20260801` zooms and clicks inside Save (live, `#[ignore]`), and the recorded calls replayed without a key |
-| `examples/vision`, scenario S14 | A harness copies a CRM record into a desktop form at ratio 2: browser marks clicked by selector, PP-OCRv6 marks on the desktop, coordinates in the fitted screenshot, one `ScreenPlan` re-checked before every step, every action a governed browser call or an approved `computer_use_execute`, the two-Save mis-grounding caught by the verifier and grounded again ([scenarios](scenarios.md#phase-c-the-screen-copilot)) |
+| `examples/vision`, scenario S14 | A harness copies a CRM record into a desktop form at ratio 2: browser marks clicked by selector, PP-OCRv6 marks on the desktop, coordinates in the fitted screenshot, the eleven form steps approved once as one screen plan and each re-checked before it runs, every action a governed browser call or an approved `computer_use_execute`, the two-Save mis-grounding caught by the verifier and grounded again, and the re-grounded Save held for a second approval ([scenarios](scenarios.md#phase-c-the-screen-copilot)) |
+| `adk-harness/tests/screen_plan_tests.rs` | One card runs a plan; a target that moved between the preview and its step runs nothing and is held again; an approval is not replayed onto another plan, window or target, a step taken twice, or a call that names a plan it is not part of; a plan longer than N or across two windows takes more than one approval; a denied plan runs nothing |
 | `adk-browser/tests/elements_tests.rs` | `browser_elements` against the recorded WebDriver server, and against a real browser through `ADK_WEBDRIVER_URL` (default `http://localhost:9515`) when one answers |

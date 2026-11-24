@@ -139,6 +139,23 @@ pub trait ApprovalPrompter: fmt::Debug + Send + Sync {
         Ok(None)
     }
 
+    /// Shows a screen plan — up to N previewed desktop actions in one window — and returns
+    /// the person's one answer for all its steps (spec 3.7 Q8). `None`, the default, has the
+    /// handler ask about each `computer_use_execute` on its own, as a prompter that shows
+    /// one call at a time needs.
+    ///
+    /// # Errors
+    ///
+    /// Returns the prompter's error.
+    #[cfg(feature = "computer-use")]
+    async fn prompt_screen_plan(
+        &self,
+        prompt: super::ScreenPlanPrompt,
+    ) -> Result<Option<super::ScreenPlanAnswer>> {
+        let _ = prompt;
+        Ok(None)
+    }
+
     /// Shows a partition crossing (spec 3.2 §7.8) and returns the person's answer: "allow
     /// this read of *X* for this run" (once, for a change), "deny", or "deny and block
     /// crossings to *X* from this partition".
@@ -472,6 +489,9 @@ pub struct PromptingConfirmationHandler {
     pub(super) per_turn_cap: usize,
     /// The batches of recent model turns, for change sets (spec 3.1 §7.26).
     pub(super) batches: std::sync::Mutex<super::batch::BatchBook>,
+    /// The computer-use pack's screen plans, shown as one card each (spec 3.7 Q8).
+    #[cfg(feature = "computer-use")]
+    pub(super) screen_plans: Option<Arc<crate::packs::computer_use::ScreenPlans>>,
     /// The partition whose crossings are put to the person with their three answers.
     #[cfg(feature = "kernel")]
     partition: Option<crate::partition::PartitionWiring>,
@@ -505,6 +525,8 @@ impl PromptingConfirmationHandler {
             serial: Mutex::new(Turns::default()),
             per_turn_cap: DEFAULT_PROMPTS_PER_TURN,
             batches: std::sync::Mutex::default(),
+            #[cfg(feature = "computer-use")]
+            screen_plans: None,
             #[cfg(feature = "kernel")]
             partition: None,
         }
@@ -629,6 +651,20 @@ impl PromptingConfirmationHandler {
             PolicyDecision::Allow => {}
             PolicyDecision::Deny { reason } => return Ok(refuse(reason.clone())),
             PolicyDecision::RequireApproval { .. } => {}
+        }
+        // The steps of a previewed screen plan are approved with one answer (spec 3.7 Q8).
+        #[cfg(feature = "computer-use")]
+        if let Some(approval) = self
+            .screen_plan(
+                &context,
+                request,
+                &policy,
+                evaluated.mode,
+                (&mut turn.prompts, &mut turn.deny_all),
+            )
+            .await?
+        {
+            return Ok(approval);
         }
         // Two or more held edits of the turn are reviewed as one change set (spec 3.1 §7.26).
         if evaluated.kind == ToolKind::Edit
