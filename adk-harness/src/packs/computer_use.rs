@@ -31,8 +31,10 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::audit::HarnessAudit;
+#[cfg(feature = "runner")]
+pub(crate) use plan::Filed;
 pub use plan::{DEFAULT_PLAN_MAX_ACTIONS, PlanStep, PlanWindow, PreviewedPlan};
-pub(crate) use plan::{Filed, PlanState, ScreenPlans, scope as plan_scope};
+pub(crate) use plan::{PlanState, ScreenPlans, scope as plan_scope};
 
 /// `computer_use_observe`: the three observation frames (spec 3.1 §7.24).
 pub const COMPUTER_USE_OBSERVE: &str = "computer_use_observe";
