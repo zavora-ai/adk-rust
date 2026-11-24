@@ -306,6 +306,12 @@ computer-use pack makes the one approval a governance decision, for any `Compute
 4. A deviation runs nothing and ends the plan; the step, previewed again, is held for a fresh
    approval. A step that fails or does not verify also ends the plan.
 
+On a surface that parks held calls rather than ask a live prompter — the web home, the phone,
+the terminal, chat — the plan's first step is one decision card for the whole plan, with its
+window, every step and target and the screenshot each target was found on, and its one answer
+decides every step with the same binding and record (adk-surface feature `computer-use`; see
+[Screen plans](../surfaces/index.md#screen-plans)).
+
 | Approval needed | When |
 |-----------------|------|
 | One | Up to N steps in one window, each still matching its preview when it runs |

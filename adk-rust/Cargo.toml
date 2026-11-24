@@ -165,9 +165,10 @@ computer-use = ["dep:adk-computer-use", "graph", "auth", "mcp"]
 # The governed, durable harness agent (spec 3.1 §8.4). With `cli`, `adk_rust::harness`
 # also re-exports the CLI's `HarnessLauncher` and `ConsolePrompter`.
 harness = ["dep:adk-harness", "agents", "tools", "skills", "sandbox", "runner", "sessions", "graph", "adk-cli?/harness"]
-# Harness packs (forwarded to adk-harness): tools or a surface under the harness policy.
+# Harness packs (forwarded to adk-harness): tools or a surface under the harness policy. With
+# `surface`, `harness-computer-use` also shows a parked screen plan as one decision card.
 harness-browser = ["harness", "adk-harness/browser"]
-harness-computer-use = ["harness", "adk-harness/computer-use"]
+harness-computer-use = ["harness", "adk-harness/computer-use", "adk-surface?/computer-use"]
 harness-payments = ["harness", "adk-harness/payments"]
 harness-voice = ["harness", "adk-harness/voice"]
 harness-managed = ["harness", "adk-harness/managed"]

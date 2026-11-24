@@ -55,7 +55,7 @@ frame is covered again before it is written, whatever the picture showed (V-I9).
 | **Off** | The server closes the camera's gate first: every frame that arrives from then on is dropped, and the frames it held are forgotten. Then the act is recorded (`surface.camera.switch`) and the source stops capturing: a camera on the frame pipeline closes its stream before the answer — a local camera's ffmpeg exits and its light goes out, an RTSP connection closes — recorded as `vision.source.stopped` with reason `switchedOff`; a page sending this browser's camera stops it. A source switched off sends nothing, as on the voice screen |
 | **Camera on** | Recorded first, then the gate opens and the source opens again (`vision.source.started`, reason `switchedOn`) |
 | **Stop the stream** | The gate closes for good and the camera's pipeline stops (`surface.camera.stop`) |
-| **Stop all** | Every camera's gate closes before the agents are stopped, and each camera's pipeline drops its frames before looking at them; **Resume all** opens them again (spec 3.7 V-I17) |
+| **Stop all** | Every camera's gate closes before the agents are stopped, and each camera's pipeline drops its frames before looking at them. Each stream camera's source closes as **Off** closes it — a local camera's ffmpeg exits, an RTSP connection closes — before the stop answers, recorded as `vision.source.stopped` with reason `stopAll`. **Resume all** opens the gates again and reopens each source whose camera is on (`vision.source.started`, reason `resumeAll`); a camera a person switched off stays closed (spec 3.7 V-I17) |
 | **Try again now** | The source is tried again (`surface.camera.retry`) |
 | **Draw a zone** / **Edit the zone** | Corner handles over the picture, the old outline dashed, the watch that uses the zone, its corners in the camera's pixels. Saving changes the watch from its next frame and is recorded (`surface.camera.zone`, with the old and new corners). A zone changed since the person started is refused, never overwritten |
 | **Raise a card from this frame** | The frame on screen is frozen: the server holds it in memory while the person writes what the agent should look at. **Raise the card** keeps that one frame as evidence for 30 days, everyone in it covered first, and sends the card to the agent as the person's message naming the frame by digest and artifact, with the regions on it. It is recorded (`surface.camera.card`) before the frame is kept |
@@ -137,9 +137,11 @@ With the `vision-camera` feature, `PipelineCameras` runs each camera through adk
 A stream camera switched off stops capturing at its source: its stream is dropped before the
 switch answers, so a `DeviceSource`'s ffmpeg exits and an `RtspSource`'s connection closes, and
 nothing opens it until the camera is on again; `PipelineCameras::is_capturing` says whether a
-camera's source is open. Under Stop all, and in the moment between a switch and the stream
-closing, frames are dropped as they arrive, before the governor counts them or the detector
-sees them. A camera's frames are kept only as
+camera's source is open. Stop all closes every stream camera's source the same way, before it
+answers, and Resume all opens again each one whose camera is on, so a freeze leaves no camera
+capturing. The voice screen's camera captures in the browser, which stops its own track; Stop
+all drops its frames. In the moment between a switch or a stop and the stream closing, frames
+are dropped as they arrive, before the governor counts them or the detector sees them. A camera's frames are kept only as
 a card's evidence or, with `PipelineCamerasBuilder::wakes`, as a watch event's wake payload,
 through adk-vision's `FrameKeeper` (`vision.evidence.kept`).
 

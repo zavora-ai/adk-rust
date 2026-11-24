@@ -493,8 +493,8 @@ async fn switching_off_drops_frames_on_the_server() {
     until("frames again", async || home.counts().observed > after.observed).await;
 }
 
-/// V-I17: Stop all pauses every camera at the hub's gate and in the pipeline; Resume all opens
-/// it again.
+/// V-I17: Stop all pauses every camera at the hub's gate and closes its source; Resume all opens
+/// both again.
 #[tokio::test(flavor = "multi_thread")]
 async fn stop_all_pauses_every_camera() {
     let home = home(|camera| camera).await;
@@ -503,8 +503,8 @@ async fn stop_all_pauses_every_camera() {
     home.engine.execute(&caller(), Command::StopAll { reason: None }).await.unwrap();
     assert!(home.cameras.is_frozen());
     let before = home.counts();
-    home.belt(start() + chrono::Duration::seconds(1), 120, 3, chrono::Duration::milliseconds(200))
-        .await;
+    assert!(!home.feed.push_frame(frame(120, false), start()), "nothing reads the source");
+    tokio::time::sleep(StdDuration::from_millis(300)).await;
     assert_eq!(home.counts().observed, before.observed, "no frame is looked at");
     let view = home.engine.camera_view(&caller(), "line-2").await.unwrap();
     assert_eq!(view.state, CameraState::Frozen);
