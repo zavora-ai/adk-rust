@@ -4,7 +4,7 @@
 //! | Path | How |
 //! |---|---|
 //! | Gemini native video | The clip leaves through the egress gate, is uploaded once through the File API and asked about as a file part, at 1 fps and low media resolution. The fixture is 227 KB, so the inline limit is set to 0 to take the File API path a real 20-minute camera clip (well over 20 MB) takes. Gemini answers from its recorded exchange, served to the real client from a local server |
-//! | Qwen3-VL-4B over sampled frames | One frame every five seconds — decoded from the clip by a user-installed ffmpeg, or drawn from the clip's own sprites at the same times where there is none — through `FramesAnalyzer` with a `VisibilityPass`, on the device. The model's answers replay a transcript (see `fixtures/recorded/README.md` for its provenance) |
+//! | Qwen3-VL-4B over sampled frames | One frame every five seconds — decoded from the clip by a user-installed ffmpeg, or drawn from the clip's own sprites at the same times where there is none — through `FramesAnalyzer` with a `VisibilityPass`, on the device. The model's answers replay its live recording on an Apple M4 CPU, request by request (`fixtures/recorded/README.md`) |
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -126,7 +126,7 @@ async fn gemini_server(exchanges: &[Value]) -> Result<MockServer> {
     Ok(server)
 }
 
-/// A scripted Qwen3-VL on this machine: it answers each request with the transcript's next
+/// Qwen3-VL on this machine, replayed: it answers each request with the transcript's next
 /// response after checking the request is the one the transcript holds — the same kind, and
 /// for a question the same frame times.
 struct Transcript {

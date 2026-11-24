@@ -1,145 +1,180 @@
 {
   "model": "qwen3-vl-4b-instruct",
-  "written": "2026-11-23",
-  "scripted": true,
-  "note": "Scripted, not recorded: the visibility pass's requests over S13's 240 frames (one every 5 s; stride 5, 4 frames a check, 8 a question) and answers in Qwen3-VL's JSON form that state what each frame shows. Qwen3-VL-4B could not run live: its 8.9 GB of weights need 14 GiB free and the machine had 7.6-11 GiB. Token counts are estimates (about 240 tokens a 640x360 image).",
+  "recorded": "2026-11-24",
+  "device": "cpu",
+  "note": "Recorded live by adk-vision's video_local_live_tests (ADK_VISION_RECORD) on an Apple M4 CPU (10 cores, 24 GB): Qwen3-VL-4B Instruct at ebb281ec through mistral.rs 0.8 in process, MistralRsConfig::default() on Device::Cpu, the dev profile with dependencies at opt-level 1; HF_HUB_OFFLINE=1 inside a sandbox-exec profile that denies all network. Each image is its SHA-256 and byte size; elapsedMs is the call's wall time.",
+  "clip": "aisle-forklift-20min.mp4",
+  "frames": 240,
+  "everyMs": 5000,
+  "width": 640,
+  "settings": {
+    "framesPerCall": 8,
+    "visibilityPass": {
+      "stride": 5,
+      "framesPerCheck": 4,
+      "target": null
+    }
+  },
+  "loadMs": 20418,
+  "wallMs": 706090,
+  "answer": "The forklift enters the aisle at 12:50.0",
+  "events": [
+    {
+      "startMs": 770000,
+      "endMs": 770000,
+      "text": "The forklift enters the aisle."
+    }
+  ],
   "exchanges": [
     {
       "kind": "target",
       "images": 0,
-      "response": "{\"target\": \"the orange forklift\"}",
+      "imageDigests": [],
+      "response": "{\"target\": \"forklift\"}",
       "usage": {
-        "input": 52,
-        "output": 9
-      }
+        "input": 65,
+        "output": 8
+      },
+      "elapsedMs": 6085
     },
     {
       "kind": "check",
       "images": 4,
-      "frames": [
-        0,
-        25000,
-        50000,
-        75000
+      "imageDigests": [
+        "sha256:911fcefb4dd6ef83e81770717362cff7871fddda4c73ae3e606f796b655f346d:12067",
+        "sha256:d48ddc012f24785bfe5c7e72e3579e22c4e3dc6ad6f8b4c8c4f2e65e5d10e287:12094",
+        "sha256:442b7fd164a4937abbf75958267f21d8cba956309f3278ce7c0aa8b9ad816cbd:12086",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325"
       ],
       "response": "{\"visible\": []}",
       "usage": {
-        "input": 1024,
-        "output": 8
-      }
+        "input": 951,
+        "output": 6
+      },
+      "elapsedMs": 96625
     },
     {
       "kind": "check",
       "images": 4,
-      "frames": [
-        100000,
-        125000,
-        150000,
-        175000
+      "imageDigests": [
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325"
       ],
       "response": "{\"visible\": []}",
       "usage": {
-        "input": 1024,
-        "output": 8
-      }
+        "input": 951,
+        "output": 6
+      },
+      "elapsedMs": 61283
     },
     {
       "kind": "check",
       "images": 4,
-      "frames": [
-        200000,
-        225000,
-        250000,
-        275000
+      "imageDigests": [
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325"
       ],
       "response": "{\"visible\": []}",
       "usage": {
-        "input": 1024,
-        "output": 8
-      }
+        "input": 951,
+        "output": 6
+      },
+      "elapsedMs": 63160
     },
     {
       "kind": "check",
       "images": 4,
-      "frames": [
-        300000,
-        325000,
-        350000,
-        375000
+      "imageDigests": [
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325"
       ],
       "response": "{\"visible\": []}",
       "usage": {
-        "input": 1024,
-        "output": 8
-      }
+        "input": 951,
+        "output": 6
+      },
+      "elapsedMs": 61910
     },
     {
       "kind": "check",
       "images": 4,
-      "frames": [
-        400000,
-        425000,
-        450000,
-        475000
+      "imageDigests": [
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325"
       ],
       "response": "{\"visible\": []}",
       "usage": {
-        "input": 1024,
-        "output": 8
-      }
+        "input": 951,
+        "output": 6
+      },
+      "elapsedMs": 60780
     },
     {
       "kind": "check",
       "images": 4,
-      "frames": [
-        500000,
-        525000,
-        550000,
-        575000
+      "imageDigests": [
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325"
       ],
       "response": "{\"visible\": []}",
       "usage": {
-        "input": 1024,
-        "output": 8
-      }
+        "input": 951,
+        "output": 6
+      },
+      "elapsedMs": 61350
     },
     {
       "kind": "check",
       "images": 4,
-      "frames": [
-        600000,
-        625000,
-        650000,
-        675000
+      "imageDigests": [
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325"
       ],
       "response": "{\"visible\": []}",
       "usage": {
-        "input": 1024,
-        "output": 8
-      }
+        "input": 951,
+        "output": 6
+      },
+      "elapsedMs": 61573
     },
     {
       "kind": "check",
       "images": 4,
-      "frames": [
-        700000,
-        725000,
-        750000,
-        775000
+      "imageDigests": [
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:adcd6779f786d3fb0446fb583447c8f9075213b84b38384fac24a87e61a36446:21665"
       ],
       "response": "{\"visible\": [4]}",
       "usage": {
-        "input": 1024,
-        "output": 8
-      }
+        "input": 951,
+        "output": 7
+      },
+      "elapsedMs": 69885
     },
     {
       "kind": "ask",
       "images": 6,
-      "stamps": [
-        "image 1 at 12:30.0",
-        "image 3 at 12:50.0",
-        "image 6 at 13:20.0"
+      "imageDigests": [
+        "sha256:d3cb0dea43debcfd6b1446431c78a29d9a0d9d320cd13ff8339f3aa1c2b7afaa:11325",
+        "sha256:422a3957f998f027b6e9de48a5074856f9067360c20b2c079bc21a1f129d181a:14439",
+        "sha256:982ca3a7c70ed03900277a6cdc578d5e8d13dba3dec51852a65bc02ed5ca08b2:22851",
+        "sha256:14fed984e36e827f334c0e5eba6b20df36e494a62b825712e91a9b038ae9a8d5:11336",
+        "sha256:01814aa3326b93a8cefed41689cc99aae44c5f33a920e4c4e8852c865a0c6212:11343",
+        "sha256:69ff7ae2f5912091dfdd2bdebd9409447143dc801f3e1d5a385405c791a8a884:11343"
       ],
       "frames": [
         750000,
@@ -149,11 +184,20 @@
         790000,
         800000
       ],
-      "response": "{\"answer\": \"The orange forklift enters aisle 3 at about 12:50, when it is first seen past the yellow line.\", \"events\": [{\"start\": 3, \"end\": 4, \"text\": \"the orange forklift crosses the yellow entrance line into aisle 3\"}]}",
+      "stamps": [
+        "image 1 at 12:30.0",
+        "image 2 at 12:40.0",
+        "image 3 at 12:50.0",
+        "image 4 at 13:00.0",
+        "image 5 at 13:10.0",
+        "image 6 at 13:20.0"
+      ],
+      "response": "{\n  \"answer\": \"The forklift enters the aisle at 12:50.0\",\n  \"events\": [\n    {\n      \"start\": 3,\n      \"end\": 3,\n      \"text\": \"The forklift enters the aisle.\"\n    }\n  ]\n}",
       "usage": {
-        "input": 1692,
-        "output": 46
-      }
+        "input": 1535,
+        "output": 63
+      },
+      "elapsedMs": 163082
     }
   ]
 }

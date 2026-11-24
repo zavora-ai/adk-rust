@@ -227,14 +227,14 @@ async fn qwen() -> Qwen {
 }
 
 /// Asks over the clip's frames sampled every `every_s` seconds; nothing leaves the machine
-/// and every frame is metered at zero cost. Returns the first event's start.
-async fn ask(qwen: &Qwen, analyzer: FramesAnalyzer, every_s: u64) -> Option<u64> {
+/// and every frame is metered at zero cost. Returns the first event's start. `settings` names
+/// the analyzer's settings in a recording.
+async fn ask(qwen: &Qwen, analyzer: FramesAnalyzer, every_s: u64, settings: Value) -> Option<u64> {
     let clip = std::env::var("ADK_VISION_CLIP").map(PathBuf::from).unwrap_or_else(|_| {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video/aisle-forklift-120s.mp4")
     });
     let width = env_or("ADK_VISION_WIDTH", 448);
     let frames = sample(&clip, every_s, width);
-    let settings = format!("{analyzer:?}");
     println!("{} frames, one every {every_s} s; {settings}", frames.len());
     let recorder = Arc::new(InMemoryEgressRecorder::new());
     let runtime = VisionRuntime::builder()
@@ -304,10 +304,20 @@ async fn qwen3_vl_finds_the_entry_after_a_visibility_pass() {
     if let Ok(target) = std::env::var("ADK_VISION_TARGET") {
         pass = pass.with_target(target);
     }
+    let frames_per_call = env_or("ADK_VISION_FRAMES_PER_CALL", 8);
+    let settings = json!({
+        "framesPerCall": frames_per_call,
+        "visibilityPass": {
+            "stride": env_or("ADK_VISION_STRIDE", 1),
+            "framesPerCheck": env_or("ADK_VISION_FRAMES_PER_CHECK", 1),
+            "target": std::env::var("ADK_VISION_TARGET").ok(),
+        },
+    });
     let analyzer = FramesAnalyzer::local(&qwen.describer)
-        .with_frames_per_call(env_or("ADK_VISION_FRAMES_PER_CALL", 8))
+        .with_frames_per_call(frames_per_call)
         .with_visibility_pass(pass);
-    let start = ask(&qwen, analyzer, env_or("ADK_VISION_EVERY_S", 5)).await.expect("an event");
+    let every_s = env_or("ADK_VISION_EVERY_S", 5);
+    let start = ask(&qwen, analyzer, every_s, settings).await.expect("an event");
     let entry = env_or("ADK_VISION_ENTRY_MS", 45_000u64);
     assert!(start.abs_diff(entry) <= 5_000, "{start} ms is not within 5 s of {entry} ms");
 }
@@ -319,9 +329,11 @@ async fn qwen3_vl_answers_in_batches_over_every_frame() {
     // puts the right batch's event at 0:45.0 but names events in batches without the forklift
     // too; all 24 in one call answers 0:35.0.
     let qwen = qwen().await;
-    let analyzer = FramesAnalyzer::local(&qwen.describer)
-        .with_frames_per_call(env_or("ADK_VISION_FRAMES_PER_CALL", 8));
-    let start = ask(&qwen, analyzer, env_or("ADK_VISION_EVERY_S", 5)).await.expect("an event");
+    let frames_per_call = env_or("ADK_VISION_FRAMES_PER_CALL", 8);
+    let analyzer = FramesAnalyzer::local(&qwen.describer).with_frames_per_call(frames_per_call);
+    let settings = json!({ "framesPerCall": frames_per_call });
+    let every_s = env_or("ADK_VISION_EVERY_S", 5);
+    let start = ask(&qwen, analyzer, every_s, settings).await.expect("an event");
     let entry = env_or("ADK_VISION_ENTRY_MS", 45_000u64);
     assert!(start.abs_diff(entry) <= 5_000, "{start} ms is not within 5 s of {entry} ms");
 }
