@@ -32,11 +32,26 @@ pub struct Setup {
     pub budget: Arc<BudgetTracker>,
     pub ledger: Arc<InMemorySpendLedger>,
     pub cx: VisionCx,
+    /// The directory of an on-disk graph database, removed when the run ends.
+    pub graph_dir: Option<tempfile::TempDir>,
 }
 
 impl Setup {
     pub async fn new() -> Self {
-        let graph = GraphMemoryService::new("sqlite::memory:").await.unwrap();
+        Self::with_graph("sqlite::memory:", None).await
+    }
+
+    /// The same stores with graph memory in a file, for a live run. The pool replaces a
+    /// connection idle for ten minutes, and a new connection to `sqlite::memory:` opens an
+    /// empty database, so a run that indexes for longer finds no graph tables.
+    pub async fn on_disk() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}?mode=rwc", dir.path().join("graph.db").display());
+        Self::with_graph(&url, Some(dir)).await
+    }
+
+    async fn with_graph(url: &str, graph_dir: Option<tempfile::TempDir>) -> Self {
+        let graph = GraphMemoryService::new(url).await.unwrap();
         graph.migrate().await.unwrap();
         let audit = InMemoryAuditRecorder::new();
         let budget = Arc::new(BudgetTracker::new(RunBudget::new()));
@@ -57,6 +72,7 @@ impl Setup {
             budget,
             ledger,
             cx,
+            graph_dir,
         }
     }
 

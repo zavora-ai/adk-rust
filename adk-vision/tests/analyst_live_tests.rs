@@ -75,7 +75,7 @@ async fn s17_an_hour_of_warehouse_video_answered_from_captions() {
         }),
     });
     let haiku = LlmDescriber::remote(recorder.clone(), ["api.anthropic.com"]).unwrap();
-    let setup = Setup::new().await;
+    let setup = Setup::on_disk().await;
     let runtime = Arc::new(
         adk_vision::VisionRuntime::builder()
             .remote_video_analyzer(Arc::new(FramesAnalyzer::remote(&haiku)))
@@ -254,7 +254,7 @@ async fn s17_captioned_on_the_device_by_qwen3_vl() {
         .with_id(id.clone())
         .with_adapter(Arc::new(Normalized1000::qwen3_vl(&id)))
         .with_limits(InputLimits::unlimited().with_max_pixels(MAX_PIXELS));
-    let setup = Setup::new().await;
+    let setup = Setup::on_disk().await;
     let runtime = Arc::new(
         adk_vision::VisionRuntime::builder()
             .video_analyzer(Arc::new(FramesAnalyzer::local(&local)))
