@@ -3,10 +3,10 @@
 
 /// The `--bg` token in light: the web home's (`adk-surface/web/src/styles/tokens.css`) and the
 /// bundled pages' (`probe/src/pages.css`).
-pub const LIGHT_BACKGROUND: [u8; 3] = [0xff, 0xff, 0xff];
+pub const LIGHT_BACKGROUND: [u8; 3] = [0xfa, 0xfa, 0xf9];
 
 /// The `--bg` token in dark.
-pub const DARK_BACKGROUND: [u8; 3] = [0x0a, 0x16, 0x28];
+pub const DARK_BACKGROUND: [u8; 3] = [0x0e, 0x0f, 0x11];
 
 /// The background a window takes before its page paints, as red, green and blue: the page's
 /// own `--bg` in the desktop's light or dark appearance.
@@ -16,8 +16,8 @@ pub const DARK_BACKGROUND: [u8; 3] = [0x0a, 0x16, 0x28];
 /// ```
 /// use adk_desktop_core::window_background;
 ///
-/// assert_eq!(window_background(true), [0x0a, 0x16, 0x28]);
-/// assert_eq!(window_background(false), [0xff, 0xff, 0xff]);
+/// assert_eq!(window_background(true), [0x0e, 0x0f, 0x11]);
+/// assert_eq!(window_background(false), [0xfa, 0xfa, 0xf9]);
 /// ```
 pub fn window_background(dark: bool) -> [u8; 3] {
     if dark { DARK_BACKGROUND } else { LIGHT_BACKGROUND }
