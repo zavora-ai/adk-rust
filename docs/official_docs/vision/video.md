@@ -390,7 +390,7 @@ The same hour captioned and answered on the device, recorded on 2026-11-24 with 
 | Captions | 120 chunks, 720 frames in 1,057 s: 8.8 s a chunk (7.8 s median per call), 116,361 input and 2,543 output tokens. 103 chunks read "Nothing happens."; each of the ten event chunks names its event — the spill as "a blue cylindrical object … leaving a small puddle", the vest worker as "a person in a yellow shirt" |
 | Citations | 8 of 10 answers cite the chunk that holds the event's start (the truck's with `supported` false); the forklift at aisle 2 and the near miss are answered "not mentioned" although their chunks were among the eight retrieved |
 | Cost | Zero: no frame reaches the egress gate and the spend ledger holds nothing |
-| On the CPU | The first 20 chunks (CPU_CHUNK s a chunk), the same captions |
+| On the CPU | 88 s a chunk over the first 20 chunks (85–97 s), about 2.9 hours for the hour. The first 8 chunks again at 89.3 s a chunk: seven captions word for word as on Metal, the eighth naming the same forklift in other words, and its one question citing its chunk at zero cost |
 
 An earlier run on the same machine wrote the same captions and cited 7 of 10. Retrieval breaks
 ties between chunks of equal score — the 103 identical captions — in the store's order, which
