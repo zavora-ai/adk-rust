@@ -12,7 +12,8 @@ use std::sync::{Arc, Mutex};
 use adk_core::egress::EgressPolicy;
 use adk_core::{
     BudgetTracker, Content, DataLocality, InMemorySpendLedger, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, ModelCallScope, Part, RunBudget, SpendLimits, UsageMetadata, UsageUnit,
+    LlmResponseStream, ModelCallScope, Part, RunBudget, SpendKey, SpendLedger, SpendLimits,
+    SpendPeriod, UsageMetadata, UsageUnit,
 };
 use adk_model::GeminiModel;
 use adk_vision::stream::{FfmpegBinary, FileSource, FrameSource};
@@ -57,13 +58,15 @@ fn label() -> Result<Label> {
     })
 }
 
-fn metered() -> (VisionCx, Arc<BudgetTracker>) {
+fn metered() -> (VisionCx, Arc<BudgetTracker>, Arc<InMemorySpendLedger>) {
     let budget = Arc::new(BudgetTracker::new(RunBudget::new()));
     let ledger = Arc::new(InMemorySpendLedger::new(SpendLimits::new()));
     let cx = VisionCx::new().with_scope(
-        ModelCallScope::new().with_budget(budget.clone()).with_spend_ledger(ledger, "aisle"),
+        ModelCallScope::new()
+            .with_budget(budget.clone())
+            .with_spend_ledger(ledger.clone(), "aisle"),
     );
-    (cx, budget)
+    (cx, budget, ledger)
 }
 
 fn gate(recorder: &Arc<InMemoryEgressRecorder>) -> EgressGate {
@@ -207,6 +210,11 @@ impl Llm for Transcript {
         Ok(Box::pin(futures::stream::iter([Ok(response)])))
     }
 
+    // mistral.rs runs in process and bounds every call at zero.
+    fn max_cost_micro_usd(&self, _request: &LlmRequest) -> Option<u64> {
+        Some(0)
+    }
+
     fn data_locality(&self) -> DataLocality {
         DataLocality::InProcess
     }
@@ -304,7 +312,7 @@ pub async fn run() -> Result<Checks> {
         .remote_video_analyzer(Arc::new(analyzer))
         .egress_gate(gate(&recorder))
         .build()?;
-    let (cx, budget) = metered();
+    let (cx, budget, _) = metered();
     let transcript = read_json(&fixtures().join("recorded/qwen3-vl-4b/s13-aisle-20min.json"))?;
     let qwen_how = if transcript["scripted"].as_bool() == Some(true) {
         "on a scripted transcript".to_string()
@@ -394,7 +402,7 @@ pub async fn run() -> Result<Checks> {
         .build()?;
     let (frames, how) = sampled(&label).await?;
     checks.note(format!("{} frames, one every 5 s, {how}", frames.len()));
-    let (cx, budget) = metered();
+    let (cx, budget, ledger) = metered();
     let out = runtime
         .analyze_video(
             &cx,
@@ -417,13 +425,15 @@ pub async fn run() -> Result<Checks> {
         checks.note(mismatch.clone());
     }
     let usage = &out.value.usage;
+    let spent = ledger.spent(&SpendKey::org("aisle"), SpendPeriod::Lifetime).await?;
     checks.check(
         &format!(
-            "the local path's tokens and cost are reported: {:?} in, {:?} out, {:?} µUSD; nothing left the machine",
+            "the local path's tokens and cost are reported: {:?} in, {:?} out, {:?} µUSD, {spent} µUSD in the ledger; nothing left the machine",
             usage.input_tokens, usage.output_tokens, usage.cost_micro_usd
         ),
         usage.input_tokens.is_some_and(|t| t > 0)
             && usage.cost_micro_usd == Some(0)
+            && spent == 0
             && recorder.is_empty()
             && budget.units().get(UsageUnit::Frames) == frames.len() as u64,
     );

@@ -271,6 +271,10 @@ impl Llm for Recorder {
         Ok(Box::pin(futures::stream::iter(std::mem::take(&mut responses))))
     }
 
+    fn max_cost_micro_usd(&self, req: &LlmRequest) -> Option<u64> {
+        self.inner.max_cost_micro_usd(req)
+    }
+
     fn data_locality(&self) -> DataLocality {
         self.inner.data_locality()
     }

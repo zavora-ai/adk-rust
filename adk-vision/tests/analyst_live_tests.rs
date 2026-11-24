@@ -194,6 +194,7 @@ async fn s17_an_hour_of_warehouse_video_answered_from_captions() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "loads Qwen3-VL (4B: 8.88 GB) through the fetcher; see the module docs"]
 async fn s17_captioned_on_the_device_by_qwen3_vl() {
+    use adk_core::SpendLedger;
     use adk_mistralrs::{Device, DeviceConfig, MistralRsConfig};
     use adk_vision::cloud::Normalized1000;
     use adk_vision::mistralrs::{MAX_PIXELS, QWEN3_VL_4B};
@@ -343,6 +344,12 @@ async fn s17_captioned_on_the_device_by_qwen3_vl() {
         asked.len()
     );
     assert!(setup.egress.released().is_empty(), "nothing left the machine");
+    let spent = setup
+        .ledger
+        .spent(&adk_core::SpendKey::org("acme"), adk_core::SpendPeriod::Lifetime)
+        .await
+        .unwrap();
+    assert_eq!(spent, 0, "the spend ledger holds nothing for the device's calls");
 
     let mut recording = recorder.recording.lock().unwrap().clone();
     recording.width = hour.spec().width;
