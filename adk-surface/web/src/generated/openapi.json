@@ -4404,6 +4404,17 @@
             ],
             "description": "The run that waited on this decision ended while it still waits: the answer is kept\nand used when the agent picks the thread up again (spec 3.7 §8.2, board choice A12)."
           },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScreenPlanView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The screen plan the card decides with one answer (spec 3.7 Q8): its window and every\nstep with its target and the screenshot the target was found on. `None` for a card that\ndecides one call."
+          },
           "reversibility": {
             "$ref": "#/components/schemas/Reversibility",
             "description": "Whether it can be taken back."
@@ -8917,6 +8928,63 @@
         "required": [
           "scale",
           "offset"
+        ],
+        "type": "object"
+      },
+      "ScreenPlanStepView": {
+        "description": "One step of a `ScreenPlanView`.",
+        "properties": {
+          "operation": {
+            "description": "What the step does: `left_click`, `type`, ….",
+            "type": "string"
+          },
+          "proposed": {
+            "description": "The action as the agent proposed it."
+          },
+          "screenshot": {
+            "description": "The digest of the screenshot the target was found on, when the runtime gave one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target": {
+            "description": "Where on the screen, in points: `(100, 300)-(190, 340) pt`. `None` for a step that acts\nwhere the step before it put the focus, such as typing.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "operation",
+          "proposed"
+        ],
+        "type": "object"
+      },
+      "ScreenPlanView": {
+        "description": "A previewed screen plan a decision card decides with one answer (spec 3.7 Q8): up to N\ndesktop actions in one window. **Allow** runs the steps once each, in order, each checked\nagainst its preview on a fresh screenshot before it runs; a step whose target moved is asked\nagain on a card of its own. Never a standing rule.",
+        "properties": {
+          "digest": {
+            "description": "The plan's fingerprint, `sha256:…`, over its window, steps and targets: the answer binds\nit.",
+            "type": "string"
+          },
+          "steps": {
+            "description": "The steps, in the order they run.",
+            "items": {
+              "$ref": "#/components/schemas/ScreenPlanStepView"
+            },
+            "type": "array"
+          },
+          "window": {
+            "description": "The window every step acts in: the application, then the window.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "digest",
+          "window",
+          "steps"
         ],
         "type": "object"
       },

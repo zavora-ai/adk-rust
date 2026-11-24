@@ -11,9 +11,10 @@
 //! approval of their own. A plan is never a standing rule.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use adk_computer_use::{Bounds, TargetEvidence};
+use adk_core::{ApprovalScope, ApprovalStore};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -375,6 +376,29 @@ struct Record {
     plan: PreviewedPlan,
     state: PlanState,
     instance: u64,
+    /// The decisions a person's answer on a surface filed for the plan's later steps.
+    filed: Option<Filed>,
+}
+
+/// The decisions filed in an approval store for the later steps of a plan a person decided on
+/// a surface that parks held calls (spec 3.7 Q8): taken back when the plan ends or is previewed
+/// again before the steps take them, so none answers a call the plan no longer covers.
+#[derive(Clone, Debug)]
+pub(crate) struct Filed {
+    pub(crate) store: Arc<dyn ApprovalStore>,
+    pub(crate) scope: ApprovalScope,
+    pub(crate) fingerprints: Vec<String>,
+}
+
+impl Filed {
+    /// Takes every decision still filed; one a step already took is gone and stays so.
+    pub(crate) async fn withdraw(self) {
+        for fingerprint in &self.fingerprints {
+            if let Err(error) = self.store.take_approval(&self.scope, fingerprint).await {
+                tracing::warn!(error = %error, "a screen plan step's filed decision could not be taken back");
+            }
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -404,8 +428,9 @@ impl ScreenPlans {
     }
 
     /// Keeps `plan`, previewed now: a plan previewed again starts over and needs a new
-    /// approval.
-    pub(super) fn keep(&self, scope: &str, plan: PreviewedPlan) {
+    /// approval. Returns the decisions filed for the plans it replaces or drops, for the caller
+    /// to take back.
+    pub(super) fn keep(&self, scope: &str, plan: PreviewedPlan) -> Vec<Filed> {
         let mut book = self.book();
         book.next += 1;
         let instance = book.next;
@@ -413,16 +438,18 @@ impl ScreenPlans {
         for step in &plan.steps {
             book.steps.insert((scope.to_string(), step.action_digest.clone()), plan.digest.clone());
         }
-        if book
-            .plans
-            .insert(key.clone(), Record { plan, state: PlanState::Previewed, instance })
-            .is_none()
-        {
-            book.order.push_back(key);
+        let mut stale = Vec::new();
+        match book.plans.insert(
+            key.clone(),
+            Record { plan, state: PlanState::Previewed, instance, filed: None },
+        ) {
+            Some(replaced) => stale.extend(replaced.filed),
+            None => book.order.push_back(key),
         }
         while book.order.len() > PLANS_CAP {
             let Some(oldest) = book.order.pop_front() else { break };
             if let Some(record) = book.plans.remove(&oldest) {
+                stale.extend(record.filed);
                 for step in record.plan.steps {
                     let key = (oldest.0.clone(), step.action_digest);
                     if book.steps.get(&key) == Some(&oldest.1) {
@@ -431,6 +458,7 @@ impl ScreenPlans {
                 }
             }
         }
+        stale
     }
 
     /// The plan the kept action `action_digest` last joined.
@@ -461,6 +489,68 @@ impl ScreenPlans {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Decides the plan `digest` from a surface (spec 3.7 Q8): only while no one decided it
+    /// yet and it is still the instance the card showed, with `filed` taken back if the plan
+    /// ends before its steps take them.
+    // Read by `Harness`, which exists with feature `runner` only.
+    #[cfg_attr(not(feature = "runner"), allow(dead_code))]
+    pub(crate) fn decide_held(
+        &self,
+        scope: &str,
+        digest: &str,
+        instance: u64,
+        state: PlanState,
+        filed: Filed,
+    ) -> bool {
+        let mut book = self.book();
+        match book.plans.get_mut(&(scope.to_string(), digest.to_string())) {
+            Some(record) if record.instance == instance && record.state == PlanState::Previewed => {
+                record.state = state;
+                record.filed = Some(filed);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Takes back a surface's decision on the plan `digest` that could not be recorded on the
+    /// held call: the plan waits for a decision again. Returns what was filed.
+    // Read by `Harness`, which exists with feature `runner` only.
+    #[cfg_attr(not(feature = "runner"), allow(dead_code))]
+    pub(crate) fn revert(&self, scope: &str, digest: &str, instance: u64) -> Option<Filed> {
+        let mut book = self.book();
+        let record = book.plans.get_mut(&(scope.to_string(), digest.to_string()))?;
+        if record.instance != instance {
+            return None;
+        }
+        record.state = PlanState::Previewed;
+        record.filed.take()
+    }
+
+    /// Ends the plan `digest` whatever its state, such as when everything is stopped while
+    /// its card waits. Returns what was filed for its steps.
+    // Read by `Harness`, which exists with feature `runner` only.
+    #[cfg_attr(not(feature = "runner"), allow(dead_code))]
+    pub(crate) fn close(&self, scope: &str, digest: &str, reason: &str) -> Option<Filed> {
+        let mut book = self.book();
+        let record = book.plans.get_mut(&(scope.to_string(), digest.to_string()))?;
+        if !matches!(record.state, PlanState::Ended { .. }) {
+            record.state = PlanState::Ended { reason: reason.to_string() };
+        }
+        record.filed.take()
+    }
+
+    /// What was filed for the plan `digest`, once the plan ended: its approval covers no
+    /// further step, so no filed decision may answer one.
+    pub(crate) fn take_filed_if_ended(&self, scope: &str, digest: &str) -> Option<Filed> {
+        let mut book = self.book();
+        let record = book.plans.get_mut(&(scope.to_string(), digest.to_string()))?;
+        match record.state {
+            PlanState::Ended { .. } => record.filed.take(),
+            PlanState::Previewed | PlanState::Approved { .. } | PlanState::Denied { .. } => None,
         }
     }
 

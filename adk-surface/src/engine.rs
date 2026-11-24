@@ -30,7 +30,7 @@ use crate::model::{
 use crate::origin::{Caller, Origin, SurfaceKind};
 use crate::project::{self, Place, Projector};
 use crate::rules::{self, Answer, Row};
-use crate::source::{Source, Steered, Steering};
+use crate::source::{HeldPlan, Source, Steered, Steering};
 use crate::words;
 
 /// The audit action of "Send" and "Queue" (spec 3.3 §11).
@@ -1123,8 +1123,19 @@ impl SurfaceEngine {
             })
             .collect();
         requests.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
+        let held: HashSet<&str> =
+            requests.iter().map(|request| request.fingerprint.as_str()).collect();
         let mut cards = Vec::with_capacity(requests.len());
         for request in &requests {
+            // A later step of an open screen plan waits behind its first step's card: one card
+            // per plan (spec 3.7 Q8).
+            if let Some(plan) = self.inner.source.screen_plan(request).await
+                && plan.step > 0
+                && plan.open
+                && plan.fingerprints.first().is_some_and(|first| held.contains(first.as_str()))
+            {
+                continue;
+            }
             cards.push(self.card(caller, request).await?);
         }
         Ok(cards)
@@ -1180,6 +1191,7 @@ impl SurfaceEngine {
             }
         }
         self.add_media(caller, request, &hint, &mut card).await;
+        self.add_plan(caller, request, &hint, &mut card).await;
         // How far a surface's answer reaches: once, or by the standing rule it made (§5.4).
         if let (Some(decided), Some(record)) = (card.decided.as_mut(), answer.as_ref())
             && decided.via.is_some()
@@ -1221,6 +1233,84 @@ impl SurfaceEngine {
             card.timeline = timeline;
         }
         Ok(card)
+    }
+
+    /// The screen plan whose one card `request` carries (spec 3.7 Q8): the plan's first step,
+    /// while no one decided the plan, or once the request itself was decided.
+    async fn card_plan(&self, request: &ApprovalRequest) -> Option<HeldPlan> {
+        self.inner
+            .source
+            .screen_plan(request)
+            .await
+            .filter(|plan| plan.step == 0 && (plan.open || request.state != ApprovalState::Pending))
+    }
+
+    /// A screen plan's first step carries the plan's one card (spec 3.7 Q8): the plan's
+    /// heading, its window and every step with its target in place of the call, and only
+    /// **Allow** and **Deny** — **Allow** where the whole plan can be shown, once it was shown
+    /// in full. A chat card carries the heading alone (S-I5).
+    async fn add_plan(
+        &self,
+        caller: &Caller,
+        request: &ApprovalRequest,
+        hint: &CardHint,
+        card: &mut DecisionCard,
+    ) {
+        let Some(plan) = self.card_plan(request).await else { return };
+        let steps = plan.view.steps.len();
+        let (text, truncated) = project::cut_call_text(plan.text.clone());
+        if rules::row(caller) == Row::Chat {
+            card.heading = words::screen_plan_chat_heading(steps);
+            card.call.truncated = truncated;
+        } else {
+            card.heading = project::capped(
+                &words::screen_plan_heading(steps, &plan.view.window),
+                project::CARD_HEADING_LIMIT,
+            );
+            card.call = crate::model::CallView {
+                tool: request.tool_name.clone(),
+                args: serde_json::to_value(&plan.view).unwrap_or(Value::Null),
+                text,
+                truncated,
+            };
+            card.detail = Some(crate::model::CardDetail::new(words::SCREEN_PLAN_DETAIL));
+            card.plan = Some(plan.view.clone());
+        }
+        if request.state == ApprovalState::Pending {
+            let mut facts = self.inner.projector.facts(request, None, hint);
+            facts.plan = true;
+            facts.truncated = truncated;
+            card.allowed = rules::allowed_answers(caller, &facts);
+        } else if let Some(decided) = card.decided.as_mut()
+            && decided.answer == crate::model::DecidedAnswer::Edited
+        {
+            // The plan's binding is not a person's edit: the card reads as the yes it was.
+            decided.answer = crate::model::DecidedAnswer::Yes;
+            let phrase = decided.via.as_ref().map(crate::origin::Via::phrase);
+            decided.text = words::said(
+                (!decided.by_you).then_some(decided.by.as_str()),
+                words::SaidWhat::Yes,
+                phrase.as_deref(),
+                &decided.at_text,
+            );
+            if let Some(step) = card.timeline.last_mut() {
+                step.text = project::capped(&decided.text, project::CARD_LINE_LIMIT);
+            }
+        }
+    }
+
+    /// Closes `plan`'s open card, whose first step `request` holds, because everything was
+    /// stopped (spec 3.7 Q8, V-I17).
+    async fn close_plan(&self, request: &ApprovalRequest, plan: &HeldPlan) {
+        if let Err(error) = self
+            .inner
+            .source
+            .close_screen_plan(request, plan, words::STOP_ALL_CLOSED_THE_PLAN)
+            .await
+        {
+            tracing::warn!(error = %error, decision.id = %request.id, "a screen plan's card stayed open after a stop");
+        }
+        self.inner.wake.notify_waiters();
     }
 
     /// The caller's decisions answered or ended since `since`, newest first, for a surface
@@ -2280,6 +2370,12 @@ impl SurfaceEngine {
         let always = self.always_label(&request).await;
         let hint = self.hint(&request).await;
         let mut facts = self.inner.projector.facts(&request, always, &hint);
+        let plan = self.card_plan(&request).await.filter(|plan| plan.open);
+        if let Some(plan) = &plan {
+            facts.plan = true;
+            facts.truncated = project::cut_call_text(plan.text.clone()).1;
+            facts.always_label = None;
+        }
         let images: Vec<String> =
             crate::evidence::images(&request).iter().map(|image| image.digest.clone()).collect();
         if !images.is_empty() {
@@ -2291,6 +2387,25 @@ impl SurfaceEngine {
             let error = SurfaceError::Rule(violation);
             self.audit_decide(caller, &request, answer, "refused", Some(&error.code())).await?;
             return Err(error);
+        }
+        if let Some(plan) = plan {
+            // A plan is approved by a person looking at it while agents may act: answered
+            // after everything was stopped, its card closes (spec 3.7 Q8, V-I17).
+            if self.inner.source.stopped().await? {
+                self.close_plan(&request, &plan).await;
+                let closed = self.inner.source.request(&request.id).await?.unwrap_or(request);
+                if closed.state == ApprovalState::Pending {
+                    return Err(SurfaceError::NotHere(
+                        "everything is stopped: a screen plan is answered once agents may act \
+                         again"
+                            .into(),
+                    ));
+                }
+                return self.already_decided(caller, &closed, answer).await;
+            }
+            return self
+                .commit(caller, &request, version, answer, (None, reason), Some(&plan))
+                .await;
         }
         if answer == Answer::Edit && edited_args.is_none() {
             return Err(SurfaceError::Invalid("an edit needs the changed arguments".into()));
@@ -2349,7 +2464,7 @@ impl SurfaceEngine {
             }
             return self.speak_later(caller, request, version, settle).await;
         }
-        self.commit(caller, &request, version, answer, edited_args, reason).await
+        self.commit(caller, &request, version, answer, (edited_args, reason), None).await
     }
 
     /// Tightens the crop of one of decision `id`'s images or covers more of it, then holds its
@@ -2545,15 +2660,17 @@ impl SurfaceEngine {
         Ok(CommandOutcome::HeldAgain { changed, card })
     }
 
-    /// Records the answer: `ApprovalService::decide` at `version`, never retried (S-I2).
+    /// Records the answer: `ApprovalService::decide` at `version`, never retried (S-I2); for a
+    /// screen plan's card, the plan's decision through the source, which records it on the
+    /// plan's first step (spec 3.7 Q8).
     async fn commit(
         &self,
         caller: &Caller,
         request: &ApprovalRequest,
         version: u64,
         answer: Answer,
-        edited_args: Option<Value>,
-        reason: Option<String>,
+        (edited_args, reason): (Option<Value>, Option<String>),
+        plan: Option<&HeldPlan>,
     ) -> Result<CommandOutcome> {
         let rule = match answer {
             Answer::AlwaysAllow => {
@@ -2582,6 +2699,9 @@ impl SurfaceEngine {
         });
         if let Ok(digest) = SPOKEN_DIGEST.try_with(Clone::clone) {
             given["transcriptDigest"] = json!(digest);
+        }
+        if let Some(plan) = plan {
+            given["planDigest"] = json!(plan.view.digest);
         }
         self.record(caller, SURFACE_AUDIT_ANSWER, given).await?;
         // A yes to a form's call is sealed to the drawing the person saw before it takes
@@ -2621,7 +2741,17 @@ impl SurfaceEngine {
             )
             .await?;
         }
-        match self.inner.source.decide(&request.id, version, decision).await {
+        let decided = match plan {
+            Some(plan) => {
+                let allow = answer != Answer::Deny;
+                self.inner
+                    .source
+                    .decide_screen_plan(caller, request, version, &plan.view.digest, allow, reason)
+                    .await
+            }
+            None => self.inner.source.decide(&request.id, version, decision).await,
+        };
+        match decided {
             Ok(updated) => {
                 // The decision is recorded and cannot be taken back: nothing after this point
                 // fails the command or keeps the decided call and the queued input waiting.
@@ -2793,7 +2923,9 @@ impl SurfaceEngine {
                 }
                 Err(SurfaceError::NotHere(words::ALL_AGENTS_STOPPED.to_string()))
             } else {
-                engine.commit(&speaker, &request, version, Answer::AllowOnce, None, None).await
+                engine
+                    .commit(&speaker, &request, version, Answer::AllowOnce, (None, None), None)
+                    .await
             };
             match &result {
                 Ok(CommandOutcome::Answered { .. }) => {}
@@ -3328,9 +3460,23 @@ impl SurfaceEngine {
         }
         // Stopping never waits on the audit log (spec 3.2 K-I8): record after, warn on failure.
         self.inner.source.stop_all(caller, &reason).await?;
+        // Every open screen plan's card closes: a plan is approved by a person looking at it
+        // while agents may act, never across a stop (spec 3.7 Q8, V-I17).
+        let mut closed = Vec::new();
+        for request in self.inner.source.requests(caller, None, true).await.unwrap_or_default() {
+            if request.state == ApprovalState::Pending
+                && let Some(plan) = self.card_plan(&request).await
+            {
+                self.close_plan(&request, &plan).await;
+                closed.push(request.id.clone());
+            }
+        }
         let mut fields = json!({ "reason": reason });
         if !cancelled.is_empty() {
             fields["cancelledAnswers"] = json!(cancelled);
+        }
+        if !closed.is_empty() {
+            fields["closedPlans"] = json!(closed);
         }
         if let Err(error) = self.audit_command(caller, SURFACE_AUDIT_STOP_ALL, fields).await {
             tracing::warn!(error = %error, "stop all took effect; its audit record failed");

@@ -1695,6 +1695,43 @@ pub fn everything_covered(provider: Option<&str>) -> String {
     )
 }
 
+/// Allows every step of a screen plan, once each, in order (spec 3.7 Q8).
+pub const ALLOW_THIS_PLAN: &str = "Allow this plan";
+/// What one answer on a screen plan's card does (spec 3.7 Q8).
+pub const SCREEN_PLAN_DETAIL: &str = "One answer runs every step once, in order. Each step is checked against this preview first; a step whose target moved is asked again.";
+/// Why a surface that cannot show a whole screen plan sends the person to the home.
+pub const LOOK_AT_THE_PLAN_IN_THE_HOME: &str =
+    "This screen can't show the whole plan. Look at it in the home before you allow it.";
+/// Why an open screen plan's card closed when everything was stopped (spec 3.7 Q8, V-I17).
+pub const STOP_ALL_CLOSED_THE_PLAN: &str = "Stop all closed this screen plan before anyone answered it. Preview the actions again for a fresh card.";
+
+/// The heading of a screen plan's card: "Run 4 desktop actions in app.forms, window
+/// "Customer form"" (spec 3.7 Q8).
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(
+///     adk_surface::words::screen_plan_heading(4, "app.forms, window \"Customer form\""),
+///     "Run 4 desktop actions in app.forms, window \"Customer form\""
+/// );
+/// ```
+pub fn screen_plan_heading(steps: usize, window: &str) -> String {
+    format!("Run {steps} desktop actions in {window}")
+}
+
+/// The heading of a screen plan's card in chat, which names no window (S-I5): "Run 4 desktop
+/// actions".
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::screen_plan_chat_heading(4), "Run 4 desktop actions");
+/// ```
+pub fn screen_plan_chat_heading(steps: usize) -> String {
+    format!("Run {steps} desktop actions")
+}
+
 /// The line of a decision a person changed before it ran, its call held again: "You changed
 /// it at 10:15 · held again with the new image" (spec 3.7 V-I5).
 ///
@@ -1849,6 +1886,10 @@ mod tests {
         LOOK_AT_THE_IMAGE_ON_A_SCREEN,
         SHOW_THE_IMAGE_IN_THE_HOME,
         OPEN_THE_SOURCE_IMAGE,
+        ALLOW_THIS_PLAN,
+        SCREEN_PLAN_DETAIL,
+        LOOK_AT_THE_PLAN_IN_THE_HOME,
+        STOP_ALL_CLOSED_THE_PLAN,
     ];
 
     #[test]

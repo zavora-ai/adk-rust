@@ -1444,6 +1444,7 @@ dependencies = [
  "adk-action",
  "adk-agent",
  "adk-artifact",
+ "adk-computer-use",
  "adk-core",
  "adk-devtools",
  "adk-eval",
