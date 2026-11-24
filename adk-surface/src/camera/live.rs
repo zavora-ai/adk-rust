@@ -18,6 +18,9 @@
 //! Switching a stream camera off stops capture at its source: the stream is dropped — a
 //! [`DeviceSource`](adk_vision::stream::DeviceSource)'s ffmpeg exits, an RTSP connection
 //! closes — recorded as `vision.source.stopped`, and on opens it again (`vision.source.started`).
+//! Stop all closes every stream camera's source the same way (reason `stopAll`), and Resume all
+//! opens again each one that is on (`resumeAll`), so a freeze leaves no camera capturing
+//! (spec 3.7 V-I17).
 //!
 //! The web home's own camera is a [`LiveCamera::surface`]: frames the voice screen or the camera
 //! page ("Use this browser's camera") capture reach the hub through [`Cameras::ingest`], which
@@ -477,8 +480,9 @@ struct Shared {
     cx: VisionCx,
     audit: Option<(AuditTrail, AuditActor)>,
     wakes: Option<Arc<dyn WatchSink>>,
-    /// Stop all, as the hub told the source.
-    frozen: AtomicBool,
+    /// Stop all, as the hub told the source: while it is in force every stream camera's source
+    /// is closed.
+    frozen: watch::Sender<bool>,
 }
 
 impl Shared {
@@ -619,7 +623,7 @@ impl PipelineCamerasBuilder {
             cx: self.cx,
             audit: self.audit,
             wakes: self.wakes,
-            frozen: AtomicBool::new(false),
+            frozen: watch::Sender::new(false),
         });
         let mut runs: Vec<Arc<Run>> = Vec::with_capacity(self.cameras.len());
         for camera in self.cameras {
@@ -876,8 +880,22 @@ impl CameraSource for PipelineCameras {
         Ok(())
     }
 
+    /// Stop all closes each stream camera's source as off does — a device's ffmpeg exits, a
+    /// connection closes — and answers once each has closed, or after [`STOP_WAIT`] whatever a
+    /// source does; Resume all opens again each one that is on. The voice screen's camera
+    /// captures in the browser, which stops its own track: its frames are dropped.
     async fn freeze(&self, frozen: bool) -> Result<()> {
-        self.shared.frozen.store(frozen, Ordering::SeqCst);
+        self.shared.frozen.send_replace(frozen);
+        if frozen {
+            let closing = self.runs.iter().filter(|run| run.feed().is_none()).map(|run| async move {
+                let mut capturing = run.capturing.subscribe();
+                if tokio::time::timeout(STOP_WAIT, capturing.wait_for(|open| !*open)).await.is_err()
+                {
+                    tracing::warn!(camera.id = %run.base.id, "the camera's source did not close in time after Stop all; its frames are still dropped");
+                }
+            });
+            futures::future::join_all(closing).await;
+        }
         Ok(())
     }
 
@@ -1218,8 +1236,11 @@ struct Reading {
     inner: Arc<dyn FrameSource>,
     stops: bool,
     switch: watch::Receiver<bool>,
-    /// The switch closed the source; opening it again is recorded.
-    switched_off: bool,
+    /// Stop all: in force, it closes the source as off does.
+    frozen: watch::Receiver<bool>,
+    /// The switch or Stop all closed the source; opening it again is recorded, with what
+    /// opened it: `switchedOn` or `resumeAll`.
+    reopened_by: Option<&'static str>,
     sampling: Sampling,
     current: Option<FrameStream>,
     next_index: u64,
@@ -1242,7 +1263,8 @@ impl FrameSource for Watched {
             inner: Arc::clone(&self.inner),
             stops: self.stops,
             switch: self.run.switch.subscribe(),
-            switched_off: false,
+            frozen: self.shared.frozen.subscribe(),
+            reopened_by: None,
             sampling,
             current: None,
             next_index: 0,
@@ -1254,15 +1276,29 @@ impl FrameSource for Watched {
         };
         let frames = futures::stream::unfold(reading, |mut reading| async move {
             loop {
-                // Off stops capture at the source: the stream is dropped, and with it any
-                // process or connection it holds, until the camera is on again.
-                if reading.stops && !*reading.switch.borrow_and_update() {
-                    reading.close(true).await;
+                // Off and Stop all stop capture at the source: the stream is dropped, and with
+                // it any process or connection it holds, until the camera is on and nothing is
+                // stopped.
+                let off = !*reading.switch.borrow_and_update();
+                let frozen = *reading.frozen.borrow_and_update();
+                if reading.stops && (off || frozen) {
+                    reading.close(Some(if off { "switchedOff" } else { "stopAll" })).await;
                     tokio::select! {
                         () = reading.run.cancel.cancelled() => return None,
-                        changed = reading.switch.wait_for(|on| *on) => {
+                        changed = reading.switch.changed() => {
                             if changed.is_err() {
                                 return None;
+                            }
+                            if *reading.switch.borrow() && reading.reopened_by.is_some() {
+                                reading.reopened_by = Some("switchedOn");
+                            }
+                        }
+                        changed = reading.frozen.changed() => {
+                            if changed.is_err() {
+                                return None;
+                            }
+                            if !*reading.frozen.borrow() && reading.reopened_by.is_some() {
+                                reading.reopened_by = Some("resumeAll");
                             }
                         }
                     }
@@ -1285,8 +1321,9 @@ impl FrameSource for Watched {
                 let next = match reading.current.as_mut() {
                     Some(stream) if reading.stops => tokio::select! {
                         next = stream.next() => next,
-                        // Switched off while waiting for a frame: closed at the top.
+                        // Switched off or stopped while waiting for a frame: closed at the top.
                         _ = reading.switch.wait_for(|on| !*on) => continue,
+                        _ = reading.frozen.wait_for(|frozen| *frozen) => continue,
                     },
                     Some(stream) => stream.next().await,
                     None => continue,
@@ -1295,7 +1332,7 @@ impl FrameSource for Watched {
                     Some(Ok(mut frame)) => {
                         reading.arrived(frame.captured_at);
                         reading.run.arrived.fetch_add(1, Ordering::SeqCst);
-                        if !reading.run.is_on() || reading.shared.frozen.load(Ordering::SeqCst) {
+                        if !reading.run.is_on() || *reading.shared.frozen.borrow() {
                             reading.run.dropped.fetch_add(1, Ordering::SeqCst);
                             continue;
                         }
@@ -1306,11 +1343,11 @@ impl FrameSource for Watched {
                         return Some((Ok(frame), reading));
                     }
                     Some(Err(error)) => {
-                        reading.close(false).await;
+                        reading.close(None).await;
                         wait_after(&reading.run, &reading.hub, &error.to_string()).await;
                     }
                     None => {
-                        reading.close(false).await;
+                        reading.close(None).await;
                         wait_after(&reading.run, &reading.hub, "the camera's stream ended").await;
                     }
                 }
@@ -1327,28 +1364,26 @@ impl Drop for Reading {
 }
 
 impl Reading {
-    /// Drops the source's stream, if one is open; `switched`, because the camera was switched
-    /// off, which is recorded as `vision.source.stopped`.
-    async fn close(&mut self, switched: bool) {
+    /// Drops the source's stream, if one is open; `reason`, when a person closed it — the
+    /// switch (`switchedOff`) or Stop all (`stopAll`) — which is recorded as
+    /// `vision.source.stopped`.
+    async fn close(&mut self, reason: Option<&'static str>) {
         let Some(stream) = self.current.take() else { return };
         drop(stream);
         self.run.capturing.send_replace(false);
-        if switched {
-            self.switched_off = true;
-            tracing::info!(camera.id = %self.run.base.id, "camera switched off: its source stopped capturing");
-            self.shared
-                .audit(switch_draft(VISION_SOURCE_STOPPED, &self.run.id, "switchedOff"))
-                .await;
+        if let Some(reason) = reason {
+            self.reopened_by = Some(if reason == "stopAll" { "resumeAll" } else { "switchedOn" });
+            tracing::info!(camera.id = %self.run.base.id, close.reason = reason, "camera source stopped capturing");
+            self.shared.audit(switch_draft(VISION_SOURCE_STOPPED, &self.run.id, reason)).await;
         }
     }
 
-    /// The source opened: after a switch off, that is recorded as `vision.source.started`.
+    /// The source opened: after a person closed it, that is recorded as
+    /// `vision.source.started` with what opened it again.
     async fn opened(&mut self) {
-        if std::mem::take(&mut self.switched_off) {
-            tracing::info!(camera.id = %self.run.base.id, "camera switched on: its source captures again");
-            self.shared
-                .audit(switch_draft(VISION_SOURCE_STARTED, &self.run.id, "switchedOn"))
-                .await;
+        if let Some(reason) = self.reopened_by.take() {
+            tracing::info!(camera.id = %self.run.base.id, open.reason = reason, "camera source captures again");
+            self.shared.audit(switch_draft(VISION_SOURCE_STARTED, &self.run.id, reason)).await;
         }
     }
 

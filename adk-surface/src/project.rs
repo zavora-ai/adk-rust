@@ -228,7 +228,7 @@ fn address_parts(url: &str) -> Option<(String, Option<&'static str>)> {
 }
 
 /// `text` cut to `limit` characters, with an ellipsis when cut.
-fn capped(text: &str, limit: usize) -> String {
+pub(crate) fn capped(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text.to_string();
     }
@@ -397,6 +397,7 @@ impl Projector {
                 always_label: None,
                 adds_agent: true,
                 image: None,
+                plan: false,
             };
         }
         // Edit replaces the call's arguments with what the surface sends back, so it is
@@ -430,6 +431,7 @@ impl Projector {
             always_label: always_label.filter(|_| !take_over && !hint.removes_always()),
             adds_agent: false,
             image: None,
+            plan: false,
         }
     }
 
@@ -621,6 +623,7 @@ impl Projector {
             elicitation,
             media: None,
             parked: None,
+            plan: None,
         };
         // Every line of the card fits: nothing a name or a hint carries can push the call and
         // its answers out of sight, or pass a long text off as the home's own words.
@@ -1315,17 +1318,19 @@ pub(crate) fn links(events: &[Event], requests: &[ApprovalRequest]) -> HashMap<u
         .collect()
 }
 
+/// `full`, cut short past [`CALL_TEXT_LIMIT`] characters, and whether it was.
+pub(crate) fn cut_call_text(full: String) -> (String, bool) {
+    if full.chars().count() <= CALL_TEXT_LIMIT {
+        return (full, false);
+    }
+    let mut cut: String = full.chars().take(CALL_TEXT_LIMIT).collect();
+    cut.push('…');
+    (cut, true)
+}
+
 /// The exact call, cut short past [`CALL_TEXT_LIMIT`] characters.
 pub(crate) fn call_view(request: &ApprovalRequest) -> CallView {
-    let full = call_text(&request.tool_name, &request.args_redacted);
-    let truncated = full.chars().count() > CALL_TEXT_LIMIT;
-    let text = if truncated {
-        let mut cut: String = full.chars().take(CALL_TEXT_LIMIT).collect();
-        cut.push('…');
-        cut
-    } else {
-        full
-    };
+    let (text, truncated) = cut_call_text(call_text(&request.tool_name, &request.args_redacted));
     CallView {
         tool: request.tool_name.clone(),
         args: request.args_redacted.clone(),

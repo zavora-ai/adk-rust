@@ -158,7 +158,9 @@ from that decision, once and in order, with `plan: { digest, step }` added to th
 arguments. Before each step runs it is previewed again and its fresh target checked against
 the previewed one; a deviation runs nothing and ends the plan, and the step is held for a fresh
 approval. `computer_use_execute` stays outside every standing rule. A prompter that does not
-override `prompt_screen_plan` asks about each step on its own. See
+override `prompt_screen_plan` asks about each step on its own. A surface without a live
+prompter parks the plan's first step as one card for the whole plan and decides it through
+`Harness::decide_held_screen_plan`, with the same binding and record. See
 [Screen plans](packs.md#screen-plans-one-approval-per-plan).
 
 ### Held calls

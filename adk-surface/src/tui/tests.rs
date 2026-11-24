@@ -90,6 +90,7 @@ pub(super) fn card(id: &str, tool: &str, args: Value) -> DecisionCard {
         elicitation: None,
         media: None,
         parked: None,
+        plan: None,
     }
 }
 

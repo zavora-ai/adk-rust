@@ -384,10 +384,15 @@ that has a decision. The decision does not depend on the model issuing the call 
   is saved but not answered rather than silently dropped. Run again with an empty message to
   answer it, or resume held calls with an empty message before sending a new one.
 
-- **Grouped decisions.** A change set or a screen plan is decided by a live prompter during the
-  run. A held call that parks instead — on a surface without a live prompter — is decided and
-  resumed on its own like any held call. A parked step of a screen plan resumes without the
-  plan's binding, so it runs as a single approved action, never as a step of the plan.
+- **Grouped decisions.** A change set is decided by a live prompter during the run; a held edit
+  that parks instead is decided and resumed on its own like any held call. A screen plan is
+  decided by a live prompter, or, parked, on one card a surface shows for the whole plan
+  (adk-surface feature `computer-use`): the decision is recorded on the plan's first step as an
+  edit that adds the plan's binding, and the later steps' decisions are filed in the
+  `ApprovalStore` under each step's fingerprint, each with its own binding, so every step resumes
+  as a step of the plan. When the plan ends, the decisions still filed are taken back and the
+  remaining steps are held again. A source that shows no plan cards decides each parked step on
+  its own, and it runs as a single approved action, never as a step of the plan.
 
 `CodeActAgent` resumes a held call from its checkpoint (`Disposition::AwaitingConfirmation`),
 which already re-dispatches the call through the governed path. The event that records the
@@ -1500,6 +1505,11 @@ plus a binding to what the person saw, which the governed path checks against th
 |-----------|-------|----------------------------|----------------------------------|
 | Change set (spec 3.1 §7.26) | Two or more held edits of one model turn | `expect_sha256`: the file's hash at that point of the reviewed diff | The write refuses a file whose content differs (`devtools.stale`) |
 | Screen plan (spec 3.7 Q8) | Up to N previewed desktop actions in one window | `plan: { digest, step }`: the plan's fingerprint over its window, steps and targets, and the step number | The step is previewed again on a fresh observation; a target that moved, changed label or left the window runs nothing, ends the plan, and is held for a fresh approval |
+
+A surface without a live prompter shows a screen plan as one card and decides it through
+`Harness::decide_held_screen_plan`, with the same bindings and the same
+`harness.computer_use.plan_decided` record (see
+[Screen plans](../surfaces/index.md#screen-plans)).
 
 Neither is a standing rule: each decision answers only the exact calls it showed, each once.
 A call whose arguments differ from the shown ones, a step out of order, and a call of another

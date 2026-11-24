@@ -384,6 +384,62 @@ pub struct DecisionCard {
     /// and used when the agent picks the thread up again (spec 3.7 §8.2, board choice A12).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked: Option<ParkedView>,
+    /// The screen plan the card decides with one answer (spec 3.7 Q8): its window and every
+    /// step with its target and the screenshot the target was found on. `None` for a card that
+    /// decides one call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<ScreenPlanView>,
+}
+
+/// A previewed screen plan a decision card decides with one answer (spec 3.7 Q8): up to N
+/// desktop actions in one window. **Allow** runs the steps once each, in order, each checked
+/// against its preview on a fresh screenshot before it runs; a step whose target moved is asked
+/// again on a card of its own. Never a standing rule.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::{ScreenPlanStepView, ScreenPlanView};
+///
+/// let plan = ScreenPlanView {
+///     digest: "sha256:ab12".into(),
+///     window: "app.forms, window \"Customer form\"".into(),
+///     steps: vec![ScreenPlanStepView {
+///         operation: "left_click".into(),
+///         target: Some("(100, 300)-(190, 340) pt".into()),
+///         screenshot: Some("sha256:screen".into()),
+///         proposed: serde_json::json!({ "operation": "left_click", "label": "Name" }),
+///     }],
+/// };
+/// assert_eq!(plan.steps.len(), 1);
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenPlanView {
+    /// The plan's fingerprint, `sha256:…`, over its window, steps and targets: the answer binds
+    /// it.
+    pub digest: String,
+    /// The window every step acts in: the application, then the window.
+    pub window: String,
+    /// The steps, in the order they run.
+    pub steps: Vec<ScreenPlanStepView>,
+}
+
+/// One step of a [`ScreenPlanView`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenPlanStepView {
+    /// What the step does: `left_click`, `type`, ….
+    pub operation: String,
+    /// Where on the screen, in points: `(100, 300)-(190, 340) pt`. `None` for a step that acts
+    /// where the step before it put the focus, such as typing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// The digest of the screenshot the target was found on, when the runtime gave one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screenshot: Option<String>,
+    /// The action as the agent proposed it.
+    pub proposed: Value,
 }
 
 /// What an MCP server asks the person while the agent's call waits (MCP elicitation), drawn

@@ -138,12 +138,14 @@ pub use model::CardDetail;
 pub use model::{
     AgentRef, AgentRow, AgentStatus, Avatar, Briefing, BriefingLine, CallView, CardStatus, Decided,
     DecidedAnswer, DecisionCard, ElicitationView, ElicitedField, ElicitedKind, ElicitedOption,
-    FeedEntry, Mode, ModeView, ParkedView, Pill, QuietView, Reversibility, Speaker, SpendView,
-    StatusLine, ThreadItem, TimelineStep,
+    FeedEntry, Mode, ModeView, ParkedView, Pill, QuietView, Reversibility, ScreenPlanStepView,
+    ScreenPlanView, Speaker, SpendView, StatusLine, ThreadItem, TimelineStep,
 };
 pub use model::{CommandRun, ImageData, OutputLine, RunStop, ShellPlace, ShellView};
 pub use origin::{Caller, Origin, SurfaceKind, Via};
 pub use project::RUN_LINES;
 pub use project::{CALL_TEXT_LIMIT, Place};
 pub use rules::{Allowed, Answer, AnswerOption, Risk};
-pub use source::{AgentState, AlwaysAllowOffer, RuleCommit, Source, SpendToday, Steered, Steering};
+pub use source::{
+    AgentState, AlwaysAllowOffer, HeldPlan, RuleCommit, Source, SpendToday, Steered, Steering,
+};

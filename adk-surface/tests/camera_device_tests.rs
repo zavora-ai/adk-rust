@@ -1,6 +1,7 @@
 //! A camera on this machine on the live camera surface (spec 3.7 §7.13, §8.2): switching it off
 //! stops capture at the source — the `DeviceSource`'s ffmpeg exits — and switching it on opens
-//! the device again, with frames from the next one. ffmpeg's `testsrc2` pattern stands in for a
+//! the device again, with frames from the next one; Stop all closes the device the same way and
+//! Resume all opens it again (V-I17). ffmpeg's `testsrc2` pattern stands in for a
 //! camera; the test skips, saying so, without ffmpeg or `pgrep`. Frames are held in memory only:
 //! the cameras keep no artifacts, so nothing is written.
 //!
@@ -19,6 +20,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use adk_core::audit_log::{AuditActor, AuditTrail, InMemoryAuditRecorder};
 use adk_surface::camera::{CameraFacts, LiveCamera, PipelineCameras};
 use adk_vision::stream::{DeviceSelector, DeviceSource, FfmpegBinary, NoRedaction};
 use adk_vision::{FrameSourceId, Sampling};
@@ -64,8 +66,19 @@ async fn until(what: &str, within: Duration, mut done: impl FnMut() -> bool) -> 
     panic!("timed out after {within:?} waiting for {what}");
 }
 
+/// The `reason` of every `action` record in `audit`.
+fn reasons(audit: &InMemoryAuditRecorder, action: &str) -> Vec<String> {
+    audit
+        .records()
+        .into_iter()
+        .filter(|record| record.action == action)
+        .filter_map(|record| record.ext.get("reason").and_then(|r| r.as_str()).map(str::to_string))
+        .collect()
+}
+
 /// Runs `source` as camera `desk`: frames, Off → no ffmpeg within [`EXIT_BOUND`] and no frame,
-/// On → ffmpeg and frames again, Stop → no ffmpeg.
+/// On → ffmpeg and frames again, Stop all → no ffmpeg and no frame, Resume all → ffmpeg and
+/// frames again, Stop → no ffmpeg.
 async fn off_stops_the_device(source: DeviceSource) {
     let camera = LiveCamera::stream(
         CameraFacts::new("desk", "Desk camera", APP, "s-desk"),
@@ -73,7 +86,12 @@ async fn off_stops_the_device(source: DeviceSource) {
         Arc::new(NoRedaction),
     )
     .sampling(Sampling { fps: 5.0, max_long_edge: Some(320) });
-    let live = PipelineCameras::builder(APP, OWNER).camera(camera).build().unwrap();
+    let audit = InMemoryAuditRecorder::new();
+    let live = PipelineCameras::builder(APP, OWNER)
+        .audit(AuditTrail::new(Arc::new(audit.clone())), AuditActor::default())
+        .camera(camera)
+        .build()
+        .unwrap();
     let cameras = live.start();
     let observed = || live.counts("desk").unwrap().observed;
 
@@ -99,11 +117,36 @@ async fn off_stops_the_device(source: DeviceSource) {
     assert_eq!(ffmpeg_children(), Some(1), "the device is open again");
     let reopened = on.elapsed();
 
+    // Stop all closes the device as off does; Resume all opens it again.
+    let stop_all = Instant::now();
+    cameras.freeze_all().await.unwrap();
+    let stop_answered = stop_all.elapsed();
+    assert_eq!(live.is_capturing("desk"), Some(false), "closed before Stop all answered");
+    let stop_exited =
+        until("ffmpeg to exit after Stop all", EXIT_BOUND, || ffmpeg_children() == Some(0)).await;
+    let frozen = observed();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(observed(), frozen, "no frame while everything is stopped");
+    assert_eq!(ffmpeg_children(), Some(0), "nothing opens the device while everything is stopped");
+    cameras.thaw_all().await.unwrap();
+    let resumed =
+        until("frames after Resume all", Duration::from_secs(60), || observed() > frozen).await;
+    assert_eq!(ffmpeg_children(), Some(1), "the device is open again");
+    assert_eq!(
+        reasons(&audit, adk_vision::stream::VISION_SOURCE_STOPPED),
+        ["switchedOff", "stopAll"]
+    );
+    assert_eq!(
+        reasons(&audit, adk_vision::stream::VISION_SOURCE_STARTED),
+        ["switchedOn", "resumeAll"]
+    );
+
     cameras.stop("desk", OWNER, chrono::Utc::now()).await.unwrap();
     until("ffmpeg to exit after the stop", EXIT_BOUND, || ffmpeg_children() == Some(0)).await;
     eprintln!(
         "first frames {first:?}; off answered in {answered:?}, ffmpeg gone {exited:?} after; \
-         on: frames again {again:?} ({reopened:?} after the switch)"
+         on: frames again {again:?} ({reopened:?} after the switch); Stop all answered in \
+         {stop_answered:?}, ffmpeg gone {stop_exited:?} after; Resume all: frames again {resumed:?}"
     );
 }
 
