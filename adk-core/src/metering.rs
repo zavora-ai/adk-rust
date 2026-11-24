@@ -352,6 +352,14 @@ impl HoldState {
         }
         let amount = match cost_micro_usd {
             Some(amount) => amount,
+            // A model that bounds its cost at zero, such as local inference, reports none.
+            None if estimate == 0 => {
+                tracing::debug!(
+                    spend.key = %key,
+                    "model response reported no cost; committing its zero bound"
+                );
+                0
+            }
             None => {
                 tracing::warn!(
                     spend.key = %key,
@@ -1329,6 +1337,58 @@ mod tests {
             .unwrap();
         let key = SpendKey::org("acme").with_vendor("deepgram");
         assert_eq!(ledger.spent(&key, SpendPeriod::Day).await.unwrap(), 7_000);
+    }
+
+    /// The messages of the warnings logged while it is the default subscriber.
+    #[derive(Clone, Default)]
+    struct Warnings(Arc<std::sync::Mutex<Vec<String>>>);
+
+    impl tracing::Subscriber for Warnings {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            struct Message(String);
+            impl tracing::field::Visit for Message {
+                fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
+                    if field.name() == "message" {
+                        self.0 = format!("{value:?}");
+                    }
+                }
+            }
+            if *event.metadata().level() == tracing::Level::WARN {
+                let mut message = Message(String::new());
+                event.record(&mut message);
+                self.0.lock().unwrap().push(message.0);
+            }
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    #[tokio::test]
+    async fn a_response_without_a_cost_warns_only_when_its_bound_is_positive() {
+        let warnings = Warnings::default();
+        let _default = tracing::subscriber::set_default(warnings.clone());
+        let ledger = Arc::new(InMemorySpendLedger::default());
+        // A local model bounds its cost at zero; a cloud model at a positive amount.
+        for bound in [0, 7_000] {
+            let mut hold = ModelSpendHold::reserve(ledger.clone(), SpendKey::org("acme"), bound)
+                .await
+                .unwrap();
+            hold.observe_cost(None);
+            hold.settle().await;
+        }
+        assert_eq!(ledger.spent(&SpendKey::org("acme"), SpendPeriod::Day).await.unwrap(), 7_000);
+        assert_eq!(
+            *warnings.0.lock().unwrap(),
+            ["model response reported no cost; committing the reserved bound or estimate"]
+        );
     }
 
     #[tokio::test]
