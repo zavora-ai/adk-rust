@@ -2403,7 +2403,9 @@ impl SurfaceEngine {
                 }
                 return self.already_decided(caller, &closed, answer).await;
             }
-            return self.commit(caller, &request, version, answer, None, reason, Some(&plan)).await;
+            return self
+                .commit(caller, &request, version, answer, (None, reason), Some(&plan))
+                .await;
         }
         if answer == Answer::Edit && edited_args.is_none() {
             return Err(SurfaceError::Invalid("an edit needs the changed arguments".into()));
@@ -2462,7 +2464,7 @@ impl SurfaceEngine {
             }
             return self.speak_later(caller, request, version, settle).await;
         }
-        self.commit(caller, &request, version, answer, edited_args, reason, None).await
+        self.commit(caller, &request, version, answer, (edited_args, reason), None).await
     }
 
     /// Tightens the crop of one of decision `id`'s images or covers more of it, then holds its
@@ -2661,15 +2663,13 @@ impl SurfaceEngine {
     /// Records the answer: `ApprovalService::decide` at `version`, never retried (S-I2); for a
     /// screen plan's card, the plan's decision through the source, which records it on the
     /// plan's first step (spec 3.7 Q8).
-    #[allow(clippy::too_many_arguments)]
     async fn commit(
         &self,
         caller: &Caller,
         request: &ApprovalRequest,
         version: u64,
         answer: Answer,
-        edited_args: Option<Value>,
-        reason: Option<String>,
+        (edited_args, reason): (Option<Value>, Option<String>),
         plan: Option<&HeldPlan>,
     ) -> Result<CommandOutcome> {
         let rule = match answer {
@@ -2924,7 +2924,7 @@ impl SurfaceEngine {
                 Err(SurfaceError::NotHere(words::ALL_AGENTS_STOPPED.to_string()))
             } else {
                 engine
-                    .commit(&speaker, &request, version, Answer::AllowOnce, None, None, None)
+                    .commit(&speaker, &request, version, Answer::AllowOnce, (None, None), None)
                     .await
             };
             match &result {
