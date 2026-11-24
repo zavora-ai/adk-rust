@@ -598,38 +598,66 @@ impl HarnessManifest {
     /// timestamp and no session data, so it is byte-identical for every build with the
     /// same configuration; at most [`HARNESS_BLOCK_MAX_BYTES`], ending with the sections
     /// it cut and `harness_help <topic>` when longer.
+    ///
+    /// A longer block cuts the flags first, then the setup lines, then the subcommands'
+    /// summaries, keeping the subcommands by name, then the commands; the class lines, what
+    /// each safety mechanism covers and the `harness_help` line are kept whatever the
+    /// surface lists.
     pub fn render(&self) -> String {
         let header = format!(
             "<harness version=\"{}\" surface=\"{} {}\">\n",
             self.harness_version, self.surface.name, self.surface.version
         );
         let footer = "</harness>";
-        let mut sections: Vec<(&str, String)> = vec![("classes", self.render_classes())];
-        sections.push(("commands", self.render_commands(false)));
-        sections.push(("setup", self.render_setup()));
-        sections.push(("safety", self.render_safety()));
-        sections.push(("flags", self.render_commands(true)));
-        sections.push((
-            "help",
-            format!(
-                "harness_help explains the harness on demand; topics: {}, or a page name.\n",
-                self.help_topics.join(", ")
+        // In reading order, each with its rank and its forms, fullest first: sections are
+        // kept from rank 0 up in the fullest form that fits, so the commands a surface adds
+        // never push out what the model must not over-promise.
+        let sections = [
+            ("classes", 0, vec![self.render_classes()]),
+            (
+                "commands",
+                3,
+                vec![
+                    self.render_commands(Listing::Commands),
+                    self.render_commands(Listing::CommandNames),
+                ],
             ),
-        ));
+            ("setup", 4, vec![self.render_setup()]),
+            ("safety", 1, vec![self.render_safety()]),
+            ("flags", 5, vec![self.render_commands(Listing::Flags)]),
+            (
+                "help",
+                2,
+                vec![format!(
+                    "harness_help explains the harness on demand; topics: {}, or a page name.\n",
+                    self.help_topics.join(", ")
+                )],
+            ),
+        ];
         // Room for the line naming every section, should all of them be cut.
         let reserve = "Cut for length: . harness_help <topic> returns them.\n".len()
-            + sections.iter().map(|(name, _)| name.len() + ", ".len()).sum::<usize>();
+            + sections.iter().map(|(name, ..)| name.len() + ", ".len()).sum::<usize>();
+        let mut room =
+            HARNESS_BLOCK_MAX_BYTES.saturating_sub(header.len() + footer.len() + reserve);
+        let mut ranked: Vec<&(&str, u8, Vec<String>)> = sections.iter().collect();
+        ranked.sort_by_key(|(_, rank, _)| *rank);
+        let mut kept: Vec<(&str, &String)> = Vec::new();
+        for (name, _, forms) in ranked {
+            // A section that does not fit is cut; the smaller ones ranked after it still go in.
+            if let Some(text) = forms.iter().find(|text| text.len() <= room) {
+                room -= text.len();
+                kept.push((*name, text));
+            }
+        }
         let mut out = header;
         let mut cut = Vec::new();
-        for (name, text) in sections {
-            if text.is_empty() {
+        for (name, _, forms) in &sections {
+            if forms[0].is_empty() {
                 continue;
             }
-            // A section that does not fit is cut; the smaller ones after it still go in.
-            if out.len() + text.len() + footer.len() + reserve <= HARNESS_BLOCK_MAX_BYTES {
-                out.push_str(&text);
-            } else {
-                cut.push(name);
+            match kept.iter().find(|(kept, _)| kept == name) {
+                Some((_, text)) => out.push_str(text),
+                None => cut.push(*name),
             }
         }
         if !cut.is_empty() {
@@ -668,15 +696,14 @@ impl HarnessManifest {
         out
     }
 
-    /// The surface's commands with their summaries: the slash commands and subcommands, or
-    /// with `flags` the flags.
-    fn render_commands(&self, flags: bool) -> String {
-        let mut commands: Vec<CommandEntry> = self
+    /// The surface's commands as `listing` shows them.
+    fn render_commands(&self, listing: Listing) -> String {
+        let flags = listing == Listing::Flags;
+        let mut commands: Vec<&CommandEntry> = self
             .surface
             .commands
             .iter()
             .filter(|command| (command.kind == CommandKind::Flag) == flags)
-            .cloned()
             .collect();
         if commands.is_empty() {
             return String::new();
@@ -691,8 +718,22 @@ impl HarnessManifest {
                  command ran):\n",
             )
         };
-        for command in &commands {
-            let _ = writeln!(out, "  {}  {}", command.typed(&self.surface.name), command.summary);
+        let mut names = Vec::new();
+        for command in commands {
+            if listing == Listing::CommandNames && command.kind == CommandKind::Subcommand {
+                names.push(command.name.as_str());
+            } else {
+                let _ =
+                    writeln!(out, "  {}  {}", command.typed(&self.surface.name), command.summary);
+            }
+        }
+        if !names.is_empty() {
+            let _ = writeln!(
+                out,
+                "  {} subcommands (harness_help cli <subcommand> says what one does): {}",
+                self.surface.name,
+                names.join(", ")
+            );
         }
         out
     }
@@ -820,8 +861,11 @@ impl HarnessManifest {
                 format!("Topics: {}\n\n{}", topics.join(", "), self.render())
             }
             Some("commands") => {
-                let commands =
-                    format!("{}{}", self.render_commands(false), self.render_commands(true));
+                let commands = format!(
+                    "{}{}",
+                    self.render_commands(Listing::Commands),
+                    self.render_commands(Listing::Flags)
+                );
                 if commands.is_empty() {
                     "This surface has no commands: the harness runs as a library.".to_string()
                 } else {
@@ -838,6 +882,14 @@ impl HarnessManifest {
                     Some(usage) => format!("{} {}\n\n{usage}", self.surface.name, entry.name),
                     None => format!("{} {}: {}", self.surface.name, entry.name, entry.summary),
                 }
+            }
+            // The sections the block names when it cuts them.
+            Some("classes") => self.render_classes(),
+            Some("setup") => self.render_setup(),
+            Some("safety") => self.render_safety(),
+            Some("flags") => {
+                let flags = self.render_commands(Listing::Flags);
+                if flags.is_empty() { "This surface lists no flags.".to_string() } else { flags }
             }
             Some(page) => pages.get(page)?.clone(),
         };
@@ -856,6 +908,17 @@ impl HarnessManifest {
         }
         Some(text)
     }
+}
+
+/// Which of the surface's commands a listing shows, and how.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Listing {
+    /// The slash commands and subcommands, each with its summary.
+    Commands,
+    /// The slash commands with their summaries, and the subcommands by name.
+    CommandNames,
+    /// The flags, each with its summary.
+    Flags,
 }
 
 /// What background shells suit under `shell` (spec 3.1 §7.29 "Isolation"); short, since the
@@ -929,6 +992,13 @@ mod tests {
                 .commands((0..commands).map(|n| {
                     CommandEntry::flag(format!("--flag-{n:04}"), "a flag with a summary")
                 }));
+        manifest_for(surface, snapshots)
+    }
+
+    fn manifest_for(
+        surface: SurfaceManifest,
+        snapshots: Option<crate::snapshot::SnapshotConfig>,
+    ) -> HarnessManifest {
         HarnessManifest::generate(ManifestInputs {
             surface,
             default_mode: HarnessMode::Ask,
@@ -1010,6 +1080,94 @@ mod tests {
             "classes are never cut"
         );
         assert!(block.ends_with("</harness>"));
+    }
+
+    /// However many subcommands a surface lists, the block keeps its class lines, what each
+    /// safety mechanism covers and the `harness_help` line, and every section it cuts is a
+    /// `harness_help` topic (spec 3.1 §7.25).
+    #[test]
+    fn the_commands_never_push_out_the_safety_lines() {
+        let pages = BTreeMap::new();
+        for count in 0..=120 {
+            let surface = SurfaceManifest::new("adk-rust", "3.0.0")
+                .commands((0..count).map(|n| {
+                    CommandEntry::subcommand(format!("command-{n:03}"), "a subcommand", None)
+                }))
+                .commands(
+                    (0..count).map(|n| CommandEntry::flag(format!("--flag-{n:03}"), "a flag")),
+                );
+            let manifest = manifest_for(surface, None);
+            let block = manifest.render();
+            assert!(block.len() <= HARNESS_BLOCK_MAX_BYTES, "{count}: {} bytes", block.len());
+            assert!(
+                block.contains("edit (edit_file): deny | deny | ask | allow"),
+                "{count}: {block}"
+            );
+            assert!(
+                block.contains("Safety (promise only what these cover):\n"),
+                "{count}: {block}"
+            );
+            assert!(block.contains("\nharness_help explains the harness"), "{count}: {block}");
+            let short = block.lines().find_map(|line| {
+                line.strip_prefix(
+                    "  adk-rust subcommands (harness_help cli <subcommand> says what one does): ",
+                )
+            });
+            for n in 0..count {
+                let name = format!("command-{n:03}");
+                let listed = block.contains(&format!("  adk-rust {name}  a subcommand\n"))
+                    || short.is_some_and(|names| names.split(", ").any(|listed| listed == name));
+                assert!(listed, "{count}: {name} is in the block, by name at least: {block}");
+            }
+            let cut = block.lines().find_map(|line| line.strip_prefix("Cut for length: "));
+            let names = cut.and_then(|line| line.split_once(". ")).map_or("", |(names, _)| names);
+            for name in names.split(", ").filter(|name| !name.is_empty()) {
+                assert!(
+                    manifest.help(Some(name), &pages).is_some(),
+                    "{count}: harness_help {name}"
+                );
+            }
+        }
+        let crowded = |count: usize| {
+            let surface = SurfaceManifest::new("adk-rust", "3.0.0")
+                .command(CommandEntry::slash("approvals", "Calls waiting for a decision"))
+                .commands((0..count).map(|n| {
+                    CommandEntry::subcommand(format!("command-{n:03}"), "a subcommand", None)
+                }));
+            manifest_for(surface, None).render()
+        };
+        let names = crowded(200);
+        assert!(names.contains("  /approvals  Calls waiting for a decision\n"), "{names}");
+        assert!(
+            names.contains(
+                "  adk-rust subcommands (harness_help cli <subcommand> says what one does): \
+                 command-000, command-001, "
+            ),
+            "the subcommands stay by name: {names}"
+        );
+        assert!(!names.contains("Cut for length"), "{names}");
+        let cut = crowded(600);
+        assert!(cut.contains("Cut for length: commands."), "{cut}");
+        assert!(cut.contains("Safety (promise only what these cover):\n"), "{cut}");
+    }
+
+    #[test]
+    fn harness_help_returns_each_section_the_block_can_cut() {
+        let manifest = manifest(400);
+        let pages = BTreeMap::new();
+        assert!(manifest.render().contains("Cut for length: flags."));
+        let flags = manifest.help(Some("flags"), &pages).unwrap();
+        assert!(flags.contains("adk-rust --flag-0399  a flag with a summary"), "{flags}");
+        for (topic, line) in [
+            ("classes", "  edit (edit_file): deny | deny | ask | allow\n"),
+            ("setup", "Packs: "),
+            ("safety", "  rewind: covers nothing: no rewind in this build"),
+        ] {
+            let help = manifest.help(Some(topic), &pages).unwrap();
+            assert!(help.contains(line), "harness_help {topic}: {help}");
+        }
+        let none = manifest_for(SurfaceManifest::library(), None);
+        assert!(none.help(Some("flags"), &pages).unwrap().contains("This surface lists no flags."));
     }
 
     #[test]

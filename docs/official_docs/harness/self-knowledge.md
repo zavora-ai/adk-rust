@@ -52,6 +52,7 @@ the file cap is partial ([Snapshots and rewind](snapshots-and-rewind.md)).
 | Property | Rule |
 |---|---|
 | Size | At most 6 KiB (`HARNESS_BLOCK_MAX_BYTES`); a longer block ends with the sections it cut and points at `harness_help` |
+| Cut order | The flags go first, then the setup lines (kernel, members, packs, web search, memory, edits, background shells), then the subcommands' summaries — the subcommands stay, by name — then the commands; the class lines, what each safety mechanism covers and the `harness_help` line are never cut for a longer command list |
 | Stability | Sorted, with no timestamp and no session data: two builds with the same configuration render the same bytes, and the block stays in the cached prefix of every request |
 | Wording | Slash commands are typed by the person; the model names the closest command when input looks mistyped and never claims one ran |
 | Edit tools | Every model is offered `write_file`, `edit_file` and `apply_patch`, so the tool surface is one per process; the `Edits:` line names the multi-file tool the model's family works best with, from `PREFERRED_MULTI_FILE_EDIT` (`apply_patch` for OpenAI models, `edit_file` otherwise), data the eval suite can revise (spec 3.1 §13 Q12) |
@@ -83,6 +84,7 @@ Standing rules for you here; a call one matches runs or is refused without askin
 | `commands` | Every command the surface lists, with its summary |
 | `cli <subcommand>` | That subcommand's long help |
 | `manifest` | The manifest as JSON |
+| `classes`, `setup`, `safety` or `flags` | That section of the block, whole, under the name the block gives it when it cuts the section |
 | a page name | A page the surface registered with `help_page` |
 
 Answers are plain text inside `<harness-help topic="…" version="…">`, at most 32 KiB, and
@@ -94,7 +96,9 @@ read nothing from the workspace or the network.
 `about` and long help, and the flags of the REPL and of `rules add`, `memory`, `sessions`,
 `up` and `wake`, generated from its command table and its clap tree, and whether the session
 runs under `adk-rust up`. The flags are the first section cut when the block runs past
-6 KiB; `harness_help commands` returns them.
+6 KiB, and the setup lines the next; `harness_help flags` and `harness_help setup` return
+them. When the subcommands' summaries no longer fit either, one line names the subcommands
+and `harness_help cli <subcommand>` returns what one does.
 
 A harness built as a library reports `SurfaceManifest::library()`. An application that puts
 its own commands in front of the harness describes them, so the model can name them:
