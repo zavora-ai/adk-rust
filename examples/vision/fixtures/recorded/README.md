@@ -13,7 +13,7 @@ record that contains a credential it was sent.
 | `gemini/s13-aisle-20min.json` | Gemini `gemini-3.6-flash` File API and `generateContent`, recorded 2026-11-23 | S13: the twenty-minute clip uploaded once, polled to `ACTIVE` (15 more `PROCESSING` polls dropped), asked about as a file part at 1 fps and low media resolution; it answered 12:40.0. `gemini-3.8-flash` answered `503` (high demand) to the same request minutes earlier |
 | `claude/s15-haiku-crop.json` | Scripted, not recorded: an Anthropic Messages answer for `claude-haiku-5-5` | S15: the reasoner's verdict on the scratch's crop. `scripted: true` marks it; the request is the one the real client sent, its image reduced to SHA-256 and size; the token counts are estimates. The session that wrote S15 could not reach the provider keys |
 | `nim-vlm/s15-nemotron-crop.json` | Scripted, not recorded: an OpenAI-compatible chat completion for NVIDIA NIM `nvidia/nemotron-3.5-super-vl-120b-a12b` on `integrate.api.nvidia.com` | S15: the verifier's verdict on the same crop; its request carries the reasoner's claim. As above |
-| `qwen3-vl-4b/s13-aisle-20min.json` | Scripted, not recorded | S13: the visibility pass's ten requests over 240 frames and answers in Qwen3-VL's JSON form stating what each frame shows. Qwen3-VL-4B's 8.9 GB weights need 14 GiB free; the machine had 7–11 GiB, so the model did not run. Token counts are estimates. `adk-vision`'s `video_local_live_tests` runs the model itself |
+| `qwen3-vl-4b/s13-aisle-20min.json` | Qwen3-VL-4B Instruct on the device, recorded 2026-11-24 by `adk-vision`'s `video_local_live_tests` (`ADK_VISION_RECORD`) on an Apple M4 CPU, with no network (`HF_HUB_OFFLINE=1` inside a sandbox that denies it) | S13: the visibility pass's ten calls over 240 frames — the target, eight checks of four frames, the eighth finding the forklift, and the question over six frames, answered 12:50.0 (entry 12:45) — each with its images' SHA-256 and size, the model's answer, its token counts (9,208 in, 120 out) and its wall time (706 s in all; 61 s with `mistralrs-metal`, the same answers) |
 
 S5, S7 and S8 replay adk-vision's own recordings (`adk-vision/tests/fixtures/cloud/recorded/`).
 S17 replays adk-vision's live analyst run
@@ -48,3 +48,16 @@ VISION_RECORD_ANTHROPIC=127.0.0.1:18742 VISION_RECORD_NIM_VLM=127.0.0.1:18743 \
 
 A recording replaces a scripted file whole, `scripted` flag included, and the scenario then says
 it ran on a live recording.
+
+S13's local path is recorded by `adk-vision`'s own live test rather than a proxy, since the
+model runs in process. From the repository root, with Qwen3-VL-4B's weights in the cache and a
+user-installed `ffmpeg`:
+
+```bash
+ADK_VISION_DEVICE=cpu ADK_VISION_CLIP=$PWD/examples/vision/fixtures/video/aisle-forklift-20min.mp4 \
+  ADK_VISION_ENTRY_MS=765000 ADK_VISION_WIDTH=640 ADK_VISION_STRIDE=5 \
+  ADK_VISION_FRAMES_PER_CHECK=4 ADK_VISION_FRAMES_PER_CALL=8 \
+  ADK_VISION_RECORD=$PWD/examples/vision/fixtures/recorded/qwen3-vl-4b/s13-aisle-20min.json \
+  cargo test -p adk-vision --features mistralrs --test video_local_live_tests \
+  qwen3_vl_finds_the_entry_after_a_visibility_pass -- --ignored --nocapture
+```

@@ -14,6 +14,23 @@ that contains a credential it was sent.
 The phrase "orange forklift" matched nothing in the drawn scene on `sam-3.1` (an empty
 `output_text`, still billed 50 frames).
 
+## The video analyst (S17)
+
+`analyst_live_tests` writes these itself with `ADK_VISION_RECORD_DIR`: each model call's
+prompt reduced to the chunk's time range or the question, the model's answer, its usage and
+wall time, and, for an answer, the time ranges of the chunks it was shown. `analyst_tests`
+replays both; an answer's citations are renumbered by those time ranges, since the in-memory
+store orders chunks of equal score differently from one process to the next.
+
+| File | Model | What it holds |
+|------|-------|---------------|
+| `analyst-warehouse-hour.claude-haiku-5-5.json` | Anthropic `claude-haiku-5-5`, every frame through the egress gate, 2026-11-23 | The hour of `WarehouseClip`: 120 captions and ten answers; 9 of 10 cite the event's chunk; 32,587 µUSD per hour of video |
+| `analyst-warehouse-60min.qwen3-vl-4b-instruct.json` | Qwen3-VL-4B Instruct on the device through mistral.rs with `mistralrs-metal`, an Apple M4, 2026-11-24, with no network (`HF_HUB_OFFLINE=1` inside a sandbox that denies it) | The same hour captioned and answered on the device: 120 captions (103 of them "Nothing happens.", each of the ten event chunks naming its event) in 1,057 s, 8.8 s a chunk; ten answers, 8 of 10 citing the event's chunk, every event's chunk among the eight retrieved; no frame through the gate and nothing in the spend ledger |
+
+An earlier run of the same model on the same machine wrote the same 120 captions and ten
+expansions and cited 7 of 10: the answer prompts showed other chunks of equal score, and the
+truck's answer changed with them.
+
 ## Recording again
 
 ```bash

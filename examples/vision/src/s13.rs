@@ -4,7 +4,7 @@
 //! | Path | How |
 //! |---|---|
 //! | Gemini native video | The clip leaves through the egress gate, is uploaded once through the File API and asked about as a file part, at 1 fps and low media resolution. The fixture is 227 KB, so the inline limit is set to 0 to take the File API path a real 20-minute camera clip (well over 20 MB) takes. Gemini answers from its recorded exchange, served to the real client from a local server |
-//! | Qwen3-VL-4B over sampled frames | One frame every five seconds — decoded from the clip by a user-installed ffmpeg, or drawn from the clip's own sprites at the same times where there is none — through `FramesAnalyzer` with a `VisibilityPass`, on the device. The model's answers replay a transcript (see `fixtures/recorded/README.md` for its provenance) |
+//! | Qwen3-VL-4B over sampled frames | One frame every five seconds — decoded from the clip by a user-installed ffmpeg, or drawn from the clip's own sprites at the same times where there is none — through `FramesAnalyzer` with a `VisibilityPass`, on the device. The model's answers replay its live recording on an Apple M4 CPU, request by request (`fixtures/recorded/README.md`) |
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -12,7 +12,8 @@ use std::sync::{Arc, Mutex};
 use adk_core::egress::EgressPolicy;
 use adk_core::{
     BudgetTracker, Content, DataLocality, InMemorySpendLedger, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, ModelCallScope, Part, RunBudget, SpendLimits, UsageMetadata, UsageUnit,
+    LlmResponseStream, ModelCallScope, Part, RunBudget, SpendKey, SpendLedger, SpendLimits,
+    SpendPeriod, UsageMetadata, UsageUnit,
 };
 use adk_model::GeminiModel;
 use adk_vision::stream::{FfmpegBinary, FileSource, FrameSource};
@@ -57,13 +58,15 @@ fn label() -> Result<Label> {
     })
 }
 
-fn metered() -> (VisionCx, Arc<BudgetTracker>) {
+fn metered() -> (VisionCx, Arc<BudgetTracker>, Arc<InMemorySpendLedger>) {
     let budget = Arc::new(BudgetTracker::new(RunBudget::new()));
     let ledger = Arc::new(InMemorySpendLedger::new(SpendLimits::new()));
     let cx = VisionCx::new().with_scope(
-        ModelCallScope::new().with_budget(budget.clone()).with_spend_ledger(ledger, "aisle"),
+        ModelCallScope::new()
+            .with_budget(budget.clone())
+            .with_spend_ledger(ledger.clone(), "aisle"),
     );
-    (cx, budget)
+    (cx, budget, ledger)
 }
 
 fn gate(recorder: &Arc<InMemoryEgressRecorder>) -> EgressGate {
@@ -126,7 +129,7 @@ async fn gemini_server(exchanges: &[Value]) -> Result<MockServer> {
     Ok(server)
 }
 
-/// A scripted Qwen3-VL on this machine: it answers each request with the transcript's next
+/// Qwen3-VL on this machine, replayed: it answers each request with the transcript's next
 /// response after checking the request is the one the transcript holds — the same kind, and
 /// for a question the same frame times.
 struct Transcript {
@@ -205,6 +208,11 @@ impl Llm for Transcript {
         });
         response.turn_complete = true;
         Ok(Box::pin(futures::stream::iter([Ok(response)])))
+    }
+
+    // mistral.rs runs in process and bounds every call at zero.
+    fn max_cost_micro_usd(&self, _request: &LlmRequest) -> Option<u64> {
+        Some(0)
     }
 
     fn data_locality(&self) -> DataLocality {
@@ -304,9 +312,19 @@ pub async fn run() -> Result<Checks> {
         .remote_video_analyzer(Arc::new(analyzer))
         .egress_gate(gate(&recorder))
         .build()?;
-    let (cx, budget) = metered();
+    let (cx, budget, _) = metered();
+    let transcript = read_json(&fixtures().join("recorded/qwen3-vl-4b/s13-aisle-20min.json"))?;
+    let qwen_how = if transcript["scripted"].as_bool() == Some(true) {
+        "on a scripted transcript".to_string()
+    } else {
+        format!(
+            "on its live recording ({}, {})",
+            transcript["device"].as_str().unwrap_or("on the device"),
+            transcript["recorded"].as_str().unwrap_or_default()
+        )
+    };
     checks.note(format!(
-        "Gemini `{model}` {}; Qwen3-VL-4B on a scripted transcript",
+        "Gemini `{model}` {}; Qwen3-VL-4B {qwen_how}",
         if live.is_some() {
             "live through the recording proxy"
         } else {
@@ -368,7 +386,6 @@ pub async fn run() -> Result<Checks> {
     }
 
     // Qwen3-VL over sampled frames, after a visibility pass, on the device.
-    let transcript = read_json(&fixtures().join("recorded/qwen3-vl-4b/s13-aisle-20min.json"))?;
     let qwen = Arc::new(Transcript {
         exchanges: transcript["exchanges"].as_array().cloned().unwrap_or_default(),
         next: Mutex::new(0),
@@ -385,7 +402,7 @@ pub async fn run() -> Result<Checks> {
         .build()?;
     let (frames, how) = sampled(&label).await?;
     checks.note(format!("{} frames, one every 5 s, {how}", frames.len()));
-    let (cx, budget) = metered();
+    let (cx, budget, ledger) = metered();
     let out = runtime
         .analyze_video(
             &cx,
@@ -408,13 +425,15 @@ pub async fn run() -> Result<Checks> {
         checks.note(mismatch.clone());
     }
     let usage = &out.value.usage;
+    let spent = ledger.spent(&SpendKey::org("aisle"), SpendPeriod::Lifetime).await?;
     checks.check(
         &format!(
-            "the local path's tokens and cost are reported: {:?} in, {:?} out, {:?} µUSD; nothing left the machine",
+            "the local path's tokens and cost are reported: {:?} in, {:?} out, {:?} µUSD, {spent} µUSD in the ledger; nothing left the machine",
             usage.input_tokens, usage.output_tokens, usage.cost_micro_usd
         ),
         usage.input_tokens.is_some_and(|t| t > 0)
             && usage.cost_micro_usd == Some(0)
+            && spent == 0
             && recorder.is_empty()
             && budget.units().get(UsageUnit::Frames) == frames.len() as u64,
     );

@@ -7,7 +7,10 @@
 //! The captioner is either an oracle that reads the clip's truth — testing the analyst's own
 //! steps, exactly — or the replay of a live `claude-haiku-5-5` run through the egress gate
 //! (`tests/fixtures/video/recorded/analyst-warehouse-hour.claude-haiku-5-5.json`, recorded by
-//! `analyst_live_tests`), which must cite as the live run did and cost what it cost.
+//! `analyst_live_tests`), which must cite as the live run did and cost what it cost, or the
+//! replay of Qwen3-VL-4B captioning and answering on the device
+//! (`analyst-warehouse-60min.qwen3-vl-4b-instruct.json`), which must cite as it did with
+//! nothing through the gate and nothing spent.
 
 mod analyst_suite;
 
@@ -36,6 +39,7 @@ use futures::StreamExt;
 
 const SOURCE: &str = "warehouse-cam-3";
 const RECORDING: &str = "analyst-warehouse-hour.claude-haiku-5-5.json";
+const ON_DEVICE: &str = "analyst-warehouse-60min.qwen3-vl-4b-instruct.json";
 
 /// The clip drawn small: the captioners here read the truth or a recording, not pixels.
 fn small_clip(duration_ms: u64) -> WarehouseClip {
@@ -349,6 +353,70 @@ async fn the_recorded_live_run_cites_as_it_did_and_costs_what_it_cost_through_th
         indexed.cost_per_hour_micro_usd().is_some_and(|c| c > 0),
         "a priced remote captioner reports its cost"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_on_device_run_cites_as_it_did_with_nothing_sent_or_spent() {
+    use adk_core::{SpendKey, SpendLedger, SpendPeriod};
+
+    let replay = Arc::new(Replay::on_device(ON_DEVICE));
+    let recording = replay.recording.clone();
+    let clip = small_clip(recording.duration_ms);
+    let setup = Setup::new().await;
+    let qwen = LlmDescriber::local(replay).unwrap();
+    let runtime = Arc::new(
+        VisionRuntime::builder()
+            .video_analyzer(Arc::new(FramesAnalyzer::local(&qwen)))
+            .egress_gate(setup.gate(EgressPolicy::public_only()))
+            .build()
+            .unwrap(),
+    );
+    let analyst = VideoAnalyst::builder(
+        runtime,
+        Arc::new(InMemoryVectorStore::new()),
+        Arc::new(WordHashEmbedding::default()),
+        COLLECTION,
+    )
+    .chunking(Chunking::fixed(recording.chunk_ms))
+    .frames_per_chunk(recording.frames_per_chunk)
+    .answerer(&qwen)
+    .open()
+    .await
+    .unwrap();
+    let every = recording.sample_every_ms;
+    let indexed = analyst
+        .index(
+            &setup.cx,
+            &scope(),
+            &clip_source(&clip),
+            clip.frames(every),
+            Sampling::at(1_000.0 / every as f32),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(indexed.chunks.len() as u64, recording.duration_ms / recording.chunk_ms);
+    assert_eq!(indexed.cost_per_hour_micro_usd(), Some(0));
+
+    let mut scored = Vec::new();
+    for event in clip.events() {
+        let answer = analyst
+            .ask(&setup.cx, &scope(), &event.question, &AnalystQuery::top(recording.top_k))
+            .await
+            .unwrap();
+        // Every event's chunk is among those retrieved; a miss is the answerer's.
+        assert!(
+            answer.retrieved.iter().any(|h| h.chunk.contains(event.at_ms)),
+            "{} was not retrieved",
+            event.id
+        );
+        scored.push(score(event, &answer));
+    }
+    assert_eq!(scored, recording.scored, "the replay cites as the live run did");
+    assert_eq!(scored.iter().filter(|s| s.hit).count(), 8);
+    assert!(setup.egress.released().is_empty(), "no frame passed the gate");
+    let spent = setup.ledger.spent(&SpendKey::org("acme"), SpendPeriod::Lifetime).await.unwrap();
+    assert_eq!(spent, 0, "the device's calls cost nothing");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

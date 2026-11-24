@@ -213,6 +213,17 @@ call, a check of every `stride`-th frame and a refine after each.
 > 0:35.0 (the entry is at 0:45). The visibility pass asks it only yes-or-no questions until
 > the forklift appears, then the question over the frames around that moment.
 
+Qwen3-VL-4B with a visibility pass — stride 5, four frames a check, 8 a question — over the
+twenty-minute aisle clip sampled every 5 s (240 frames at 640×360, entry at 12:45), on an Apple
+M4 (10 cores, 24 GB), the `dev` profile, with no network:
+
+| Device | Load | Calls | Answer | Tokens | Time to answer |
+|--------|------|-------|--------|--------|----------------|
+| CPU | 20 s | the target, eight checks (61 s each), the question over six frames (163 s) | 12:50.0 | 9,208 in, 120 out | 706 s |
+| Metal (`mistralrs-metal`) | 26 s | the same calls with the same answers (4.2 s a check, the question 22 s) | 12:50.0 | the same | 61 s |
+
+The run is S13's local path, recorded live; `examples/vision` replays it.
+
 ## Conformance for Video Analyzers
 
 `video_analyzer_conformance_tests!` (feature `conformance`) runs a `VideoAnalyzer` through
@@ -370,8 +381,26 @@ The live run, recorded on 2026-11-23:
 | Citations | 9 of 10 answers cite the chunk that holds the event's start: 8 with `supported` true, the near miss as the closest match with `supported` false; the spill is missed, because the captioner describes the drum and puddle as "a blue vehicle" |
 | Cost | Captioning 32,587 µUSD for the hour (193,320 input and 16,749 output tokens): $0.033 per hour of video. The ten answers, with their expansions, 3,334 µUSD |
 
-The PR tier replays that run through the egress gate (`adk-vision/tests/analyst_tests.rs`):
-the replay must cite as the live run did and report the same cost per hour. `examples/vision`
+The same hour captioned and answered on the device, recorded on 2026-11-24 with no network
+(`HF_HUB_OFFLINE=1` inside a sandbox that denies it):
+
+| Item | Value |
+|------|-------|
+| Captioner and answerer | Qwen3-VL-4B Instruct through `LlmDescriber::mistralrs` and `FramesAnalyzer::local`, `mistralrs-metal` on an Apple M4 (10 cores, 24 GB), the `dev` profile |
+| Captions | 120 chunks, 720 frames in 1,057 s: 8.8 s a chunk (7.8 s median per call), 116,361 input and 2,543 output tokens. 103 chunks read "Nothing happens."; each of the ten event chunks names its event — the spill as "a blue cylindrical object … leaving a small puddle", the vest worker as "a person in a yellow shirt" |
+| Citations | 8 of 10 answers cite the chunk that holds the event's start (the truck's with `supported` false); the forklift at aisle 2 and the near miss are answered "not mentioned" although their chunks were among the eight retrieved |
+| Cost | Zero: no frame reaches the egress gate and the spend ledger holds nothing |
+| On the CPU | 88 s a chunk over the first 20 chunks (85–97 s), about 2.9 hours for the hour. The first 8 chunks again at 89.3 s a chunk: seven captions word for word as on Metal, the eighth naming the same forklift in other words, and its one question citing its chunk at zero cost |
+
+An earlier run on the same machine wrote the same captions and cited 7 of 10. Retrieval breaks
+ties between chunks of equal score — the 103 identical captions — in the store's order, which
+differs from one process to the next, so the answer prompts show different quiet chunks and
+the truck's answer changed with them. Captioning on the device is as complete as the cloud
+run's; answering from the captions is the weaker step for a 4B model.
+
+The PR tier replays the cloud run through the egress gate (`adk-vision/tests/analyst_tests.rs`):
+the replay must cite as the live run did and report the same cost per hour. It replays the
+on-device run too, which must cite as it did with nothing through the gate and nothing spent. `examples/vision`
 (`s17_video_analyst`) replays it through the real Anthropic client from a local server and
 checks the frames the server received against the gate's releases and the spend ledger
 against the captions' and answers' cost. A second test
@@ -382,6 +411,10 @@ the erasure.
 ```bash
 ANTHROPIC_API_KEY=... cargo test -p adk-vision --features analyst \
     --test analyst_live_tests -- --ignored --nocapture
+
+# On the device: Qwen3-VL-4B's weights in the cache; ADK_VISION_ANALYST_CHUNKS bounds the run.
+ADK_VISION_DEVICE=metal cargo test -p adk-vision --features analyst,mistralrs-metal \
+    --test analyst_live_tests s17_captioned_on_the_device_by_qwen3_vl -- --ignored --nocapture
 ```
 
 ## Tracking Through a Clip with `sam-3.1`

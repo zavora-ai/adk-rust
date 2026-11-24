@@ -1,0 +1,1988 @@
+{
+  "model": "qwen3-vl-4b-instruct",
+  "recordedAt": "2026-11-24T18:51:22Z",
+  "durationMs": 3600000,
+  "width": 480,
+  "height": 270,
+  "sampleEveryMs": 2500,
+  "chunkMs": 30000,
+  "framesPerChunk": 6,
+  "topK": 8,
+  "captions": [
+    {
+      "fromMs": 0,
+      "toMs": 30000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 16,
+        "total_token_count": 979
+      },
+      "elapsedMs": 8100
+    },
+    {
+      "fromMs": 30000,
+      "toMs": 60000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 16,
+        "total_token_count": 979
+      },
+      "elapsedMs": 7802
+    },
+    {
+      "fromMs": 60000,
+      "toMs": 90000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 16,
+        "total_token_count": 979
+      },
+      "elapsedMs": 7797
+    },
+    {
+      "fromMs": 90000,
+      "toMs": 120000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 16,
+        "total_token_count": 979
+      },
+      "elapsedMs": 7802
+    },
+    {
+      "fromMs": 120000,
+      "toMs": 150000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 16,
+        "total_token_count": 979
+      },
+      "elapsedMs": 7727
+    },
+    {
+      "fromMs": 150000,
+      "toMs": 180000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 16,
+        "total_token_count": 979
+      },
+      "elapsedMs": 7430
+    },
+    {
+      "fromMs": 180000,
+      "toMs": 210000,
+      "text": "{\n  \"caption\": \"A forklift enters the warehouse aisle and moves forward, carrying a single box.\",\n  \"objects\": [\n    \"forklift\",\n    \"box\"\n  ]\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 41,
+        "total_token_count": 1004
+      },
+      "elapsedMs": 11804
+    },
+    {
+      "fromMs": 210000,
+      "toMs": 240000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 16,
+        "total_token_count": 979
+      },
+      "elapsedMs": 7716
+    },
+    {
+      "fromMs": 240000,
+      "toMs": 270000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 16,
+        "total_token_count": 979
+      },
+      "elapsedMs": 7521
+    },
+    {
+      "fromMs": 270000,
+      "toMs": 300000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 16,
+        "total_token_count": 979
+      },
+      "elapsedMs": 7558
+    },
+    {
+      "fromMs": 300000,
+      "toMs": 330000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 16,
+        "total_token_count": 979
+      },
+      "elapsedMs": 7451
+    },
+    {
+      "fromMs": 330000,
+      "toMs": 360000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 16,
+        "total_token_count": 979
+      },
+      "elapsedMs": 7458
+    },
+    {
+      "fromMs": 360000,
+      "toMs": 390000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 16,
+        "total_token_count": 979
+      },
+      "elapsedMs": 7416
+    },
+    {
+      "fromMs": 390000,
+      "toMs": 420000,
+      "text": "{\n  \"caption\": \"A person in a blue shirt pushes a cart across the warehouse floor from left to right, passing by shelves and a dock door.\",\n  \"objects\": [\n    \"person\",\n    \"cart\"\n  ]\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 49,
+        "total_token_count": 1012
+      },
+      "elapsedMs": 13482
+    },
+    {
+      "fromMs": 420000,
+      "toMs": 450000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 16,
+        "total_token_count": 979
+      },
+      "elapsedMs": 7554
+    },
+    {
+      "fromMs": 450000,
+      "toMs": 480000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 16,
+        "total_token_count": 979
+      },
+      "elapsedMs": 7430
+    },
+    {
+      "fromMs": 480000,
+      "toMs": 510000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 16,
+        "total_token_count": 979
+      },
+      "elapsedMs": 7608
+    },
+    {
+      "fromMs": 510000,
+      "toMs": 540000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 16,
+        "total_token_count": 979
+      },
+      "elapsedMs": 7998
+    },
+    {
+      "fromMs": 540000,
+      "toMs": 570000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 963,
+        "candidates_token_count": 16,
+        "total_token_count": 979
+      },
+      "elapsedMs": 8009
+    },
+    {
+      "fromMs": 570000,
+      "toMs": 600000,
+      "text": "{\n  \"caption\": \"A white delivery truck arrives at Dock 1 and begins to open its doors, revealing its interior as it stops in the warehouse.\",\n  \"objects\": [\n    \"delivery truck\",\n    \"Dock 1\"\n  ]\n}",
+      "usage": {
+        "prompt_token_count": 964,
+        "candidates_token_count": 52,
+        "total_token_count": 1016
+      },
+      "elapsedMs": 14328
+    },
+    {
+      "fromMs": 600000,
+      "toMs": 630000,
+      "text": "{\n  \"caption\": \"The dock door closes, and the scene remains static with no other movement.\",\n  \"objects\": [\n    \"dock door\",\n    \"aisle shelves\"\n  ]\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 41,
+        "total_token_count": 1012
+      },
+      "elapsedMs": 12338
+    },
+    {
+      "fromMs": 630000,
+      "toMs": 660000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7718
+    },
+    {
+      "fromMs": 660000,
+      "toMs": 690000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7492
+    },
+    {
+      "fromMs": 690000,
+      "toMs": 720000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7608
+    },
+    {
+      "fromMs": 720000,
+      "toMs": 750000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7559
+    },
+    {
+      "fromMs": 750000,
+      "toMs": 780000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7568
+    },
+    {
+      "fromMs": 780000,
+      "toMs": 810000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7513
+    },
+    {
+      "fromMs": 810000,
+      "toMs": 840000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7655
+    },
+    {
+      "fromMs": 840000,
+      "toMs": 870000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7725
+    },
+    {
+      "fromMs": 870000,
+      "toMs": 900000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7512
+    },
+    {
+      "fromMs": 900000,
+      "toMs": 930000,
+      "text": "{\n  \"caption\": \"At 06:15:27, a group of brown boxes on the rightmost shelf in Aisle 3 begins to fall and scatter to the floor.\",\n  \"objects\": [\n    \"boxes\",\n    \"shelf\"\n  ]\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 58,
+        "total_token_count": 1029
+      },
+      "elapsedMs": 14600
+    },
+    {
+      "fromMs": 930000,
+      "toMs": 960000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7665
+    },
+    {
+      "fromMs": 960000,
+      "toMs": 990000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7564
+    },
+    {
+      "fromMs": 990000,
+      "toMs": 1020000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7632
+    },
+    {
+      "fromMs": 1020000,
+      "toMs": 1050000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8989
+    },
+    {
+      "fromMs": 1050000,
+      "toMs": 1080000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8044
+    },
+    {
+      "fromMs": 1080000,
+      "toMs": 1110000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7524
+    },
+    {
+      "fromMs": 1110000,
+      "toMs": 1140000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7522
+    },
+    {
+      "fromMs": 1140000,
+      "toMs": 1170000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7727
+    },
+    {
+      "fromMs": 1170000,
+      "toMs": 1200000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7812
+    },
+    {
+      "fromMs": 1200000,
+      "toMs": 1230000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8089
+    },
+    {
+      "fromMs": 1230000,
+      "toMs": 1260000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8094
+    },
+    {
+      "fromMs": 1260000,
+      "toMs": 1290000,
+      "text": "{\n  \"caption\": \"A person in a yellow shirt and white hat walks into the frame from the left and moves toward the right, eventually stopping near the exit.\",\n  \"objects\": [\n    \"person\"\n  ]\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 47,
+        "total_token_count": 1018
+      },
+      "elapsedMs": 13127
+    },
+    {
+      "fromMs": 1290000,
+      "toMs": 1320000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8210
+    },
+    {
+      "fromMs": 1320000,
+      "toMs": 1350000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8492
+    },
+    {
+      "fromMs": 1350000,
+      "toMs": 1380000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8586
+    },
+    {
+      "fromMs": 1380000,
+      "toMs": 1410000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8612
+    },
+    {
+      "fromMs": 1410000,
+      "toMs": 1440000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8663
+    },
+    {
+      "fromMs": 1440000,
+      "toMs": 1470000,
+      "text": "{\n  \"caption\": \"A person in a blue shirt pushes a shopping cart from the left side of the warehouse floor and moves toward the right, passing by the shelves.\",\n  \"objects\": [\n    \"person\",\n    \"shopping cart\"\n  ]\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 53,
+        "total_token_count": 1024
+      },
+      "elapsedMs": 15957
+    },
+    {
+      "fromMs": 1470000,
+      "toMs": 1500000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8624
+    },
+    {
+      "fromMs": 1500000,
+      "toMs": 1530000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8533
+    },
+    {
+      "fromMs": 1530000,
+      "toMs": 1560000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8398
+    },
+    {
+      "fromMs": 1560000,
+      "toMs": 1590000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8006
+    },
+    {
+      "fromMs": 1590000,
+      "toMs": 1620000,
+      "text": "{\n  \"caption\": \"A blue cylindrical object rolls into the aisle from the left and comes to rest on the floor, leaving a small puddle behind.\",\n  \"objects\": [\n    \"blue cylindrical object\"\n  ]\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 47,
+        "total_token_count": 1018
+      },
+      "elapsedMs": 12742
+    },
+    {
+      "fromMs": 1620000,
+      "toMs": 1650000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7632
+    },
+    {
+      "fromMs": 1650000,
+      "toMs": 1680000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7927
+    },
+    {
+      "fromMs": 1680000,
+      "toMs": 1710000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8132
+    },
+    {
+      "fromMs": 1710000,
+      "toMs": 1740000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8362
+    },
+    {
+      "fromMs": 1740000,
+      "toMs": 1770000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8148
+    },
+    {
+      "fromMs": 1770000,
+      "toMs": 1800000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7899
+    },
+    {
+      "fromMs": 1800000,
+      "toMs": 1830000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7825
+    },
+    {
+      "fromMs": 1830000,
+      "toMs": 1860000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7946
+    },
+    {
+      "fromMs": 1860000,
+      "toMs": 1890000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7844
+    },
+    {
+      "fromMs": 1890000,
+      "toMs": 1920000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7864
+    },
+    {
+      "fromMs": 1920000,
+      "toMs": 1950000,
+      "text": "{\n  \"caption\": \"A pallet of red boxes appears at the right side of the warehouse floor near the exit and remains there until the end of the sequence.\",\n  \"objects\": [\n    \"pallet of red boxes\"\n  ]\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 50,
+        "total_token_count": 1021
+      },
+      "elapsedMs": 13792
+    },
+    {
+      "fromMs": 1950000,
+      "toMs": 1980000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7773
+    },
+    {
+      "fromMs": 1980000,
+      "toMs": 2010000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7746
+    },
+    {
+      "fromMs": 2010000,
+      "toMs": 2040000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7779
+    },
+    {
+      "fromMs": 2040000,
+      "toMs": 2070000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7756
+    },
+    {
+      "fromMs": 2070000,
+      "toMs": 2100000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7836
+    },
+    {
+      "fromMs": 2100000,
+      "toMs": 2130000,
+      "text": "{\n  \"caption\": \"A person in a blue shirt pushes a cart across a warehouse floor, moving from left to right past shelves labeled Dock 1, Isle 1, Aisle 2, and Aisle 3, with the exit on the far right.\",\n  \"objects\": [\n    \"person\",\n    \"cart\",\n    \"shelves\",\n    \"dock\",\n    \"aisle signs\",\n    \"exit\"\n  ]\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 92,
+        "total_token_count": 1063
+      },
+      "elapsedMs": 20774
+    },
+    {
+      "fromMs": 2130000,
+      "toMs": 2160000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7824
+    },
+    {
+      "fromMs": 2160000,
+      "toMs": 2190000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7803
+    },
+    {
+      "fromMs": 2190000,
+      "toMs": 2220000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7960
+    },
+    {
+      "fromMs": 2220000,
+      "toMs": 2250000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7928
+    },
+    {
+      "fromMs": 2250000,
+      "toMs": 2280000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7819
+    },
+    {
+      "fromMs": 2280000,
+      "toMs": 2310000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7745
+    },
+    {
+      "fromMs": 2310000,
+      "toMs": 2340000,
+      "text": "{\n  \"caption\": \"A worker in an orange shirt climbs a ladder placed in front of the first aisle, then disappears from view as the ladder is removed.\",\n  \"objects\": [\n    \"worker\",\n    \"ladder\"\n  ]\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 51,
+        "total_token_count": 1022
+      },
+      "elapsedMs": 13489
+    },
+    {
+      "fromMs": 2340000,
+      "toMs": 2370000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8140
+    },
+    {
+      "fromMs": 2370000,
+      "toMs": 2400000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8026
+    },
+    {
+      "fromMs": 2400000,
+      "toMs": 2430000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7831
+    },
+    {
+      "fromMs": 2430000,
+      "toMs": 2460000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7819
+    },
+    {
+      "fromMs": 2460000,
+      "toMs": 2490000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8454
+    },
+    {
+      "fromMs": 2490000,
+      "toMs": 2520000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8704
+    },
+    {
+      "fromMs": 2520000,
+      "toMs": 2550000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8010
+    },
+    {
+      "fromMs": 2550000,
+      "toMs": 2580000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7882
+    },
+    {
+      "fromMs": 2580000,
+      "toMs": 2610000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7897
+    },
+    {
+      "fromMs": 2610000,
+      "toMs": 2640000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7861
+    },
+    {
+      "fromMs": 2640000,
+      "toMs": 2670000,
+      "text": "{\n  \"caption\": \"Two forklifts enter the warehouse from the left and move toward the center, passing between the aisles, then disappear from view.\",\n  \"objects\": [\n    \"blue forklift\",\n    \"orange forklift\"\n  ]\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 57,
+        "total_token_count": 1028
+      },
+      "elapsedMs": 15113
+    },
+    {
+      "fromMs": 2670000,
+      "toMs": 2700000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7828
+    },
+    {
+      "fromMs": 2700000,
+      "toMs": 2730000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7667
+    },
+    {
+      "fromMs": 2730000,
+      "toMs": 2760000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7843
+    },
+    {
+      "fromMs": 2760000,
+      "toMs": 2790000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7647
+    },
+    {
+      "fromMs": 2790000,
+      "toMs": 2820000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7805
+    },
+    {
+      "fromMs": 2820000,
+      "toMs": 2850000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7669
+    },
+    {
+      "fromMs": 2850000,
+      "toMs": 2880000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7923
+    },
+    {
+      "fromMs": 2880000,
+      "toMs": 2910000,
+      "text": "{\n  \"caption\": \"A person in a blue shirt pushes a shopping cart into the warehouse aisle from the left side of the frame.\",\n  \"objects\": [\n    \"person\",\n    \"shopping cart\"\n  ]\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 46,
+        "total_token_count": 1017
+      },
+      "elapsedMs": 12762
+    },
+    {
+      "fromMs": 2910000,
+      "toMs": 2940000,
+      "text": "{\n  \"caption\": \"A person in a blue shirt pushes a shopping cart across a warehouse aisle, moving from left to right past shelves stocked with boxes.\",\n  \"objects\": [\n    \"person\",\n    \"shopping cart\"\n  ]\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 50,
+        "total_token_count": 1021
+      },
+      "elapsedMs": 13265
+    },
+    {
+      "fromMs": 2940000,
+      "toMs": 2970000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7769
+    },
+    {
+      "fromMs": 2970000,
+      "toMs": 3000000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7556
+    },
+    {
+      "fromMs": 3000000,
+      "toMs": 3030000,
+      "text": "{\n  \"caption\": \"A fire erupts from a box on the middle shelf of Aisle 2, followed by a plume of smoke rising above it.\",\n  \"objects\": [\n    \"fire\",\n    \"smoke\"\n  ]\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 52,
+        "total_token_count": 1023
+      },
+      "elapsedMs": 13686
+    },
+    {
+      "fromMs": 3030000,
+      "toMs": 3060000,
+      "text": "{\n  \"caption\": \"A small fire burns on a shelf in Aisle 2, with smoke rising, while the surrounding shelves and labels remain unchanged.\",\n  \"objects\": [\n    \"fire\",\n    \"smoke\"\n  ]\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 50,
+        "total_token_count": 1021
+      },
+      "elapsedMs": 13265
+    },
+    {
+      "fromMs": 3060000,
+      "toMs": 3090000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7542
+    },
+    {
+      "fromMs": 3090000,
+      "toMs": 3120000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7499
+    },
+    {
+      "fromMs": 3120000,
+      "toMs": 3150000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8013
+    },
+    {
+      "fromMs": 3150000,
+      "toMs": 3180000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7861
+    },
+    {
+      "fromMs": 3180000,
+      "toMs": 3210000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7698
+    },
+    {
+      "fromMs": 3210000,
+      "toMs": 3240000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7707
+    },
+    {
+      "fromMs": 3240000,
+      "toMs": 3270000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7718
+    },
+    {
+      "fromMs": 3270000,
+      "toMs": 3300000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7780
+    },
+    {
+      "fromMs": 3300000,
+      "toMs": 3330000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7605
+    },
+    {
+      "fromMs": 3330000,
+      "toMs": 3360000,
+      "text": "{\n  \"caption\": \"The scene is a static warehouse view with shelves and a dock, and the lighting dims progressively over the frames, eventually turning completely dark.\",\n  \"objects\": [\n    \"light\",\n    \"shelves\",\n    \"dock\",\n    \"exit\"\n  ]\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 59,
+        "total_token_count": 1030
+      },
+      "elapsedMs": 14961
+    },
+    {
+      "fromMs": 3360000,
+      "toMs": 3390000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7402
+    },
+    {
+      "fromMs": 3390000,
+      "toMs": 3420000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7667
+    },
+    {
+      "fromMs": 3420000,
+      "toMs": 3450000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7558
+    },
+    {
+      "fromMs": 3450000,
+      "toMs": 3480000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7519
+    },
+    {
+      "fromMs": 3480000,
+      "toMs": 3510000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 8093
+    },
+    {
+      "fromMs": 3510000,
+      "toMs": 3540000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7644
+    },
+    {
+      "fromMs": 3540000,
+      "toMs": 3570000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7563
+    },
+    {
+      "fromMs": 3570000,
+      "toMs": 3600000,
+      "text": "{\n  \"caption\": \"Nothing happens.\",\n  \"objects\": []\n}",
+      "usage": {
+        "prompt_token_count": 971,
+        "candidates_token_count": 16,
+        "total_token_count": 987
+      },
+      "elapsedMs": 7506
+    }
+  ],
+  "expansions": [
+    {
+      "question": "When does the forklift drive up to aisle 2?",
+      "text": "{\"caption\": \"The forklift drives up to aisle 2 and stops near the shelf.\"}",
+      "usage": {
+        "prompt_token_count": 101,
+        "candidates_token_count": 22,
+        "total_token_count": 123
+      },
+      "elapsedMs": 2882
+    },
+    {
+      "question": "When does a truck back into the dock door?",
+      "text": "{\"caption\": \"The truck slowly reverses into the dock door as the operator adjusts the position to align with the loading area.\"}",
+      "usage": {
+        "prompt_token_count": 98,
+        "candidates_token_count": 28,
+        "total_token_count": 126
+      },
+      "elapsedMs": 3623
+    },
+    {
+      "question": "When do boxes fall off the shelf?",
+      "text": "{\"caption\": \"The boxes fall off the shelf when the person pushes them too hard or the shelf becomes unstable.\"}",
+      "usage": {
+        "prompt_token_count": 96,
+        "candidates_token_count": 25,
+        "total_token_count": 121
+      },
+      "elapsedMs": 3355
+    },
+    {
+      "question": "When does the worker in the yellow vest walk across the floor?",
+      "text": "{\"caption\": \"The worker in the yellow vest walks across the floor while carrying a tool.\"}",
+      "usage": {
+        "prompt_token_count": 101,
+        "candidates_token_count": 21,
+        "total_token_count": 122
+      },
+      "elapsedMs": 2830
+    },
+    {
+      "question": "When is there a spill on the floor?",
+      "text": "{\"caption\": \"A liquid spills onto the floor, creating a visible puddle as it spreads across the surface.\"}",
+      "usage": {
+        "prompt_token_count": 97,
+        "candidates_token_count": 25,
+        "total_token_count": 122
+      },
+      "elapsedMs": 3624
+    },
+    {
+      "question": "When is the fire exit blocked?",
+      "text": "{\"caption\": \"The fire exit is blocked when a person or object obstructs the doorway, preventing safe evacuation.\"}",
+      "usage": {
+        "prompt_token_count": 95,
+        "candidates_token_count": 25,
+        "total_token_count": 120
+      },
+      "elapsedMs": 3501
+    },
+    {
+      "question": "When does someone climb a ladder?",
+      "text": "{\"caption\": \"A person climbs a ladder to reach a high shelf.\"}",
+      "usage": {
+        "prompt_token_count": 95,
+        "candidates_token_count": 17,
+        "total_token_count": 112
+      },
+      "elapsedMs": 2233
+    },
+    {
+      "question": "When do two forklifts nearly collide?",
+      "text": "{\"caption\": \"Two forklifts move toward each other in a warehouse and nearly collide as their paths cross.\"}",
+      "usage": {
+        "prompt_token_count": 98,
+        "candidates_token_count": 26,
+        "total_token_count": 124
+      },
+      "elapsedMs": 3535
+    },
+    {
+      "question": "When is there a fire?",
+      "text": "{\"caption\": \"A fire erupts suddenly in the room, with flames and smoke rising rapidly as people react in panic.\"}",
+      "usage": {
+        "prompt_token_count": 94,
+        "candidates_token_count": 27,
+        "total_token_count": 121
+      },
+      "elapsedMs": 4033
+    },
+    {
+      "question": "When do the lights go out?",
+      "text": "{\"caption\": \"The lights go out when the power cuts off during the scene.\"}",
+      "usage": {
+        "prompt_token_count": 95,
+        "candidates_token_count": 19,
+        "total_token_count": 114
+      },
+      "elapsedMs": 2714
+    }
+  ],
+  "answers": [
+    {
+      "question": "When does the forklift drive up to aisle 2?",
+      "text": "{\n  \"answer\": \"not specified\",\n  \"supported\": false,\n  \"chunks\": []\n}",
+      "usage": {
+        "prompt_token_count": 557,
+        "candidates_token_count": 22,
+        "total_token_count": 579
+      },
+      "elapsedMs": 4649,
+      "shown": [
+        [
+          180000,
+          210000
+        ],
+        [
+          600000,
+          630000
+        ],
+        [
+          900000,
+          930000
+        ],
+        [
+          2100000,
+          2130000
+        ],
+        [
+          2640000,
+          2670000
+        ],
+        [
+          2880000,
+          2910000
+        ],
+        [
+          3000000,
+          3030000
+        ],
+        [
+          3030000,
+          3060000
+        ]
+      ]
+    },
+    {
+      "question": "When does a truck back into the dock door?",
+      "text": "{\n  \"answer\": \"The truck arrives at Dock 1 and begins to open its doors, but there is no mention of it backing into the dock door.\",\n  \"supported\": false,\n  \"chunks\": [3]\n}",
+      "usage": {
+        "prompt_token_count": 483,
+        "candidates_token_count": 48,
+        "total_token_count": 531
+      },
+      "elapsedMs": 8230,
+      "shown": [
+        [
+          360000,
+          390000
+        ],
+        [
+          390000,
+          420000
+        ],
+        [
+          570000,
+          600000
+        ],
+        [
+          600000,
+          630000
+        ],
+        [
+          1080000,
+          1110000
+        ],
+        [
+          1530000,
+          1560000
+        ],
+        [
+          2100000,
+          2130000
+        ],
+        [
+          3330000,
+          3360000
+        ]
+      ]
+    },
+    {
+      "question": "When do boxes fall off the shelf?",
+      "text": "{\n  \"answer\": \"At 06:15:27, a group of brown boxes on the rightmost shelf in Aisle 3 begins to fall and scatter to the floor.\",\n  \"supported\": true,\n  \"chunks\": [3]\n}",
+      "usage": {
+        "prompt_token_count": 537,
+        "candidates_token_count": 56,
+        "total_token_count": 593
+      },
+      "elapsedMs": 10203,
+      "shown": [
+        [
+          180000,
+          210000
+        ],
+        [
+          390000,
+          420000
+        ],
+        [
+          900000,
+          930000
+        ],
+        [
+          1920000,
+          1950000
+        ],
+        [
+          2880000,
+          2910000
+        ],
+        [
+          2910000,
+          2940000
+        ],
+        [
+          3000000,
+          3030000
+        ],
+        [
+          3030000,
+          3060000
+        ]
+      ]
+    },
+    {
+      "question": "When does the worker in the yellow vest walk across the floor?",
+      "text": "{\n  \"answer\": \"21:00.0–21:30.0\",\n  \"supported\": true,\n  \"chunks\": [3]\n}",
+      "usage": {
+        "prompt_token_count": 584,
+        "candidates_token_count": 37,
+        "total_token_count": 621
+      },
+      "elapsedMs": 7166,
+      "shown": [
+        [
+          390000,
+          420000
+        ],
+        [
+          900000,
+          930000
+        ],
+        [
+          1260000,
+          1290000
+        ],
+        [
+          1440000,
+          1470000
+        ],
+        [
+          1590000,
+          1620000
+        ],
+        [
+          1920000,
+          1950000
+        ],
+        [
+          2100000,
+          2130000
+        ],
+        [
+          2310000,
+          2340000
+        ]
+      ]
+    },
+    {
+      "question": "When is there a spill on the floor?",
+      "text": "{\n  \"answer\": \"At 26:30.0–27:00.0, a blue cylindrical object rolls into the aisle and comes to rest on the floor, leaving a small puddle behind.\",\n  \"supported\": true,\n  \"chunks\": [5]\n}",
+      "usage": {
+        "prompt_token_count": 566,
+        "candidates_token_count": 62,
+        "total_token_count": 628
+      },
+      "elapsedMs": 11874,
+      "shown": [
+        [
+          390000,
+          420000
+        ],
+        [
+          600000,
+          630000
+        ],
+        [
+          900000,
+          930000
+        ],
+        [
+          1440000,
+          1470000
+        ],
+        [
+          1590000,
+          1620000
+        ],
+        [
+          1920000,
+          1950000
+        ],
+        [
+          2100000,
+          2130000
+        ],
+        [
+          3030000,
+          3060000
+        ]
+      ]
+    },
+    {
+      "question": "When is the fire exit blocked?",
+      "text": "{\n  \"answer\": \"The fire exit is blocked by a pallet of red boxes appearing at the right side of the warehouse floor near the exit and remaining there until the end of the sequence.\",\n  \"supported\": true,\n  \"chunks\": [4]\n}",
+      "usage": {
+        "prompt_token_count": 570,
+        "candidates_token_count": 54,
+        "total_token_count": 624
+      },
+      "elapsedMs": 9357,
+      "shown": [
+        [
+          390000,
+          420000
+        ],
+        [
+          1260000,
+          1290000
+        ],
+        [
+          1440000,
+          1470000
+        ],
+        [
+          1920000,
+          1950000
+        ],
+        [
+          2100000,
+          2130000
+        ],
+        [
+          2910000,
+          2940000
+        ],
+        [
+          3000000,
+          3030000
+        ],
+        [
+          3030000,
+          3060000
+        ]
+      ]
+    },
+    {
+      "question": "When does someone climb a ladder?",
+      "text": "{\n  \"answer\": \"At 38:30.0–39:00.0\",\n  \"supported\": true,\n  \"chunks\": [6]\n}",
+      "usage": {
+        "prompt_token_count": 573,
+        "candidates_token_count": 39,
+        "total_token_count": 612
+      },
+      "elapsedMs": 7900,
+      "shown": [
+        [
+          390000,
+          420000
+        ],
+        [
+          900000,
+          930000
+        ],
+        [
+          1260000,
+          1290000
+        ],
+        [
+          1440000,
+          1470000
+        ],
+        [
+          2100000,
+          2130000
+        ],
+        [
+          2310000,
+          2340000
+        ],
+        [
+          2880000,
+          2910000
+        ],
+        [
+          2910000,
+          2940000
+        ]
+      ]
+    },
+    {
+      "question": "When do two forklifts nearly collide?",
+      "text": "{\n  \"answer\": \"not mentioned\",\n  \"supported\": false,\n  \"chunks\": []\n}",
+      "usage": {
+        "prompt_token_count": 524,
+        "candidates_token_count": 22,
+        "total_token_count": 546
+      },
+      "elapsedMs": 5271,
+      "shown": [
+        [
+          180000,
+          210000
+        ],
+        [
+          390000,
+          420000
+        ],
+        [
+          600000,
+          630000
+        ],
+        [
+          1260000,
+          1290000
+        ],
+        [
+          1440000,
+          1470000
+        ],
+        [
+          2640000,
+          2670000
+        ],
+        [
+          2880000,
+          2910000
+        ],
+        [
+          3330000,
+          3360000
+        ]
+      ]
+    },
+    {
+      "question": "When is there a fire?",
+      "text": "{\n  \"answer\": \"At 50:00.0–50:30.0 and 50:30.0–51:00.0\",\n  \"supported\": true,\n  \"chunks\": [7, 8]\n}",
+      "usage": {
+        "prompt_token_count": 485,
+        "candidates_token_count": 59,
+        "total_token_count": 544
+      },
+      "elapsedMs": 10448,
+      "shown": [
+        [
+          180000,
+          210000
+        ],
+        [
+          360000,
+          390000
+        ],
+        [
+          1080000,
+          1110000
+        ],
+        [
+          1530000,
+          1560000
+        ],
+        [
+          2100000,
+          2130000
+        ],
+        [
+          2640000,
+          2670000
+        ],
+        [
+          3000000,
+          3030000
+        ],
+        [
+          3030000,
+          3060000
+        ]
+      ]
+    },
+    {
+      "question": "When do the lights go out?",
+      "text": "{\n  \"answer\": \"55:30.0\",\n  \"supported\": true,\n  \"chunks\": [8]\n}",
+      "usage": {
+        "prompt_token_count": 451,
+        "candidates_token_count": 29,
+        "total_token_count": 480
+      },
+      "elapsedMs": 5659,
+      "shown": [
+        [
+          360000,
+          390000
+        ],
+        [
+          1020000,
+          1050000
+        ],
+        [
+          1080000,
+          1110000
+        ],
+        [
+          1440000,
+          1470000
+        ],
+        [
+          1530000,
+          1560000
+        ],
+        [
+          2100000,
+          2130000
+        ],
+        [
+          2550000,
+          2580000
+        ],
+        [
+          3330000,
+          3360000
+        ]
+      ]
+    }
+  ],
+  "scored": [
+    {
+      "event": "forklift-aisle-2",
+      "atMs": 190000,
+      "cited": null,
+      "hit": false,
+      "supported": false,
+      "answer": "not specified"
+    },
+    {
+      "event": "truck-docks",
+      "atMs": 583000,
+      "cited": [
+        570000,
+        600000
+      ],
+      "hit": true,
+      "supported": false,
+      "answer": "The truck arrives at Dock 1 and begins to open its doors, but there is no mention of it backing into the dock door."
+    },
+    {
+      "event": "boxes-fall",
+      "atMs": 927000,
+      "cited": [
+        900000,
+        930000
+      ],
+      "hit": true,
+      "supported": true,
+      "answer": "At 06:15:27, a group of brown boxes on the rightmost shelf in Aisle 3 begins to fall and scatter to the floor."
+    },
+    {
+      "event": "vest-worker-crosses",
+      "atMs": 1266000,
+      "cited": [
+        1260000,
+        1290000
+      ],
+      "hit": true,
+      "supported": true,
+      "answer": "21:00.0–21:30.0"
+    },
+    {
+      "event": "spill",
+      "atMs": 1612000,
+      "cited": [
+        1590000,
+        1620000
+      ],
+      "hit": true,
+      "supported": true,
+      "answer": "At 26:30.0–27:00.0, a blue cylindrical object rolls into the aisle and comes to rest on the floor, leaving a small puddle behind."
+    },
+    {
+      "event": "exit-blocked",
+      "atMs": 1938000,
+      "cited": [
+        1920000,
+        1950000
+      ],
+      "hit": true,
+      "supported": true,
+      "answer": "The fire exit is blocked by a pallet of red boxes appearing at the right side of the warehouse floor near the exit and remaining there until the end of the sequence."
+    },
+    {
+      "event": "ladder-climb",
+      "atMs": 2311000,
+      "cited": [
+        2310000,
+        2340000
+      ],
+      "hit": true,
+      "supported": true,
+      "answer": "At 38:30.0–39:00.0"
+    },
+    {
+      "event": "near-miss",
+      "atMs": 2647000,
+      "cited": null,
+      "hit": false,
+      "supported": false,
+      "answer": "not mentioned"
+    },
+    {
+      "event": "fire",
+      "atMs": 3021000,
+      "cited": [
+        3000000,
+        3030000
+      ],
+      "hit": true,
+      "supported": true,
+      "answer": "At 50:00.0–50:30.0 and 50:30.0–51:00.0"
+    },
+    {
+      "event": "lights-out",
+      "atMs": 3342000,
+      "cited": [
+        3330000,
+        3360000
+      ],
+      "hit": true,
+      "supported": true,
+      "answer": "55:30.0"
+    }
+  ],
+  "costPerHourMicroUsd": 0,
+  "device": "metal",
+  "loadMs": 8911,
+  "indexedMs": 3600000,
+  "indexWallMs": 1057398
+}
