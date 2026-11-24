@@ -140,7 +140,19 @@ mod tests {
             block.contains("/approvals  Calls in this session waiting for a decision"),
             "{block}"
         );
-        assert!(block.contains("adk-rust up  "), "the subcommands stay in the block: {block}");
-        assert!(block.contains("Safety"), "{block}");
+        assert!(block.contains("Safety (promise only what these cover):\n"), "{block}");
+        // Whatever features add subcommands, each stays: with its summary, or by name once
+        // the summaries no longer fit.
+        let names = block.lines().find_map(|line| {
+            line.strip_prefix(
+                "  adk-rust subcommands (harness_help cli <subcommand> says what one does): ",
+            )
+        });
+        for sub in crate::cli::Cli::command().get_subcommands().filter(|sub| !sub.is_hide_set()) {
+            let name = sub.get_name();
+            let listed = block.contains(&format!("\n  adk-rust {name}  "))
+                || names.is_some_and(|names| names.split(", ").any(|listed| listed == name));
+            assert!(listed, "adk-rust {name} stays in the block: {block}");
+        }
     }
 }
