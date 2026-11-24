@@ -195,10 +195,10 @@ async fn s17_an_hour_of_warehouse_video_answered_from_captions() {
 #[ignore = "loads Qwen3-VL (4B: 8.88 GB) through the fetcher; see the module docs"]
 async fn s17_captioned_on_the_device_by_qwen3_vl() {
     use adk_mistralrs::{Device, DeviceConfig, MistralRsConfig};
+    use adk_vision::cloud::Normalized1000;
     use adk_vision::mistralrs::{MAX_PIXELS, QWEN3_VL_4B};
     use adk_vision::{
         FetchConfig, InMemoryAcceptanceStore, InputLimits, ManifestSet, ModelFetcher,
-        Normalized1000,
     };
     use futures::StreamExt;
 

@@ -47,12 +47,13 @@ use adk_core::{
     Part, RunBudget, UsageUnit,
 };
 use adk_mistralrs::{Device, DeviceConfig, MistralRsConfig};
+use adk_vision::cloud::Normalized1000;
 use adk_vision::mistralrs::{MAX_PIXELS, QWEN3_VL_4B};
 use adk_vision::{
     DecodeLimits, Digest, EgressAction, EgressConfig, EgressGate, FetchConfig, FrameMeta,
     FrameSourceId, FramesAnalyzer, InMemoryAcceptanceStore, InMemoryEgressRecorder, InputLimits,
-    LlmDescriber, ManifestSet, ModelFetcher, Normalized1000, Sampling, SentImage, SourceImage,
-    VideoRequest, VideoSource, VisibilityPass, VisionCx, VisionRuntime,
+    LlmDescriber, ManifestSet, ModelFetcher, Sampling, SentImage, SourceImage, VideoRequest,
+    VideoSource, VisibilityPass, VisionCx, VisionRuntime,
 };
 use futures::StreamExt;
 use serde_json::{Value, json};
