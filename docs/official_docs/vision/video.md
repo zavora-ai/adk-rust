@@ -213,6 +213,17 @@ call, a check of every `stride`-th frame and a refine after each.
 > 0:35.0 (the entry is at 0:45). The visibility pass asks it only yes-or-no questions until
 > the forklift appears, then the question over the frames around that moment.
 
+Qwen3-VL-4B with a visibility pass — stride 5, four frames a check, 8 a question — over the
+twenty-minute aisle clip sampled every 5 s (240 frames at 640×360, entry at 12:45), on an Apple
+M4 (10 cores, 24 GB), the `dev` profile, with no network:
+
+| Device | Load | Calls | Answer | Tokens | Time to answer |
+|--------|------|-------|--------|--------|----------------|
+| CPU | 20 s | the target, eight checks (61 s each), the question over six frames (163 s) | 12:50.0 | 9,208 in, 120 out | 706 s |
+| Metal (`mistralrs-metal`) | 26 s | the same calls with the same answers (4.2 s a check, the question 22 s) | 12:50.0 | the same | 61 s |
+
+The run is S13's local path, recorded live; `examples/vision` replays it.
+
 ## Conformance for Video Analyzers
 
 `video_analyzer_conformance_tests!` (feature `conformance`) runs a `VideoAnalyzer` through

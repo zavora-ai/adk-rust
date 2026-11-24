@@ -40,7 +40,6 @@ server.
 | A user's RF-DETR fine-tune in a manifest the user wrote (S9) | A manifest the scenario writes into a user manifest directory, naming the built-in RF-DETR Nano's file by revision and SHA-256; it is loaded with `ManifestSet::with_dir`, verified on fetch, run on ONNX Runtime on each woken frame, where it finds the clip's wall clock | No fine-tune is published, and the project hosts no weights (Q6). A user's export and labels go in the same manifest |
 | The fine-tune's crack class (S9–S12) | `BeltDetector`, colour segmentation that finds the printed parts, the dark cracks across them and the fiducial | COCO weights cannot see a crack |
 | An hour of camera video above 20 MB (S13) | A 227 KB, twenty-minute clip of the same scene, sent through the File API with the inline limit set to 0 | The File API path is what a real clip takes; the fixture stays small |
-| Local Qwen3-VL-4B (S13) | A scripted transcript of the visibility pass's requests and answers in Qwen3-VL's form | The 8.9 GB weights need 14 GiB free; the machine that wrote the scenario had less. `adk-vision`'s `video_local_live_tests` runs the model itself |
 
 ## Phase C: the Screen Copilot
 
@@ -85,6 +84,14 @@ python3 -I adk-vision/tests/fixtures/video/recorded/proxy.py 18762 https://gener
 VISION_RECORD_META=127.0.0.1:18761 VISION_RECORD_GEMINI=127.0.0.1:18762 META_API_KEY=… GEMINI_API_KEY=… \
   cargo run --manifest-path examples/vision/Cargo.toml -- s11_a_budget_per_frame s13_native_video_two_ways
 ```
+
+S13's local path replays Qwen3-VL-4B's own run on an Apple M4 CPU, recorded with no network
+(`HF_HUB_OFFLINE=1` in a sandbox that denies it): ten calls over 240 frames, the eighth
+visibility check finding the forklift and the question over six frames answering 12:50.0,
+9,208 input and 120 output tokens, 706 s on the CPU and 61 s with `mistralrs-metal`, the same
+answers. The model runs in process, so `adk-vision`'s live test records it instead of a proxy,
+with S13's settings and `ADK_VISION_RECORD` naming the fixture
+(`examples/vision/fixtures/recorded/README.md` gives the command).
 
 S11's escalation clips are cut from the conveyor clip once with a user-installed ffmpeg and
 committed, so the scenario needs no encoder:

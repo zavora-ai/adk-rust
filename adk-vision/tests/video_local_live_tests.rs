@@ -27,16 +27,24 @@
 //! With `ADK_VISION_RECORD` naming a file, the run is written there as the transcript
 //! `examples/vision` S13 replays: each call's kind, the SHA-256 and size of each image, the
 //! frame times a question names, the model's answer, its token counts and its wall time.
-//! S13's own settings, on its clip at its full width:
+//! S13's own settings, on its clip at its full width, from the repository root (the test runs
+//! in `adk-vision/`, so the paths are absolute):
 //!
 //! ```text
-//! ADK_VISION_DEVICE=cpu ADK_VISION_CLIP=examples/vision/fixtures/video/aisle-forklift-20min.mp4 \
+//! ADK_VISION_DEVICE=cpu ADK_VISION_CLIP=$PWD/examples/vision/fixtures/video/aisle-forklift-20min.mp4 \
 //!     ADK_VISION_ENTRY_MS=765000 ADK_VISION_WIDTH=640 ADK_VISION_STRIDE=5 \
 //!     ADK_VISION_FRAMES_PER_CHECK=4 ADK_VISION_FRAMES_PER_CALL=8 \
-//!     ADK_VISION_RECORD=examples/vision/fixtures/recorded/qwen3-vl-4b/s13-aisle-20min.json \
+//!     ADK_VISION_RECORD=$PWD/examples/vision/fixtures/recorded/qwen3-vl-4b/s13-aisle-20min.json \
 //!     cargo test -p adk-vision --features mistralrs --test video_local_live_tests \
 //!     qwen3_vl_finds_the_entry_after_a_visibility_pass -- --ignored --nocapture
 //! ```
+//!
+//! Recorded on an Apple M4 (10 cores, 24 GB), the `dev` profile, with no network: Qwen3-VL-4B
+//! names the target, checks the 240 frames four at a time until the eighth check finds the
+//! forklift, and answers 12:50 from six frames around it — 10 calls, 9,208 input and 120
+//! output tokens. On the CPU the model loads in 20 s and answers in 706 s (61 s a check); with
+//! `mistralrs-metal` it loads in 26 s and answers in 61 s (4.2 s a check), the same calls
+//! with the same answers.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

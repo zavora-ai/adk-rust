@@ -108,8 +108,19 @@ dependencies at `opt-level = 1`, `MistralRsConfig::default()`; from the crate's 
 | Conformance shapes through the describer | IoU 0.83 (red) and 0.80 (blue) in source pixels | 19 s |
 | COCO 2017 val `000000000785`, "Give a box for every person" | "the person is skiing"; person box IoU 0.985 against COCO's ground truth | 28 s |
 
-A release build, `isq` quantisation or `mistralrs-metal` shortens the calls; they were not
-measured here.
+`Qwen/Qwen3-VL-4B-Instruct` on the same machine and profile, `MistralRsConfig::default()`,
+from `adk-vision/tests/video_local_live_tests.rs` and `analyst_live_tests.rs` (S13 and S17),
+with no network:
+
+| Run | CPU | Metal (`mistralrs-metal`) |
+|-----|-----|---------------------------|
+| `LlmDescriber::mistralrs` after the fetcher verified the files | 20 s | 26 s the first time, 3.6 s the next |
+| Peak memory of the test process | 10.7 GB | 11.0 GB |
+| A visibility check, four 640×360 frames (951 input tokens) | 61 s | 4.2 s |
+| A question over six 640×360 frames (1,535 input, 63 output tokens) | 163 s | 22 s |
+
+Both devices gave the same answers to the same requests. A release build or `isq`
+quantisation shortens the calls further; they were not measured here.
 
 ## On Ollama
 
