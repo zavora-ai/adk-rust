@@ -206,6 +206,7 @@ pub struct HarnessRuntime {
     /// The computer-use pack's screen plans, decided from a surface's card when a held step
     /// parks (spec 3.7 Q8).
     #[cfg(feature = "computer-use")]
+    #[cfg_attr(not(feature = "runner"), allow(dead_code))]
     pub(crate) screen_plans: Option<Arc<crate::packs::computer_use::ScreenPlans>>,
     /// Take over, when the harness was built with it (spec 3.3 §10 H2).
     pub(crate) take_over: Option<crate::take_over::TakeOver>,

@@ -495,6 +495,8 @@ impl ScreenPlans {
     /// Decides the plan `digest` from a surface (spec 3.7 Q8): only while no one decided it
     /// yet and it is still the instance the card showed, with `filed` taken back if the plan
     /// ends before its steps take them.
+    // Read by `Harness`, which exists with feature `runner` only.
+    #[cfg_attr(not(feature = "runner"), allow(dead_code))]
     pub(crate) fn decide_held(
         &self,
         scope: &str,
@@ -516,6 +518,8 @@ impl ScreenPlans {
 
     /// Takes back a surface's decision on the plan `digest` that could not be recorded on the
     /// held call: the plan waits for a decision again. Returns what was filed.
+    // Read by `Harness`, which exists with feature `runner` only.
+    #[cfg_attr(not(feature = "runner"), allow(dead_code))]
     pub(crate) fn revert(&self, scope: &str, digest: &str, instance: u64) -> Option<Filed> {
         let mut book = self.book();
         let record = book.plans.get_mut(&(scope.to_string(), digest.to_string()))?;
@@ -528,6 +532,8 @@ impl ScreenPlans {
 
     /// Ends the plan `digest` whatever its state, such as when everything is stopped while
     /// its card waits. Returns what was filed for its steps.
+    // Read by `Harness`, which exists with feature `runner` only.
+    #[cfg_attr(not(feature = "runner"), allow(dead_code))]
     pub(crate) fn close(&self, scope: &str, digest: &str, reason: &str) -> Option<Filed> {
         let mut book = self.book();
         let record = book.plans.get_mut(&(scope.to_string(), digest.to_string()))?;
