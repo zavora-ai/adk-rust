@@ -46,6 +46,7 @@ pub(crate) fn blur(pixels: &mut DecodedImage, bbox: &BBox, sigma: f32) {
 
 /// Blurs the pixels inside `bbox` with an approximation of a Gaussian of `sigma`, in time
 /// that does not grow with `sigma`: for a blur as wide as the box itself.
+#[cfg(feature = "stream")]
 pub(crate) fn fast_blur(pixels: &mut DecodedImage, bbox: &BBox, sigma: f32) {
     let (w, h) = pixels.size();
     let (x0, y0, bw, bh) = bbox.pixel_bounds(w, h);
