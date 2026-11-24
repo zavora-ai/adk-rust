@@ -109,7 +109,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 1. `FixedSizeChunker` splits the document into 256-byte chunks with 50-byte overlap — the
    chunker's own sizes decide chunking
 2. `MockEmbedder` converts each chunk into a 64-dimensional vector
-3. `InMemoryVectorStore` stores the vectors and searches by cosine similarity
+3. `InMemoryVectorStore` stores the vectors and searches by cosine similarity; chunks of
+   equal score rank by chunk ID, so a query returns the same chunks on every run
 4. `pipeline.scoped(scope)` binds ingest and query to one [scope](#scopes)
 5. `query()` embeds the question, finds the closest chunks in the scope, and returns them ranked
    by score; `query_with()` takes `QueryOptions`, such as `QueryOptions::new().with_top_k(3)`
