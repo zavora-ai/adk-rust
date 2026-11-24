@@ -1544,6 +1544,20 @@ async fn serve_resident(
     stop_when: impl Future<Output = ()> + Send,
 ) -> Result<()> {
     kernel.start().await.map_err(AdkError::from)?;
+    // One stop for the server and the kernel, registered before the address listens: a
+    // signal that comes as soon as a client can reach it drains both, never ends the process
+    // by the signal's default action.
+    let signal_error = |e: std::io::Error| AdkError::config(format!("signal handler: {e}"));
+    #[cfg(unix)]
+    let (mut interrupt, mut terminate) = {
+        use tokio::signal::unix::{SignalKind, signal};
+        (
+            signal(SignalKind::interrupt()).map_err(signal_error)?,
+            signal(SignalKind::terminate()).map_err(signal_error)?,
+        )
+    };
+    #[cfg(windows)]
+    let mut interrupt = tokio::signal::windows::ctrl_c().map_err(signal_error)?;
     let listener = match listening(socket, addr) {
         Ok(listener) => listener,
         Err(error) => {
@@ -1573,19 +1587,6 @@ async fn serve_resident(
     #[cfg(feature = "surface")]
     println!("  web home  http://{addr}/ui/");
     println!("  approvals: GET /api/approvals, POST /api/approvals/{{id}}/decide");
-    // One stop for the server and the kernel, registered before Ctrl+C is offered: a signal
-    // that comes at once stops both, never the kernel alone with the server left waiting.
-    let signal_error = |e: std::io::Error| AdkError::config(format!("signal handler: {e}"));
-    #[cfg(unix)]
-    let (mut interrupt, mut terminate) = {
-        use tokio::signal::unix::{SignalKind, signal};
-        (
-            signal(SignalKind::interrupt()).map_err(signal_error)?,
-            signal(SignalKind::terminate()).map_err(signal_error)?,
-        )
-    };
-    #[cfg(windows)]
-    let mut interrupt = tokio::signal::windows::ctrl_c().map_err(signal_error)?;
     let (stop, mut stopping) = tokio::sync::watch::channel(false);
     println!("Press Ctrl+C to drain and stop\n");
     let server = tokio::spawn(async move {
