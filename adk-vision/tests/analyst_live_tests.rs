@@ -17,7 +17,9 @@
 //! `ADK_VISION_DEVICE` names (`cpu`, `metal`, or automatic): no frame reaches the egress gate
 //! and the cost is zero. `ADK_VISION_ANALYST_CHUNKS` bounds it to the hour's first chunks,
 //! and only the questions whose events start in them are asked. Its recording is named
-//! `analyst-warehouse-<minutes>min.<model>.json`.
+//! `analyst-warehouse-<minutes>min.<model>.json`; `analyst_tests` replays the hour recorded
+//! on an Apple M4 with `mistralrs-metal` (8.8 s a chunk, 8 of 10 citations, nothing sent or
+//! spent).
 //!
 //! ```text
 //! HF_HUB_CACHE=/path/to/models ADK_VISION_DEVICE=cpu ADK_VISION_ANALYST_CHUNKS=20 \

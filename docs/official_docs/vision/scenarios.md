@@ -115,7 +115,7 @@ cargo run --manifest-path examples/vision/Cargo.toml -- --write-s11-clips
 | Live answers from the reasoner's and the verifier's models (S15) | Answers scripted in each provider's wire format, served to the real Anthropic and OpenAI-compatible clients; each fixture holds the request its client sent and says `scripted: true` | The session that wrote the scenario could not reach the provider keys. `VISION_RECORD_ANTHROPIC` and `VISION_RECORD_NIM_VLM` record both in one run (`examples/vision/fixtures/recorded/README.md`) |
 | The fine-tune's crack class (S15) | `BeltDetector`, as in S9; the verifier runs it with a 0.75 score floor | COCO weights cannot see a crack |
 | An hour of recorded warehouse video (S17) | `WarehouseClip`, drawn frame by frame from its time at 480×270 | The fixture needs no file and its truth is exact |
-| Captioned locally (S17) | Claude Haiku 5.5, every frame through the egress gate | Qwen3-VL-4B's 8.9 GB of weights need 14 GiB free; `VideoAnalyst` takes a local `FramesAnalyzer` the same way |
+| Captioned locally (S17) | Claude Haiku 5.5, every frame through the egress gate | Qwen3-VL-4B captioned and answered the same hour on the device (`adk-vision`'s `analyst_live_tests`, replayed by `analyst_tests`): every event's chunk captioned with its event, 8 of 10 answers citing it in the recorded run and 7 in an earlier one, at zero cost with nothing sent. At the threshold rather than above it, it stays beside the cloud recording ([Video](video.md#scenario-s17)) |
 
 ## Related
 
