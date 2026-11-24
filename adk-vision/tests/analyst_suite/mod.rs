@@ -128,6 +128,40 @@ pub fn question_of(prompt: &str) -> Option<String> {
     Some(rest.split_once("\n\n")?.0.trim().to_string())
 }
 
+/// The time ranges of the numbered chunk lines in an answer prompt, in order:
+/// "[1] 3:00.0–3:30.0: <caption>".
+pub fn shown_of(prompt: &str) -> Vec<(u64, u64)> {
+    prompt
+        .lines()
+        .filter_map(|line| {
+            let (_, rest) = line.strip_prefix('[')?.split_once("] ")?;
+            let (range, _) = rest.split_once(": ")?;
+            let (start, end) = range.split(" of ").next()?.split_once('–')?;
+            Some((parse_stamp(start)?, parse_stamp(end)?))
+        })
+        .collect()
+}
+
+/// `text`, an answer's JSON, with each cited chunk number moved from its place in
+/// `recorded` to the place of the same time range in `shown`; a range not shown now is cited
+/// as a number past the list, which cites nothing.
+fn renumbered(text: &str, recorded: &[(u64, u64)], shown: &[(u64, u64)]) -> String {
+    let Some(mut root) = serde_json::from_str::<serde_json::Value>(text.trim()).ok() else {
+        return text.to_string();
+    };
+    if let Some(chunks) = root.get_mut("chunks").and_then(serde_json::Value::as_array_mut) {
+        for n in chunks.iter_mut() {
+            let Some(range) = n.as_u64().and_then(|n| recorded.get(n.checked_sub(1)? as usize))
+            else {
+                continue;
+            };
+            let place = shown.iter().position(|r| r == range).map_or(shown.len() + 1, |i| i + 1);
+            *n = serde_json::json!(place);
+        }
+    }
+    root.to_string()
+}
+
 pub fn prompt_of(req: &LlmRequest) -> String {
     req.contents
         .iter()
@@ -178,6 +212,10 @@ pub struct RecordedAnswer {
     /// The call's wall time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elapsed_ms: Option<u64>,
+    /// The time ranges of the chunks an answer prompt showed, by number, so a replay cites
+    /// the same chunks when a retrieval breaks ties between equal captions differently.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shown: Vec<(u64, u64)>,
 }
 
 /// A live S17 run: what was asked of the model and what it answered, and the result.
@@ -259,13 +297,20 @@ impl Llm for Recorder {
         }
         let mut recording = self.recording.lock().unwrap();
         if let Some(question) = expansion_of(&prompt) {
-            recording.expansions.push(RecordedAnswer { question, text, usage, elapsed_ms });
+            recording.expansions.push(RecordedAnswer {
+                question,
+                text,
+                usage,
+                elapsed_ms,
+                shown: Vec::new(),
+            });
         } else if let Some((from_ms, to_ms)) =
             caption_range(&prompt).filter(|_| !prompt.contains("Question:"))
         {
             recording.captions.push(RecordedCaption { from_ms, to_ms, text, usage, elapsed_ms });
         } else if let Some(question) = question_of(&prompt) {
-            recording.answers.push(RecordedAnswer { question, text, usage, elapsed_ms });
+            let shown = shown_of(&prompt);
+            recording.answers.push(RecordedAnswer { question, text, usage, elapsed_ms, shown });
         }
         drop(recording);
         Ok(Box::pin(futures::stream::iter(std::mem::take(&mut responses))))
@@ -291,6 +336,11 @@ impl Replay {
     pub fn load(name: &str) -> Self {
         let text = std::fs::read_to_string(recording_path(name)).unwrap();
         Self { recording: serde_json::from_str(&text).unwrap(), locality: DataLocality::Remote }
+    }
+
+    /// The recording of a model on this machine.
+    pub fn on_device(name: &str) -> Self {
+        Self { locality: DataLocality::InProcess, ..Self::load(name) }
     }
 }
 
@@ -322,7 +372,11 @@ impl Llm for Replay {
                 .iter()
                 .find(|a| a.question == question)
                 .unwrap_or_else(|| panic!("no recorded answer to {question:?}"));
-            return Ok(respond(&found.text, found.usage.clone()));
+            if found.shown.is_empty() {
+                return Ok(respond(&found.text, found.usage.clone()));
+            }
+            let text = renumbered(&found.text, &found.shown, &shown_of(&prompt));
+            return Ok(respond(&text, found.usage.clone()));
         }
         let (from, to) =
             caption_range(&prompt).unwrap_or_else(|| panic!("an unexpected prompt: {prompt}"));
@@ -335,6 +389,11 @@ impl Llm for Replay {
             .filter(|c| overlap(c) > 0)
             .unwrap_or_else(|| panic!("no recorded caption for {from}–{to} ms"));
         Ok(respond(&found.text, found.usage.clone()))
+    }
+
+    // A model on this machine bounds its calls at zero, as mistral.rs does.
+    fn max_cost_micro_usd(&self, _req: &LlmRequest) -> Option<u64> {
+        matches!(self.locality, DataLocality::InProcess | DataLocality::Loopback).then_some(0)
     }
 
     fn data_locality(&self) -> DataLocality {
