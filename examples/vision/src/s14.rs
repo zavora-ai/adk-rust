@@ -320,7 +320,8 @@ impl Copilot {
                 return self.call(plan, "computer_use_preview", json!({ "action": action }));
             }
             many => {
-                let actions: Vec<Value> = many.iter().map(|i| plan.steps[*i].action.clone()).collect();
+                let actions: Vec<Value> =
+                    many.iter().map(|i| plan.steps[*i].action.clone()).collect();
                 plan.batch = many.to_vec();
                 return self.call(plan, "computer_use_preview", json!({ "actions": actions }));
             }
@@ -445,7 +446,9 @@ impl Llm for Copilot {
             "computer_use_preview" => {
                 match answer["previews"].as_array() {
                     Some(previews) => {
-                        for (i, preview) in std::mem::take(&mut plan.batch).into_iter().zip(previews) {
+                        for (i, preview) in
+                            std::mem::take(&mut plan.batch).into_iter().zip(previews)
+                        {
                             plan.steps[i].preview = Some(preview.clone());
                         }
                     }
