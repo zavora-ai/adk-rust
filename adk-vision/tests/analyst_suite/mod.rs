@@ -163,6 +163,9 @@ pub struct RecordedCaption {
     pub text: String,
     /// The usage the provider reported, thinking and cache tokens included.
     pub usage: UsageMetadata,
+    /// The call's wall time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -172,6 +175,9 @@ pub struct RecordedAnswer {
     pub text: String,
     /// The usage the provider reported, thinking and cache tokens included.
     pub usage: UsageMetadata,
+    /// The call's wall time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
 }
 
 /// A live S17 run: what was asked of the model and what it answered, and the result.
@@ -193,6 +199,18 @@ pub struct Recording {
     pub answers: Vec<RecordedAnswer>,
     pub scored: Vec<Scored>,
     pub cost_per_hour_micro_usd: Option<u64>,
+    /// Where a model on this machine ran: `cpu` or `metal`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    /// How long the model took to load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_ms: Option<u64>,
+    /// How much of the clip a bounded run indexed, from its start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexed_ms: Option<u64>,
+    /// The indexing's wall time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_wall_ms: Option<u64>,
 }
 
 pub fn recording_path(name: &str) -> PathBuf {
@@ -219,8 +237,10 @@ impl Llm for Recorder {
     ) -> adk_core::Result<LlmResponseStream> {
         use futures::StreamExt;
         let prompt = prompt_of(&req);
+        let started = std::time::Instant::now();
         let mut responses: Vec<adk_core::Result<LlmResponse>> =
             self.inner.generate_content(req, stream).await?.collect().await;
+        let elapsed_ms = Some(started.elapsed().as_millis() as u64);
         let mut text = String::new();
         let mut usage = UsageMetadata::default();
         for response in responses.iter().flatten() {
@@ -239,13 +259,13 @@ impl Llm for Recorder {
         }
         let mut recording = self.recording.lock().unwrap();
         if let Some(question) = expansion_of(&prompt) {
-            recording.expansions.push(RecordedAnswer { question, text, usage });
+            recording.expansions.push(RecordedAnswer { question, text, usage, elapsed_ms });
         } else if let Some((from_ms, to_ms)) =
             caption_range(&prompt).filter(|_| !prompt.contains("Question:"))
         {
-            recording.captions.push(RecordedCaption { from_ms, to_ms, text, usage });
+            recording.captions.push(RecordedCaption { from_ms, to_ms, text, usage, elapsed_ms });
         } else if let Some(question) = question_of(&prompt) {
-            recording.answers.push(RecordedAnswer { question, text, usage });
+            recording.answers.push(RecordedAnswer { question, text, usage, elapsed_ms });
         }
         drop(recording);
         Ok(Box::pin(futures::stream::iter(std::mem::take(&mut responses))))

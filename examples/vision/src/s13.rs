@@ -305,8 +305,18 @@ pub async fn run() -> Result<Checks> {
         .egress_gate(gate(&recorder))
         .build()?;
     let (cx, budget) = metered();
+    let transcript = read_json(&fixtures().join("recorded/qwen3-vl-4b/s13-aisle-20min.json"))?;
+    let qwen_how = if transcript["scripted"].as_bool() == Some(true) {
+        "on a scripted transcript".to_string()
+    } else {
+        format!(
+            "on its live recording ({}, {})",
+            transcript["device"].as_str().unwrap_or("on the device"),
+            transcript["recorded"].as_str().unwrap_or_default()
+        )
+    };
     checks.note(format!(
-        "Gemini `{model}` {}; Qwen3-VL-4B on a scripted transcript",
+        "Gemini `{model}` {}; Qwen3-VL-4B {qwen_how}",
         if live.is_some() {
             "live through the recording proxy"
         } else {
@@ -368,7 +378,6 @@ pub async fn run() -> Result<Checks> {
     }
 
     // Qwen3-VL over sampled frames, after a visibility pass, on the device.
-    let transcript = read_json(&fixtures().join("recorded/qwen3-vl-4b/s13-aisle-20min.json"))?;
     let qwen = Arc::new(Transcript {
         exchanges: transcript["exchanges"].as_array().cloned().unwrap_or_default(),
         next: Mutex::new(0),

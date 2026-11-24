@@ -11,6 +11,20 @@
 //! ANTHROPIC_API_KEY=... ADK_VISION_RECORD_DIR=tests/fixtures/video/recorded \
 //!     cargo test -p adk-vision --features analyst --test analyst_live_tests -- --ignored --nocapture
 //! ```
+//!
+//! With `mistralrs` too, `s17_captioned_on_the_device_by_qwen3_vl` captions and answers on
+//! this machine with Qwen3-VL (4B by default, `ADK_VISION_QWEN` for another) on the device
+//! `ADK_VISION_DEVICE` names (`cpu`, `metal`, or automatic): no frame reaches the egress gate
+//! and the cost is zero. `ADK_VISION_ANALYST_CHUNKS` bounds it to the hour's first chunks,
+//! and only the questions whose events start in them are asked. Its recording is named
+//! `analyst-warehouse-<minutes>min.<model>.json`.
+//!
+//! ```text
+//! HF_HUB_CACHE=/path/to/models ADK_VISION_DEVICE=cpu ADK_VISION_ANALYST_CHUNKS=20 \
+//!     ADK_VISION_RECORD_DIR=tests/fixtures/video/recorded \
+//!     cargo test -p adk-vision --features analyst,mistralrs --test analyst_live_tests \
+//!     s17_captioned_on_the_device_by_qwen3_vl -- --ignored --nocapture
+//! ```
 
 mod analyst_suite;
 
@@ -174,4 +188,174 @@ async fn s17_an_hour_of_warehouse_video_answered_from_captions() {
     assert_eq!(store.count(COLLECTION, &scope, None).await.unwrap(), 0);
     assert!(setup.captions.export_user("site-7", "ops").await.unwrap().is_empty());
     assert!(hits >= 8, "{hits}/10");
+}
+
+#[cfg(feature = "mistralrs")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "loads Qwen3-VL (4B: 8.88 GB) through the fetcher; see the module docs"]
+async fn s17_captioned_on_the_device_by_qwen3_vl() {
+    use adk_mistralrs::{Device, DeviceConfig, MistralRsConfig};
+    use adk_vision::mistralrs::{MAX_PIXELS, QWEN3_VL_4B};
+    use adk_vision::{
+        FetchConfig, InMemoryAcceptanceStore, InputLimits, ManifestSet, ModelFetcher,
+        Normalized1000,
+    };
+    use futures::StreamExt;
+
+    let id = std::env::var("ADK_VISION_QWEN").unwrap_or_else(|_| QWEN3_VL_4B.into());
+    let fetcher =
+        ModelFetcher::new(FetchConfig::from_env(), Arc::new(InMemoryAcceptanceStore::new()));
+    let model = fetcher.fetch(ManifestSet::builtin().unwrap().get(&id).unwrap()).await.unwrap();
+    let device = std::env::var("ADK_VISION_DEVICE").unwrap_or_else(|_| "auto".into());
+    let config = MistralRsConfig {
+        device: DeviceConfig {
+            device: match device.as_str() {
+                "cpu" => Device::Cpu,
+                "metal" => Device::Metal,
+                _ => Device::Auto,
+            },
+            ..DeviceConfig::default()
+        },
+        ..MistralRsConfig::default()
+    };
+    let loading = std::time::Instant::now();
+    let qwen = LlmDescriber::mistralrs(&model, config).await.unwrap();
+    let load_ms = loading.elapsed().as_millis() as u64;
+    println!("loaded {id} on {device} in {load_ms} ms");
+
+    let hour = WarehouseClip::new(WarehouseSpec::default());
+    let chunks = std::env::var("ADK_VISION_ANALYST_CHUNKS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(hour.spec().duration_ms / CHUNK_MS);
+    let indexed_ms = (chunks * CHUNK_MS).min(hour.spec().duration_ms);
+    let recorder = Arc::new(Recorder {
+        inner: Arc::clone(qwen.model()),
+        recording: Mutex::new(Recording {
+            model: id.clone(),
+            recorded_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            duration_ms: hour.spec().duration_ms,
+            sample_every_ms: EVERY_MS,
+            chunk_ms: CHUNK_MS,
+            frames_per_chunk: FRAMES_PER_CHUNK,
+            top_k: TOP_K,
+            device: Some(device.clone()),
+            load_ms: Some(load_ms),
+            indexed_ms: Some(indexed_ms),
+            ..Recording::default()
+        }),
+    });
+    // The describer `LlmDescriber::mistralrs` loaded, over the recorder.
+    let local = LlmDescriber::local(recorder.clone())
+        .unwrap()
+        .with_id(id.clone())
+        .with_adapter(Arc::new(Normalized1000::qwen3_vl(&id)))
+        .with_limits(InputLimits::unlimited().with_max_pixels(MAX_PIXELS));
+    let setup = Setup::new().await;
+    let runtime = Arc::new(
+        adk_vision::VisionRuntime::builder()
+            .video_analyzer(Arc::new(FramesAnalyzer::local(&local)))
+            .egress_gate(setup.gate(EgressPolicy::public_only()))
+            .build()
+            .unwrap(),
+    );
+    let store: Arc<dyn VectorStore> = Arc::new(InMemoryVectorStore::new());
+    let analyst = VideoAnalyst::builder(
+        runtime,
+        store.clone(),
+        Arc::new(WordHashEmbedding::default()),
+        COLLECTION,
+    )
+    .chunking(Chunking::fixed(CHUNK_MS))
+    .frames_per_chunk(FRAMES_PER_CHUNK)
+    .captions(setup.captions.clone())
+    .graph(setup.graph.clone())
+    .keyframes(setup.artifacts.clone(), FramePrivacy::new(Arc::new(NoRedaction)))
+    .answerer(&local)
+    .open()
+    .await
+    .unwrap();
+
+    let scope = Scope::new("site-7").unwrap();
+    let source = ClipSource::new("warehouse-cam-3", MediaScope::new("site-7", "ops", "s1"))
+        .starting_at(hour.spec().started_at)
+        .with_run("s17-local");
+    let frames = hour.frames(EVERY_MS).take((indexed_ms / EVERY_MS) as usize).boxed();
+    let started = std::time::Instant::now();
+    let indexed = analyst
+        .index(&setup.cx, &scope, &source, frames, Sampling::at(1_000.0 / EVERY_MS as f32))
+        .await
+        .unwrap()
+        .value;
+    let index_wall_ms = started.elapsed().as_millis() as u64;
+    println!(
+        "indexed {} chunks ({} of {} min) on {device} in {:.0} s, {:.1} s a chunk: {} frames in {} requests, {:?} input and {:?} output tokens, cost {:?} µUSD",
+        indexed.chunks.len(),
+        indexed.duration_ms / 60_000,
+        hour.spec().duration_ms / 60_000,
+        index_wall_ms as f64 / 1_000.0,
+        index_wall_ms as f64 / 1_000.0 / indexed.chunks.len().max(1) as f64,
+        indexed.usage.frames,
+        indexed.usage.requests,
+        indexed.usage.input_tokens,
+        indexed.usage.output_tokens,
+        indexed.usage.cost_micro_usd,
+    );
+    assert!(setup.egress.released().is_empty(), "no frame reached the egress gate");
+    assert_eq!(indexed.usage.cost_micro_usd, Some(0));
+    let asked: Vec<_> = hour.events().iter().filter(|e| e.at_ms < indexed_ms).collect();
+    for event in &asked {
+        let chunk = indexed.chunks.iter().find(|c| c.contains(event.at_ms)).unwrap();
+        println!(
+            "  truth {:>8} {:<20} chunk {}: {}",
+            event.at_ms,
+            event.id,
+            chunk.time_range(),
+            chunk.caption
+        );
+    }
+
+    let mut scored = Vec::new();
+    for event in &asked {
+        let started = std::time::Instant::now();
+        let answer = analyst
+            .ask(&setup.cx, &scope, &event.question, &AnalystQuery::top(TOP_K))
+            .await
+            .unwrap();
+        assert_eq!(answer.usage.cost_micro_usd.unwrap_or(0), 0);
+        let s = score(event, &answer);
+        println!(
+            "{} {:<20} at {:>8} ms cited {:?} supported {:?} in {:.0} s: {} [searched with: {}]",
+            if s.hit { "HIT " } else { "MISS" },
+            s.event,
+            s.at_ms,
+            s.cited,
+            s.supported,
+            started.elapsed().as_secs_f32(),
+            s.answer,
+            answer.expanded.as_deref().unwrap_or_default()
+        );
+        scored.push(s);
+    }
+    let hits = scored.iter().filter(|s| s.hit).count();
+    println!(
+        "{hits}/{} answers cite the chunk of their event; nothing left the machine",
+        asked.len()
+    );
+    assert!(setup.egress.released().is_empty(), "nothing left the machine");
+
+    let mut recording = recorder.recording.lock().unwrap().clone();
+    recording.width = hour.spec().width;
+    recording.height = hour.spec().height;
+    recording.scored = scored;
+    recording.cost_per_hour_micro_usd = indexed.cost_per_hour_micro_usd();
+    recording.index_wall_ms = Some(index_wall_ms);
+    if let Ok(dir) = std::env::var("ADK_VISION_RECORD_DIR") {
+        let name = format!("analyst-warehouse-{}min.{id}.json", indexed_ms / 60_000);
+        let path = std::path::Path::new(&dir).join(&name);
+        std::fs::write(&path, serde_json::to_string_pretty(&recording).unwrap() + "\n").unwrap();
+        println!("recorded to {}", path.display());
+    }
+    let erasure = analyst.erase_source(&setup.cx, &scope, "warehouse-cam-3").await.unwrap();
+    assert_eq!(erasure.chunks, indexed.chunks.len() as u64);
 }
