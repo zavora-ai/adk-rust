@@ -646,7 +646,7 @@ impl HarnessManifest {
             // A section that does not fit is cut; the smaller ones ranked after it still go in.
             if let Some(text) = forms.iter().find(|text| text.len() <= room) {
                 room -= text.len();
-                kept.push((name, text));
+                kept.push((*name, text));
             }
         }
         let mut out = header;
