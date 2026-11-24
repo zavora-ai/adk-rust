@@ -347,9 +347,10 @@ async fn spike_home_and_probe() {
     let message =
         driver.wait("//input[@placeholder='Message your agents']", Duration::from_secs(10)).await;
     driver.type_into(&message, "Write the October invoice\u{E007}").await;
+    // The card's heading draws a "?" after a question that has no closing punctuation.
     let allow = driver
         .wait(
-            "//main//article[.//h3[normalize-space()='Write file invoice.txt']]\
+            "//main//article[.//h3[starts-with(normalize-space(), 'Write file invoice.txt')]]\
              //button[normalize-space()='Allow once']",
             Duration::from_secs(30),
         )
