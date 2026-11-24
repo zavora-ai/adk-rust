@@ -200,3 +200,7 @@ export const LOOK_AT_THE_IMAGE_ON_A_SCREEN = "To decide, look at the image on a 
 export const SHOW_THE_IMAGE_IN_THE_HOME = "This screen can't show the image. Look at it in the home before you decide.";
 export const HELD_AGAIN_WITH_THE_NEW_IMAGE = "held again with the new image";
 export const OPEN_THE_SOURCE_IMAGE = "Open the source image";
+export const ALLOW_THIS_PLAN = "Allow this plan";
+export const SCREEN_PLAN_DETAIL = "One answer runs every step once, in order. Each step is checked against this preview first; a step whose target moved is asked again.";
+export const LOOK_AT_THE_PLAN_IN_THE_HOME = "This screen can't show the whole plan. Look at it in the home before you allow it.";
+export const STOP_ALL_CLOSED_THE_PLAN = "Stop all closed this screen plan before anyone answered it. Preview the actions again for a fresh card.";

@@ -21,6 +21,7 @@ use crate::agents::{
     AgentChoices, AgentDetail, AgentDraft, AgentPreview, AgentPreviewRequest, EndedWork,
 };
 use crate::error::{Result, SurfaceError};
+use crate::model::ScreenPlanView;
 use crate::origin::Caller;
 
 /// An agent's state as a source reports it, before projection into an
@@ -61,6 +62,38 @@ pub struct SpendToday {
 pub struct AlwaysAllowOffer {
     /// The button's words, such as "Always allow for this folder".
     pub label: String,
+}
+
+/// A held call that is a step of a previewed screen plan, as a source tells the engine
+/// (spec 3.7 Q8): the plan's first step carries the plan's one card, and the steps held with it
+/// wait behind that card.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::{HeldPlan, ScreenPlanView};
+///
+/// let held = HeldPlan {
+///     view: ScreenPlanView { digest: "sha256:ab".into(), window: "app.forms".into(), steps: Vec::new() },
+///     text: "0 desktop action(s) in app.forms".into(),
+///     step: 0,
+///     open: true,
+///     fingerprints: Vec::new(),
+/// };
+/// assert!(held.open);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeldPlan {
+    /// The plan as its card shows it.
+    pub view: ScreenPlanView,
+    /// The plan as text: the window, then each step's operation, target and proposed action.
+    pub text: String,
+    /// Which step the held call is, from 0.
+    pub step: usize,
+    /// No one decided the plan yet: its first step's card takes one answer for every step.
+    pub open: bool,
+    /// The fingerprint each step's call is held under, in order.
+    pub fingerprints: Vec<String>,
 }
 
 /// What became of a message a running turn was offered (spec 3.3 §6 "steer").
@@ -254,6 +287,51 @@ pub trait Source: Send + Sync {
     ) -> Result<crate::evidence::ImageChanged> {
         let _ = (caller, request, version, change);
         Err(SurfaceError::unsupported("changing an image before it leaves"))
+    }
+
+    /// The screen plan `request`'s held call is a step of, when the source keeps it (spec 3.7
+    /// Q8). `None`, the default: every call is decided on a card of its own.
+    async fn screen_plan(&self, request: &ApprovalRequest) -> Option<HeldPlan> {
+        let _ = request;
+        None
+    }
+
+    /// Decides the screen plan whose first step `request` holds, as `caller` answered its card
+    /// — every step allowed, or denied with `reason` — and records the decision on `request` at
+    /// `version` (spec 3.7 Q8, S-I2): an approval runs each step once, in order, with the plan's
+    /// binding, and a step whose target moved is held again for a card of its own.
+    ///
+    /// # Errors
+    ///
+    /// `surface.unsupported` by default; a conflict when the plan or the request changed since
+    /// the card was shown.
+    async fn decide_screen_plan(
+        &self,
+        caller: &Caller,
+        request: &ApprovalRequest,
+        version: u64,
+        digest: &str,
+        allow: bool,
+        reason: Option<String>,
+    ) -> Result<ApprovalRequest> {
+        let _ = (caller, request, version, digest, allow, reason);
+        Err(SurfaceError::unsupported("deciding a screen plan"))
+    }
+
+    /// Closes the open card of `plan`, whose first step `request` holds, for `why`: the plan
+    /// ends and every step of it still held is cancelled, so none runs (spec 3.7 Q8, V-I17).
+    ///
+    /// # Errors
+    ///
+    /// `surface.unsupported` by default, or the source's error.
+    async fn close_screen_plan(
+        &self,
+        request: &ApprovalRequest,
+        plan: &HeldPlan,
+        why: &str,
+    ) -> Result<()> {
+        let _ = (request, plan, why);
+        Err(SurfaceError::unsupported("closing a screen plan"))
     }
 
     /// When the run that waited on `request` ended while the request is still open, so the

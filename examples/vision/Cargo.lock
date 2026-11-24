@@ -613,6 +613,7 @@ dependencies = [
  "image",
  "oar-ocr",
  "ort",
+ "pretty-hex",
  "reqwest",
  "retina",
  "serde",

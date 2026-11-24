@@ -2,29 +2,30 @@
 @import "@fontsource-variable/jetbrains-mono";
 
 :root {
-  --bg: #ffffff;
+  --bg: #fafaf9;
   --card: #ffffff;
-  --raised: #f6f7f9;
-  --border: #e6e8ec;
-  --text: #0f172a;
-  --text-2: #475569;
-  --label: #64748b;
+  --raised: #f4f4f1;
+  --border: #e7e6e2;
+  --text: #18181b;
+  --text-2: #4b4b53;
+  --label: #6b6b74;
   --brand: #f74c00;
-  --accent: #c03a00;
+  --accent: #c2410c;
   --mono: "JetBrains Mono Variable", ui-monospace, monospace;
   color-scheme: light dark;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0a1628;
-    --card: #15233b;
-    --raised: #1c2b45;
-    --border: #2a3d5c;
-    --text: #f1f5f9;
-    --text-2: #d5dee8;
-    --label: #a7b4c6;
-    --accent: #ff9c78;
+    --bg: #0e0f11;
+    --card: #16171a;
+    --raised: #1e1f23;
+    --border: #26272c;
+    --text: #ededef;
+    --text-2: #b5b5bd;
+    --label: #8e8e97;
+    --brand: #ff6a1f;
+    --accent: #ff8a4c;
   }
 }
 

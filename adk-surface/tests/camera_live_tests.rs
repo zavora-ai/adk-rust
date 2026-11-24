@@ -2,9 +2,9 @@
 //! `vision-camera`): what the surface shows is what each camera's `StreamPipeline` measured —
 //! the frame with its tracked regions, the governor's rate, quota and steps, the watch
 //! conditions and their zones — and a person's acts reach the pipeline: a zone edited on the
-//! surface changes what fires, switching off drops frames before the pipeline sees them, Stop
-//! all pauses every camera at the hub's gate, and a card keeps the shown frame with everyone in
-//! it covered.
+//! surface changes what fires, switching off closes the source, Stop all pauses every camera at
+//! the hub's gate and closes each stream camera's source until Resume all, and a card keeps the
+//! shown frame with everyone in it covered.
 
 #![cfg(all(feature = "web", feature = "vision-camera"))]
 
@@ -493,8 +493,8 @@ async fn switching_off_drops_frames_on_the_server() {
     until("frames again", async || home.counts().observed > after.observed).await;
 }
 
-/// V-I17: Stop all pauses every camera at the hub's gate and in the pipeline; Resume all opens
-/// it again.
+/// V-I17: Stop all pauses every camera at the hub's gate and closes its source; Resume all opens
+/// both again.
 #[tokio::test(flavor = "multi_thread")]
 async fn stop_all_pauses_every_camera() {
     let home = home(|camera| camera).await;
@@ -503,8 +503,8 @@ async fn stop_all_pauses_every_camera() {
     home.engine.execute(&caller(), Command::StopAll { reason: None }).await.unwrap();
     assert!(home.cameras.is_frozen());
     let before = home.counts();
-    home.belt(start() + chrono::Duration::seconds(1), 120, 3, chrono::Duration::milliseconds(200))
-        .await;
+    assert!(!home.feed.push_frame(frame(120, false), start()), "nothing reads the source");
+    tokio::time::sleep(StdDuration::from_millis(300)).await;
     assert_eq!(home.counts().observed, before.observed, "no frame is looked at");
     let view = home.engine.camera_view(&caller(), "line-2").await.unwrap();
     assert_eq!(view.state, CameraState::Frozen);
@@ -823,6 +823,76 @@ async fn switching_off_closes_the_source_and_on_opens_it_again() {
     // Stopping the stream closes it for good.
     home.engine.stop_camera(&caller(), "line-2").await.unwrap();
     until("the source closed", async || open.load(Ordering::SeqCst) == 0).await;
+}
+
+/// Stop all closes each stream camera's source as off does — closed before Stop all answers,
+/// recorded as `vision.source.stopped` with reason `stopAll` — and Resume all opens again each
+/// one that is on (`resumeAll`); a camera a person switched off stays closed through Resume all
+/// (spec 3.7 V-I17).
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_all_closes_each_stream_source_and_resume_all_reopens_it() {
+    let (inner, feed) = SurfaceCameraSource::new(FrameSourceId("line-2".into()));
+    feed.switch(true);
+    let open = Arc::new(AtomicU32::new(0));
+    let opened = Arc::new(AtomicU32::new(0));
+    let source = Counted {
+        id: FrameSourceId("line-2".into()),
+        inner,
+        open: Arc::clone(&open),
+        opened: Arc::clone(&opened),
+    };
+    let camera = LiveCamera::stream(facts(), Arc::new(source), Arc::new(NoRedaction))
+        .detector(runtime(), DetectQuery::Classes(vec!["part".into()]))
+        .sampling(Sampling { fps: 5.0, max_long_edge: None });
+    let home = home_with(camera, feed).await;
+    home.belt(start(), 100, 2, chrono::Duration::milliseconds(200)).await;
+    home.settle().await;
+    assert_eq!((open.load(Ordering::SeqCst), opened.load(Ordering::SeqCst)), (1, 1));
+
+    home.engine.execute(&caller(), Command::StopAll { reason: None }).await.unwrap();
+    assert_eq!(open.load(Ordering::SeqCst), 0, "closed before Stop all answered");
+    assert_eq!(home.live.is_capturing("line-2"), Some(false));
+    assert!(!home.feed.push_frame(frame(120, false), start()), "nothing reads the source");
+    tokio::time::sleep(StdDuration::from_millis(500)).await;
+    assert_eq!(opened.load(Ordering::SeqCst), 1, "nothing opens it while everything is stopped");
+    assert_eq!(
+        reasons(&home, adk_vision::stream::VISION_SOURCE_STOPPED),
+        [serde_json::json!("stopAll")]
+    );
+
+    home.engine.execute(&caller(), Command::ResumeAll).await.unwrap();
+    until("the source opened again", async || open.load(Ordering::SeqCst) == 1).await;
+    assert_eq!(opened.load(Ordering::SeqCst), 2);
+    let before = home.counts();
+    home.belt(start() + chrono::Duration::seconds(2), 140, 2, chrono::Duration::milliseconds(200))
+        .await;
+    until("frames after Resume all", async || home.counts().observed > before.observed).await;
+    assert_eq!(
+        reasons(&home, adk_vision::stream::VISION_SOURCE_STARTED)
+            .into_iter()
+            .filter(|reason| !reason.is_null())
+            .collect::<Vec<_>>(),
+        [serde_json::json!("resumeAll")]
+    );
+
+    // Switched off by a person, the camera stays closed through Stop all and Resume all.
+    home.engine.switch_camera(&caller(), "line-2", false).await.unwrap();
+    home.engine.execute(&caller(), Command::StopAll { reason: None }).await.unwrap();
+    home.engine.execute(&caller(), Command::ResumeAll).await.unwrap();
+    tokio::time::sleep(StdDuration::from_millis(500)).await;
+    assert_eq!(open.load(Ordering::SeqCst), 0, "Resume all opens only a camera that is on");
+    assert_eq!(opened.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        reasons(&home, adk_vision::stream::VISION_SOURCE_STOPPED),
+        [serde_json::json!("stopAll"), serde_json::json!("switchedOff")]
+    );
+    home.engine.switch_camera(&caller(), "line-2", true).await.unwrap();
+    until("the source opened by its switch", async || open.load(Ordering::SeqCst) == 1).await;
+    let started: Vec<_> = reasons(&home, adk_vision::stream::VISION_SOURCE_STARTED)
+        .into_iter()
+        .filter(|reason| !reason.is_null())
+        .collect();
+    assert_eq!(started, [serde_json::json!("resumeAll"), serde_json::json!("switchedOn")]);
 }
 
 fn api(engine: SurfaceEngine, device: bool) -> axum::Router {

@@ -244,10 +244,14 @@
 # setup code, the API contract with its generated types, and the doctests.
 9 adk-surface website doc
 # The live camera surface on the frame pipeline (spec 3.7 §7.13, §8.2): `PipelineCameras`, a
-# stream camera switched off closing its source — ffmpeg's test pattern through `DeviceSource`,
-# skipping, saying so, without ffmpeg — the web home's own camera fed through the frames route,
-# and the doctests. The real camera run is ignored.
+# stream camera switched off or paused by Stop all closing its source — ffmpeg's test pattern
+# through `DeviceSource`, skipping, saying so, without ffmpeg — the web home's own camera fed
+# through the frames route, and the doctests. The real camera run is ignored.
 9 adk-surface web,vision-camera doc
+# Screen plans on decision cards (spec 3.7 Q8): a parked plan's one card over a harness with the
+# computer-use pack — approve, deny, a deviation held again on a fresh card, a truncated plan
+# approved once shown in full, Stop all closing the card.
+9 adk-surface computer-use doc
 # Screen actions (spec 3.3 §2 item 7): the registry, the policy, the gate and snooze; with
 # every surface, the routes, the API contract, `/snooze`, a spoken snooze, the Telegram card
 # and the "One verb, three origins" scenario, whose tests need `web`, `tui` and `voice`

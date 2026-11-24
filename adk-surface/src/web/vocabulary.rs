@@ -215,6 +215,10 @@ const WORDS: &[(&str, &str)] = listed![
     SHOW_THE_IMAGE_IN_THE_HOME,
     HELD_AGAIN_WITH_THE_NEW_IMAGE,
     OPEN_THE_SOURCE_IMAGE,
+    ALLOW_THIS_PLAN,
+    SCREEN_PLAN_DETAIL,
+    LOOK_AT_THE_PLAN_IN_THE_HOME,
+    STOP_ALL_CLOSED_THE_PLAN,
 ];
 
 /// The words of [`words`](crate::words) as a TypeScript module, one exported constant each

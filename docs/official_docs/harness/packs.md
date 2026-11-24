@@ -189,16 +189,36 @@ A step the plan's approval does not cover is held on its own and needs a fresh a
 | The person denies the plan | Every step is refused with the person's message; the turn's remaining calls are denied |
 
 A prompter that shows one call at a time keeps the default `prompt_screen_plan`, which returns
-`None`: each step is then asked about on its own. A surface without a live prompter parks each
-held step, as it parks any held call. A plan is never a standing rule, a `tool_approvals`
-entry or a hook decision.
+`None`: each step is then asked about on its own. A plan is never a standing rule, a
+`tool_approvals` entry or a hook decision.
+
+#### On a surface that parks held calls
+
+Without a live prompter, a held step parks in the approval inbox. `Harness::held_screen_plan`
+tells a surface which plan a parked `computer_use_execute` is a step of — by its fingerprint,
+so only a call with exactly the previewed arguments, agent and tool matches — and adk-surface
+(feature `computer-use`) shows the plan's first step as one card for the whole plan (see
+[Screen plans](../surfaces/index.md#screen-plans)).
+
+| Step | What `Harness::decide_held_screen_plan` does |
+|---|---|
+| 1 | Checks the plan is still the one the card showed and that no one decided it |
+| 2 | Settles the plan, then files the decision of each later step in the approval store under that step's fingerprint: an approval with the step's own binding, or the denial; the open inbox requests of later steps already held are withdrawn |
+| 3 | Records `harness.computer_use.plan_decided` with `approvalId` and the person as the actor |
+| 4 | Returns the decision for the first step: an edit that adds `plan: { digest, step: 1 }`, or the denial. The surface records it on the first step's request; when that fails, `revert_held_screen_plan` sets the plan back and takes the filed decisions back |
+
+Each step still runs only in order and only after its fresh preview finds the target the card
+showed. When the plan ends — a deviation, a failed or unverified step, a step out of order — or
+the same actions are previewed again, the decisions filed for its remaining steps are taken
+back, so each remaining step is held for a fresh card. `Harness::end_held_screen_plan` ends a
+plan whose card a surface closes, as **Stop all** does.
 
 ### Audit records
 
 | Record | Fields (`ext`) | When |
 |---|---|---|
 | `harness.computer_use.previewed` | `functionCallId`, `actionDigest`, `policyDigest`, `route`, `actionClass`, `requestedMode`; `planDigest`, `step` for a plan's step | After each preview |
-| `harness.computer_use.plan_decided` | `planDigest`, `window`, `steps` (action digests), `functionCallId`, `answer` (`approve`, `deny`) | When a person answers a screen plan's card |
+| `harness.computer_use.plan_decided` | `planDigest`, `window`, `steps` (action digests), `functionCallId`, `answer` (`approve`, `deny`); `approvalId` for a card a surface parked, whose actor is the person | When a person answers a screen plan's card |
 | `harness.computer_use.executed` | `functionCallId`, `actionDigest`, `policyDigest`, `receiptId`, `status`, `verified`, `committed`, and `planDigest`, `step` for a step run under a plan; or `refusal` (`previewMismatch`, `planDeviation` with `deviation`), `reason` | After the graph ran, or at a refusal |
 
 ### Known limits

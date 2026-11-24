@@ -260,6 +260,6 @@ impl PromptingConfirmationHandler {
     }
 }
 
-fn denied_message(plan: &PreviewedPlan) -> String {
+pub(super) fn denied_message(plan: &PreviewedPlan) -> String {
     format!("the person denied screen plan {}", plan.digest)
 }

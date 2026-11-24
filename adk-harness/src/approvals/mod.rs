@@ -3,6 +3,8 @@
 
 mod batch;
 mod changeset;
+#[cfg(all(feature = "computer-use", feature = "runner"))]
+mod held_plan;
 pub mod matcher;
 mod prompt;
 mod rule;
@@ -14,6 +16,8 @@ pub use changeset::{
     CHANGE_SET_MAX_BYTES, ChangeSet, ChangeSetAnswer, ChangeSetCall, ChangeSetFile,
     ChangeSetPrompt, RenderedChangeSet,
 };
+#[cfg(all(feature = "computer-use", feature = "runner"))]
+pub use held_plan::{HeldPlanState, HeldScreenPlan};
 pub(crate) use prompt::rule_audit_fields;
 pub use prompt::{
     ApprovalPrompt, ApprovalPrompter, DEFAULT_PROMPTS_PER_TURN, PromptAnswer,

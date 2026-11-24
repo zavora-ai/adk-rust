@@ -1052,6 +1052,83 @@ impl Source for LocalSource {
         Ok(crate::evidence::ImageChanged { from: image.digest.clone(), to, width, height })
     }
 
+    #[cfg(feature = "computer-use")]
+    async fn screen_plan(&self, request: &ApprovalRequest) -> Option<crate::source::HeldPlan> {
+        let held = self.harness.as_ref()?.held_screen_plan(request)?;
+        Some(held_plan(&held))
+    }
+
+    #[cfg(feature = "computer-use")]
+    async fn decide_screen_plan(
+        &self,
+        caller: &Caller,
+        request: &ApprovalRequest,
+        version: u64,
+        digest: &str,
+        allow: bool,
+        reason: Option<String>,
+    ) -> Result<ApprovalRequest> {
+        let harness = self
+            .harness
+            .as_ref()
+            .ok_or_else(|| SurfaceError::unsupported("deciding a screen plan"))?;
+        let approvals = self.approvals()?;
+        let answer = if allow {
+            adk_harness::ScreenPlanAnswer::Approve
+        } else {
+            adk_harness::ScreenPlanAnswer::Deny {
+                message: reason.filter(|reason| !reason.trim().is_empty()),
+            }
+        };
+        let decision = harness
+            .decide_held_screen_plan(request, digest, answer, &caller.subject)
+            .await?
+            .with_groups(caller.groups.clone());
+        match approvals.decide(&request.id, version, decision).await {
+            Ok(updated) => Ok(updated),
+            Err(error) => {
+                // Another answer reached the call first: the plan waits for a decision again.
+                harness.revert_held_screen_plan(request, digest).await;
+                Err(error.into())
+            }
+        }
+    }
+
+    #[cfg(feature = "computer-use")]
+    async fn close_screen_plan(
+        &self,
+        request: &ApprovalRequest,
+        plan: &crate::source::HeldPlan,
+        why: &str,
+    ) -> Result<()> {
+        let harness = self
+            .harness
+            .as_ref()
+            .ok_or_else(|| SurfaceError::unsupported("closing a screen plan"))?;
+        harness.end_held_screen_plan(request, &plan.view.digest, why).await;
+        // Every step still held, the card's own call first: a cancel denies the call, so none
+        // runs on an answer given after the stop.
+        let approvals = self.approvals()?;
+        let mut query = InboxQuery::default()
+            .with_session(&request.scope)
+            .with_states([ApprovalState::Pending]);
+        loop {
+            let page = approvals.inbox(query.clone()).await?;
+            for item in
+                page.items.iter().filter(|item| plan.fingerprints.contains(&item.fingerprint))
+            {
+                if let Err(error) = approvals.cancel(&item.id, Some(why.to_string())).await {
+                    tracing::warn!(error = %error, decision.id = %item.id, "a screen plan step's request was not cancelled");
+                }
+            }
+            match page.next_cursor {
+                Some(cursor) => query = query.with_cursor(Some(cursor)),
+                None => break,
+            }
+        }
+        Ok(())
+    }
+
     async fn run_ended(&self, request: &ApprovalRequest) -> Option<DateTime<Utc>> {
         let (runs, run_id) = (self.runs.as_ref()?, request.run_id.as_ref()?);
         match runs.get(run_id).await {
@@ -1847,6 +1924,41 @@ impl LocalSource {
         let session = session_id.to_string();
         tokio::spawn(async move { drain(stream, &session).await });
         Ok(())
+    }
+}
+
+/// The plan a held call is a step of, as its card shows it (spec 3.7 Q8).
+#[cfg(feature = "computer-use")]
+fn held_plan(held: &adk_harness::HeldScreenPlan) -> crate::source::HeldPlan {
+    let plan = &held.plan;
+    let steps = plan
+        .steps
+        .iter()
+        .map(|step| crate::model::ScreenPlanStepView {
+            operation: step
+                .action
+                .get("operation")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("action")
+                .to_string(),
+            target: step.target.as_ref().and_then(|target| target.bounds.as_ref()).map(|bounds| {
+                let p = bounds.to_points();
+                format!("({:.0}, {:.0})-({:.0}, {:.0}) pt", p.x, p.y, p.x + p.width, p.y + p.height)
+            }),
+            screenshot: step.target.as_ref().and_then(|target| target.screenshot_hash.clone()),
+            proposed: step.proposed.clone(),
+        })
+        .collect();
+    crate::source::HeldPlan {
+        view: crate::model::ScreenPlanView {
+            digest: plan.digest.clone(),
+            window: plan.window.to_string(),
+            steps,
+        },
+        text: held.render(),
+        step: held.step,
+        open: held.state == adk_harness::HeldPlanState::Open,
+        fingerprints: held.fingerprints.clone(),
     }
 }
 

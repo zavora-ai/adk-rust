@@ -29,7 +29,7 @@ adk-surface = { version = "3.0.0", features = ["web"] }
 
 | Source | Reads | Acts |
 |---|---|---|
-| `LocalSource` | The session store, the approval service, an in-process kernel's process table and `/proc` ledger, a harness's mode | Decide, start a turn (a kernel process, a harness turn or a runner turn), freeze and unfreeze, set the mode, create the standing rule of "Always allow" |
+| `LocalSource` | The session store, the approval service, an in-process kernel's process table and `/proc` ledger, a harness's mode and screen plans | Decide, decide a screen plan, start a turn (a kernel process, a harness turn or a runner turn), freeze and unfreeze, set the mode, create the standing rule of "Always allow" |
 | `ControlSource` | A kernel's control plane through `ControlClient` (attach, processes, health, the ledger) and the approvals inbox beside it, read in full | Decide (edits included), spawn, freeze, unfreeze |
 
 `Source::keeps_ledger` says whether a source keeps the `/proc` ledger the briefing reads;
@@ -98,6 +98,35 @@ A call that spends money follows the high-risk column and is never allowed "alwa
 shown truncated cannot be approved until the surface expanded it. A chat card leaves the
 machine through someone else's servers, so it carries the agent, the risk and the tool's name
 as its heading, never the call's arguments (S-I5).
+
+### Screen plans
+
+With feature `computer-use`, a harness's computer-use pack parks a previewed screen plan as one
+card (spec 3.7 Q8). The model previews up to N desktop actions in one window
+(`computer_use_preview { actions }`) and runs the first one; the held call carries the plan's
+card, and the plan's later steps held with it wait behind that card rather than on cards of
+their own.
+
+| Part | Field | Example |
+|---|---|---|
+| Heading | `heading` | Run 4 desktop actions in app.forms, window "Customer form" |
+| The plan | `plan.digest`, `plan.window`, `plan.steps[]` (`operation`, `target`, `screenshot`, `proposed`) | `left_click` at `(100, 300)-(190, 340) pt`, found on screenshot `sha256:…` |
+| The exact plan | `call.text`, `call.args`, `call.truncated` | The window, then each step's operation, target and proposed action |
+| Actions | `allowed.options` | Allow this plan · Deny |
+| What one answer does | `detail` | One answer runs every step once, in order. Each step is checked against this preview first; a step whose target moved is asked again. |
+
+| Rule | Behaviour |
+|---|---|
+| One answer for every step | **Allow this plan** records the plan's decision through `Harness::decide_held_screen_plan` and resumes the first step with the plan's binding, `plan: { digest, step: 1 }`, as the harness's live prompter does; each later step is answered from the same decision, once and in order, with its own binding. **Deny** refuses every step with the person's reason. `harness.computer_use.plan_decided` records the answer, with `approvalId` and the person as the actor |
+| A deviation holds again | Before each step runs it is previewed again on a fresh screenshot; a target that moved, changed label or left the window runs nothing and ends the plan, and the step, previewed again, waits on a fresh card of its own. The plan's decision answers no later step |
+| Shown in full first | A plan longer than the card's text limit is shown truncated, and **Allow this plan** is refused with `surface.call_not_expanded` until the surface expanded it |
+| Where it can be allowed | The web home, the phone and the terminal. Chat, the tray and voice can show no whole plan: they offer **Deny** and send the person to the home; a chat card carries the heading alone (S-I5) |
+| Never a standing rule | No **Always allow** and no **Edit**: no standing rule, `tool_approvals` entry or hook covers `computer_use_execute` |
+| A freeze closes it | **Stop all** closes every open plan card: the plan ends and each of its held steps is cancelled, so none runs; `surface.stop_all` lists them as `closedPlans`. A plan card answered while everything is stopped closes the same way. Previewing the actions again makes a fresh card |
+
+`Source::screen_plan`, `Source::decide_screen_plan` and `Source::close_screen_plan` carry it:
+`LocalSource` with a harness implements them; another source leaves each step on a card of its
+own, decided alone, which runs as a single approved action.
 
 ### Card hints
 

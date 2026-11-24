@@ -1502,6 +1502,12 @@ export interface DecisionCard {
    * and used when the agent picks the thread up again (spec 3.7 §8.2, board choice A12).
    */
   parked?: ParkedView | null;
+  /**
+   * The screen plan the card decides with one answer (spec 3.7 Q8): its window and every
+   * step with its target and the screenshot the target was found on. `None` for a card that
+   * decides one call.
+   */
+  plan?: ScreenPlanView | null;
   /** Whether it can be taken back. */
   reversibility: Reversibility;
   /** "Can't be unsent". */
@@ -3049,6 +3055,39 @@ export interface SceneValues {
   offset: number;
   /** What one unit of height stands for; above 0. */
   scale: number;
+}
+
+/** One step of a `ScreenPlanView`. */
+export interface ScreenPlanStepView {
+  /** What the step does: `left_click`, `type`, …. */
+  operation: string;
+  /** The action as the agent proposed it. */
+  proposed: unknown;
+  /** The digest of the screenshot the target was found on, when the runtime gave one. */
+  screenshot?: string | null;
+  /**
+   * Where on the screen, in points: `(100, 300)-(190, 340) pt`. `None` for a step that acts
+   * where the step before it put the focus, such as typing.
+   */
+  target?: string | null;
+}
+
+/**
+ * A previewed screen plan a decision card decides with one answer (spec 3.7 Q8): up to N
+ * desktop actions in one window. **Allow** runs the steps once each, in order, each checked
+ * against its preview on a fresh screenshot before it runs; a step whose target moved is asked
+ * again on a card of its own. Never a standing rule.
+ */
+export interface ScreenPlanView {
+  /**
+   * The plan's fingerprint, `sha256:…`, over its window, steps and targets: the answer binds
+   * it.
+   */
+  digest: string;
+  /** The steps, in the order they run. */
+  steps: ScreenPlanStepView[];
+  /** The window every step acts in: the application, then the window. */
+  window: string;
 }
 
 /** What asked for a `DrawnSent` call (spec 3.3 §6.1 `genui`, `genui-apps`). */

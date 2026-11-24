@@ -203,6 +203,11 @@ pub struct HarnessRuntime {
     /// The payments pack's per-request reminder (spec 3.1 §7.16).
     #[cfg(feature = "payments")]
     pub(crate) payments: Option<Arc<crate::packs::payments::PaymentsReminder>>,
+    /// The computer-use pack's screen plans, decided from a surface's card when a held step
+    /// parks (spec 3.7 Q8).
+    #[cfg(feature = "computer-use")]
+    #[cfg_attr(not(feature = "runner"), allow(dead_code))]
+    pub(crate) screen_plans: Option<Arc<crate::packs::computer_use::ScreenPlans>>,
     /// Take over, when the harness was built with it (spec 3.3 §10 H2).
     pub(crate) take_over: Option<crate::take_over::TakeOver>,
     /// The tools and toolsets the model is given besides `toolset`, for a realtime session

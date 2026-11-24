@@ -169,6 +169,10 @@ pub struct DecisionFacts {
     /// surface may answer then depends on whether it can show them and whether anything is
     /// left to send. `None` for a call without images.
     pub image: Option<ImageGate>,
+    /// The card decides a whole screen plan with one answer (spec 3.7 Q8): **Allow** and
+    /// **Deny** only, never **Always allow** or **Edit**, and **Allow** only where the whole
+    /// plan can be shown — the web home, the phone and the terminal.
+    pub plan: bool,
 }
 
 /// What the rules need to know about a decision with images (spec 3.7 §8.2).
@@ -251,6 +255,7 @@ impl Allowed {
 ///     always_label: Some("Always allow for this person".into()),
 ///     adds_agent: false,
 ///     image: None,
+///     plan: false,
 /// };
 /// let chat = Caller::human("ana", SurfaceKind::Chat, Origin::Chat { channel: "Telegram".into() });
 /// let answers: Vec<Answer> = allowed_answers(&chat, &facts).options.iter().map(|o| o.answer).collect();
@@ -345,7 +350,30 @@ pub fn allowed_answers(caller: &Caller, facts: &DecisionFacts) -> Allowed {
     if let Some(gate) = facts.image {
         image_answers(row, gate, &mut allowed);
     }
+    if facts.plan {
+        plan_answers(row, &mut allowed);
+    }
     allowed
+}
+
+/// Narrows `allowed` for a screen plan's card (spec 3.7 Q8): one answer for every step, never
+/// a standing rule and never edited, and approved only by a person who can see the whole plan.
+pub(crate) fn plan_answers(row: Row, allowed: &mut Allowed) {
+    allowed.options.retain(|option| matches!(option.answer, Answer::AllowOnce | Answer::Deny));
+    for option in &mut allowed.options {
+        if option.answer == Answer::AllowOnce && !option.needs_presence {
+            option.label = words::ALLOW_THIS_PLAN.to_string();
+        }
+    }
+    match row {
+        Row::Chat | Row::Tray | Row::Voice => {
+            allowed.options.retain(|option| option.answer == Answer::Deny);
+            allowed.cancel_window_secs = None;
+            allowed.open_in_home = row != Row::Voice;
+            allowed.note = Some(words::LOOK_AT_THE_PLAN_IN_THE_HOME.to_string());
+        }
+        Row::Web | Row::Phone | Row::Terminal | Row::Agent => {}
+    }
 }
 
 /// Narrows `allowed` for a decision with images (spec 3.7 §8.2): see [`ImageGate`].
@@ -477,6 +505,7 @@ impl RuleViolation {
 ///     always_label: None,
 ///     adds_agent: false,
 ///     image: None,
+///     plan: false,
 /// };
 /// let web = Caller::human("ana", SurfaceKind::Web, Origin::Pointer);
 /// assert_eq!(check(&web, &facts, Answer::AllowOnce, true), Err(RuleViolation::PresenceRequired));
@@ -583,6 +612,7 @@ mod tests {
             always_label: Some(words::ALWAYS_ALLOW_FOR_THIS_PERSON.into()),
             adds_agent: false,
             image: None,
+            plan: false,
         }
     }
 
@@ -665,6 +695,40 @@ mod tests {
         assert_eq!(check(&web, &truncated, AllowOnce, false), Err(RuleViolation::NotExpanded));
         assert_eq!(check(&web, &truncated, AllowOnce, true), Ok(()));
         assert_eq!(check(&web, &truncated, Deny, false), Ok(()));
+    }
+
+    /// A screen plan's card (spec 3.7 Q8): allow and deny where the plan can be shown, deny
+    /// elsewhere, never always or edit, and allow only once the plan was shown in full.
+    #[test]
+    fn a_screen_plan_is_allowed_or_denied_where_it_can_be_seen() {
+        let plan = DecisionFacts { plan: true, ..facts(Risk::Medium) };
+        let web = caller(SurfaceKind::Web, Origin::Pointer);
+        assert_eq!(answers(&web, &plan), vec![AllowOnce, Deny]);
+        assert_eq!(allowed_answers(&web, &plan).options[0].label, words::ALLOW_THIS_PLAN);
+        assert_eq!(
+            answers(&caller(SurfaceKind::Phone, Origin::Touch), &plan),
+            vec![AllowOnce, Deny]
+        );
+        assert_eq!(
+            answers(&caller(SurfaceKind::Terminal, Origin::Keyboard), &plan),
+            vec![AllowOnce, Deny]
+        );
+        for row in [
+            caller(SurfaceKind::Chat, telegram()),
+            caller(SurfaceKind::Tray, Origin::Pointer),
+            caller(SurfaceKind::Web, Origin::Voice),
+        ] {
+            let allowed = allowed_answers(&row, &plan);
+            assert_eq!(answers(&row, &plan), vec![Deny], "{row:?}");
+            assert_eq!(allowed.note.as_deref(), Some(words::LOOK_AT_THE_PLAN_IN_THE_HOME));
+            assert_eq!(allowed.cancel_window_secs, None);
+        }
+        assert_eq!(check(&web, &plan, AlwaysAllow, true), Err(RuleViolation::NotOffered));
+        assert_eq!(check(&web, &plan, Edit, true), Err(RuleViolation::NotOffered));
+        let long = DecisionFacts { truncated: true, ..plan };
+        assert_eq!(check(&web, &long, AllowOnce, false), Err(RuleViolation::NotExpanded));
+        assert_eq!(check(&web, &long, AllowOnce, true), Ok(()));
+        assert_eq!(check(&web, &long, Deny, false), Ok(()));
     }
 
     #[test]

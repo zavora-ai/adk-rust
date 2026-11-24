@@ -31,6 +31,8 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::audit::HarnessAudit;
+#[cfg(feature = "runner")]
+pub(crate) use plan::Filed;
 pub use plan::{DEFAULT_PLAN_MAX_ACTIONS, PlanStep, PlanWindow, PreviewedPlan};
 pub(crate) use plan::{PlanState, ScreenPlans, scope as plan_scope};
 
@@ -242,6 +244,14 @@ impl Shared {
         format!("{session_id}\u{1f}{action_digest}")
     }
 
+    /// Takes back what a surface filed for the plan `digest` once the plan ended (spec 3.7
+    /// Q8): a later step is held for a fresh approval, never answered by the old decision.
+    async fn withdraw_ended(&self, scope: &str, digest: &str) {
+        if let Some(filed) = self.plans.take_filed_if_ended(scope, digest) {
+            filed.withdraw().await;
+        }
+    }
+
     fn keep(&self, session_id: &str, action_digest: &str, kept: Kept) {
         let mut previews = self.previews.lock().unwrap_or_else(|e| e.into_inner());
         if previews.len() >= KEPT_PREVIEWS_CAP {
@@ -431,7 +441,11 @@ impl PreviewTool {
         let (plans, positions) = plan::group(steps, self.shared.plan_max_actions);
         let scope = plan_scope(ctx.app_name(), ctx.user_id(), ctx.session_id());
         for plan in &plans {
-            self.shared.plans.keep(&scope, plan.clone());
+            // A plan previewed again needs a new decision: what a surface filed for the old
+            // one is taken back.
+            for filed in self.shared.plans.keep(&scope, plan.clone()) {
+                filed.withdraw().await;
+            }
         }
         let audit = HarnessAudit::for_tool(ctx);
         let mut answers = Vec::with_capacity(previewed.len());
@@ -777,6 +791,7 @@ impl Tool for ExecuteTool {
                 match self.shared.plans.begin(&scope, &binding.digest, binding.step - 1, &args) {
                     Ok(step) => Some(step),
                     Err(reason) => {
+                        self.shared.withdraw_ended(&scope, &binding.digest).await;
                         return self
                             .refuse_step(
                                 audit.as_ref(),
@@ -792,9 +807,10 @@ impl Tool for ExecuteTool {
             }
             None => None,
         };
-        let end_plan = |reason: &str| {
+        let end_plan = async |reason: &str| {
             if let Some(binding) = &binding {
                 self.shared.plans.end(&scope, &binding.digest, reason);
+                self.shared.withdraw_ended(&scope, &binding.digest).await;
             }
         };
 
@@ -816,7 +832,7 @@ impl Tool for ExecuteTool {
                 // approval the person gave for exactly these digests (spec 3.1 §7.24, I59).
                 let Some(preview) = interrupted_preview(&interrupted) else {
                     self.shared.forget(&session_id, &action_digest);
-                    end_plan("the runtime's approval interrupt carried no preview");
+                    end_plan("the runtime's approval interrupt carried no preview").await;
                     return self
                         .refuse(
                             audit.as_ref(),
@@ -830,7 +846,7 @@ impl Tool for ExecuteTool {
                     || preview.policy.policy_digest != policy_digest
                 {
                     self.shared.forget(&session_id, &action_digest);
-                    end_plan("the runtime's preview changed since the approval");
+                    end_plan("the runtime's preview changed since the approval").await;
                     return self
                         .refuse(
                             audit.as_ref(),
@@ -847,7 +863,8 @@ impl Tool for ExecuteTool {
                         plan::deviation(planned.target.as_ref(), preview.envelope.target.as_ref())
                 {
                     self.shared.forget(&session_id, &action_digest);
-                    end_plan(&format!("step {} deviated: {}", binding.step, deviation.reason));
+                    end_plan(&format!("step {} deviated: {}", binding.step, deviation.reason))
+                        .await;
                     return self
                         .refuse_step(
                             audit.as_ref(),
@@ -878,14 +895,14 @@ impl Tool for ExecuteTool {
                 match resumed {
                     Ok(output) => output,
                     Err(error) => {
-                        end_plan("the step's execution failed");
+                        end_plan("the step's execution failed").await;
                         return Err(runtime_error("execution", error));
                     }
                 }
             }
             Err(error) => {
                 self.shared.forget(&session_id, &action_digest);
-                end_plan("the step's execution failed");
+                end_plan("the step's execution failed").await;
                 return Err(runtime_error("execution", error));
             }
         };
@@ -901,6 +918,7 @@ impl Tool for ExecuteTool {
         if let Some(binding) = &binding {
             let ran = checked && verified == json!(true) && committed == json!(true);
             self.shared.plans.finish(&scope, &binding.digest, binding.step - 1, ran);
+            self.shared.withdraw_ended(&scope, &binding.digest).await;
         }
         let plan_digest = binding.as_ref().map(|binding| binding.digest.clone());
         let step = binding.as_ref().map(|binding| binding.step);

@@ -3119,6 +3119,8 @@ impl HarnessAgentBuilder {
                 cache_capable: self.context_caching.then_some(self.cache_capable).flatten(),
                 #[cfg(feature = "payments")]
                 payments: payments.map(|payments| payments.reminder),
+                #[cfg(feature = "computer-use")]
+                screen_plans: computer_use.as_ref().map(|computer_use| computer_use.plans.clone()),
                 take_over: self.take_over,
                 agent_tools: (agent_tools, agent_toolsets),
             },
