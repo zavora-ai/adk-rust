@@ -81,7 +81,7 @@ mistralrs-cuda = ["mistralrs", "adk-mistralrs/cuda"]
 stream = ["dep:futures"]
 # `RtspSource`: cameras over RTSP through `retina` (MIT OR Apache-2.0). MJPEG decodes in
 # process; H.264 and H.265 need the `ffmpeg` feature too.
-rtsp = ["stream", "dep:retina", "dep:url"]
+rtsp = ["stream", "dep:retina", "dep:url", "dep:pretty-hex"]
 # `FileSource` (MP4, MOV) and H.264/H.265 decoding through a user-installed `ffmpeg` binary,
 # spawned through `ffmpeg-sidecar` with its download feature off: nothing is vendored or
 # downloaded (spec 3.7 D-11, Q9).
@@ -186,6 +186,9 @@ oar-ocr-vl = { version = "0.11.0", optional = true, default-features = false }
 
 # `rtsp`: RTSP sessions and RTP depacketising for H.264, H.265 and MJPEG.
 retina = { version = "0.4.21", optional = true }
+# `retina` builds `pretty_hex::HexConfig` with a struct literal, which pretty-hex 0.4.3 broke by
+# adding a field; the cap keeps fresh resolutions on a version `retina` compiles against.
+pretty-hex = { version = ">=0.4.0, <0.4.3", optional = true }
 # `rtsp`: the camera URL `retina` takes.
 url = { version = "2.5", optional = true }
 # `ffmpeg`: spawns the ffmpeg binary the user installed. `download_ffmpeg` stays off.

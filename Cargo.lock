@@ -1602,6 +1602,7 @@ dependencies = [
  "oar-ocr",
  "oar-ocr-vl",
  "ort",
+ "pretty-hex",
  "proptest",
  "reqwest 0.13.5",
  "retina",
