@@ -44,7 +44,8 @@ async fn claude(model: &str, recording: &str) -> Result<(LlmDescriber, MockServe
         .allow_insecure_http()
         .with_base_url(base);
     let client: Arc<dyn Llm> = Arc::new(adk_model::AnthropicClient::new(config)?);
-    let describer = LlmDescriber::remote_with_hosts(client, [ANTHROPIC_HOST])?.with_max_output_tokens(400);
+    let describer =
+        LlmDescriber::remote_with_hosts(client, [ANTHROPIC_HOST])?.with_max_output_tokens(400);
     Ok((describer, server))
 }
 
