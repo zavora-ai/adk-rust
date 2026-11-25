@@ -209,6 +209,9 @@ export function App({
     setFocusDecision(undefined);
     setVisiting(undefined);
   }, []);
+  // The agent shown while none is chosen. It applies to the latest choice, so a decision opened
+  // between the roster's render and this call, such as a deep link's, keeps its thread.
+  const showFirst = useCallback((agent: string) => setSelected((chosen) => chosen ?? agent), []);
   // A decision opens in its own session's thread, whichever session the agent's row names;
   // one of another session than the person's conversation is visited, not followed.
   const openDecision = useCallback(
@@ -516,6 +519,7 @@ export function App({
             takeOver={takeOver}
             selected={selected}
             onSelect={select}
+            onShowFirst={showFirst}
             followed={followed}
             onFollow={follow}
             visiting={visiting}

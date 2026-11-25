@@ -53,6 +53,7 @@ export function Threads({
   takeOver,
   selected,
   onSelect,
+  onShowFirst,
   followed,
   onFollow,
   visiting,
@@ -83,6 +84,8 @@ export function Threads({
   /** The agent shown, once one is. */
   selected?: string;
   onSelect: (agent: string) => void;
+  /** Shows `agent` while none is chosen, keeping a choice made since this render. */
+  onShowFirst: (agent: string) => void;
   /** The session each agent's thread follows, by agent name ("" before any agent). */
   followed: Record<string, string>;
   onFollow: (agent: string, session: string) => void;
@@ -125,8 +128,8 @@ export function Threads({
     return chosen ?? agents.find((row) => row.status === "waitingForYou") ?? agents[0];
   }, [agents, selected]);
   useEffect(() => {
-    if (current && selected === undefined) onSelect(current.agent.name);
-  }, [current, selected, onSelect]);
+    if (current && selected === undefined) onShowFirst(current.agent.name);
+  }, [current, selected, onShowFirst]);
 
   const key = current?.agent.name ?? "";
   const pinned = followed[key];

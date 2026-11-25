@@ -3,7 +3,7 @@
 // thread once, and the address becomes the thread's.
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { ApiError } from "../src/client";
 import { FixtureClient } from "../src/fixture/fixture";
@@ -49,6 +49,31 @@ describe("the home opened at a decision", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/ui/"));
   });
 
+  it("opens a decision whose card comes after the roster, not the agent shown first", async () => {
+    // React yields to the page between drawing the roster and running its effects, as on a busy
+    // machine: every read of its clock is 10 ms on.
+    let now = performance.now();
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => (now += 10));
+    try {
+      const client = new CardAfterRoster();
+      const card = await client.decision("apr_invoice");
+      await client.command(
+        { type: "decide", decisionId: card.id, version: card.version, answer: "allowOnce", expanded: true },
+        { kind: "pointer" },
+      );
+      client.linked = card.id;
+      window.history.replaceState(null, "", "/ui/decisions/apr_invoice");
+      render(<App client={client} />);
+      expect((await screen.findByRole("alert")).textContent).toBe("You said yes in the home app at 07:40");
+      // Code waits for the person, so it is the agent shown first when no decision is opened.
+      expect(await screen.findByRole("main", { name: "Finance" })).toBeTruthy();
+      await new Promise((settled) => setTimeout(settled, 50));
+      expect(screen.getByRole("main").getAttribute("aria-label")).toBe("Finance");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("shows the problem line for a decision that does not exist", async () => {
     window.history.replaceState(null, "", "/ui/decisions/missing.v1");
     render(<App client={new FixtureClient()} />);
@@ -91,4 +116,27 @@ class Locked extends FixtureClient {
     this.check();
     return super.decision(id);
   }
+}
+
+/** The example whose linked card arrives once the roster is drawn and before the home has run
+ * that render's effects, the order a busy machine gave in CI. */
+class CardAfterRoster extends FixtureClient {
+  linked?: string;
+  override async decision(id: string) {
+    const card = await super.decision(id);
+    if (id === this.linked) await rosterDrawn();
+    return card;
+  }
+}
+
+/** Resolves in the microtask after the render that lists Code in the roster. */
+function rosterDrawn(): Promise<void> {
+  return new Promise((resolve) => {
+    const observer = new MutationObserver(() => {
+      if (!screen.queryByRole("button", { name: /^Code/ })) return;
+      observer.disconnect();
+      resolve();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  });
 }
