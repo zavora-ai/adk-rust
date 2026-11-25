@@ -1,54 +1,70 @@
 {
-  "scripted": true,
-  "note": "Scripted, not recorded: written in the provider's wire format for scenario S15, because the session that wrote the scenario could not reach the provider's key. The request is the one the real client sent, its image reduced to SHA-256 and size; the token counts are estimates. Record it live with VISION_RECORD_ANTHROPIC and VISION_RECORD_NIM_VLM (fixtures/recorded/README.md).",
   "path": "/v1/messages",
   "request": {
-    "cache_control": {
-      "type": "ephemeral"
-    },
     "max_tokens": 400,
     "messages": [
       {
         "content": [
           {
+            "type": "image",
             "source": {
+              "type": "base64",
               "data": "{{image:base64:sha256:65ed966e5cc85c8cb3e6d1604507e1e0a501fc901309b819607784fc3bd37e78:564}}",
-              "media_type": "image/png",
-              "type": "base64"
-            },
-            "type": "image"
+              "media_type": "image/png"
+            }
           },
           {
-            "text": "You are the reasoner of a vision team. You hold no tools and never see the whole image: you see the regions a perceiver on the device found, measurements, and 1 crop(s) of the image around those regions, redacted before they were sent.\n\nQuestion: This is a crop of a 3D-printed part on an inspection line, around a dark mark the camera found. Is the mark a crack that makes the part defective, or a surface mark that needs no action?\nAnswer with one verdict from: \"defect\", \"no_defect\".\n\nRegions, in source pixels: {\"image\":\"sha256:cbe234a87b5431f9c2841e1391c9b564c00501362055cb9e52364795f04ccc83\",\"width\":1280,\"height\":720,\"regions\":[{\"image\":\"sha256:cbe234a87b5431f9c2841e1391c9b564c00501362055cb9e52364795f04ccc83\",\"shape\":{\"kind\":\"box\",\"x0\":73.0,\"y0\":359.0,\"x1\":172.0,\"y1\":419.0},\"label\":\"crack\",\"score\":0.97,\"origin\":{\"backend\":\"inspector-defects\",\"frame\":{\"kind\":\"sentPixels\"},\"chain\":{\"sourceWidth\":1280,\"sourceHeight\":720,\"steps\":[]}}},{\"image\":\"sha256:cbe234a87b5431f9c2841e1391c9b564c00501362055cb9e52364795f04ccc83\",\"shape\":{\"kind\":\"box\",\"x0\":957.0,\"y0\":388.0,\"x1\":981.0,\"y1\":401.0},\"label\":\"crack\",\"score\":0.6779438,\"origin\":{\"backend\":\"inspector-defects\",\"frame\":{\"kind\":\"sentPixels\"},\"chain\":{\"sourceWidth\":1280,\"sourceHeight\":720,\"steps\":[]}}}]}\n\nAnswer with JSON only: {\"verdict\": <one of the verdicts>, \"label\": <the class you judged>, \"confidence\": <0 to 1>, \"rationale\": <one sentence>}.",
-            "type": "text"
+            "type": "text",
+            "text": "You are the reasoner of a vision team. You hold no tools and never see the whole image: you see the regions a perceiver on the device found, measurements, and 1 crop(s) of the image around those regions, redacted before they were sent.\n\nQuestion: This is a crop of a 3D-printed part on an inspection line, around a dark mark the camera found. Is the mark a crack that makes the part defective, or a surface mark that needs no action?\nAnswer with one verdict from: \"defect\", \"no_defect\".\n\nRegions, in source pixels: {\"image\":\"sha256:cbe234a87b5431f9c2841e1391c9b564c00501362055cb9e52364795f04ccc83\",\"width\":1280,\"height\":720,\"regions\":[{\"image\":\"sha256:cbe234a87b5431f9c2841e1391c9b564c00501362055cb9e52364795f04ccc83\",\"shape\":{\"kind\":\"box\",\"x0\":73.0,\"y0\":359.0,\"x1\":172.0,\"y1\":419.0},\"label\":\"crack\",\"score\":0.97,\"origin\":{\"backend\":\"inspector-defects\",\"frame\":{\"kind\":\"sentPixels\"},\"chain\":{\"sourceWidth\":1280,\"sourceHeight\":720,\"steps\":[]}}},{\"image\":\"sha256:cbe234a87b5431f9c2841e1391c9b564c00501362055cb9e52364795f04ccc83\",\"shape\":{\"kind\":\"box\",\"x0\":957.0,\"y0\":388.0,\"x1\":981.0,\"y1\":401.0},\"label\":\"crack\",\"score\":0.6779438,\"origin\":{\"backend\":\"inspector-defects\",\"frame\":{\"kind\":\"sentPixels\"},\"chain\":{\"sourceWidth\":1280,\"sourceHeight\":720,\"steps\":[]}}}]}\n\nAnswer with JSON only: {\"verdict\": <one of the verdicts>, \"label\": <the class you judged>, \"confidence\": <0 to 1>, \"rationale\": <one sentence>}."
           }
         ],
         "role": "user"
       }
     ],
     "model": "claude-haiku-5-5",
-    "stream": false
+    "stream": false,
+    "cache_control": {
+      "type": "ephemeral"
+    }
   },
   "status": 200,
   "contentType": "application/json",
   "response": {
     "model": "claude-haiku-5-5",
-    "id": "msg_s15_scripted",
+    "id": "msg_011ChNymJf2fWSrgqzaM9AXD",
     "type": "message",
     "role": "assistant",
     "content": [
       {
+        "type": "thinking",
+        "thinking": "",
+        "signature": "CAQSlgkKEAgUGAI4AUIIdGhpbmtpbmcSDGkcRN/XYv+MtcD3lRoMHt7NgFOydkweBTY0IjBQaNbvfoG/rsbaoJj3s7DbDVyYe5EPMI3WDLqHpsdHdEKelntIBSu166KxSvPi7mYqswhEbHeegsF/Iw0savaZOQmNlETqGdtlMHjDNvOtxkZbqEIaFQ5OSB62no9kr0rnNuj4Kru60T76QBtXdV3x4nxATAuEEQOQwcwHmmZkmcFQlPuwybP+cS+ac8Nqp+mFY0vksa1q+vfxm2Et82ZhtoutOnwRGXir11insZrVZUy4Kuf/cxg3QM0LeJ49szc+OFpvTJg5+UJS4gnlhBPisJRIpW1YhyR0KzWSXM1rGEE9O8HB1KdyVdoCHU5FVJE6oA/ZTixSboH838gaTn+J/v889pi0oWv4+3+RgXXs1vaRMizH5GCpquqMGOL0NMoaUgyjrVUBm39AiwODJdpeVaVLQmrJsZLC4MnBZhhr9rkqsQWI51kn8YfgATiqyaM4Qsv6hy2foHvH2rKartageCJPIBWRzdZKcuPYmM/IACwKcuKGH0kVx20OpW5ne8l8M5Q/8EfWgc3rv6fO636iCmSZM8JBUbuhFU3dmnaKiaFd6CL+XdPu87/fJTcWdb58uBmz0C0+VtM9FktrYLXWI+00wLjDo5/OQB1Ob7ucwOalhKlqktQAi+abvuNs34R+LJO0ZrbCkBb8tij3N+B9NRjP9hsea6hgBIwPw6MQCImlYPQWCblijcQCvbkq9+RWNdTq3/dWj3i/egX/JI8yj39WzU9ByvfId6tIeRgt2f/pXlpowK/1AyA0FXGRSBgCUunxf3sHDIThpA0SVQbdZVYWqjSYQHbMn4RLOTUWF4nVNdPRUg05bChWejd7SQjFHfU9PU/jwYJ3Z7vVSglokt/rQSFWQDJ5fWYi7O/mAQfLl61yTkPhm617Mb9xkN/Bd/UPMGTVey4pQ4TY5/oMRLDbvroqK/UwBySv5V0ri9+3dFceucjRMbARZI2OH2Un+BUy/XxX3rlRfh0QSe+/RJVcKUIN1fwhkIinyNH0Qmr3ogTeVHtvCmP7m8HZu1RsWasNj+tbgBy8jLT4Bwj4rae+Kn0TiF11ggmYty6CY2YahwKHBkrcNSpLs1vBRRS5ng8D4m/T+rZteW7b7oP9D/MIjLDXcLU4RXu3ZcVv4VHhvLgvZgGhuK0TAWlOo1+ULT8BYAPE7emxF1n2feqSx6/Y5Uk8ton2INQV1EmlqaPFs3VyThO4A0XsZyw06TxaJT8Y0816J37JfED3g2mHsITy30LP+HnXRkhp/FLcmSrvrqX1opUGKZWzkO1iUz7uduip2GYMlqgBpIGG1E41PulL8U0abCBNQS8oaxF6hi3xVIS7IiAsOhR4Wgsp2De1NS7rLn8iwMiclgi6qqlPuBPKsxlUOVBrJ2lB92nN8hIAjYvh6sO187jnmZKJgY1K0fSgoHqrKTlZ2cPPqUb2cCW7lzVcCjVbRgiVo/rGLaq9oHowtWPnW+IBkwrlDxcNuURGuqiefPPtbRdf3cSxEwAaPiF7GAE="
+      },
+      {
         "type": "text",
-        "text": "{\"verdict\": \"defect\", \"label\": \"crack\", \"confidence\": 0.62, \"rationale\": \"A thin dark line crosses the printed layer lines at an angle, which fits a short crack more than a layer artefact, though it is too short to be sure.\"}"
+        "text": "{\"verdict\": \"defect\", \"label\": \"crack\", \"confidence\": 0.6, \"rationale\": \"The crop shows a thin, sharply dark linear streak across the orange surface, which matches the detector's high-confidence crack label (0.97), so it looks more like a crack than a cosmetic smudge, though the small crop limits certainty.\"}"
       }
     ],
+    "container": null,
     "stop_reason": "end_turn",
     "stop_sequence": null,
+    "stop_details": null,
     "usage": {
-      "input_tokens": 431,
-      "cache_creation_input_tokens": 0,
+      "input_tokens": 4,
+      "cache_creation_input_tokens": 654,
       "cache_read_input_tokens": 0,
-      "output_tokens": 64
-    }
+      "cache_creation": {
+        "ephemeral_5m_input_tokens": 654,
+        "ephemeral_1h_input_tokens": 0
+      },
+      "output_tokens": 317,
+      "output_tokens_details": {
+        "thinking_tokens": 205
+      },
+      "service_tier": "standard",
+      "inference_geo": "global",
+      "speed": "standard"
+    },
+    "diagnostics": null
   }
 }

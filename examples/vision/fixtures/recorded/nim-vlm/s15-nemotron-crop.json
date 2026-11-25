@@ -1,53 +1,59 @@
 {
-  "scripted": true,
-  "note": "Scripted, not recorded: written in the provider's wire format for scenario S15, because the session that wrote the scenario could not reach the provider's key. The request is the one the real client sent, its image reduced to SHA-256 and size; the token counts are estimates. Record it live with VISION_RECORD_ANTHROPIC and VISION_RECORD_NIM_VLM (fixtures/recorded/README.md).",
   "path": "/v1/chat/completions",
   "request": {
-    "chat_template_kwargs": {
-      "enable_thinking": false
-    },
-    "max_completion_tokens": 600,
     "messages": [
       {
+        "role": "user",
         "content": [
           {
+            "type": "image_url",
             "image_url": {
-              "detail": "auto",
-              "url": "{{image:image/png:sha256:65ed966e5cc85c8cb3e6d1604507e1e0a501fc901309b819607784fc3bd37e78:564}}"
-            },
-            "type": "image_url"
+              "url": "{{image:image/png:sha256:65ed966e5cc85c8cb3e6d1604507e1e0a501fc901309b819607784fc3bd37e78:564}}",
+              "detail": "auto"
+            }
           },
           {
-            "text": "You are the verifier of a vision team. Another model made a claim about a region of an image; check it against the pixels. The image is a crop around the claimed region, redacted before it was sent.\n\nQuestion: This is a crop of a 3D-printed part on an inspection line, around a dark mark the camera found. Is the mark a crack that makes the part defective, or a surface mark that needs no action?\nClaim: {\"verdict\":\"defect\",\"label\":\"crack\",\"confidence\":0.62,\"regions\":{\"image\":\"sha256:cbe234a87b5431f9c2841e1391c9b564c00501362055cb9e52364795f04ccc83\",\"width\":1280,\"height\":720,\"regions\":[{\"image\":\"sha256:cbe234a87b5431f9c2841e1391c9b564c00501362055cb9e52364795f04ccc83\",\"shape\":{\"kind\":\"box\",\"x0\":957.0,\"y0\":388.0,\"x1\":981.0,\"y1\":401.0},\"label\":\"crack\",\"score\":0.6779438,\"origin\":{\"backend\":\"inspector-defects\",\"frame\":{\"kind\":\"sentPixels\"},\"chain\":{\"sourceWidth\":1280,\"sourceHeight\":720,\"steps\":[]}}}]},\"rationale\":\"A thin dark line crosses the printed layer lines at an angle, which fits a short crack more than a layer artefact, though it is too short to be sure.\",\"member\":\"reasoner\",\"provider\":\"anthropic\"}\nLocal perception on the device looked for `crack` around the claimed region: 1 region(s) found, best overlap with the claim 0.00.\n\nAnswer with JSON only: {\"verdict\": <one of \"defect\", \"no_defect\">, \"label\": <the class>, \"confidence\": <0 to 1>, \"rationale\": <one sentence>}.",
-            "type": "text"
+            "type": "text",
+            "text": "You are the verifier of a vision team. Another model made a claim about a region of an image; check it against the pixels. The image is a crop around the claimed region, redacted before it was sent.\n\nQuestion: This is a crop of a 3D-printed part on an inspection line, around a dark mark the camera found. Is the mark a crack that makes the part defective, or a surface mark that needs no action?\nClaim: {\"verdict\":\"defect\",\"label\":\"crack\",\"confidence\":0.6,\"regions\":{\"image\":\"sha256:cbe234a87b5431f9c2841e1391c9b564c00501362055cb9e52364795f04ccc83\",\"width\":1280,\"height\":720,\"regions\":[{\"image\":\"sha256:cbe234a87b5431f9c2841e1391c9b564c00501362055cb9e52364795f04ccc83\",\"shape\":{\"kind\":\"box\",\"x0\":957.0,\"y0\":388.0,\"x1\":981.0,\"y1\":401.0},\"label\":\"crack\",\"score\":0.6779438,\"origin\":{\"backend\":\"inspector-defects\",\"frame\":{\"kind\":\"sentPixels\"},\"chain\":{\"sourceWidth\":1280,\"sourceHeight\":720,\"steps\":[]}}}]},\"rationale\":\"The crop shows a thin, sharply dark linear streak across the orange surface, which matches the detector's high-confidence crack label (0.97), so it looks more like a crack than a cosmetic smudge, though the small crop limits certainty.\",\"member\":\"reasoner\",\"provider\":\"anthropic\"}\nLocal perception on the device looked for `crack` around the claimed region: 1 region(s) found, best overlap with the claim 0.00.\n\nAnswer with JSON only: {\"verdict\": <one of \"defect\", \"no_defect\">, \"label\": <the class>, \"confidence\": <0 to 1>, \"rationale\": <one sentence>}."
           }
-        ],
-        "role": "user"
+        ]
       }
     ],
-    "model": "nvidia/nemotron-3.5-super-vl-120b-a12b"
+    "model": "nvidia/nemotron-3.5-super-vl-120b-a12b",
+    "max_completion_tokens": 600,
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    }
   },
   "status": 200,
   "contentType": "application/json",
   "response": {
-    "id": "chatcmpl-s15-scripted",
-    "object": "chat.completion",
-    "created": 1763856000,
-    "model": "nvidia/nemotron-3.5-super-vl-120b-a12b",
+    "id": "chatcmpl-14df67fc-e4ef-4dc7-aa53-356ab41f5554",
     "choices": [
       {
         "index": 0,
-        "finish_reason": "stop",
         "message": {
-          "role": "assistant",
-          "content": "{\"verdict\": \"no_defect\", \"label\": \"crack\", \"confidence\": 0.78, \"rationale\": \"The mark is short and does not open the surface between the layer lines, and local perception finds no crack over the claimed region.\"}"
-        }
+          "content": "{\"verdict\": \"no_defect\", \"label\": \"surface mark\", \"confidence\": 0.8, \"rationale\": \"The thin, dark line is consistent with a surface scratch or mark rather than a structural crack, as it lacks depth and discontinuity typical of a crack.\"}",
+          "refusal": null,
+          "role": "assistant"
+        },
+        "finish_reason": "stop",
+        "logprobs": null
       }
     ],
+    "created": 1795579293,
+    "model": "private/nvidia/nemotron-3.5-super-120b-a12b",
+    "object": "chat.completion",
     "usage": {
-      "prompt_tokens": 702,
-      "completion_tokens": 58,
-      "total_tokens": 760
+      "prompt_tokens": 802,
+      "completion_tokens": 63,
+      "total_tokens": 865,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0
+      }
     }
   }
 }
