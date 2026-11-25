@@ -114,7 +114,7 @@ fn main() -> adk_surface::Result<()> {
 | `Cameras::offer` | Every frame, with what was found on it (`Overlay`): dropped when the camera is off, stopped or paused by Stop all (`Offered::Dropped`), else held in memory and shown |
 | `Cameras::ingest` | A frame a screen captured — the voice screen's camera, or the camera page's **Use this browser's camera** — handed to the camera's pipeline once it passes the same gate (`CameraSource::intake`), at most `MAX_SCREEN_FPS` (10) a second |
 | `Cameras::freeze_all`, `thaw_all`, `with_governance` | Stop all and Resume all, which the engine calls; and a kill switch the gate also follows |
-| `CameraSource::keep_frame` | Keeps a card's frame: everyone in it covered first, written once, returned as the `ImageEvidence` a card and a held call carry |
+| `CameraSource::keep_frame` | Keeps a card's frame — what the camera's privacy hook covered, and under `LiveCamera::cover_people` everyone in it, covered first — written once, returned as the `ImageEvidence` a card and a held call carry |
 | `PipelineCameras` (`vision-camera`) | Each camera on adk-vision's frame pipeline, below |
 | `ScriptedCameras` (`web`) | A source over the boards' fixture content, every board state reachable, for tests and screenshots |
 | `camera::bridge` (`voice`) | `feed_realtime` sends a camera's frames to a realtime session under the voice screen's `FramePolicy`: one a second for Gemini Live, changed frames at most every five seconds for the OpenAI Realtime API; `with_camera` turns on Gemini Live's context window compression |
@@ -123,11 +123,15 @@ fn main() -> adk_surface::Result<()> {
 
 With the `vision-camera` feature, `PipelineCameras` runs each camera through adk-vision's
 `StreamPipeline` — sampler, frame governor, privacy hook, detector, tracker — and is the
-`CameraSource` the hub reads. What the surface shows is what the pipeline measured:
+`CameraSource` the hub reads. What the surface shows is what the pipeline measured. A frame
+is shown as the camera sent it unless the camera opts in to a restriction:
+`LiveCamera::with_privacy(hook)` redacts every frame before any other stage sees it, such as
+`RedactorPrivacy::blur_faces`, and `LiveCamera::cover_people` covers every region the
+detector labels `person` or `face` before a frame is shown or kept.
 
 | The surface shows | From |
 |---|---|
-| The picture and its overlays | Each observation's redacted frame as a JPEG, with its tracked regions in the camera's pixels and how long after capture they were ready |
+| The picture and its overlays | Each observation's frame as a JPEG, after the camera's opt-ins, with its tracked regions in the camera's pixels and how long after capture they were ready |
 | **Looking**, **Frames today**, the steps | The pipeline's frame governor: its rate, its count against the period's quota, and each `vision.governor.step` it took |
 | **Asking sam-3.1 about unclear tracks** | Escalations the governor granted through `PipelineCameras::escalate` |
 | **Tracks now** | The tracker's anonymous identifiers on the newest frame, and where each is |

@@ -339,7 +339,7 @@ if let Some(chunk) = answer.primary() {
 | `frames_per_chunk` | 6 | Frames sent per caption call, evenly spaced over the chunk |
 | `call_options` | none | The video route and the data class remote frames are released as |
 | `captions`, `graph` | off | `adk-memory` entries per chunk; the clip in graph memory |
-| `keyframes`, `visual_memory` | off | Middle frames through the privacy hook into artifacts; their embeddings in a `VisualMemory` built without captions or a graph |
+| `keyframes`, `keyframe_privacy`, `visual_memory` | off | Middle frames into artifacts, through the hook of `keyframe_privacy` when one is given; their embeddings in a `VisualMemory` built without captions or a graph |
 | `answerer` | none | The model that answers from captions; any `LlmDescriber`, local or remote, metered by its token price |
 | `expand_questions` | on | Search for the question together with the caption the answerer expects, so a question in other words than the captions — "when do the lights go out?" over "the picture turns dark" — still finds its chunk |
 
@@ -443,20 +443,21 @@ ambiguous.
 `EgressGate::release_clip` runs the gate's steps for a clip:
 
 1. **Destination.** The adk-core egress policy decides each host.
-2. **Redact.** A clip is not re-encoded on the device, so a configuration that requires any
+2. **Redact.** A clip is not re-encoded on the device, so a configuration that lists any
    redaction class refuses every clip (V-I2). Analyse sampled frames instead; the gate
    redacts each one.
-3. **Decide.** `deny`, `ask` or `allow` for the host and data class; `ask` holds the clip
-   until a person approves its digest.
+3. **Decide.** `deny`, `ask` or `allow` (the default) for the host or provider and the data
+   class; `ask` holds the clip until a person approves its digest.
 4. **Record.** The receipt names the clip's digest as source and egress digest, the
    destination and the estimated cost, before the clip is returned.
 
 ```toml
+# Clips to Gemini go unasked; any other destination asks.
 [egress]
 default = "ask"
 
 [[egress.rule]]
-host = "generativelanguage.googleapis.com"
+provider = "gemini"
 classes = ["video"]
 action = "allow"
 ```

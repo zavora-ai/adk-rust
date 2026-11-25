@@ -3,7 +3,8 @@
 The `adk-vision` crate gives agents local-first perception: detection, segmentation,
 document reading, embedding, description, tracking and editing behind one set of
 contracts, with every region in source pixels, every weight file verified, and every image
-that leaves the machine cropped, redacted and recorded first. It implements
+that leaves the machine passing the egress gate and recorded first — redacted, held or
+refused only when you opt in to that restriction. It implements
 [spec 3.7](../../design/spec-3.7-vision.md).
 
 > **Note:** `adk-vision` is **Experimental**. This release holds phases A to C of spec 3.7:
@@ -26,7 +27,7 @@ adk-vision = { version = "3.0.0", features = ["fetch"] }
 |---------|------|------------|
 | Source image | `SourceImage`, `ImageRef` | Pixels decoded once on the device, named by the `sha256:` digest of their encoded bytes; `MediaStore` keeps them as artifacts |
 | Sent image | `SentImage` | What an on-device backend sees: pixels and the transform chain from the source. Only `VisionRuntime` makes one |
-| Released image | `ReleasedImage` | What a remote backend sees: the cropped, redacted copy, its bytes and its egress receipt. Only `EgressGate` makes one |
+| Released image | `ReleasedImage` | What a remote backend sees: the copy the gate cropped and, when the rules list classes, redacted; its bytes and its egress receipt. Only `EgressGate` makes one |
 | Raw region | `RawRegion` | A backend's answer, in the backend's own coordinate frame. Never leaves the call that produced it |
 | Region | `Region`, `RegionSet` | An answer in source pixels, with its backend, model, frame, transform chain and any escalation |
 | Manifest | `ModelManifest` | A model's files pinned by revision and SHA-256, its licence, runtime and input |
@@ -161,20 +162,23 @@ cost, region count, duration — the fields of the `vision.call` audit record.
    host is refused; otherwise the adk-core `EgressPolicy` decides each of the backend's hosts.
 2. **Minimise.** The image is cropped to the request's crop and downscaled to the
    backend's limit.
-3. **Redact.** Each class the configuration requires is found by its `Redactor` and filled
-   with solid colour, because blur and pixelation of text can be reversed; then the
-   caller's marked regions. A required class with no redactor refuses the release.
-4. **Decide.** The first `[[egress.rule]]` matching the host and data class, else the
-   default, says `deny`, `ask` or `allow`. `ask` holds the release until a person approves
-   its exact egress digest; a different image is a different digest and is held again.
+3. **Redact.** Each class the configuration's `redact` list names is found by its
+   `Redactor` and filled with solid colour, because blur and pixelation of text can be
+   reversed; then the caller's marked regions. A listed class with no redactor refuses the
+   release. The list is empty by default.
+4. **Decide.** The first `[[egress.rule]]` matching the host or provider and the data
+   class, else the default, says `deny`, `ask` or `allow`. `allow` is the default. `ask`
+   holds the release until a person approves its exact egress digest; a different image is a
+   different digest and is held again.
 5. **Record.** With a media store (`EgressGate::with_media_store`), the egress copy is
    stored as an artifact. The `EgressReceipt` goes to the `EgressRecorder`, and a
    `vision.egress.released` record to the call's audit trail, before the image is
    returned; a refusal is recorded too.
 6. **Release.**
 
-`.adk/vision.toml` holds the rules. There is no setting that releases before redaction,
-and an unknown key is an error:
+`.adk/vision.toml` holds the rules. With no file, every release is allowed and nothing is
+redacted; each restriction is an opt-in, enforced once chosen. Redaction of a listed class
+always precedes the decision, and an unknown key is an error:
 
 ```toml
 [egress]
@@ -184,8 +188,18 @@ redact = ["faces", "personal_text"]
 [[egress.rule]]
 host = "generativelanguage.googleapis.com"
 classes = ["document_crop"]
-action = "ask"
+action = "allow"
+
+[[egress.rule]]
+provider = "openrouter"
+action = "deny"
 ```
+
+A rule names exactly one of `host` and `provider`. A provider is the id a model's responses
+carry in `LlmResponse::provider` — `anthropic`, `gemini`, `openai`, `bedrock`, `nvidia`,
+`muse` — and a backend names its providers in `BackendDescriptor::providers`, which
+`LlmDescriber::remote` fills from `Llm::data_destinations`. See
+[Restricting What Leaves the Machine](../security/image-privacy.md).
 
 ## Model Manifests and Licences
 
@@ -300,7 +314,7 @@ an approval card can show the exact image; see [Governed Vision Tools](governed-
 - [Calibration and Measurement](measure.md): lengths and areas in millimetres in a fiducial's plane
 - [Visual Memory](memory.md): images by embedding in any `adk-rag` vector store, found by text or an example image, and erased by source
 - [The Annotated Viewer](../surfaces/annotated-viewer.md): what an agent saw, on the web home
-- [Image Privacy](../security/image-privacy.md)
+- [Restricting What Leaves the Machine](../security/image-privacy.md)
 - [Local ONNX backends](onnx.md)
 - [Cloud vision backends](cloud.md): `LlmDescriber`, NVIDIA NIM and Meta `sam-3.1`
 - [Local describer](local-describer.md): Qwen3-VL in this process over mistral.rs

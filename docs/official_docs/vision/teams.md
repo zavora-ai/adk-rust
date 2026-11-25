@@ -12,10 +12,10 @@ and the image on one card. This page implements spec 3.7 §7.12 and the generic 
 adk-vision = { version = "3.0.0", features = ["team"] }
 ```
 
-> **Note:** the spec's open-question defaults are in force: images leave only after
-> redaction, through the egress gate, and each remote host asks first unless a rule allows it
-> (Q1); faces are filled by the YuNet face detector, and a person it finds no face for whole
-> (Q3).
+> **Note:** images reach a remote role only through the egress gate, under the rules of
+> `.adk/vision.toml`; with none they leave as they are, and `ask`, `deny` and `redact` each
+> restrict once chosen (spec 3.7 Q1, revised 2026-11-25). Under `redact = ["faces"]`, faces
+> are filled by the YuNet face detector, and a person it finds no face for whole (Q3).
 
 ## The Three Roles
 

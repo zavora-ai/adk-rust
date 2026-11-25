@@ -937,7 +937,8 @@ async fn redactors(
     use adk_vision::onnx::{OnnxOptions, RfDetr, YuNet};
     use adk_vision::{FaceRedactor, PersonalTextRedactor, PpOcrReader, PpOcrV6Size};
 
-    let classes = gate.redaction_classes();
+    // The classes the rules list, which the gate refuses to release without.
+    let classes = gate.config().redact.clone();
     if classes.contains(&RedactionClass::faces()) {
         let mut models = Vec::new();
         for id in FACE_DETECTORS {

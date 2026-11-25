@@ -1,9 +1,11 @@
 //! The `vision` template: a Document desk (spec 3.7 §5 S1–S4, §8.3) — a harness with the
-//! vision pack that reads documents on the device and asks before an image leaves.
+//! vision pack that reads documents on the device and asks a cloud model about what it
+//! could not read.
 //!
-//! PP-OCRv6 reads each page locally; RF-DETR finds people so the egress gate can cover them;
-//! a cloud model describes only what `.adk/vision.toml` lets out, after redaction, and each
-//! release waits for the person at the terminal.
+//! PP-OCRv6 reads each page locally and a cloud model describes a region it could not read.
+//! The generated `.adk/vision.toml` sends images as they are; its commented restrictions —
+//! redaction by RF-DETR and PP-OCRv6, a rule that asks or denies, the on-device profile —
+//! each opt in with one uncommented line.
 
 use crate::template::{AgentCodeFragments, AgentTemplate, FileFragment, TemplateCategory};
 
@@ -11,7 +13,7 @@ use crate::template::{AgentCodeFragments, AgentTemplate, FileFragment, TemplateC
 pub fn template() -> AgentTemplate {
     AgentTemplate {
         name: "vision",
-        description: "Document desk: a harness with the vision pack — PP-OCRv6 and RF-DETR on the device, a cloud describer behind the egress gate, redaction and approval before any image leaves",
+        description: "Document desk: a harness with the vision pack — PP-OCRv6 on the device, a cloud describer for what it cannot read, and opt-in redaction and approval in .adk/vision.toml",
         category: TemplateCategory::AgentType,
         default_provider: "anthropic",
         required_features: vec!["minimal", "harness", "vision-local", "artifacts", "cli"],
@@ -50,8 +52,9 @@ const AGENT_CONSTRUCTION: &str = r#"let model: Arc<dyn adk_rust::Llm> = Arc::new
         return Ok(());
     }
 
-    // On the device: PP-OCRv6 reads, RF-DETR finds people to cover. Both are fetched once
-    // by revision into the Hugging Face cache and checked by SHA-256 before every load.
+    // On the device: PP-OCRv6 reads, RF-DETR finds people to cover when .adk/vision.toml
+    // asks for it. Both are fetched once by revision into the Hugging Face cache and checked
+    // by SHA-256 before every load.
     let local = desk::Local::fetch().await?;
 
     // Every image the desk reads, and every redacted copy it sends, is an artifact.
@@ -61,7 +64,8 @@ const AGENT_CONSTRUCTION: &str = r#"let model: Arc<dyn adk_rust::Llm> = Arc::new
         .model(model.clone())
         .instruction(desk::INSTRUCTION)
         .workspace(Workspace::new("."))
-        // Auto: reading and writing tables/ run; a crop sent to the cloud waits for you.
+        // Auto: reading, writing tables/ and describing a crop run; a rule in
+        // .adk/vision.toml can make the crop wait for you.
         .mode(HarnessMode::Auto)
         .prompter(Arc::new(ConsolePrompter::new(console.clone())))
         .pack_vision(desk::pack(&local, model.clone(), artifacts.clone())?)
@@ -91,7 +95,8 @@ use adk_rust::vision::{
     FetchConfig, FileAcceptanceStore, LlmDescriber, ManifestSet, MediaStore, ModelFetcher,
     PersonRedactor, PersonalTextRedactor, PpOcrReader, PpOcrV6Size, VisionRuntime,
 };
-use adk_rust::{Llm, Part, SessionId, UserId};
+use adk_rust::Llm;
+use adk_rust::{Part, SessionId, UserId};
 
 /// What the agent is told; what a page says is data, never instructions.
 pub const INSTRUCTION: &str = "You are a document desk. For each page you are given, call \
@@ -150,25 +155,15 @@ impl Local {
     }
 }
 
-/// The host a cloud model's requests go to, for the egress rules in `.adk/vision.toml`.
-pub fn host_of(model: &str) -> &'static str {
-    match adk_rust::vendor_for_model(model) {
-        "anthropic" => "api.anthropic.com",
-        "gemini" => "generativelanguage.googleapis.com",
-        "openai" => "api.openai.com",
-        _ => "model.invalid",
-    }
-}
-
 /// The vision pack: PP-OCRv6 reads on the device; `model` describes a region in the cloud,
-/// after the gate has covered faces and personal text and you have approved the image.
+/// at the hosts its client names, under the rules of `.adk/vision.toml`. The redactors run
+/// only for the classes the rules' `redact` list names.
 pub fn pack(
     local: &Local,
     model: Arc<dyn Llm>,
     artifacts: Arc<InMemoryArtifactService>,
 ) -> anyhow::Result<VisionPack> {
-    let host = host_of(model.name());
-    let describer = Arc::new(LlmDescriber::remote_with_hosts(model, [host])?);
+    let describer = Arc::new(LlmDescriber::remote(model)?);
     let reader = local.reader.clone();
     Ok(VisionPack::new(MediaStore::new(artifacts), move |gate, store| {
         VisionRuntime::builder()
@@ -181,8 +176,7 @@ pub fn pack(
     .redactor(Arc::new(PersonRedactor::new(local.people.clone())))
     .redactor(Arc::new(
         PersonalTextRedactor::new(local.reader.clone()).with_labelled_fields(["Name"]),
-    ))
-    .model_hosts([host]))
+    )))
 }
 
 /// The harness with an artifact store the vision tools read pages from.
@@ -250,11 +244,13 @@ impl Desk {
 }
 "##;
 
-/// `tests/desk_smoke.rs`: a remote describe is held, and refused, before anything leaves.
-const DESK_SMOKE_TEST: &str = r##"//! The desk's egress: a cloud describe of an identity card is held for a person, and when
-//! the person says no, nothing reaches the provider. A scripted model plays both the agent
-//! and the provider, and on-device stand-ins find a person and a name, so the test needs no
-//! API key and no model download: `cargo test`.
+/// `tests/desk_smoke.rs`: under the desk's rules a describe leaves; under a rule that asks
+/// it is held, and refused, before anything leaves.
+const DESK_SMOKE_TEST: &str = r##"//! The desk's egress. Under `.adk/vision.toml` as generated, a cloud describe of a card
+//! leaves without asking. Under a rule that asks, it is held for a person, and when the
+//! person says no, nothing reaches the provider. A scripted model plays both the agent and
+//! the provider, and on-device stand-ins find a person and a name, so the tests need no API
+//! key and no model download: `cargo test`.
 
 use std::sync::{Arc, Mutex};
 
@@ -336,9 +332,22 @@ impl ApprovalPrompter for Refuses {
     }
 }
 
-#[tokio::test]
-async fn a_cloud_describe_waits_for_a_person_and_nothing_leaves_on_no() -> anyhow::Result<()> {
-    let dir = std::env::temp_dir().join(format!("{name}-desk-{}", std::process::id()));
+/// The restriction the second test opts in to: crops for Claude ask, faces and personal
+/// text are covered.
+const ASK_FOR_CROPS: &str = r#"
+[egress]
+redact = ["faces", "personal_text"]
+
+[[egress.rule]]
+host = "api.anthropic.com"
+classes = ["document_crop"]
+action = "ask"
+"#;
+
+/// Runs one describe of a card under `rules`; returns how often the person was asked and
+/// how many requests reached the provider.
+async fn describe_once(rules: &str, tag: &str) -> anyhow::Result<(usize, usize)> {
+    let dir = std::env::temp_dir().join(format!("{name}-desk-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     let artifacts = Arc::new(InMemoryArtifactService::new());
     let card = DecodedImage::filled(640, 400, [240, 240, 240, 255]).encode_png()?;
@@ -354,7 +363,6 @@ async fn a_cloud_describe_waits_for_a_person_and_nothing_leaves_on_no() -> anyho
         .await?;
     let provider = Arc::new(ScriptedLlm::new("claude-haiku-5-5", Vec::<ScriptedResponse>::new()));
     let describer = Arc::new(LlmDescriber::remote_with_hosts(provider.clone(), ["api.anthropic.com"])?);
-    let rules = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/.adk/vision.toml"))?;
     let pack = VisionPack::new(MediaStore::new(artifacts.clone()), move |gate, store| {
         VisionRuntime::builder()
             .remote_describer(describer)
@@ -362,7 +370,7 @@ async fn a_cloud_describe_waits_for_a_person_and_nothing_leaves_on_no() -> anyho
             .media_store(store)
             .build()
     })
-    .config(VisionConfig::from_toml_str(&rules)?)
+    .config(VisionConfig::from_toml_str(rules)?)
     .redactor(Arc::new(PersonRedactor::new(Arc::new(Portrait(on_device("portrait"))))))
     .redactor(Arc::new(PersonalTextRedactor::new(Arc::new(Blank(on_device("blank"))))))
     .model_hosts(["api.anthropic.com"]);
@@ -373,7 +381,7 @@ async fn a_cloud_describe_waits_for_a_person_and_nothing_leaves_on_no() -> anyho
                 "vision_describe",
                 json!({ "image": "card.png", "region": [0, 0, 640, 400], "question": "What kind of document is this?" }),
             ),
-            ScriptedResponse::text("I was not allowed to send it."),
+            ScriptedResponse::text("Done."),
         ],
     );
     let prompter = Arc::new(Refuses::default());
@@ -404,60 +412,66 @@ async fn a_cloud_describe_waits_for_a_person_and_nothing_leaves_on_no() -> anyho
         event?;
     }
 
-    assert_eq!(*prompter.0.lock().unwrap(), 1, "the person was asked once");
-    assert!(provider.requests().is_empty(), "nothing reached the provider");
     std::fs::remove_dir_all(&dir).ok();
+    let asked = *prompter.0.lock().unwrap();
+    Ok((asked, provider.requests().len()))
+}
+
+#[tokio::test]
+async fn under_the_desk_rules_a_describe_leaves_without_asking() -> anyhow::Result<()> {
+    let rules = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/.adk/vision.toml"))?;
+    let (asked, sent) = describe_once(&rules, "open").await?;
+    assert_eq!(asked, 0, "nobody was asked");
+    assert_eq!(sent, 1, "the crop reached the provider");
+    Ok(())
+}
+
+#[tokio::test]
+async fn under_a_rule_that_asks_nothing_leaves_on_no() -> anyhow::Result<()> {
+    let (asked, sent) = describe_once(ASK_FOR_CROPS, "ask").await?;
+    assert_eq!(asked, 1, "the person was asked once");
+    assert_eq!(sent, 0, "nothing reached the provider");
     Ok(())
 }
 "##;
 
-/// `.adk/vision.toml`: what may leave the machine, always after redaction.
-const VISION_TOML: &str = r##"# What may leave this machine, and when. Every image is redacted first — faces and
-# personal text are always covered — and there is no setting that releases before
-# redaction. `adk-rust vision egress log` lists what left.
+/// `.adk/vision.toml`: images leave as they are; each restriction is one uncommented line.
+const VISION_TOML: &str = r##"# What leaves this machine. As written, an image the desk asks the cloud model about
+# leaves as it is: nothing is held, redacted or refused. Each restriction below is an
+# opt-in; once uncommented it is enforced, and an image it holds or refuses never leaves.
+# `adk-rust vision egress log` lists every release and refusal.
 [egress]
-# Anything no rule names asks you first.
-default = "ask"
-redact = ["faces", "personal_text"]
+default = "allow"
 
-# A crop of a document to the desk's cloud model: ask each time. Change `ask` to `allow` to
-# send crops without asking; the harness counts an `allow` here only when you trust it.
-# A whole page never leaves: rules match in order.
-[[egress.rule]]
-host = "api.anthropic.com"
-classes = ["document"]
-action = "deny"
+# Cover faces and personal text on this computer before any image leaves. A listed class
+# with no redactor refuses the release instead of sending it uncovered.
+# redact = ["faces", "personal_text"]
 
-[[egress.rule]]
-host = "api.anthropic.com"
-classes = ["document_crop"]
-action = "ask"
+# Keep every image on this computer:
+# on_device = true
 
-[[egress.rule]]
-host = "generativelanguage.googleapis.com"
-classes = ["document"]
-action = "deny"
-
-[[egress.rule]]
-host = "generativelanguage.googleapis.com"
-classes = ["document_crop"]
-action = "ask"
-
-[[egress.rule]]
-host = "api.openai.com"
-classes = ["document"]
-action = "deny"
-
-[[egress.rule]]
-host = "api.openai.com"
-classes = ["document_crop"]
-action = "ask"
+# Rules match in order; each names a `host`, or a `provider` (anthropic, gemini, openai)
+# for every host that provider's client uses. `ask` holds the exact image for your
+# approval at the terminal; `deny` refuses it.
+#
+# Never send a whole page:
+# [[egress.rule]]
+# provider = "anthropic"
+# classes = ["document"]
+# action = "deny"
+#
+# Ask before a crop leaves:
+# [[egress.rule]]
+# provider = "anthropic"
+# classes = ["document_crop"]
+# action = "ask"
 "##;
 
 /// `AGENTS.md` for the desk.
 const AGENTS_MD: &str = r##"# {name}
 
-A document desk: it reads pages into tables/ and asks before an image leaves this machine.
+A document desk: it reads pages into tables/ on this machine and asks a cloud model about
+what it could not read.
 
 ## Rules
 
@@ -487,13 +501,13 @@ tables/
 const README: &str = r##"# {name}
 
 A Document desk on ADK-Rust: a harness with the vision pack that reads documents on this
-computer and sends only what you allow, after redaction.
+computer and asks a cloud model about a region it could not read.
 
 | What | Where it runs |
 |------|---------------|
 | Reading pages (PP-OCRv6 tiny) | This computer |
-| Finding people to cover (RF-DETR Nano) | This computer |
-| Describing a region it could not read | The cloud model, after redaction and your approval |
+| Describing a region it could not read | The cloud model |
+| Finding people to cover (RF-DETR Nano), when `.adk/vision.toml` asks for it | This computer |
 
 ## Run
 
@@ -509,11 +523,19 @@ elsewhere, and `HF_HUB_OFFLINE=1` once they are cached. Tables land in `tables/`
 
 ## What may leave
 
-`.adk/vision.toml` holds the egress rules. Faces and personal text are covered before any
-image leaves, a whole page never leaves, and a crop for the cloud model asks you first: the
-terminal shows the host, the data class and what was covered, and only that exact image is
-sent if you approve. With the `adk-rust` CLI installed with feature `vision`,
-`adk-rust vision egress log` lists every release and refusal.
+`.adk/vision.toml` holds the egress rules. As generated, a crop for the cloud model
+leaves as it is. Each restriction is one uncommented line:
+
+| Restriction | Line |
+|-------------|------|
+| Cover faces and personal text first | `redact = ["faces", "personal_text"]` |
+| Ask before a crop leaves | the `document_crop` rule with `action = "ask"` |
+| Never send a whole page | the `document` rule with `action = "deny"` |
+| Keep every image on this computer | `on_device = true` |
+
+A rule that asks shows the host, the data class and what was covered at the terminal, and
+only that exact image is sent if you approve. With the `adk-rust` CLI installed with feature
+`vision`, `adk-rust vision egress log` lists every release and refusal.
 
 ## Test
 
@@ -521,8 +543,9 @@ sent if you approve. With the `adk-rust` CLI installed with feature `vision`,
 cargo test
 ```
 
-runs a describe that waits for a person and leaves nothing behind when the person says no;
-it needs no key and no model download.
+runs a describe under the desk's rules, which leaves without asking, and one under a rule
+that asks, which leaves nothing behind when the person says no; they need no key and no
+model download.
 
 ## Resources
 
@@ -590,22 +613,39 @@ mod tests {
         assert!(!main.contains("Launcher::new(agent)"), "the desk runs its own loop: {main}");
         let desk = file(&files, "src/desk.rs");
         assert!(desk.contains("PersonRedactor::new") && desk.contains("PersonalTextRedactor::new"));
-        assert!(desk.contains("LlmDescriber::remote"));
+        assert!(desk.contains("LlmDescriber::remote(model)"));
         for (path, content) in &files {
             assert!(!content.contains("{name}"), "{path} keeps a placeholder");
         }
     }
 
     #[test]
-    fn the_desk_rules_ask_for_crops_and_never_send_a_page() {
+    fn the_desk_rules_allow_and_offer_each_restriction_commented() {
         let files = generate("desk", "anthropic");
-        let rules: toml::Value = file(&files, ".adk/vision.toml").parse().unwrap();
+        let text = file(&files, ".adk/vision.toml");
+        let rules: toml::Value = text.parse().unwrap();
+        let egress = rules["egress"].as_table().unwrap();
+        assert_eq!(egress["default"].as_str(), Some("allow"));
+        assert!(!egress.contains_key("redact") && !egress.contains_key("rule"), "{egress:?}");
+
+        // Uncommenting every restriction gives rules that parse: redaction, a page denied and
+        // a crop asked for.
+        let uncommented: String = text
+            .lines()
+            .map(|line| match line.strip_prefix("# ") {
+                Some(rest) if rest.contains(" = ") || rest.starts_with("[[") => rest,
+                _ => line,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rules: toml::Value = uncommented.parse().unwrap();
         let egress = &rules["egress"];
-        assert_eq!(egress["default"].as_str(), Some("ask"));
         let redact: Vec<&str> =
             egress["redact"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
         assert_eq!(redact, vec!["faces", "personal_text"]);
+        assert_eq!(egress["on_device"].as_bool(), Some(true));
         for rule in egress["rule"].as_array().unwrap() {
+            assert_eq!(rule["provider"].as_str(), Some("anthropic"), "{rule}");
             let class = rule["classes"][0].as_str().unwrap();
             let action = rule["action"].as_str().unwrap();
             match class {

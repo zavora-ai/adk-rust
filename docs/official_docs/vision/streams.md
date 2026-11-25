@@ -185,10 +185,11 @@ async fn escalate(pipeline: &StreamPipeline, cx: &VisionCx, frames: u64) -> adk_
 
 ## The Privacy Step
 
-Every frame passes a `PrivacyHook` before any other stage sees it. The builder requires one:
-there is no default, so a pipeline that redacts nothing says so with `NoRedaction`, and kept
-frames record `none` as their privacy step. `RedactorPrivacy` runs any on-device egress
-`Redactor` and hides what it finds:
+A stream's frames are not redacted unless you give a hook: `with_privacy(hook)` on
+`StreamPipeline::builder`, `SourceSpec` and `LiveCamera` passes every frame through a
+`PrivacyHook` before any other stage sees it, and a frame the hook fails on is dropped.
+Without one, kept frames record `none` (`NoRedaction`) as their privacy step.
+`RedactorPrivacy` runs any on-device egress `Redactor` and hides what it finds:
 
 | `RedactionMethod` | Hides each box by |
 |-------------------|-------------------|
@@ -204,7 +205,7 @@ and the rest of its person stays; a person seen from behind is blurred whole. Ea
 held for two frames (`RedactorPrivacy::with_hold`): a frame in which YuNet misses a face it
 found just before blurs the face's last place, widened a quarter of its size per frame. Its name, and
 the privacy step kept frames record, is `redactor:faces`. The models load on the first frame,
-each verified against its SHA-256; see [Image Privacy](../security/image-privacy.md#what-is-redacted)
+each verified against its SHA-256; see [Restricting What Leaves the Machine](../security/image-privacy.md#what-is-redacted)
 for the redactor and the face detector's licence.
 
 ```rust
@@ -256,9 +257,7 @@ each deletion `vision.evidence.purged`, with the frame's digest, never its pixel
 ```rust
 use std::sync::Arc;
 
-use adk_vision::stream::{
-    FrameBudget, NoRedaction, Observation, ObservationSink, RtspSource, StreamPipeline,
-};
+use adk_vision::stream::{FrameBudget, Observation, ObservationSink, RtspSource, StreamPipeline};
 use adk_vision::{DetectQuery, FrameSourceId, GreedyIouTracker, Sampling, VisionCx, VisionRuntime};
 
 /// Prints what the detector found on each frame.
@@ -335,7 +334,7 @@ and delivers the event to a `WatchSink` such as `adk-kernel`'s `VisionWakeSource
 use std::sync::Arc;
 
 use adk_artifact::InMemoryArtifactService;
-use adk_vision::stream::{FrameKeeper, NoRedaction, RtspSource, StreamPipeline, StreamWatch};
+use adk_vision::stream::{FrameKeeper, RtspSource, StreamPipeline, StreamWatch};
 use adk_vision::{
     DetectQuery, FrameSourceId, GreedyIouTracker, MediaScope, Sampling, VisionCx, VisionRuntime,
     WatchCondition, WatchEvaluator, WatchSink,
@@ -375,14 +374,14 @@ observation on to a second sink, such as the live camera surface.
 
 `FrameSources` is the registry an operator fills and an agent watches through the
 `vision_watch` tool. The operator registers each source with a `SourceSpec` — the source,
-its privacy hook, the keeper, the wake sink, and optionally a description, the detector and
+the keeper, the wake sink, and optionally a privacy hook, a description, the detector and
 its query, a `TrackerFactory`, the sampling, a budget and an observer — and the agent names
 it; the camera URL and its credentials never reach a tool call, a record or a wake.
 
 ```rust
 use std::sync::Arc;
 
-use adk_vision::stream::{FrameKeeper, FrameSource, FrameSources, NoRedaction, SourceSpec};
+use adk_vision::stream::{FrameKeeper, FrameSource, FrameSources, SourceSpec};
 use adk_vision::{
     DetectQuery, FrameSourceId, GreedyIouTracker, Sampling, Tracker, VisionCx, VisionRuntime,
     WatchCondition, WatchSink,

@@ -2,8 +2,9 @@
 
 `VisionToolset` gives an agent nine vision tools that run on the governed tool path. A
 call that stays on the device runs like any read. A call that would send an image off the
-machine is checked against the egress rules, held for a person with the exact image it
-would send when the rules ask, and released only as that redacted copy. Every backend
+machine is checked against the egress rules: with none it leaves as it is; a rule that asks
+holds it for a person with the exact image it would send, and a listed redaction class
+covers it first. Every backend
 call opens its budget hold before any image leaves, and every call, release and edit
 writes a signed `vision.*` audit record. This page implements spec 3.7 §7.8, §7.9 and
 §9.3 ([spec](../../design/spec-3.7-vision.md)).
@@ -13,8 +14,9 @@ writes a signed `vision.*` audit record. This page implements spec 3.7 §7.8, §
 adk-vision = { version = "3.0.0", features = ["guardrail"] }
 ```
 
-> **Note:** the spec's open-question defaults are in force: images leave only after
-> redaction and each remote host asks first (Q1). Q3 is settled: faces are redacted by the
+> **Note:** spec 3.7 Q1, revised 2026-11-25: every restriction is an opt-in. With no rules
+> an image leaves unredacted and unasked; `ask`, `deny`, `redact` and `on_device` each
+> restrict once chosen. Q3 is settled: when the rules list `faces`, faces are redacted by the
 > YuNet face detector, and a person it finds no face for as the whole person.
 
 ## The Tools
@@ -150,15 +152,15 @@ that lets the call run names the digest it saw: see
 The rules come from `.adk/vision.toml`; see [The Egress Gate](index.md#the-egress-gate).
 The egress policy reads them per call:
 
-| Rule for the host and data class | Policy decision | Gate decision |
+| Rule for the host or provider and data class | Policy decision | Gate decision |
 |----------------------------------|-----------------|---------------|
 | `deny` | `Deny`; the evidence callback refuses before anyone is asked | `vision.egress.refused` at `decide` |
 | `ask` | `RequireApproval`, with the egress image as evidence | Releases the approved digest only |
-| `allow` | `Allow` | Releases the redacted copy |
+| `allow` (the default) | `Allow` | Releases the copy, redacted when the rules list classes |
 | — (on-device backend) | `Allow` | Nothing leaves |
 
-Redaction precedes every decision: an `allow` rule releases the redacted copy, never the
-original. An escalation from an on-device backend to a remote one is decided by the same
+Redaction of every listed class precedes every decision: under `redact`, an `allow` rule
+releases the redacted copy, never the original. An escalation from an on-device backend to a remote one is decided by the same
 rules when the runtime escalates; under an `ask` rule its crops are not pre-approved and
 the call fails with the egress digest, so give the escalation's host and class an `allow`
 rule to escalate unattended.
@@ -239,17 +241,18 @@ fn harness(
 
 | Piece | The pack |
 |-------|----------|
-| Classes | On the device `Read`; off it `External`, trusted read-only under an `allow` rule — so an `ask` call is held in Ask and Auto and denied in ReadOnly and Plan |
-| Rules | `.adk/vision.toml`, or `VisionPack::config`; faces and personal text are always redacted, and a workspace file's `allow` rules ask until the operator calls `trust_workspace_rules` |
-| Redactors | The operator's `VisionPack::redactor`s; with feature `vision-local`, a default for each required class none covers (below) |
+| Classes | On the device `Read`; off it `External`, trusted read-only under an `allow` rule (the default), so an `ask` call is held in Ask and Auto. ReadOnly and Plan deny every call that sends an image off the machine, whatever the rules allow |
+| Rules | `.adk/vision.toml` as written, or `VisionPack::config`; with neither, every release is allowed and nothing is redacted. `VisionPack::distrust_workspace_rules` makes a workspace file's `allow` rules and default ask, and with no file every release asks |
+| Redactors | The operator's `VisionPack::redactor`s; with feature `vision-local`, a default for each listed class none covers (below) |
 | Approvals | The egress policy joins the operator policy; the harness prompter or inbox sees the egress image on the held call |
-| Privacy guardrail | On every request to a remote harness model; no agent tool removes it ([Image Privacy](../security/image-privacy.md)) |
+| Privacy guardrail | On every request to a remote harness model, releasing to the hosts the model names; no agent tool removes it ([Restricting What Leaves the Machine](../security/image-privacy.md)) |
 | Text | `vision_read` and `vision_describe` deliver recognised text inside an `<untrusted-content source="vision">` block, screened as fetched text is |
 
 ### Default Redactors
 
 With `adk-harness` feature `vision-local`, the pack installs a default redactor for each class
-the rules require that no `VisionPack::redactor` covers, so a pack needs no redactor wiring:
+the rules' `redact` list names that no `VisionPack::redactor` covers, so a pack needs no
+redactor wiring:
 
 ```toml
 [dependencies]
@@ -274,7 +277,7 @@ at build time as `adk-vision`'s `onnx` feature does.
 
 - [The Annotated Viewer](../surfaces/annotated-viewer.md) — each call's answer record, drawn over its image on the web home
 - [Vision overview](index.md)
-- [Image Privacy](../security/image-privacy.md)
+- [Restricting What Leaves the Machine](../security/image-privacy.md)
 - [Tool Authorization](../security/tool-authorization.md) - "Approving with Evidence"
 - [Audit Log](../security/audit-log.md)
 - [Spend Ledger](../security/spend-ledger.md)

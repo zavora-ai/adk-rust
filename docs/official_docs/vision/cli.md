@@ -23,7 +23,7 @@ Everything the CLI keeps belongs to a project: the current directory, or `--proj
 
 | Path | Holds |
 |------|-------|
-| `.adk/vision.toml` | The egress rules (`--config` names another file). No file means every release asks |
+| `.adk/vision.toml` | The egress rules (`--config` names another file). No file means every release is allowed and nothing is redacted |
 | `.adk/vision/licences.json` | Licence acceptances, recorded by `models accept` |
 | `.adk/vision/egress.jsonl` | Every release and refusal, written by the gate before a request is sent |
 | `.adk/vision/media/` | The egress copies: the exact bytes released |
@@ -105,14 +105,16 @@ runs Qwen3-VL in the process — see [Local Describer](local-describer.md).
 
 ### A Remote Call Goes Through the Egress Gate
 
-For a remote backend the CLI builds the gate from the project's rules — faces and personal
-text are always redacted, whatever the file says — and releases only what the rules allow:
+For a remote backend the CLI builds the gate from the project's rules, applied as written;
+with no file the image leaves as it is. The backend's hosts are its client's, so a
+`--base-url` gateway is the host the rules see:
 
 1. The image is cropped (with `--crop`) and resized to the backend's limit.
-2. Faces and personal text are covered, on the device. Without `vision-local` there is no
-   redactor, and the gate refuses the release at its redact step.
-3. The rule for the host and data class decides: `deny` refuses; `allow` releases; `ask`
-   holds the call.
+2. The classes the rules' `redact` list names — `faces`, `personal_text` — are covered, on
+   the device. Without `vision-local` there is no redactor, and the gate refuses a release the
+   rules want redacted at its redact step.
+3. The rule for the host or provider and the data class decides: `deny` refuses; `allow`
+   releases; `ask` holds the call. `allow` is the default.
 4. A held call writes the exact image to `.adk/vision/held/` and prints the host, data class,
    what was covered and the egress digest. On a terminal it asks `send this image to <host>?`;
    without one it exits with status 2, and `--approve <digest>` releases that image, and only
@@ -121,6 +123,7 @@ text are always redacted, whatever the file says — and releases only what the 
    before the request is sent.
 
 ```bash
+# .adk/vision.toml: default = "ask", redact = ["faces", "personal_text"]
 adk-rust vision run describe id-card.png --crop 20,70,620,390 \
   --question "What kind of document is this?"
 # held: this image would be sent to api.anthropic.com as image_crop
@@ -188,4 +191,4 @@ the `PATH` is used otherwise ([Streams](streams.md#ffmpeg)).
 - [Getting started: a Document desk](getting-started.md)
 - [Vision overview](index.md): manifests, licences and the egress gate
 - [Streams](streams.md): frame sources, local cameras included
-- [Image Privacy](../security/image-privacy.md)
+- [Restricting What Leaves the Machine](../security/image-privacy.md)

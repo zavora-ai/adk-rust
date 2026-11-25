@@ -1,22 +1,60 @@
-# Image Privacy
+# Restricting What Leaves the Machine
 
-An image an agent handles can carry faces and personal details a text guardrail never sees.
-`adk-vision` guards every path the framework controls by which an image could reach a remote
-model: the vision tools release images only through the egress gate, and
-`ImagePrivacyGuardrail` runs the same gate on model requests, tool results and user input.
-An image leaves only as a cropped, redacted copy that the rules allow or a person approved,
-and every release is recorded before the request is sent (spec 3.7 §7.8, §9).
+An agent with `adk-vision` reads, detects and describes images out of the box: with no
+`.adk/vision.toml`, an image a remote backend is called with leaves as the agent sends it,
+unredacted and unasked, and its release is still recorded. Every restriction below is an
+opt-in. Once chosen, it is enforced on every path the framework controls — the vision tools
+release images only through the egress gate, and `ImagePrivacyGuardrail` runs the same gate
+on model requests, tool results and user input — and it fails closed: an image it holds,
+refuses or cannot redact never leaves (spec 3.7 §7.8, §9, §13 Q1 revised 2026-11-25).
 
 ```toml
 [dependencies]
 adk-vision = { version = "3.0.0", features = ["guardrail"] }
 ```
 
+## The Opt-Ins
+
+| Restriction | Set with | What it does |
+|-------------|----------|--------------|
+| Ask | `default = "ask"`, or a rule with `action = "ask"` | Holds the release until a person approves the exact redacted image, by its egress digest |
+| Deny | `default = "deny"`, or a rule with `action = "deny"` | Refuses the release and records why |
+| Per destination | `[[egress.rule]]` with `host` (`*.example.com` for subdomains) or `provider` (`anthropic`, `gemini`, `bedrock`, `nvidia`) | Applies the rule's action to that host, or to every host of that provider |
+| Redact | `redact = ["faces", "personal_text"]` | Covers each listed class on the device before the decision; a listed class with no redactor refuses the release |
+| On device | `on_device = true` | Refuses every release at the destination step |
+| Stream privacy | `with_privacy(hook)` on `StreamPipeline::builder`, `SourceSpec` or `LiveCamera` | Redacts every frame before any other stage sees it |
+| Cover people on the live camera | `LiveCamera::cover_people` | Covers every detected person before a frame is shown or kept |
+| Distrust the workspace file | `VisionPack::distrust_workspace_rules` | A workspace `.adk/vision.toml`'s `allow` rules and default ask, and with no file every release asks |
+| Harness mode | ReadOnly or Plan | Denies every vision call that sends an image off the machine, whatever the rules allow |
+
+```toml
+# .adk/vision.toml: crops to Anthropic go after faces and personal text are covered; whole
+# pages ask; nothing goes to OpenRouter.
+[egress]
+default = "ask"
+redact = ["faces", "personal_text"]
+
+[[egress.rule]]
+provider = "anthropic"
+classes = ["document_crop"]
+action = "allow"
+
+[[egress.rule]]
+provider = "openrouter"
+action = "deny"
+```
+
+A rule names exactly one of `host` and `provider`; rules match in order, the first match
+decides, and a backend with several hosts gets the strictest of their decisions. A
+`provider` is the id a model's responses carry in `LlmResponse::provider`, which
+`adk_core::Llm::data_destinations` names with the hosts of the client's configured endpoint:
+a custom base URL, a Vertex AI location or a Bedrock region is the host a rule sees.
+
 ## What Is Redacted
 
-The gate fills each region solid black — blur and pixelation of text can be reversed — then
-encodes the copy that leaves. Redactors run on the device and answer in the pixels of the
-image about to be released:
+When the rules list a class, the gate fills each region solid black — blur and pixelation
+of text can be reversed — then encodes the copy that leaves. Redactors run on the device and
+answer in the pixels of the image about to be released:
 
 | Class | Redactor | Finds |
 |-------|----------|-------|
@@ -28,7 +66,7 @@ image about to be released:
 `PiiRedactor::find` reports each match as a byte range of the text it searched;
 `PersonalTextRedactor` joins each block's words with single spaces, so every range maps to
 the words it covers and their boxes. A labelled field's value is covered whether the reader
-returns it on the label's line or as the next block to its right. A class the rules require
+returns it on the label's line or as the next block to its right. A class the rules list
 with no redactor installed refuses every release, and a redactor refuses a remote backend.
 
 A face counts as a person's when its centre lies inside the person's box, so a person seen
@@ -44,7 +82,7 @@ desk frame is no longer blanked by one person's box. An approval card draws a fa
 | Both | `2 faces covered, 1 as the whole person` |
 
 The receipt and the `vision.egress.released` record count both under `faces`, the class the
-rules require.
+rules list.
 
 ### The Default Redactors
 
@@ -62,8 +100,10 @@ file checked against its SHA-256 before it loads. A load that fails — `HF_HUB_
 weights not cached, a digest mismatch, no network — fails that call, so the gate refuses the
 release at its redact step and records why; the next call tries the load again. One load
 errs toward covering instead: a `FaceRedactor` whose face detector cannot load covers every
-person its fallback finds as the whole person, with a warning.
-`PERSONAL_FIELD_LABELS` lists the field labels the harness vision pack covers by default.
+person its fallback finds as the whole person, with a warning. The harness vision pack
+installs these defaults (feature `vision-local`) for `faces` and `personal_text` when the
+rules list them and no redactor of the operator's covers them; `PERSONAL_FIELD_LABELS` lists
+the field labels it covers.
 
 > **Note:** RF-DETR is trained on photographs: the drawn portrait of the test identity card
 > scores 0.11 as a `person`. YuNet finds the drawn faces of the scenario fixtures (scores 0.64
@@ -92,17 +132,19 @@ compares them, and no manifest holds a recognition model.
 
 The `adk-harness` test `s3_the_default_redactors_leave_no_face_and_no_personal_string` checks
 the harness vision pack's default redactors on the identity-card fixture and two COCO
-photographs: YuNet finds no face, and PP-OCRv6 tiny, small and medium none of the seeded
-personal strings, in the bytes the provider received.
+photographs, under rules that list both classes: YuNet finds no face, and PP-OCRv6 tiny,
+small and medium none of the seeded personal strings, in the bytes the provider received.
 
 ## Faces on Streams
 
-A frame source's privacy hook runs before any other stage, so a stored frame was redacted
-before its write (V-I9). `RedactorPrivacy::blur_faces(fetcher)` (feature `onnx`) is the face
-blur of spec 3.7 S18: `FaceRedactor::on_device` under `RedactionMethod::FACE_BLUR`, a
-Gaussian whose standard deviation is a quarter of each box's longer side, so a near face is
-blurred as hard as a far one, with each face held for two frames so a frame in which YuNet
-misses a moving face still blurs it. See [Streams](../vision/streams.md#the-privacy-step).
+A stream's frames are not redacted unless a privacy hook is given: `with_privacy(hook)` on
+`StreamPipeline::builder`, `SourceSpec` or `LiveCamera`, and `keyframe_privacy(hook)` on the
+video analyst. A hook runs before any other stage, so a stored frame was redacted before its
+write (V-I9). `RedactorPrivacy::blur_faces(fetcher)` (feature `onnx`) is the face blur of
+spec 3.7 S18: `FaceRedactor::on_device` under `RedactionMethod::FACE_BLUR`, a Gaussian whose
+standard deviation is a quarter of each box's longer side, so a near face is blurred as hard
+as a far one, with each face held for two frames so a frame in which YuNet misses a moving
+face still blurs it. See [Streams](../vision/streams.md#the-privacy-step).
 
 ## The On-Device Profile
 
@@ -116,7 +158,6 @@ then works offline, as under `HF_HUB_OFFLINE=1`, and so does `adk-rust vision ru
 # .adk/vision.toml
 [egress]
 on_device = true
-redact = ["faces", "personal_text"]
 ```
 
 Run the agent with `HF_HUB_OFFLINE=1` and a warm cache, and inside a sandbox with the network
@@ -151,8 +192,9 @@ fn guarded(
     model: Arc<dyn adk_core::Llm>,
     gate: Arc<EgressGate>,
 ) -> adk_core::Result<adk_agent::LlmAgent> {
+    // No hosts given: the guardrail releases to the hosts the model names.
     let guardrail =
-        Arc::new(ImagePrivacyGuardrail::for_model(gate, model.as_ref(), ["api.anthropic.com"]));
+        Arc::new(ImagePrivacyGuardrail::for_model(gate, model.as_ref(), Vec::<String>::new()));
     LlmAgentBuilder::new("desk")
         .model(model)
         .before_model_callback(guardrail.before_model_callback())
@@ -162,26 +204,44 @@ fn guarded(
 
 - **Locality.** `ImagePrivacyGuardrail::for_model` reads `Llm::data_locality()`. A model in
   this process or on loopback is not guarded, since nothing leaves.
+- **Destinations.** Images are released to the hosts given, or with none to the hosts and
+  providers of `Llm::data_destinations()`.
 - **Released parts.** A part the gate released carries a release annotation; it passes again
   only when its bytes hash to a digest that gate released, so a forged annotation is gated.
-- **Rules.** Under the default `ask`, an image bound for a model's context is withheld with a
-  placeholder; the vision tools can still read it on the device. An `allow` rule for the
-  model's host and class `model_context` releases the redacted copy.
+- **Rules.** Under the default `allow`, an image bound for a model's context is released as
+  it is. A rule that asks or denies for the model's host or provider and class
+  `model_context` withholds it with a placeholder; the vision tools can still read it on the
+  device.
 - **Boundary.** User code that calls an `Llm` directly, without the guardrail, is outside this
   guarantee.
+
+## Safeguards That Always Apply
+
+These hold whatever the rules say; the configurable ones are set where the table names.
+
+| Safeguard | Default | Configure with |
+|-----------|---------|----------------|
+| Decode caps on every image | 50 MB and 50 megapixels | `DecodeLimits::with_max_bytes`, `DecodeLimits::with_max_pixels` |
+| Per-backend input limits | Each adapter's documented limit; larger images downscaled, with the resize on the transform chain | `LlmDescriber::with_limits`, `BackendDescriptor::with_limits` |
+| Model digest and size checks | Every file checked against its manifest's SHA-256 and size before it loads | A user manifest in a `ManifestSet` names its own files |
+| Licence acceptance for use-restricted weights | Nothing loads until a person records acceptance | `adk-rust vision models accept`, or an `AcceptanceStore` |
+| Text read from an image is untrusted | Screened and delivered inside a delimited block in the harness | — |
+| Screen-plan limits | A plan holds at most 10 actions | `ComputerUsePack::with_plan_max_actions`, `ScreenPlan::with_max_actions` |
+| Unknown keys in `.adk/vision.toml` | Refused, not ignored | — |
+| Every release recorded | Before the request is sent | An `EgressRecorder`, the run's audit trail |
 
 ## Invariants
 
 | | Invariant | Enforced by |
 |---|-----------|-------------|
 | V-I1 | A remote backend receives only a `ReleasedImage`, and only the egress gate constructs one | The type system: remote backends implement their trait for `ReleasedImage` |
-| V-I2 | Redaction precedes every release; no configuration releases before it | The gate's step order; `.adk/vision.toml` refuses unknown keys |
+| V-I2 | Redaction of every listed class precedes the decision and the release; no configuration releases before it | The gate's step order; `.adk/vision.toml` refuses unknown keys |
 | V-I3 | Every release writes its record, with source and egress digests and the destination, before the request is sent | `EgressRecorder` and the run's audit trail (`vision.egress.released`) |
 | V-I4 | With the vision pack, the guardrail is on for remote model calls, and no agent tool removes it | `adk-harness` feature `vision` |
 | V-I5 | A held vision call carries its evidence, and a different image holds it again | The egress digest in the call's fingerprint |
 | V-I6 | A priced call opens its hold before its request | The runtime's preflight, before any image is released |
 | V-I8 | Face and person detection only redact; no manifest holds a recognition model | `FaceRedactor`, `PersonRedactor`; the built-in manifest |
-| V-I9 | A stored frame's faces are blurred before the write | `FramePrivacy` makes the only frame a `FrameKeeper` stores |
+| V-I9 | A stored frame passed its source's privacy hook, when one is set, before the write | `FramePrivacy` makes the only frame a `FrameKeeper` stores |
 | V-I15 | Records carry digests and artifact references, never pixels | `vision.*` records |
 | V-I17 | A freeze refuses every vision call and every release | `VisionCx::check` at each step |
 
