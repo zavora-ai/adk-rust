@@ -74,6 +74,9 @@ home follows the voice row. The high-risk column is about approving: the tray an
 **Deny** on every decision, and only chat, where a high-risk decision never resolves (S-I6),
 offers no answer there. A decision that needs more than one approver never offers "Always
 allow", and the standing rule of "Always allow" is granted only once the request is approved.
+It is granted as the person's yes resolves the request and before the approved call resumes,
+also on a kernel, where the decision itself wakes the run: the rest of that turn, and `/rules`
+once the call has run, already see the rule.
 
 A decision the kernel itself asks is drawn in the same plain words: an agent's proposed routine
 shows its title as the heading, who suggests it and when it runs as the summary, and **Do it**

@@ -418,8 +418,14 @@ async fn scenario(stores: Stores, clock: ManualClock) {
         .pid;
 
     // Friday 09:00: the routine runs without asking; Home's limit holds Home's errand.
-    // The kernel starts watching the routine's expression before 09:00.
-    move_to(&world, at(23, 8, 55)).await;
+    // The kernel watches the routine's expression from before 09:00, as the cursor it records
+    // on its first look shows; a first look after 09:00 would start the expression past
+    // Friday's run.
+    let cursor = format!("kernel:{ROUTINE}");
+    eventually("the kernel to watch the routine", || async {
+        world.stores.watermarks.read(&cursor).await.ok().flatten()
+    })
+    .await;
     move_to(&world, at(23, 9, 0) + chrono::Duration::seconds(30)).await;
     eventually("Friday's routine to finish", || async {
         (completed(&kernel, &work_target).await == 2).then_some(())
