@@ -155,7 +155,7 @@ impl VisionPack {
             redactors: Vec::new(),
             config: None,
             distrust_workspace_rules: false,
-            egress: EgressPolicy::public_only(),
+            egress: EgressPolicy::allow_private_networks(),
             recorder: Arc::new(InMemoryEgressRecorder::new()),
             model_hosts: Vec::new(),
             classes: ("document".to_string(), "document_crop".to_string()),
@@ -221,8 +221,10 @@ impl VisionPack {
         self
     }
 
-    /// The destination policy the gate checks each backend host against; public hosts by
-    /// default.
+    /// The destination policy the gate checks each backend host against: any host, on a
+    /// public or private network, by default (never a cloud metadata endpoint).
+    /// `EgressPolicy::public_only()`, an allowlist, or `private_networks = false` in the
+    /// rules restrict it.
     pub fn egress_policy(mut self, policy: EgressPolicy) -> Self {
         self.egress = policy;
         self

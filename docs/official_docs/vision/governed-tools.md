@@ -78,7 +78,7 @@ fn desk(
     let artifacts = Arc::new(InMemoryArtifactService::new());
     let store = MediaStore::new(artifacts.clone());
     let gate = EgressGate::new(
-        EgressPolicy::public_only(),
+        EgressPolicy::allow_private_networks(),
         rules.egress,
         Arc::new(InMemoryEgressRecorder::new()),
     )

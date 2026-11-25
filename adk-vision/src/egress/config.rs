@@ -132,8 +132,9 @@ impl EgressRuleConfig {
 /// through, and the rules per host or provider and data class.
 ///
 /// With no table, every image a remote backend is called with leaves unredacted and
-/// unasked. Each restriction is an opt-in: `default = "ask"` or `"deny"`, a rule that asks
-/// or denies for a host or provider, a `redact` class, or `on_device = true`. A chosen
+/// unasked, to a public or a private-network host. Each restriction is an opt-in:
+/// `default = "ask"` or `"deny"`, a rule that asks or denies for a host or provider, a
+/// `redact` class, `private_networks = false`, or `on_device = true`. A chosen
 /// restriction fails closed: a listed class no redactor covers refuses the release
 /// ([`VisionError::RedactionUnavailable`]), and redaction runs before the decision, so an
 /// approval names the redacted image. Unknown keys are refused rather than ignored (V-I2).
@@ -188,10 +189,25 @@ pub struct EgressConfig {
     /// whatever the rules say, so no image leaves the machine. `false` by default.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub on_device: bool,
+    /// Whether images may go to a host on a loopback, private or link-local address, such as
+    /// a self-hosted model on this machine or the local network. `true` by default;
+    /// `private_networks = false` keeps image egress to public addresses. Cloud metadata
+    /// endpoints are refused either way, and the gate's [`EgressPolicy`](adk_core::egress::EgressPolicy)
+    /// stays the ceiling: this switch only narrows it.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub private_networks: bool,
 }
 
 fn allow() -> EgressAction {
     EgressAction::Allow
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 impl Default for EgressConfig {
@@ -201,11 +217,29 @@ impl Default for EgressConfig {
             redact: Vec::new(),
             rules: Vec::new(),
             on_device: false,
+            private_networks: true,
         }
     }
 }
 
 impl EgressConfig {
+    /// Keeps image egress to public addresses: a host on a loopback, private or link-local
+    /// address is refused at the destination step.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_vision::{EgressConfig, VisionConfig};
+    ///
+    /// assert!(EgressConfig::default().private_networks);
+    /// let config = VisionConfig::from_toml_str("[egress]\nprivate_networks = false").unwrap();
+    /// assert_eq!(config.egress, EgressConfig::default().public_networks_only());
+    /// ```
+    pub fn public_networks_only(mut self) -> Self {
+        self.private_networks = false;
+        self
+    }
+
     /// The on-device profile: every release is refused at the destination step with its
     /// reason, before anything is minimised, redacted or sent.
     ///

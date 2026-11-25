@@ -588,7 +588,7 @@ pub struct Reasoned {
 /// #     }
 /// # }
 /// let gate = Arc::new(EgressGate::new(
-///     EgressPolicy::public_only(),
+///     EgressPolicy::allow_private_networks(),
 ///     EgressConfig::default(),
 ///     Arc::new(InMemoryEgressRecorder::new()),
 /// ));

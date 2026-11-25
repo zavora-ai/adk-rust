@@ -1,7 +1,7 @@
 //! Permissive by default, every restriction an opt-in: with no `.adk/vision.toml` an image
 //! with a person in it leaves unredacted and unasked, and each restriction the rules can
-//! choose — `ask`, `deny`, a `redact` class, a `provider` rule — holds, refuses or covers as
-//! chosen.
+//! choose — `ask`, `deny`, a `redact` class, a `provider` rule, public networks only — holds,
+//! refuses or covers as chosen.
 
 mod governed;
 
@@ -25,7 +25,15 @@ fn claude() -> BackendDescriptor {
 
 fn gate(config: EgressConfig) -> (EgressGate, Arc<InMemoryEgressRecorder>) {
     let recorder = Arc::new(InMemoryEgressRecorder::new());
-    (EgressGate::new(EgressPolicy::public_only(), config, recorder.clone()), recorder)
+    (EgressGate::new(EgressPolicy::allow_private_networks(), config, recorder.clone()), recorder)
+}
+
+fn served_at(host: &str) -> BackendDescriptor {
+    BackendDescriptor::new(
+        "self-hosted",
+        Locality::Remote { hosts: vec![host.into()] },
+        CoordFrame::SentPixels,
+    )
 }
 
 fn photo() -> DataClass {
@@ -40,6 +48,7 @@ fn an_empty_file_is_the_permissive_default() {
     assert!(empty.egress.redact.is_empty());
     assert!(empty.egress.rules.is_empty());
     assert!(!empty.egress.on_device);
+    assert!(empty.egress.private_networks);
 }
 
 #[tokio::test]
@@ -140,6 +149,49 @@ async fn a_provider_rule_matches_every_host_of_that_provider() {
 
     let other = gateway.with_provider("gemini");
     gate.release(&cx, ReleaseRequest::new(&card.source, &other, photo())).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_model_on_a_private_network_receives_images_unless_the_rules_keep_them_public() {
+    let card = identity_card();
+    let cx = VisionCx::new();
+    let (open, _) = gate(VisionConfig::default().egress);
+    for host in ["127.0.0.1:11434", "192.168.1.20:8000", "10.0.4.7"] {
+        let backend = served_at(host);
+        open.release(&cx, ReleaseRequest::new(&card.source, &backend, photo()))
+            .await
+            .unwrap_or_else(|err| panic!("{host}: {err}"));
+    }
+
+    let public = VisionConfig::from_toml_str("[egress]\nprivate_networks = false").unwrap();
+    let (restricted, recorder) = gate(public.egress);
+    let backend = served_at("192.168.1.20:8000");
+    let refused =
+        restricted.release(&cx, ReleaseRequest::new(&card.source, &backend, photo())).await;
+    assert!(matches!(refused, Err(VisionError::EgressRefused { .. })), "{refused:?}");
+    let records = recorder.records();
+    assert!(
+        matches!(&records[..], [EgressRecord::Refused(refusal)] if refusal.step == "destination"),
+        "{records:?}"
+    );
+    restricted.release(&cx, ReleaseRequest::new(&card.source, &claude(), photo())).await.unwrap();
+}
+
+#[tokio::test]
+async fn the_operator_policy_stays_the_ceiling_and_metadata_endpoints_stay_refused() {
+    let card = identity_card();
+    let cx = VisionCx::new();
+    let recorder = Arc::new(InMemoryEgressRecorder::new());
+    let public =
+        EgressGate::new(EgressPolicy::public_only(), VisionConfig::default().egress, recorder);
+    let lan = served_at("192.168.1.20:8000");
+    let refused = public.release(&cx, ReleaseRequest::new(&card.source, &lan, photo())).await;
+    assert!(matches!(refused, Err(VisionError::EgressRefused { .. })), "{refused:?}");
+
+    let (open, _) = gate(VisionConfig::default().egress);
+    let metadata = served_at("169.254.169.254");
+    let refused = open.release(&cx, ReleaseRequest::new(&card.source, &metadata, photo())).await;
+    assert!(matches!(refused, Err(VisionError::EgressRefused { .. })), "{refused:?}");
 }
 
 #[cfg(feature = "cloud")]

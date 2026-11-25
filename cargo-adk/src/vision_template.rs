@@ -450,6 +450,10 @@ default = "allow"
 # Keep every image on this computer:
 # on_device = true
 
+# Send images only to public addresses, never to a model on this machine or the local
+# network:
+# private_networks = false
+
 # Rules match in order; each names a `host`, or a `provider` (anthropic, gemini, openai)
 # for every host that provider's client uses. `ask` holds the exact image for your
 # approval at the terminal; `deny` refuses it.
@@ -532,6 +536,7 @@ leaves as it is. Each restriction is one uncommented line:
 | Ask before a crop leaves | the `document_crop` rule with `action = "ask"` |
 | Never send a whole page | the `document` rule with `action = "deny"` |
 | Keep every image on this computer | `on_device = true` |
+| Only public addresses, no local or private-network model | `private_networks = false` |
 
 A rule that asks shows the host, the data class and what was covered at the terminal, and
 only that exact image is sent if you approve. With the `adk-rust` CLI installed with feature
@@ -628,8 +633,8 @@ mod tests {
         assert_eq!(egress["default"].as_str(), Some("allow"));
         assert!(!egress.contains_key("redact") && !egress.contains_key("rule"), "{egress:?}");
 
-        // Uncommenting every restriction gives rules that parse: redaction, a page denied and
-        // a crop asked for.
+        // Uncommenting every restriction gives rules that parse: redaction, the on-device and
+        // public-network switches, a page denied and a crop asked for.
         let uncommented: String = text
             .lines()
             .map(|line| match line.strip_prefix("# ") {
@@ -644,6 +649,7 @@ mod tests {
             egress["redact"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
         assert_eq!(redact, vec!["faces", "personal_text"]);
         assert_eq!(egress["on_device"].as_bool(), Some(true));
+        assert_eq!(egress["private_networks"].as_bool(), Some(false));
         for rule in egress["rule"].as_array().unwrap() {
             assert_eq!(rule["provider"].as_str(), Some("anthropic"), "{rule}");
             let class = rule["classes"][0].as_str().unwrap();

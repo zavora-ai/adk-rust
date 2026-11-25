@@ -126,7 +126,7 @@ let reader = NimDocumentReader::new(
     NimCvConfig::new("https://ai.api.nvidia.com/v1/cv").with_api_key_from_env(),
 )?;
 let gate = EgressGate::new(
-    EgressPolicy::public_only(),
+    EgressPolicy::allow_private_networks(),
     EgressConfig::default()
         .redacting(RedactionClass::personal_text())
         .with_rule("ai.api.nvidia.com", &["document_page"], EgressAction::Allow),

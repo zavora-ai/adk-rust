@@ -923,7 +923,7 @@ async fn gate(
     let state = project.join(STATE_DIR);
     let artifacts = adk_artifact::FileArtifactService::new(state.join("media"))?;
     let recorder = Arc::new(JsonlEgressRecorder { path: state.join("egress.jsonl") });
-    let gate = EgressGate::new(EgressPolicy::public_only(), rules.egress, recorder)
+    let gate = EgressGate::new(EgressPolicy::allow_private_networks(), rules.egress, recorder)
         .with_media_store(MediaStore::new(Arc::new(artifacts)));
     redactors(gate, fetcher, set).await
 }

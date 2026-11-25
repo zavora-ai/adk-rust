@@ -156,9 +156,10 @@ impl EgressGate {
             self.refuse_clip(cx, &request, &hosts, None, "destination", &reason).await?;
             return Err(VisionError::EgressRefused { host: hosts.join(", "), reason });
         }
+        let policy = self.destination_policy();
         for host in &hosts {
             let (name, port) = split_host_port(host);
-            if let Err(denial) = self.policy.decide(&EgressTarget::Name { host: name, port }) {
+            if let Err(denial) = policy.decide(&EgressTarget::Name { host: name, port }) {
                 let reason = denial.to_string();
                 self.refuse_clip(cx, &request, &hosts, None, "destination", &reason).await?;
                 return Err(VisionError::EgressRefused { host: host.clone(), reason });

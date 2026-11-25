@@ -1,5 +1,6 @@
 //! [`EgressGate`]: destination, minimise, redact, decide, record, release.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -280,7 +281,8 @@ impl StagedEgress {
 ///
 /// 1. **Destination.** Under the on-device profile ([`EgressConfig::on_device`]) every host
 ///    is refused here; otherwise the adk-core [`EgressPolicy`] decides each of the backend's
-///    hosts, and an unlisted host is refused here.
+///    hosts, and an unlisted host is refused here. `private_networks = false`
+///    ([`EgressConfig::private_networks`]) narrows that policy to public addresses.
 /// 2. **Minimise.** The image is cropped to the request's crop and downscaled to the
 ///    backend's limit; both are recorded in the transform chain.
 /// 3. **Redact.** Every class the configuration lists, none by default, is found by its
@@ -367,7 +369,7 @@ impl EgressGate {
     /// };
     ///
     /// let config = EgressConfig::default().with_provider_rule("anthropic", &[], EgressAction::Ask);
-    /// let gate = EgressGate::new(EgressPolicy::public_only(), config, Arc::new(InMemoryEgressRecorder::new()));
+    /// let gate = EgressGate::new(EgressPolicy::allow_private_networks(), config, Arc::new(InMemoryEgressRecorder::new()));
     /// let claude = BackendDescriptor::new(
     ///     "claude",
     ///     Locality::Remote { hosts: vec!["gateway.example.com".into()] },
@@ -402,6 +404,16 @@ impl EgressGate {
     /// The egress rules.
     pub fn config(&self) -> &EgressConfig {
         &self.config
+    }
+
+    /// The network policy the destination step applies: the gate's policy, narrowed to
+    /// public addresses under `private_networks = false`.
+    pub(super) fn destination_policy(&self) -> Cow<'_, EgressPolicy> {
+        if self.config.private_networks {
+            Cow::Borrowed(&self.policy)
+        } else {
+            Cow::Owned(self.policy.narrow(&EgressPolicy::public_only()))
+        }
     }
 
     /// Runs the destination, minimise and redact steps and returns what would leave, for an
@@ -566,9 +578,10 @@ impl EgressGate {
             self.refuse(cx, request, hosts, None, "destination", &reason).await?;
             return Err(VisionError::EgressRefused { host: hosts.join(", "), reason });
         }
+        let policy = self.destination_policy();
         for host in hosts {
             let (name, port) = split_host_port(host);
-            if let Err(denial) = self.policy.decide(&EgressTarget::Name { host: name, port }) {
+            if let Err(denial) = policy.decide(&EgressTarget::Name { host: name, port }) {
                 let reason = denial.to_string();
                 self.refuse(cx, request, hosts, None, "destination", &reason).await?;
                 return Err(VisionError::EgressRefused { host: host.clone(), reason });

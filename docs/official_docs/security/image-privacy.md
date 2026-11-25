@@ -2,8 +2,8 @@
 
 An agent with `adk-vision` reads, detects and describes images out of the box: with no
 `.adk/vision.toml`, an image a remote backend is called with leaves as the agent sends it,
-unredacted and unasked, and its release is still recorded. Every restriction below is an
-opt-in. Once chosen, it is enforced on every path the framework controls — the vision tools
+unredacted and unasked, to a public host or to a model on a private network, and its release
+is still recorded. Every restriction below is an opt-in. Once chosen, it is enforced on every path the framework controls — the vision tools
 release images only through the egress gate, and `ImagePrivacyGuardrail` runs the same gate
 on model requests, tool results and user input — and it fails closed: an image it holds,
 refuses or cannot redact never leaves (spec 3.7 §7.8, §9, §13 Q1 revised 2026-11-25).
@@ -22,6 +22,7 @@ adk-vision = { version = "3.0.0", features = ["guardrail"] }
 | Per destination | `[[egress.rule]]` with `host` (`*.example.com` for subdomains) or `provider` (`anthropic`, `gemini`, `bedrock`, `nvidia`) | Applies the rule's action to that host, or to every host of that provider |
 | Redact | `redact = ["faces", "personal_text"]` | Covers each listed class on the device before the decision; a listed class with no redactor refuses the release |
 | On device | `on_device = true` | Refuses every release at the destination step |
+| Public networks only | `private_networks = false`, or the gate built with `EgressPolicy::public_only()` or an allowlist | Refuses a host on a loopback, private or link-local address at the destination step; the gate's policy is the ceiling the switch narrows. Cloud metadata endpoints are refused either way |
 | Stream privacy | `with_privacy(hook)` on `StreamPipeline::builder`, `SourceSpec` or `LiveCamera` | Redacts every frame before any other stage sees it |
 | Cover people on the live camera | `LiveCamera::cover_people` | Covers every detected person before a frame is shown or kept |
 | Distrust the workspace file | `VisionPack::distrust_workspace_rules` | A workspace `.adk/vision.toml`'s `allow` rules and default ask, and with no file every release asks |

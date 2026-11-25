@@ -228,7 +228,7 @@ impl AnyProbe {
         if gate {
             let config = EgressConfig::default().with_default(EgressAction::Allow);
             builder = builder.egress_gate(EgressGate::new(
-                EgressPolicy::public_only(),
+                EgressPolicy::allow_private_networks(),
                 config,
                 recorder.clone(),
             ));
