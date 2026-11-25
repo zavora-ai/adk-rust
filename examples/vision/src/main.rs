@@ -1,7 +1,7 @@
 //! Scenarios S1–S19 of spec 3.7 §5 for `adk-vision`: the Document desk and phase A (S1–S8); the
 //! Inspector, visual wakes, frame budgets, the live camera surface and native video of phase B
 //! (S9–S13); the Screen copilot, the Inspector as a team, visual memory and the video analyst of
-//! phase C (S14–S17); blur by default on streams and the on-device profile (S18, S19).
+//! phase C (S14–S17); face blur on streams and the on-device profile (S18, S19).
 //!
 //! On the device, for real: PP-OCRv6 tiny reads, RF-DETR Nano and YuNet detect, SAM 2.1 Tiny
 //! segments and SigLIP 2 embeds, each fetched by revision and SHA-256 through the model fetcher
@@ -92,7 +92,7 @@ const SCENARIOS: &[(&str, &str)] = &[
     ("s15_perceiver_reasoner_verifier", "S15 Perceiver, reasoner, verifier"),
     ("s16_visual_memory", "S16 Visual memory"),
     ("s17_video_analyst", "S17 Video analyst"),
-    ("s18_blur_by_default_on_streams", "S18 Blur by default on streams"),
+    ("s18_blur_faces_on_streams", "S18 Blur faces on streams"),
     ("s19_off_the_network", "S19 Off the network"),
 ];
 
@@ -115,7 +115,7 @@ async fn run(name: &str, desk: &s1_s2::Shared) -> Result<Checks> {
         "s15_perceiver_reasoner_verifier" => s15::run().await,
         "s16_visual_memory" => s16::run().await,
         "s17_video_analyst" => s17::run().await,
-        "s18_blur_by_default_on_streams" => s18::run().await,
+        "s18_blur_faces_on_streams" => s18::run().await,
         "s19_off_the_network" => s19::run().await,
         other => bail!("no scenario `{other}`"),
     }

@@ -293,7 +293,7 @@ async fn inspect(runtime: Arc<VisionRuntime>, url: &str) -> adk_vision::Result<(
 |-------|--------------|
 | Source and sampler | Frames at the sampling rate and size |
 | Frame governor | Thins or pauses frames to the budget; records each change |
-| Privacy | Redacts every frame first; a failing hook drops the frame |
+| Privacy | With `with_privacy(hook)`, redacts every frame first; a failing hook drops the frame. Without one, frames pass unredacted |
 | Detector | `VisionRuntime::detect_with`: metered in `UsageUnit::Frames`, regions in source pixels |
 | Tracker | Anonymous track identifiers, reset when the stream starts and when it stops |
 | Sink | `ObservationSink::observe` with the frame, its digest, regions and calls |

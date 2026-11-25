@@ -1,4 +1,4 @@
-//! S18 (blur by default on streams): two drawn passers-by — generated faces, not anyone's
+//! S18 (blur faces on streams): two drawn passers-by — generated faces, not anyone's
 //! likeness — walk across the Inspector's conveyor camera, one close and one far. Every frame
 //! passes the face blur (YuNet, RF-DETR Nano for a person with no face found) before any
 //! other stage; a keeper stores every frame. The store, the order of the writes and YuNet run
