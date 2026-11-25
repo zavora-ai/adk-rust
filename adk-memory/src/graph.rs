@@ -47,9 +47,8 @@ use adk_core::{Content, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::{Row, SqlitePool};
-use std::str::FromStr;
 use std::time::Duration;
 
 /// Sentinel query the realtime runner uses at session start; we answer it with
@@ -152,29 +151,7 @@ impl GraphMemoryService {
     /// An in-memory database lasts only while a connection to it is open, so its pool keeps
     /// one connection and never closes it for idling or age.
     pub async fn new(database_url: &str) -> Result<Self> {
-        Self::connect(database_url, SqlitePoolOptions::new()).await
-    }
-
-    /// Connects as [`new`](Self::new) does, with `pool` as the pool's settings.
-    async fn connect(database_url: &str, pool: SqlitePoolOptions) -> Result<Self> {
-        let options = SqliteConnectOptions::from_str(database_url)
-            .map_err(|e| adk_core::AdkError::memory(format!("invalid sqlite url: {e}")))?
-            .create_if_missing(true);
-        // Read as `SqliteConnectOptions` reads it: `:memory:` as the database, or `mode=memory`.
-        let path = database_url.trim_start_matches("sqlite://").trim_start_matches("sqlite:");
-        let (database, params) = path.split_once('?').unwrap_or((path, ""));
-        let in_memory =
-            database == ":memory:" || params.split('&').any(|param| param == "mode=memory");
-        let pool = if in_memory {
-            pool.max_connections(1).idle_timeout(None).max_lifetime(None)
-        } else {
-            pool
-        };
-        let pool = pool
-            .connect_with(options)
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("sqlite connection failed: {e}")))?;
-        Ok(Self { pool, profile_entities: 12, profile_observations: 5, default_ttl: None })
+        Ok(Self::from_pool(crate::sqlite::connect(database_url, SqlitePoolOptions::new()).await?))
     }
 
     /// Build from an existing pool.
@@ -1149,7 +1126,9 @@ mod tests {
     #[tokio::test]
     async fn an_in_memory_graph_keeps_its_tables_past_the_pool_idle_timeout() {
         let reaping = SqlitePoolOptions::new().idle_timeout(Duration::from_millis(50));
-        let kg = GraphMemoryService::connect("sqlite::memory:", reaping).await.unwrap();
+        let kg = GraphMemoryService::from_pool(
+            crate::sqlite::connect("sqlite::memory:", reaping).await.unwrap(),
+        );
         kg.migrate().await.unwrap();
         let mia = CreateEntityInput {
             name: "Mia".into(),

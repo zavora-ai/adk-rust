@@ -20,7 +20,7 @@ use adk_core::Result;
 use async_trait::async_trait;
 use chrono::Utc;
 use serde::Deserialize;
-use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 use std::path::Path;
 use std::str::FromStr;
@@ -84,6 +84,29 @@ fn fts5_match_query(query: &str) -> Option<String> {
     (!terms.is_empty()).then(|| terms.join(" "))
 }
 
+/// Opens a pool on the SQLite database at `database_url` with `pool` as its settings,
+/// creating the file if missing.
+///
+/// An in-memory database lasts only while a connection to it is open, so its pool keeps one
+/// connection and never closes it for idling or age; a file-backed pool keeps `pool` as given.
+pub(crate) async fn connect(database_url: &str, pool: SqlitePoolOptions) -> Result<SqlitePool> {
+    let options = SqliteConnectOptions::from_str(database_url)
+        .map_err(|e| adk_core::AdkError::memory(format!("invalid sqlite url: {e}")))?
+        .create_if_missing(true);
+    // Read as `SqliteConnectOptions` reads it: `:memory:` as the database, or `mode=memory`.
+    let path = database_url.trim_start_matches("sqlite://").trim_start_matches("sqlite:");
+    let (database, params) = path.split_once('?').unwrap_or((path, ""));
+    let in_memory = database == ":memory:" || params.split('&').any(|param| param == "mode=memory");
+    let pool = if in_memory {
+        pool.max_connections(1).idle_timeout(None).max_lifetime(None)
+    } else {
+        pool
+    };
+    pool.connect_with(options)
+        .await
+        .map_err(|e| adk_core::AdkError::memory(format!("sqlite connection failed: {e}")))
+}
+
 /// SQLite-backed memory service with FTS5 full-text search.
 ///
 /// Stores memory entries in a SQLite database with an FTS5 virtual table
@@ -112,14 +135,11 @@ impl SqliteMemoryService {
     /// Accepts any SQLite connection string (e.g. `sqlite:memory.db`,
     /// `sqlite::memory:` for in-memory). File-based databases are
     /// created automatically if they don't exist.
+    ///
+    /// An in-memory database lasts only while a connection to it is open, so its pool keeps
+    /// one connection and never closes it for idling or age.
     pub async fn new(database_url: &str) -> Result<Self> {
-        let options = SqliteConnectOptions::from_str(database_url)
-            .map_err(|e| adk_core::AdkError::memory(format!("invalid sqlite url: {e}")))?
-            .create_if_missing(true);
-        let pool = SqlitePool::connect_with(options)
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("sqlite connection failed: {e}")))?;
-        Ok(Self { pool, default_ttl: None })
+        Ok(Self::from_pool(connect(database_url, SqlitePoolOptions::new()).await?))
     }
 
     /// Create a memory service from an existing connection pool.
@@ -658,7 +678,6 @@ impl MemoryService for SqliteMemoryService {
 mod tests {
     use super::*;
     use adk_core::Content;
-    use sqlx::sqlite::SqlitePoolOptions;
 
     const APP: &str = "app";
     const USER: &str = "user";
@@ -799,5 +818,39 @@ mod tests {
         let deleted =
             service.delete_entries_in_project(APP, USER, "proj", "project's deadline?").await;
         assert_eq!(deleted.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_in_memory_service_keeps_its_entries_past_the_pool_idle_timeout() {
+        let reaping = SqlitePoolOptions::new().idle_timeout(Duration::from_millis(50));
+        let service =
+            SqliteMemoryService::from_pool(connect("sqlite::memory:", reaping).await.unwrap());
+        service.migrate().await.unwrap();
+        let entry =
+            MemoryEntry::new(Content::new("user").with_text("Prefers the night shift"), "user");
+        service.add_session(APP, USER, "s1", vec![entry]).await.unwrap();
+        // Long enough for the pool's reaper to find the connection idle past the timeout.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(search_texts(&service, "night shift").await, ["Prefers the night shift"]);
+    }
+
+    #[tokio::test]
+    async fn only_an_in_memory_service_changes_the_pool_settings() {
+        let settings = |options: &SqlitePoolOptions| {
+            (options.get_max_connections(), options.get_idle_timeout(), options.get_max_lifetime())
+        };
+        let path =
+            std::env::temp_dir().join(format!("adk-memory-pool-{}.db", uuid::Uuid::new_v4()));
+        let on_disk =
+            SqliteMemoryService::new(&format!("sqlite://{}", path.display())).await.unwrap();
+        assert_eq!(settings(on_disk.pool.options()), settings(&SqlitePoolOptions::new()));
+        on_disk.pool.close().await;
+        let _ = std::fs::remove_file(&path);
+
+        let named = format!("sqlite:memory-{}?mode=memory", uuid::Uuid::new_v4());
+        for url in ["sqlite::memory:", named.as_str()] {
+            let in_memory = SqliteMemoryService::new(url).await.unwrap();
+            assert_eq!(settings(in_memory.pool.options()), (1, None, None), "{url}");
+        }
     }
 }

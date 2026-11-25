@@ -50,6 +50,10 @@ let memory = SqliteMemoryService::new("sqlite://memory.db").await?;
 // or build from an existing pool: SqliteMemoryService::from_pool(pool)
 ```
 
+`sqlite::memory:` keeps the database in memory, for tests. An in-memory database lasts only
+while a connection to it is open, so `SqliteMemoryService::new` gives it a pool of one
+connection that is never closed for idling or age.
+
 Search treats the query as plain text: an entry matches when it contains every
 word of the query, and FTS5 syntax such as `'`, `?`, `*`, `AND` or `OR` is
 matched literally, the same as `plainto_tsquery` in the Postgres backend.
