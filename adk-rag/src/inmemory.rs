@@ -21,7 +21,8 @@ type ScopeChunks = HashMap<String, Chunk>;
 /// An in-memory vector store using cosine similarity for search.
 ///
 /// Collections are stored as nested `HashMap`s: collection name → scope → chunk ID → chunk.
-/// All operations are async-safe via `tokio::sync::RwLock`.
+/// All operations are async-safe via `tokio::sync::RwLock`. Search returns results by
+/// descending score, and results of equal score by ascending chunk ID.
 ///
 /// # Example
 ///
@@ -130,7 +131,14 @@ impl VectorStore for InMemoryVectorStore {
             })
             .collect();
 
-        scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        // Map order changes from one process to the next, so equal scores fall back to the
+        // chunk id and a query always returns the same chunks in the same order.
+        scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.chunk.id.cmp(&b.chunk.id))
+        });
         scored.truncate(query.top_k);
         Ok(scored)
     }

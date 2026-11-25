@@ -54,7 +54,9 @@ relations.
 ## Creating one
 
 `graph-memory` is SQLite-backed, so it's a file (or `sqlite::memory:` for tests); the file is
-created when missing:
+created when missing. An in-memory database lasts only while a connection to it is open, so
+`GraphMemoryService::new` gives it a pool of one connection that is never closed for idling or
+age:
 
 ```rust
 use adk_memory::GraphMemoryService;

@@ -85,3 +85,40 @@ mod prop_inmemory_search_ordering {
         }
     }
 }
+
+/// Results of equal score come back in ascending chunk-id order, so a store answers the same
+/// query with the same chunks in every process; results of different scores keep score order.
+#[tokio::test]
+async fn equal_scores_come_back_in_chunk_id_order() {
+    let ties: Vec<String> = (0..24).map(|n| format!("tie-{n:02}")).collect();
+    let mut chunks: Vec<Chunk> = ties
+        .iter()
+        .map(|id| {
+            Chunk::new(id, "clip", "a forklift crosses the aisle").with_embedding(vec![1.0, 0.0])
+        })
+        .collect();
+    // Their ids sort against their scores, so only score can place them.
+    chunks.push(Chunk::new("z-closer", "clip", "a pallet").with_embedding(vec![1.0, 1.0]));
+    chunks.push(Chunk::new("a-farthest", "clip", "an empty aisle").with_embedding(vec![0.0, 1.0]));
+    chunks.reverse();
+    let store = InMemoryVectorStore::new();
+    store.create_collection("clips", &CollectionSpec::new(2)).await.unwrap();
+    store.upsert("clips", &Scope::single_tenant(), &chunks).await.unwrap();
+
+    let ids = |results: Vec<adk_rag::SearchResult>| -> Vec<String> {
+        results.into_iter().map(|result| result.chunk.id).collect()
+    };
+    let all = store
+        .search("clips", &Scope::single_tenant(), &VectorQuery::new(&[1.0, 0.0], 30))
+        .await
+        .unwrap();
+    let mut expected = ties.clone();
+    expected.extend(["z-closer".to_string(), "a-farthest".to_string()]);
+    assert_eq!(ids(all), expected);
+
+    let top = store
+        .search("clips", &Scope::single_tenant(), &VectorQuery::new(&[1.0, 0.0], 5))
+        .await
+        .unwrap();
+    assert_eq!(ids(top), ties[..5]);
+}

@@ -47,7 +47,7 @@ use adk_core::{Content, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 use std::str::FromStr;
 use std::time::Duration;
@@ -148,11 +148,30 @@ pub struct GraphMemoryService {
 impl GraphMemoryService {
     /// Connect to SQLite (e.g. `sqlite:kg.db`, `sqlite::memory:`), creating the
     /// file if missing.
+    ///
+    /// An in-memory database lasts only while a connection to it is open, so its pool keeps
+    /// one connection and never closes it for idling or age.
     pub async fn new(database_url: &str) -> Result<Self> {
+        Self::connect(database_url, SqlitePoolOptions::new()).await
+    }
+
+    /// Connects as [`new`](Self::new) does, with `pool` as the pool's settings.
+    async fn connect(database_url: &str, pool: SqlitePoolOptions) -> Result<Self> {
         let options = SqliteConnectOptions::from_str(database_url)
             .map_err(|e| adk_core::AdkError::memory(format!("invalid sqlite url: {e}")))?
             .create_if_missing(true);
-        let pool = SqlitePool::connect_with(options)
+        // Read as `SqliteConnectOptions` reads it: `:memory:` as the database, or `mode=memory`.
+        let path = database_url.trim_start_matches("sqlite://").trim_start_matches("sqlite:");
+        let (database, params) = path.split_once('?').unwrap_or((path, ""));
+        let in_memory =
+            database == ":memory:" || params.split('&').any(|param| param == "mode=memory");
+        let pool = if in_memory {
+            pool.max_connections(1).idle_timeout(None).max_lifetime(None)
+        } else {
+            pool
+        };
+        let pool = pool
+            .connect_with(options)
             .await
             .map_err(|e| adk_core::AdkError::memory(format!("sqlite connection failed: {e}")))?;
         Ok(Self { pool, profile_entities: 12, profile_observations: 5, default_ttl: None })
@@ -1125,6 +1144,41 @@ mod tests {
         assert_eq!(exported.len(), 3, "a turn with no text and no artifact is skipped");
 
         assert_eq!(kg.delete_memory("app", "u1", "caption-1").await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_in_memory_graph_keeps_its_tables_past_the_pool_idle_timeout() {
+        let reaping = SqlitePoolOptions::new().idle_timeout(Duration::from_millis(50));
+        let kg = GraphMemoryService::connect("sqlite::memory:", reaping).await.unwrap();
+        kg.migrate().await.unwrap();
+        let mia = CreateEntityInput {
+            name: "Mia".into(),
+            entity_type: "person".into(),
+            observations: vec!["Prefers the night shift".into()],
+        };
+        kg.create_entities("app", "u", vec![mia]).await.unwrap();
+        // Long enough for the pool's reaper to find the connection idle past the timeout.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(kg.entity_count("app", "u").await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn only_an_in_memory_graph_changes_the_pool_settings() {
+        let settings = |options: &SqlitePoolOptions| {
+            (options.get_max_connections(), options.get_idle_timeout(), options.get_max_lifetime())
+        };
+        let path = std::env::temp_dir().join(format!("adk-kg-pool-{}.db", uuid::Uuid::new_v4()));
+        let on_disk =
+            GraphMemoryService::new(&format!("sqlite://{}", path.display())).await.unwrap();
+        assert_eq!(settings(on_disk.pool.options()), settings(&SqlitePoolOptions::new()));
+        on_disk.pool.close().await;
+        let _ = std::fs::remove_file(&path);
+
+        let named = format!("sqlite:kg-{}?mode=memory", uuid::Uuid::new_v4());
+        for url in ["sqlite::memory:", named.as_str()] {
+            let in_memory = GraphMemoryService::new(url).await.unwrap();
+            assert_eq!(settings(in_memory.pool.options()), (1, None, None), "{url}");
+        }
     }
 
     #[tokio::test]

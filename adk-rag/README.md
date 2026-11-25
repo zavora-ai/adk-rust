@@ -268,7 +268,7 @@ Add `async-trait = "0.1"` to your `Cargo.toml` when implementing traits.
 
 ### InMemoryVectorStore (default)
 
-No external dependencies. Good for development, testing, and small datasets. Data is lost when the process exits.
+No external dependencies. Good for development, testing, and small datasets. Data is lost when the process exits. Results of equal score come back in ascending chunk-ID order, so a query returns the same chunks on every run.
 
 ```rust
 use adk_rag::InMemoryVectorStore;
