@@ -10,7 +10,7 @@
 //! | Caption | Each chunk's frames, at most [`frames_per_chunk`](VideoAnalystBuilder::frames_per_chunk) of them evenly spaced, go to the runtime's video analyzer as one `VideoRequest::Caption` call — Qwen3-VL on this machine, or a remote model whose frames each pass the egress gate — metered as `UsageUnit::Frames` |
 //! | Index | The caption and the things it names are embedded by any `adk_rag::EmbeddingProvider` and stored as one [`Chunk`] in any [`VectorStore`], with the chunk's time range, keyframe and clip in its metadata |
 //! | Remember | With [`captions`](VideoAnalystBuilder::captions), each caption is an `adk-memory` entry naming its time range, with references to its keyframe and clip artifacts; with [`graph`](VideoAnalystBuilder::graph), the clip is a graph entity whose observations are the captions, related to what they name |
-//! | Keyframes | With [`keyframes`](VideoAnalystBuilder::keyframes), each chunk's middle frame passes the privacy hook and is stored as an image artifact; with [`visual_memory`](VideoAnalystBuilder::visual_memory) it is also embedded in a [`VisualMemory`], so a chunk can be found by an example image |
+//! | Keyframes | With [`keyframes`](VideoAnalystBuilder::keyframes), each chunk's middle frame is stored as an image artifact, after the hook of [`keyframe_privacy`](VideoAnalystBuilder::keyframe_privacy) when one is given; with [`visual_memory`](VideoAnalystBuilder::visual_memory) it is also embedded in a [`VisualMemory`], so a chunk can be found by an example image |
 //! | Ask | [`VideoAnalyst::ask`] has the [`answerer`](VideoAnalystBuilder::answerer) write the caption it expects the answer's chunk to have, retrieves the chunks nearest the question and that caption, and asks it to answer from their captions alone, citing chunks by number; without an answerer the chunk nearest the question is the answer |
 //! | Cost | [`IndexedClip::cost_per_hour_micro_usd`] is the captioning's cost per hour of video |
 //! | Erasure | [`VideoAnalyst::erase_source`] deletes a clip's chunks, captions, graph entity and keyframes and writes `vision.analyst.erased` |
@@ -128,7 +128,7 @@ use crate::media::{
 use crate::memory::{VisualItem, VisualMemory};
 use crate::runtime::{CallOptions, CallRecord, VideoSource, VisionOutput, VisionRuntime};
 use crate::sent::VisionInput;
-use crate::stream::{FramePrivacy, FrameStream};
+use crate::stream::{FramePrivacy, FrameStream, NoRedaction, PrivacyHook};
 use crate::traits::{Describer, Sampling, VideoRequest, VideoUsage};
 use crate::video::answer::{ModelAnswer, add_usage, generate};
 use crate::video::{evenly_spaced, timestamp};
@@ -602,6 +602,7 @@ impl std::fmt::Debug for VideoAnalyst {
 pub struct VideoAnalystBuilder {
     analyst: VideoAnalyst,
     visual: Option<Arc<VisualMemory>>,
+    keyframe_privacy: Option<Arc<dyn PrivacyHook>>,
 }
 
 impl VideoAnalystBuilder {
@@ -638,15 +639,23 @@ impl VideoAnalystBuilder {
         self
     }
 
-    /// Stores each chunk's middle frame in `artifacts` after `privacy` redacts it, and
-    /// deletes it from there when the clip is erased.
-    pub fn keyframes(mut self, artifacts: Arc<dyn ArtifactService>, privacy: FramePrivacy) -> Self {
+    /// Stores each chunk's middle frame in `artifacts`, and deletes it from there when the
+    /// clip is erased. Keyframes are not redacted unless a hook is given with
+    /// [`keyframe_privacy`](Self::keyframe_privacy).
+    pub fn keyframes(mut self, artifacts: Arc<dyn ArtifactService>) -> Self {
         self.analyst.keyframes = Some(Keyframes {
             media: MediaStore::new(Arc::clone(&artifacts)),
             artifacts,
-            privacy,
+            privacy: FramePrivacy::new(Arc::new(NoRedaction)),
             visual: None,
         });
+        self
+    }
+
+    /// Passes each keyframe through `hook` before it is stored, such as
+    /// `RedactorPrivacy::blur_faces`. Needs [`keyframes`](Self::keyframes).
+    pub fn keyframe_privacy(mut self, hook: Arc<dyn PrivacyHook>) -> Self {
+        self.keyframe_privacy = Some(hook);
         self
     }
 
@@ -686,7 +695,7 @@ impl VideoAnalystBuilder {
     /// # Errors
     ///
     /// [`VisionError::InvalidInput`] for a chunking that cannot cut, or a visual memory
-    /// without keyframes; [`VisionError::BackendNotFound`] when the runtime has no video
+    /// or a keyframe privacy hook without keyframes; [`VisionError::BackendNotFound`] when the runtime has no video
     /// analyzer; the store's errors.
     pub async fn open(mut self) -> Result<VideoAnalyst> {
         self.analyst.chunking.validate()?;
@@ -700,6 +709,14 @@ impl VideoAnalystBuilder {
                 ));
             };
             keyframes.visual = Some(visual);
+        }
+        if let Some(hook) = self.keyframe_privacy.take() {
+            let Some(keyframes) = &mut self.analyst.keyframes else {
+                return Err(VisionError::InvalidInput(
+                    "a keyframe privacy hook redacts keyframes; configure `keyframes` too".into(),
+                ));
+            };
+            keyframes.privacy = FramePrivacy::new(hook);
         }
         let analyst = self.analyst;
         let spec = CollectionSpec::new(analyst.embedder.dimensions()).with_filterable(FILTERABLE);
@@ -733,6 +750,7 @@ impl VideoAnalyst {
                 expand_questions: true,
             },
             visual: None,
+            keyframe_privacy: None,
         }
     }
 

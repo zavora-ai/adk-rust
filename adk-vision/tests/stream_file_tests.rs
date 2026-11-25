@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use adk_vision::stream::fixtures::{ConveyorClip, ConveyorSpec, write_mp4};
-use adk_vision::stream::{FfmpegBinary, FileSource, FrameSource, NoRedaction, StreamPipeline};
+use adk_vision::stream::{FfmpegBinary, FileSource, FrameSource, StreamPipeline};
 use adk_vision::{
     DecodedImage, Frame, FramePixels, FrameSourceId, Sampling, VisionCx, VisionError,
 };
@@ -117,7 +117,7 @@ async fn the_pipeline_reads_a_file_to_its_end() {
     let dir = tempfile::tempdir().unwrap();
     let path = mp4(&binary, dir.path(), &clip(), 30);
     let source = Arc::new(FileSource::new(FrameSourceId("clip".into()), &path).with_ffmpeg(binary));
-    let summary = StreamPipeline::builder(source, Arc::new(NoRedaction))
+    let summary = StreamPipeline::builder(source)
         .sampling(Sampling { fps: 5.0, max_long_edge: None })
         .build()
         .unwrap()

@@ -23,8 +23,8 @@ use adk_core::{
 use adk_runner::Runner;
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use adk_vision::stream::{
-    FrameKeeper, FrameSource, FrameSources, FrameStream, NoRedaction, SourceSpec, StopCause,
-    StreamPipeline, StreamWatch, TrackerFactory, VISION_EVIDENCE_KEPT, VISION_SOURCE_STARTED,
+    FrameKeeper, FrameSource, FrameSources, FrameStream, SourceSpec, StopCause, StreamPipeline,
+    StreamWatch, TrackerFactory, VISION_EVIDENCE_KEPT, VISION_SOURCE_STARTED,
     VISION_SOURCE_STOPPED, WatchChange,
 };
 use adk_vision::{
@@ -176,19 +176,17 @@ async fn a_stream_wakes_once_per_track_with_its_kept_frame_metered_in_frames() {
         .with_scope(ModelCallScope::new().with_budget(budget.clone()))
         .with_audit(AuditTrail::new(Arc::new(audit.clone())), AuditActor::default());
 
-    let summary = StreamPipeline::builder(
-        Arc::new(Belt { id: line(), frames: Some(20), paint: belt }),
-        Arc::new(NoRedaction),
-    )
-    .sampling(Sampling::at(10.0))
-    .detector(detector(), DetectQuery::Classes(vec!["red".into(), "blue".into()]))
-    .tracker(tracker()())
-    .sink(watch.clone())
-    .build()
-    .unwrap()
-    .run(&cx)
-    .await
-    .unwrap();
+    let summary =
+        StreamPipeline::builder(Arc::new(Belt { id: line(), frames: Some(20), paint: belt }))
+            .sampling(Sampling::at(10.0))
+            .detector(detector(), DetectQuery::Classes(vec!["red".into(), "blue".into()]))
+            .tracker(tracker()())
+            .sink(watch.clone())
+            .build()
+            .unwrap()
+            .run(&cx)
+            .await
+            .unwrap();
 
     assert_eq!(summary.observations, 20);
     // One part, one event, on its third frame — the frame the camera missed did not end the
@@ -246,7 +244,6 @@ fn registry_source(artifacts: &Arc<InMemoryArtifactService>, wakes: &Arc<Wakes>)
             frames: None,
             paint: |_| drawn(&[("red", BBox::new(100.0, 100.0, 140.0, 140.0))]),
         }),
-        Arc::new(NoRedaction),
         keeper,
         wakes.clone(),
     )

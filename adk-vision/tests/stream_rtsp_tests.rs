@@ -12,9 +12,7 @@ use std::time::Duration;
 use adk_vision::stream::fixtures::{
     ConveyorClip, ConveyorSpec, RtspTestOptions, RtspTestServer, TestVideo,
 };
-use adk_vision::stream::{
-    FrameSource, NoRedaction, Observation, ObservationSink, RtspSource, StreamPipeline,
-};
+use adk_vision::stream::{FrameSource, Observation, ObservationSink, RtspSource, StreamPipeline};
 use adk_vision::{
     BBox, BackendDescriptor, CoordFrame, DecodedImage, DetectQuery, Detector, Frame, FramePixels,
     FrameSourceId, GreedyIouTracker, Locality, RawRegion, Sampling, SentImage, VisionCx,
@@ -241,7 +239,7 @@ async fn the_pipeline_tracks_each_part_over_rtsp() {
     )));
     let runtime = Arc::new(VisionRuntime::builder().detector(detector).build().unwrap());
     let seen = Arc::new(Seen::default());
-    let summary = StreamPipeline::builder(source, Arc::new(NoRedaction))
+    let summary = StreamPipeline::builder(source)
         .sampling(Sampling { fps: 5.0, max_long_edge: None })
         .detector(runtime, DetectQuery::Classes(vec!["part".into()]))
         .tracker(Box::new(GreedyIouTracker::new(0.2, 3)))

@@ -28,7 +28,6 @@ use adk_vision::analyst::{
 };
 use adk_vision::conformance::{VideoAnalyzerTarget, VideoFixture};
 use adk_vision::memory::VisualMemory;
-use adk_vision::stream::{FramePrivacy, NoRedaction};
 use adk_vision::{
     BackendDescriptor, CoordFrame, Embedder, EmbeddingSpace, FrameMeta, FramesAnalyzer,
     LlmDescriber, Locality, MediaScope, Metric, Sampling, SegmentPrompt, SentImage, SourceImage,
@@ -151,7 +150,7 @@ async fn an_hour_of_warehouse_video_is_chunked_captioned_indexed_answered_and_er
     .frames_per_chunk(3)
     .captions(setup.captions.clone())
     .graph(setup.graph.clone())
-    .keyframes(setup.artifacts.clone(), FramePrivacy::new(Arc::new(NoRedaction)))
+    .keyframes(setup.artifacts.clone())
     .visual_memory(visual)
     .answerer(&describer)
     .open()

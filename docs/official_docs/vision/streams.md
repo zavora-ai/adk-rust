@@ -216,7 +216,9 @@ use adk_vision::{FetchConfig, InMemoryAcceptanceStore, ModelFetcher};
 fn blurred(camera: Arc<RtspSource>) -> adk_vision::Result<StreamPipeline> {
     let fetcher =
         ModelFetcher::new(FetchConfig::from_env(), Arc::new(InMemoryAcceptanceStore::new()));
-    StreamPipeline::builder(camera, Arc::new(RedactorPrivacy::blur_faces(fetcher))).build()
+    StreamPipeline::builder(camera)
+        .with_privacy(Arc::new(RedactorPrivacy::blur_faces(fetcher)))
+        .build()
 }
 ```
 
@@ -274,7 +276,7 @@ impl ObservationSink for Print {
 
 async fn inspect(runtime: Arc<VisionRuntime>, url: &str) -> adk_vision::Result<()> {
     let camera = Arc::new(RtspSource::new(FrameSourceId("line-1".into()), url)?);
-    let summary = StreamPipeline::builder(camera, Arc::new(NoRedaction))
+    let summary = StreamPipeline::builder(camera)
         .sampling(Sampling { fps: 5.0, max_long_edge: Some(960) })
         .budget(FrameBudget::new(5.0).with_min_local_fps(1.0).with_local_quota(200_000))
         .detector(runtime, DetectQuery::Classes(vec!["person".into()]))
@@ -353,7 +355,7 @@ async fn watch(
     );
     let conditions = vec![WatchCondition::new("wall-clock", ["clock"]).with_min_frames(3)];
     let watch = StreamWatch::new(WatchEvaluator::new(conditions)?, Arc::new(keeper), wakes);
-    StreamPipeline::builder(Arc::new(RtspSource::new(line, url)?), Arc::new(NoRedaction))
+    StreamPipeline::builder(Arc::new(RtspSource::new(line, url)?))
         .sampling(Sampling::at(2.0))
         .detector(runtime, DetectQuery::Classes(vec!["clock".into()]))
         .tracker(Box::new(GreedyIouTracker::new(0.3, 4)))
@@ -395,7 +397,7 @@ async fn register(
 ) -> adk_vision::Result<FrameSources> {
     let sources = FrameSources::new(streams);
     sources.register(
-        SourceSpec::new(camera, Arc::new(NoRedaction), keeper, wakes)
+        SourceSpec::new(camera, keeper, wakes)
             .describe("Line 1 conveyor, top camera")
             .detector(runtime, DetectQuery::Classes(vec!["person".into(), "clock".into()]))
             .tracker(Arc::new(|| Box::new(GreedyIouTracker::new(0.3, 4)) as Box<dyn Tracker>))

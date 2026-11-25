@@ -20,7 +20,7 @@ use adk_surface::{CardHint, CardHints, LocalSource, Place, SurfaceEngine};
 use adk_vision::stream::fixtures::{
     ConveyorClip, ConveyorSpec, RtspTestOptions, RtspTestServer, TestVideo,
 };
-use adk_vision::stream::{FrameBudget, NoRedaction, RtspSource};
+use adk_vision::stream::{FrameBudget, RtspSource};
 use adk_vision::{DetectQuery, FrameSourceId, GreedyIouTracker, VisionCx, VisionRuntime};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -296,7 +296,6 @@ pub async fn serve(
             .passing("parts")
             .with_ingest(Ingest::rtsp(spec.width, spec.height, "this computer")),
         stream("line-2")?,
-        Arc::new(NoRedaction),
     )
     .detector(Arc::clone(&detection.runtime), detection.query.clone())
     .tracker(|| Box::new(GreedyIouTracker::new(0.3, 3)))
@@ -313,7 +312,6 @@ pub async fn serve(
             .passing("parts")
             .with_ingest(Ingest::rtsp(spec.width, spec.height, "this computer")),
         stream("line-3")?,
-        Arc::new(NoRedaction),
     )
     .detector(Arc::clone(&detection.runtime), detection.query)
     .tracker(|| Box::new(GreedyIouTracker::new(0.3, 3)))
@@ -329,7 +327,6 @@ pub async fn serve(
         CameraFacts::new("this-computer", "This computer's camera", APP, SESSION)
             .with_place("this computer")
             .with_ingest(Ingest::this_computer(1280, 720)),
-        Arc::new(NoRedaction),
     );
     let live = PipelineCameras::builder(APP, OWNER)
         .artifacts(artifacts.clone() as Arc<dyn ArtifactService>)

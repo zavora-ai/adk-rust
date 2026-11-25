@@ -67,9 +67,8 @@ pub trait PrivacyHook: Send + Sync {
     ) -> Result<Vec<BBox>>;
 }
 
-/// The explicit choice to redact nothing, for a scene that never shows a person: a
-/// conveyor of parts, a gauge, a screen with no camera in it. Kept frames record `none` as
-/// their privacy step.
+/// Redacts nothing: the privacy step of a pipeline, source or camera given no hook. Kept
+/// frames record `none` as their privacy step.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoRedaction;
 

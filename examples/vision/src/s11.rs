@@ -26,10 +26,7 @@ use adk_core::{
 };
 use adk_vision::sam::{SamConfig, SamVideoTracker};
 use adk_vision::stream::fixtures::{ConveyorClip, ConveyorSpec};
-use adk_vision::stream::{
-    EscalationVerdict, FrameBudget, GovernorChange, GovernorHandle, NoRedaction, Observation,
-    ObservationSink, SourceEvent, StopReason, StreamPipeline,
-};
+use adk_vision::stream::{EscalationVerdict, FrameBudget, GovernorChange, GovernorHandle, Observation, ObservationSink, SourceEvent, StopReason, StreamPipeline};
 use adk_vision::{
     DetectQuery, EgressAction, EgressConfig, EgressGate, GreedyIouTracker, InMemoryEgressRecorder,
     Sampling, SegmentPrompt, SourceClip, VideoRequest, VideoSource, VisionCx, VisionRuntime,
@@ -364,7 +361,6 @@ pub async fn run() -> Result<Checks> {
         Arc::new(VisionRuntime::builder().detector(Arc::new(BeltDetector::new())).build()?);
     let line_2 = StreamPipeline::builder(
         Arc::new(ClipSource::new("line-2", clip.clone(), LOOPS, start())),
-        Arc::new(NoRedaction),
     )
     .sampling(Sampling::at(5.0))
     .budget(
@@ -391,7 +387,6 @@ pub async fn run() -> Result<Checks> {
     let log3 = Arc::new(StreamLog::default());
     let line_3 = StreamPipeline::builder(
         Arc::new(ClipSource::new("line-3", small, LOOPS, start())),
-        Arc::new(NoRedaction),
     )
     .sampling(Sampling::at(5.0))
     .budget(FrameBudget::new(5.0).with_min_local_fps(1.0).with_local_quota(600))

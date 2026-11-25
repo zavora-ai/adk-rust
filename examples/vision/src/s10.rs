@@ -30,7 +30,7 @@ use adk_kernel::{
 };
 use adk_server::background::DurableWorkerConfig;
 use adk_vision::stream::fixtures::ConveyorClip;
-use adk_vision::stream::{FrameKeeper, FrameSources, NoRedaction, RtspSource, SourceSpec};
+use adk_vision::stream::{FrameKeeper, FrameSources, RtspSource, SourceSpec};
 use adk_vision::{
     DetectQuery, FrameSourceId, GreedyIouTracker, MediaScope, MediaStore, Sampling, Tracker,
     VISION_WATCH_FIRED, VisionCx, VisionRuntime, WatchCondition,
@@ -275,7 +275,6 @@ pub async fn run() -> Result<Checks> {
     sources.register(
         SourceSpec::new(
             Arc::new(RtspSource::new(id.clone(), &server.url())?),
-            Arc::new(NoRedaction),
             keeper,
             wakes.clone(),
         )

@@ -149,7 +149,7 @@ through adk-vision's `FrameKeeper` (`vision.evidence.kept`).
 use std::sync::Arc;
 
 use adk_surface::camera::{CameraFacts, Ingest, LiveCamera, LiveWatch, PipelineCameras, ZoneFacts};
-use adk_vision::stream::{FrameBudget, NoRedaction, RtspSource};
+use adk_vision::stream::{FrameBudget, RtspSource};
 use adk_vision::{DetectQuery, FrameSourceId, GreedyIouTracker, VisionCx, VisionRuntime, WatchCondition};
 
 fn cameras(
@@ -161,7 +161,6 @@ fn cameras(
             .with_place("line 2")
             .with_ingest(Ingest::rtsp(1920, 1080, "the line 2 server")),
         Arc::new(RtspSource::new(FrameSourceId("line-2".into()), "rtsp://10.0.4.21:554/stream1")?),
-        Arc::new(NoRedaction),
     )
     .detector(detector, DetectQuery::Classes(vec!["part".into(), "crack".into()]))
     .tracker(|| Box::new(GreedyIouTracker::new(0.3, 3)))
@@ -179,7 +178,6 @@ fn cameras(
     let this_computer = LiveCamera::surface(
         CameraFacts::new("this-computer", "This computer's camera", "inspector", "s-line")
             .with_ingest(Ingest::this_computer(1280, 720)),
-        Arc::new(NoRedaction),
     );
     let live = PipelineCameras::builder("inspector", "ana")
         .artifacts(artifacts)

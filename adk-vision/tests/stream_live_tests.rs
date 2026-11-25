@@ -23,8 +23,7 @@ use adk_vision::stream::fixtures::{
     ConveyorClip, ConveyorSpec, RtspTestOptions, RtspTestServer, TestVideo,
 };
 use adk_vision::stream::{
-    FrameBudget, FrameKeeper, KeepReason, NoRedaction, Observation, ObservationSink, RtspSource,
-    StreamPipeline,
+    FrameBudget, FrameKeeper, KeepReason, Observation, ObservationSink, RtspSource, StreamPipeline,
 };
 use adk_vision::{
     BBox, DetectQuery, FetchConfig, FrameSourceId, GreedyIouTracker, InMemoryAcceptanceStore,
@@ -75,7 +74,7 @@ async fn rf_detr_detects_on_the_conveyor_clip_read_over_rtsp() {
     let source = Arc::new(RtspSource::new(id.clone(), &server.url()).unwrap());
     let seen = Arc::new(Seen::default());
     let started = Instant::now();
-    let summary = StreamPipeline::builder(source, Arc::new(NoRedaction))
+    let summary = StreamPipeline::builder(source)
         .sampling(Sampling { fps: 2.0, max_long_edge: None })
         .budget(FrameBudget::new(2.0).with_min_local_fps(0.5))
         .detector(runtime, DetectQuery::Classes(vec!["clock".into(), "person".into()]))

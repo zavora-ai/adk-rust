@@ -284,7 +284,8 @@ pub async fn run() -> Result<Checks> {
         inner: RedactorPrivacy::new(Arc::new(redactor), RedactionMethod::FACE_BLUR).with_hold(2),
         log: log.clone(),
     };
-    let summary = StreamPipeline::builder(source.clone(), Arc::new(hook))
+    let summary = StreamPipeline::builder(source.clone())
+        .with_privacy(Arc::new(hook))
         .sink(Arc::new(KeepAll(keeper)))
         .build()?
         .run(&VisionCx::new())

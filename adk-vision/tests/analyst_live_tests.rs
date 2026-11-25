@@ -38,7 +38,6 @@ use adk_memory::MemoryService;
 use adk_rag::{InMemoryVectorStore, Scope, VectorStore};
 use adk_vision::analyst::fixtures::{WarehouseClip, WarehouseSpec};
 use adk_vision::analyst::{AnalystQuery, Chunking, ClipSource, VideoAnalyst, WordHashEmbedding};
-use adk_vision::stream::{FramePrivacy, NoRedaction};
 use adk_vision::{FramesAnalyzer, LlmDescriber, MediaScope, Sampling};
 use analyst_suite::{COLLECTION, Recorder, Recording, Setup, recording_path, score};
 
@@ -94,7 +93,7 @@ async fn s17_an_hour_of_warehouse_video_answered_from_captions() {
     .frames_per_chunk(FRAMES_PER_CHUNK)
     .captions(setup.captions.clone())
     .graph(setup.graph.clone())
-    .keyframes(setup.artifacts.clone(), FramePrivacy::new(Arc::new(NoRedaction)))
+    .keyframes(setup.artifacts.clone())
     .answerer(&haiku)
     .open()
     .await
@@ -273,7 +272,7 @@ async fn s17_captioned_on_the_device_by_qwen3_vl() {
     .frames_per_chunk(FRAMES_PER_CHUNK)
     .captions(setup.captions.clone())
     .graph(setup.graph.clone())
-    .keyframes(setup.artifacts.clone(), FramePrivacy::new(Arc::new(NoRedaction)))
+    .keyframes(setup.artifacts.clone())
     .answerer(&local)
     .open()
     .await

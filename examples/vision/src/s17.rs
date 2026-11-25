@@ -24,7 +24,6 @@ use adk_memory::{GraphMemoryService, InMemoryMemoryService, MemoryService};
 use adk_rag::{InMemoryVectorStore, Scope, VectorStore};
 use adk_vision::analyst::fixtures::{WarehouseClip, WarehouseSpec};
 use adk_vision::analyst::{AnalystQuery, Chunking, ClipSource, VideoAnalyst, WordHashEmbedding};
-use adk_vision::stream::{FramePrivacy, NoRedaction};
 use adk_vision::{
     Digest, EgressAction, EgressConfig, EgressGate, FramesAnalyzer, InMemoryEgressRecorder,
     LlmDescriber, MediaScope, Sampling, VisionCx, VisionRuntime,
@@ -231,7 +230,7 @@ pub async fn run() -> Result<Checks> {
     .frames_per_chunk(recorded.frames_per_chunk)
     .captions(captions.clone())
     .graph(graph.clone())
-    .keyframes(artifacts, FramePrivacy::new(Arc::new(NoRedaction)))
+    .keyframes(artifacts)
     .answerer(&haiku)
     .open()
     .await?;

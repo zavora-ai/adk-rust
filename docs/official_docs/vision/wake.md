@@ -110,7 +110,7 @@ pipeline delivers events straight to it:
 ```rust,no_run
 use std::sync::Arc;
 use adk_kernel::{Trigger, VisionWakeSource, Wake};
-use adk_vision::stream::{FrameKeeper, FrameSource, FrameSources, NoRedaction, SourceSpec};
+use adk_vision::stream::{FrameKeeper, FrameSource, FrameSources, SourceSpec};
 use adk_vision::{DetectQuery, FrameSourceId, MediaScope, VisionCx, VisionRuntime, WatchCondition};
 
 # async fn run(
@@ -134,7 +134,7 @@ let keeper = FrameKeeper::new(
 );
 let sources = FrameSources::new(VisionCx::new());
 sources.register(
-    SourceSpec::new(camera, Arc::new(NoRedaction), Arc::new(keeper), wakes)
+    SourceSpec::new(camera, Arc::new(keeper), wakes)
         .detector(detector, DetectQuery::Classes(vec!["clock".into()])),
 )?;
 let seal = WatchCondition::new("wall-clock", ["clock"]);
