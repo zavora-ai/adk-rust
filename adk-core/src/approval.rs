@@ -1615,6 +1615,39 @@ pub trait ApprovalNotifier: fmt::Debug + Send + Sync {
     async fn notify(&self, notification: &ApprovalNotification) -> Result<()>;
 }
 
+/// Work a decided request's outcome waits for: it runs once the decision that resolved the
+/// request is recorded, and before the outcome reaches the held call or wakes a run parked on
+/// it.
+///
+/// A host uses it for what the call it lets run must already see, such as the standing rule
+/// "Always allow" makes, which the resumed turn's next call is checked against (spec 3.3
+/// §7.2). A hook reports its own failures; the outcome applies whatever it does.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{
+///     ApprovalDecision, ApprovalRequest, ApprovalResolution, ApprovalState, async_trait,
+/// };
+///
+/// #[derive(Debug)]
+/// struct GrantOnApproval;
+///
+/// #[async_trait]
+/// impl ApprovalResolution for GrantOnApproval {
+///     async fn resolving(&self, request: &ApprovalRequest, decision: &ApprovalDecision) {
+///         if request.state == ApprovalState::Approved {
+///             tracing::info!(approval.id = %request.id, approver = %decision.approver.id, "approved");
+///         }
+///     }
+/// }
+/// ```
+#[async_trait]
+pub trait ApprovalResolution: fmt::Debug + Send + Sync {
+    /// Runs for `request`, just resolved by `decision`, before its outcome applies.
+    async fn resolving(&self, request: &ApprovalRequest, decision: &ApprovalDecision);
+}
+
 // ---------------------------------------------------------------------------
 // Routing calls held by the governed path
 // ---------------------------------------------------------------------------
@@ -1953,6 +1986,40 @@ pub trait ApprovalService: fmt::Debug + Send + Sync {
         false
     }
 
+    /// Adds `hook`, which runs for each request a decision resolves, after the decision is
+    /// recorded and before the outcome applies ([`ApprovalResolution`]). Returns whether the
+    /// service took it.
+    ///
+    /// The default takes none and answers `false`; a wrapper forwards it to the service it
+    /// wraps.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::{
+    ///     ApprovalDecision, ApprovalRequest, ApprovalResolution, ApprovalService,
+    ///     InMemoryApprovalStore, StoreApprovalService, async_trait,
+    /// };
+    ///
+    /// #[derive(Debug)]
+    /// struct Log;
+    ///
+    /// #[async_trait]
+    /// impl ApprovalResolution for Log {
+    ///     async fn resolving(&self, request: &ApprovalRequest, _decision: &ApprovalDecision) {
+    ///         tracing::info!(approval.id = %request.id, "resolving");
+    ///     }
+    /// }
+    ///
+    /// let service = StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()));
+    /// assert!(service.add_resolution(Arc::new(Log)));
+    /// ```
+    fn add_resolution(&self, hook: Arc<dyn ApprovalResolution>) -> bool {
+        let _ = hook;
+        false
+    }
+
     /// Files a call a [`ToolReviewer`](crate::ToolReviewer) approved or denied in the run as
     /// a request it decided, so the inbox's history shows the decision and who made it
     /// (`decided_by: model:<id>` for a [`ModelApprover`](crate::ModelApprover)). Returns
@@ -2099,6 +2166,8 @@ pub struct StoreApprovalService {
     fallback_router: std::sync::OnceLock<Arc<dyn ApprovalRouter>>,
     /// Notifiers a host added after the service was built (`add_notifier`).
     late_notifiers: std::sync::RwLock<Vec<Arc<dyn ApprovalNotifier>>>,
+    /// What a resolved outcome waits for (`add_resolution`).
+    resolutions: std::sync::RwLock<Vec<Arc<dyn ApprovalResolution>>>,
 }
 
 impl fmt::Debug for StoreApprovalService {
@@ -2116,6 +2185,7 @@ impl fmt::Debug for StoreApprovalService {
             )
             .field("audit", &self.audit)
             .field("directory", &self.directory.is_some())
+            .field("resolutions", &self.resolutions.read().unwrap_or_else(|e| e.into_inner()).len())
             .finish()
     }
 }
@@ -2135,6 +2205,7 @@ impl StoreApprovalService {
             directory: None,
             fallback_router: std::sync::OnceLock::new(),
             late_notifiers: std::sync::RwLock::new(Vec::new()),
+            resolutions: std::sync::RwLock::new(Vec::new()),
         }
     }
 
@@ -2720,6 +2791,12 @@ impl ApprovalService for StoreApprovalService {
             self.notify(ApprovalEventKind::Decided, &next, Some(&decision), None).await;
             return Ok(next);
         }
+        // What the call must already see, such as the standing rule an answer made, is in
+        // place before the outcome reaches it (spec 3.3 §7.2).
+        let resolutions = self.resolutions.read().unwrap_or_else(|e| e.into_inner()).clone();
+        for hook in resolutions {
+            hook.resolving(&next, &decision).await;
+        }
         // The outcome is written before any notifier runs, so a call that is decided
         // another way meanwhile waits for it no longer than the store write (spec 3.3 §7.3).
         let applied = self.apply(next.clone(), false).await?;
@@ -2971,6 +3048,11 @@ impl ApprovalService for StoreApprovalService {
 
     fn add_notifier(&self, notifier: Arc<dyn ApprovalNotifier>) -> bool {
         self.late_notifiers.write().unwrap_or_else(|e| e.into_inner()).push(notifier);
+        true
+    }
+
+    fn add_resolution(&self, hook: Arc<dyn ApprovalResolution>) -> bool {
+        self.resolutions.write().unwrap_or_else(|e| e.into_inner()).push(hook);
         true
     }
 }
@@ -3319,6 +3401,94 @@ mod tests {
                 (ApprovalEventKind::Resolved, true, false),
             ]
         );
+    }
+
+    /// A resolution hook runs once the deciding answer is recorded and before the outcome
+    /// reaches the call or wakes its run, so what the hook stores, such as the standing rule
+    /// "Always allow" makes, is there when the run resumes (spec 3.3 §7.2).
+    #[tokio::test]
+    async fn a_resolution_hook_runs_before_the_outcome_reaches_the_call_or_its_run() {
+        use crate::{
+            ApprovalStore, DurableRunStore, InMemoryApprovalStore, InMemoryRunStore, NewRun,
+            RunState,
+        };
+
+        /// The request's state, the approver, whether the call was decided, and the run's state.
+        type Seen = (ApprovalState, String, bool, Option<RunState>);
+
+        #[derive(Debug)]
+        struct Witness {
+            store: Arc<InMemoryApprovalStore>,
+            runs: Arc<InMemoryRunStore>,
+            run_id: String,
+            seen: std::sync::Mutex<Vec<Seen>>,
+        }
+        #[async_trait::async_trait]
+        impl ApprovalResolution for Witness {
+            async fn resolving(&self, request: &ApprovalRequest, decision: &ApprovalDecision) {
+                let applied =
+                    self.store.has_decision(&request.scope, &request.fingerprint).await.unwrap();
+                let run = self.runs.get(&self.run_id).await.unwrap().map(|run| run.state);
+                self.seen.lock().unwrap().push((
+                    request.state,
+                    decision.approver.id.clone(),
+                    applied,
+                    run,
+                ));
+            }
+        }
+
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let runs = Arc::new(InMemoryRunStore::new());
+        let new = NewRun::new("q", "app", "u", "agent", json!({})).with_session_id("s");
+        let run_id = runs.enqueue(new).await.unwrap().record().unwrap().run_id.clone();
+        let claim = runs.claim("q", "w", Duration::from_secs(60)).await.unwrap().unwrap();
+        let call = ToolConfirmationRequest::new("pay", json!({ "cents": 500 }));
+        let checkpoint = crate::RunCheckpointRef::AwaitingApproval {
+            session_id: "s".into(),
+            invocation_id: None,
+            fingerprints: vec![call.fingerprint()],
+            expires_at: None,
+        };
+        runs.set_checkpoint(&run_id, claim.epoch, checkpoint).await.unwrap();
+        runs.wait(&run_id, claim.epoch, None).await.unwrap();
+        let witness = Arc::new(Witness {
+            store: store.clone(),
+            runs: runs.clone(),
+            run_id: run_id.clone(),
+            seen: Default::default(),
+        });
+        let service = StoreApprovalService::new(store.clone())
+            .with_run_store(runs.clone())
+            .with_router(ApprovalPolicy::new([ApproverSelector::human("ana")]));
+        assert!(service.add_resolution(witness.clone()));
+        let held = ApprovalCall {
+            scope: ApprovalScope::new("app", "u", "s"),
+            request: call,
+            reason: "pay".into(),
+            agent_name: "agent".into(),
+            invocation_id: "inv".into(),
+            run_id: Some(run_id.clone()),
+            acting: None,
+        };
+        let request = service.submit_call(held).await.unwrap().unwrap();
+        service
+            .decide(
+                &request.id,
+                request.version,
+                ApprovalDecision::approve(SubjectRef::human("ana")),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *witness.seen.lock().unwrap(),
+            vec![(ApprovalState::Approved, "ana".to_string(), false, Some(RunState::Waiting))],
+            "the hook saw the recorded yes, the call not yet decided and its run still asleep"
+        );
+        assert!(store.has_decision(&request.scope, &request.fingerprint).await.unwrap());
+        let woken = runs.claim("q", "w", Duration::from_secs(60)).await.unwrap();
+        assert_eq!(woken.map(|claim| claim.record.run_id), Some(run_id), "then the run wakes");
     }
 
     #[tokio::test]

@@ -9,9 +9,10 @@ use std::time::Duration;
 use adk_artifact::{ArtifactService, VersionsRequest};
 use adk_core::audit_log::AuditActor;
 use adk_core::{
-    ApprovalDecision, ApprovalRequest, ApprovalService, ApprovalState, Content, DurableRunStore,
-    ErrorCategory, Event, GovernanceControl, ImageEvidence, InboxQuery, NewRun, RequestContext,
-    RequestedCall, RequestedVia, RunCheckpointRef, RunState, SessionId, UserId,
+    ApprovalAction, ApprovalDecision, ApprovalRequest, ApprovalResolution, ApprovalService,
+    ApprovalState, Content, DurableRunStore, ErrorCategory, Event, GovernanceControl,
+    ImageEvidence, InboxQuery, NewRun, RequestContext, RequestedCall, RequestedVia,
+    RunCheckpointRef, RunState, SessionId, UserId,
 };
 use adk_harness::{
     ArgSpec, Harness, HarnessMode, RuleOwner, RulePredicate, RuleSuggestion, StandingDecision,
@@ -85,6 +86,8 @@ pub struct LocalSource {
     artifacts: Option<Arc<dyn ArtifactService>>,
     runs: Option<Arc<dyn DurableRunStore>>,
     eval_fixtures: Option<std::path::PathBuf>,
+    /// The rules "Always allow" prepared, granted as their decisions resolve.
+    prepared: Arc<PreparedRules>,
 }
 
 impl fmt::Debug for LocalSource {
@@ -282,6 +285,19 @@ impl LocalSourceBuilder {
                 .map(|harness| harness.runner().governance().clone())
                 .or_else(|| self.runner.as_ref().map(|runner| runner.governance().clone()))
         });
+        // A rule "Always allow" prepared is granted as its author's yes resolves the decision,
+        // before the call it allowed resumes: on a kernel the decision itself wakes the run
+        // (spec 3.3 §7.2).
+        let prepared = Arc::new(PreparedRules::default());
+        if let Some(harness) = &self.harness {
+            let decided_by = self
+                .approvals
+                .clone()
+                .or_else(|| harness.agent().runtime().approval_service().cloned());
+            if let Some(service) = decided_by {
+                service.add_resolution(prepared.clone());
+            }
+        }
         Ok(LocalSource {
             app: self.app,
             sessions,
@@ -295,6 +311,7 @@ impl LocalSourceBuilder {
             artifacts: self.artifacts,
             runs: self.runs,
             eval_fixtures: self.eval_fixtures,
+            prepared,
         })
     }
 }
@@ -639,11 +656,93 @@ struct GrantRule {
     surface: String,
 }
 
-#[async_trait]
-impl RuleCommit for GrantRule {
-    async fn commit(self: Box<Self>) -> Result<()> {
+impl GrantRule {
+    async fn grant(self) -> Result<()> {
         self.harness.agent().grant_rule(self.rule, &self.surface, Some(&self.from)).await?;
         Ok(())
+    }
+}
+
+/// The rules "Always allow" prepared, by the decision each waits for. The approval service
+/// grants one as its author's yes resolves the decision ([`ApprovalResolution`]), before the
+/// outcome reaches the call, so the turn the call resumes already runs under the rule.
+#[derive(Default)]
+struct PreparedRules {
+    by_decision: std::sync::Mutex<std::collections::HashMap<String, Arc<PreparedRule>>>,
+}
+
+impl fmt::Debug for PreparedRules {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let waiting = self.by_decision.lock().unwrap_or_else(|e| e.into_inner()).len();
+        f.debug_struct("PreparedRules").field("waiting", &waiting).finish()
+    }
+}
+
+/// One prepared rule: who answered, the decision's version then, and the grant, which the
+/// decision's resolution or the engine's commit takes, whichever comes first.
+struct PreparedRule {
+    author: String,
+    version: u64,
+    grant: tokio::sync::Mutex<Option<GrantRule>>,
+}
+
+impl PreparedRules {
+    /// Forgets `rule` as the one prepared for `decision`, unless another replaced it.
+    fn forget(&self, decision: &str, rule: &Arc<PreparedRule>) {
+        let mut by_decision = self.by_decision.lock().unwrap_or_else(|e| e.into_inner());
+        if by_decision.get(decision).is_some_and(|prepared| Arc::ptr_eq(prepared, rule)) {
+            by_decision.remove(decision);
+        }
+    }
+}
+
+#[async_trait]
+impl ApprovalResolution for PreparedRules {
+    async fn resolving(&self, request: &ApprovalRequest, decision: &ApprovalDecision) {
+        let prepared =
+            self.by_decision.lock().unwrap_or_else(|e| e.into_inner()).get(&request.id).cloned();
+        let Some(prepared) = prepared else { return };
+        // Only the author's own yes, at the version it was prepared for, grants the rule: an
+        // answer that lost, someone else's yes or a later "Allow once" grants nothing.
+        if request.state != ApprovalState::Approved
+            || decision.kind != ApprovalAction::Approve
+            || decision.approver.id != prepared.author
+            || request.version != prepared.version + 1
+        {
+            return;
+        }
+        self.forget(&request.id, &prepared);
+        let grant = prepared.grant.lock().await.take();
+        if let Some(grant) = grant
+            && let Err(error) = grant.grant().await
+        {
+            tracing::warn!(error = %error, decision.id = %request.id, "the call was allowed once; its standing rule could not be created");
+        }
+    }
+}
+
+/// The engine's hold on a prepared rule: its commit grants the rule unless the decision's
+/// resolution did; dropped uncommitted, the rule is no longer prepared.
+struct PreparedCommit {
+    rules: Arc<PreparedRules>,
+    decision: String,
+    rule: Arc<PreparedRule>,
+}
+
+#[async_trait]
+impl RuleCommit for PreparedCommit {
+    async fn commit(self: Box<Self>) -> Result<()> {
+        let grant = self.rule.grant.lock().await.take();
+        match grant {
+            Some(grant) => grant.grant().await,
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for PreparedCommit {
+    fn drop(&mut self) {
+        self.rules.forget(&self.decision, &self.rule);
     }
 }
 
@@ -1172,7 +1271,21 @@ impl Source for LocalSource {
             .ok()
             .and_then(|value| value.as_str().map(str::to_string))
             .unwrap_or_else(|| "surface".to_string());
-        Ok(Box::new(GrantRule { harness, rule, from, surface }))
+        let prepared = Arc::new(PreparedRule {
+            author: caller.user_id().to_string(),
+            version: request.version,
+            grant: tokio::sync::Mutex::new(Some(GrantRule { harness, rule, from, surface })),
+        });
+        self.prepared
+            .by_decision
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(request.id.clone(), prepared.clone());
+        Ok(Box::new(PreparedCommit {
+            rules: self.prepared.clone(),
+            decision: request.id.clone(),
+            rule: prepared,
+        }))
     }
 
     async fn agents(&self, user: &str) -> Result<Vec<AgentState>> {

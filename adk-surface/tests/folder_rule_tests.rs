@@ -160,3 +160,38 @@ async fn always_allow_for_this_folder_covers_every_file_write_in_it() {
     assert_eq!(created[0].ext["surface"], "web");
     s.kernel.stop().await.unwrap();
 }
+
+/// On a kernel, the rule "Always allow" makes is stored before the call it allowed resumes,
+/// so the next write of the same turn runs under it, however long the rule takes to record.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn always_allow_on_a_kernel_stores_the_rule_before_the_turn_resumes() {
+    let call = ScriptedResponse::function_call;
+    let model = Arc::new(ScriptedLlm::new(
+        "scripted",
+        vec![
+            call("write_file", json!({ "path": "notes/a.md", "content": "first" })),
+            call("write_file", json!({ "path": "notes/b.md", "content": "second" })),
+            ScriptedResponse::text("Done."),
+        ],
+    ));
+    let s = scenario_slow_to_record_rules(model, Duration::from_millis(500)).await;
+    std::fs::create_dir_all(s.path.join("notes")).unwrap();
+    s.engine
+        .execute(
+            &web(),
+            Command::Send {
+                session_id: "n1".into(),
+                text: "take notes".into(),
+                images: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let first = next_card(&s, &[]).await.expect("the first write asks");
+    answer(&s, &first, Answer::AlwaysAllow).await;
+    let asked = next_card(&s, std::slice::from_ref(&first.id)).await.map(|card| card.heading);
+    assert_eq!(asked, None, "the second write asked although the rule covers it");
+    assert_eq!(std::fs::read_to_string(s.path.join("notes/b.md")).unwrap(), "second");
+    assert_eq!(records(&s, "harness.rule.created").len(), 1);
+    s.kernel.stop().await.unwrap();
+}

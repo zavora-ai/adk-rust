@@ -253,10 +253,10 @@ pub use agent_loader::{AgentLoader, MultiAgentLoader, SingleAgentLoader};
 pub use approval::{
     APPROVAL_REAPPLY_GRACE, ApprovalAction, ApprovalCall, ApprovalCursor, ApprovalDecision,
     ApprovalDelegation, ApprovalEventKind, ApprovalNotification, ApprovalNotifier, ApprovalPolicy,
-    ApprovalRequest, ApprovalRequestQuery, ApprovalRisk, ApprovalRoute, ApprovalRouter,
-    ApprovalService, ApprovalState, ApprovalTick, ApproverDirectory, ApproverSelector,
-    DEFAULT_APPROVAL_PAGE, DelegationScope, DelegationWindow, EscalationStep, ExpiryAction,
-    InboxPage, InboxQuery, StoreApprovalService,
+    ApprovalRequest, ApprovalRequestQuery, ApprovalResolution, ApprovalRisk, ApprovalRoute,
+    ApprovalRouter, ApprovalService, ApprovalState, ApprovalTick, ApproverDirectory,
+    ApproverSelector, DEFAULT_APPROVAL_PAGE, DelegationScope, DelegationWindow, EscalationStep,
+    ExpiryAction, InboxPage, InboxQuery, StoreApprovalService,
 };
 pub use budget::{
     BUDGET_LIMIT_KEY, BUDGET_RECORDED_KEY, BudgetExceeded, BudgetLimit, BudgetTracker, BudgetUsage,

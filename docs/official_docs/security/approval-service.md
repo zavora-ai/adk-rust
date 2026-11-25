@@ -19,6 +19,7 @@ PostgreSQL, Redis, MongoDB, Neo4j, or Firestore.
 | **Escalation** | `tick` fires each escalation step once its delay has passed, adding its approvers and notifying |
 | **Delegation** | A subject lets another decide in their place within a time window and an application or tool scope |
 | **Notification** | `ApprovalNotifier` hears submission, escalation, decisions, resolution, expiry, and cancellation; `adk-server` ships a signed webhook notifier |
+| **Resolution hooks** | An `ApprovalResolution` runs once the deciding answer is recorded and before the outcome reaches the call or wakes its run |
 | **Resume** | A resolution is written to the store under the call's fingerprint, wakes the durable run waiting for it, and is otherwise taken by the next run, which resumes the held call |
 | **Binding** | The fingerprint names the acting agent and the tool's origin, so a resolution authorizes only the agent that held the call, on the tool it was held for; a held call that resumes against another MCP server or a redefined tool is answered as not run |
 
@@ -110,6 +111,14 @@ notifier to a built service with `ApprovalService::add_notifier`: the
 `operator` group and publishes `held` and `decided` on its bus. A router the service was built
 with keeps deciding, including to leave a call in the store only. Both methods answer whether
 the service took what it was given; their defaults take nothing, so a wrapper forwards them.
+
+`ApprovalService::add_resolution` adds an `ApprovalResolution`, which runs for each request a
+decision resolves, after the decision is recorded and before the outcome is written for the
+call and its run is woken. A host puts there what the resumed call must already see:
+`adk-surface`'s `LocalSource` grants the standing rule of "Always allow" from it, so the turn
+the approved call resumes is checked against the rule
+([Surfaces](../surfaces/index.md)). A hook reports its own failures, and the outcome applies
+whatever it does. The default takes none, and a wrapper forwards it.
 
 ## Policy
 

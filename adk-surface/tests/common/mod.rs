@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use adk_core::audit_log::{AuditTrail, InMemoryAuditRecorder};
+use adk_core::audit_log::{AuditRecordDraft, AuditRecorder, AuditTrail, InMemoryAuditRecorder};
 use adk_core::{
     ApprovalPolicy, ApprovalService, ApproverSelector, DurableRunStore, InMemoryApprovalStore,
     InMemoryRunStore, Llm, RequestContext, StoreApprovalService,
@@ -50,7 +50,7 @@ pub async fn scenario_with(
     control: ControlPlaneConfig,
     hosted: bool,
 ) -> Scenario {
-    build(model, control, hosted, None).await
+    build(model, control, hosted, None, None).await
 }
 
 /// The hosted harness of [`scenario`] on a kernel that writes the `/proc` ledger to `ledger`
@@ -60,7 +60,34 @@ pub async fn scenario_with_ledger(
     control: ControlPlaneConfig,
     ledger: adk_kernel::proc::Ledger,
 ) -> Scenario {
-    build(model, control, true, Some(ledger)).await
+    build(model, control, true, Some(ledger), None).await
+}
+
+/// The hosted harness of [`scenario`], whose record of each standing rule it creates takes
+/// `delay` to write, as a busy store does: the rule is stored only once it is on record.
+pub async fn scenario_slow_to_record_rules(model: Arc<dyn Llm>, delay: Duration) -> Scenario {
+    build(model, ControlPlaneConfig::default().without_socket(), true, None, Some(delay)).await
+}
+
+/// An audit log whose `harness.rule.created` records take `delay` to write.
+#[derive(Debug)]
+struct SlowRuleRecords {
+    inner: InMemoryAuditRecorder,
+    delay: Duration,
+}
+
+#[async_trait::async_trait]
+impl AuditRecorder for SlowRuleRecords {
+    fn digest(&self, value: &Value) -> String {
+        self.inner.digest(value)
+    }
+
+    async fn record(&self, draft: AuditRecordDraft) -> adk_core::Result<()> {
+        if draft.action == "harness.rule.created" {
+            tokio::time::sleep(self.delay).await;
+        }
+        self.inner.record(draft).await
+    }
 }
 
 async fn build(
@@ -68,6 +95,7 @@ async fn build(
     control: ControlPlaneConfig,
     hosted: bool,
     ledger: Option<adk_kernel::proc::Ledger>,
+    rule_delay: Option<Duration>,
 ) -> Scenario {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().to_path_buf();
@@ -84,6 +112,10 @@ async fn build(
             ),
     );
     let audit = InMemoryAuditRecorder::new();
+    let harness_audit: Arc<dyn AuditRecorder> = match rule_delay {
+        Some(delay) => Arc::new(SlowRuleRecords { inner: audit.clone(), delay }),
+        None => Arc::new(audit.clone()),
+    };
     let agent = Arc::new(
         HarnessAgent::builder("finance")
             .model(model.clone())
@@ -98,7 +130,7 @@ async fn build(
             .mode(HarnessMode::Ask)
             .approval_service(Arc::clone(&service))
             // The harness's own records (standing rules, spec 3.1 §9.3) beside the surface's.
-            .audit_log(Arc::new(audit.clone()))
+            .audit_log(harness_audit)
             .build()
             .unwrap(),
     );

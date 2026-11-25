@@ -661,6 +661,10 @@ impl ApprovalService for NotifyingApprovals {
         self.inner.add_notifier(notifier)
     }
 
+    fn add_resolution(&self, hook: Arc<dyn adk_core::ApprovalResolution>) -> bool {
+        self.inner.add_resolution(hook)
+    }
+
     async fn record_review(
         &self,
         call: ApprovalCall,
