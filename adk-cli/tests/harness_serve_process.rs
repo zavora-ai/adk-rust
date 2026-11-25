@@ -1,5 +1,5 @@
-//! `adk-rust serve` as a process (spec 3.1 §8.2, §13 Q5): it starts, listens, and names
-//! where plans are kept.
+//! `adk-rust serve` as a process (spec 3.1 §8.2, §13 Q5): it starts, listens, names where
+//! plans are kept, and stops cleanly on a signal that comes as soon as it listens.
 
 #![cfg(all(unix, feature = "scripted-model", feature = "harness", feature = "persist"))]
 
@@ -44,4 +44,41 @@ fn serve_starts_and_names_where_plans_are_kept() {
     let shown = common::text(&output);
     assert!(listening, "serve did not listen:\n{shown}");
     assert!(shown.contains("plans checkpointed in harness.db"), "{shown}");
+}
+
+/// A `SIGTERM` sent the moment `serve` answers stops it cleanly, for the harness and for the
+/// plain chat agent: each catches the signal before its address listens.
+#[test]
+fn serve_stops_cleanly_on_a_sigterm_as_soon_as_it_listens() {
+    for agent in ["harness", "chat"] {
+        let home = tempfile::tempdir().unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_adk-rust"));
+        command
+            .args(["serve", "--agent", agent, "--port", &port.to_string(), "--dir"])
+            .arg(ws.path())
+            .args(["--model-script", "[]"])
+            .current_dir(ws.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        common::isolate(&mut command, home.path());
+        let mut child = command.spawn().expect("adk-rust starts");
+        let started = Instant::now();
+        while TcpStream::connect(("127.0.0.1", port)).is_err() {
+            assert!(child.try_wait().unwrap().is_none(), "serve --agent {agent} exited early");
+            assert!(started.elapsed() < common::TIMEOUT, "serve --agent {agent} did not listen");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // SAFETY: the child is alive; SIGTERM asks `serve` to stop.
+        unsafe { libc::kill(i32::try_from(child.id()).unwrap(), libc::SIGTERM) };
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "serve --agent {agent} stops on SIGTERM ({}):\n{}",
+            output.status,
+            common::text(&output)
+        );
+    }
 }

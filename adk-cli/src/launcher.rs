@@ -44,9 +44,7 @@ use adk_core::{
 };
 use adk_runner::Runner;
 use adk_server::background::BackgroundState;
-use adk_server::{
-    RequestContextExtractor, SecurityConfig, ServerBuilder, ServerConfig, shutdown_signal,
-};
+use adk_server::{RequestContextExtractor, SecurityConfig, ServerBuilder, ServerConfig};
 use adk_session::{CreateRequest, GetRequest, InMemorySessionService, SessionService};
 use axum::Router;
 use clap::{Parser, Subcommand};
@@ -1008,9 +1006,7 @@ impl Launcher {
         let addr = SocketAddr::new(self.bind_address, port);
         let app = self.build_app()?;
 
-        let listener = tokio::net::TcpListener::bind(addr)
-            .await
-            .map_err(|e| adk_core::AdkError::config(format!("failed to bind {addr}: {e}")))?;
+        let (listener, stop) = listen_until_signal(bind_socket(addr)?, addr)?;
 
         if !addr.ip().is_loopback() {
             warn!(
@@ -1023,12 +1019,75 @@ impl Launcher {
         // The peer address lets an extractor such as the harness's loopback operator see who
         // connected.
         axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-            .with_graceful_shutdown(shutdown_signal())
+            .with_graceful_shutdown(stop)
             .await
             .map_err(|e| adk_core::AdkError::config(format!("server error: {e}")))?;
 
         Ok(())
     }
+}
+
+/// Binds a socket to `addr` as `TcpListener::bind` does, without listening: it accepts no
+/// connection until [`listen_until_signal`] makes it listen.
+pub(crate) fn bind_socket(addr: SocketAddr) -> Result<tokio::net::TcpSocket> {
+    let refused = |e: io::Error| AdkError::config(format!("failed to bind {addr}: {e}"));
+    let socket = match addr {
+        SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4(),
+        SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6(),
+    }
+    .map_err(refused)?;
+    // As `TcpListener::bind` sets it: a quick restart rebinds at once. Not on Windows, where it
+    // would let another process take the port.
+    #[cfg(not(windows))]
+    socket.set_reuseaddr(true).map_err(refused)?;
+    socket.bind(addr).map_err(refused)?;
+    Ok(socket)
+}
+
+/// Catches Ctrl-C, and `SIGTERM` on Unix, then starts accepting connections on `socket`, bound
+/// to `addr`. The future resolves at the first signal.
+///
+/// A signal sent as soon as a client can reach the address stops the server gracefully: the
+/// handlers are registered before the socket listens, whereas `adk_server::shutdown_signal`
+/// registers them only once the server first polls it, and a signal before that ends the
+/// process by its default action.
+///
+/// # Errors
+///
+/// Returns a configuration error when a handler cannot be registered or the socket cannot
+/// listen.
+pub(crate) fn listen_until_signal(
+    socket: tokio::net::TcpSocket,
+    addr: SocketAddr,
+) -> Result<(tokio::net::TcpListener, impl Future<Output = ()> + Send + 'static)> {
+    let signal_error = |e: io::Error| AdkError::config(format!("signal handler: {e}"));
+    #[cfg(unix)]
+    let signal = {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut interrupt = signal(SignalKind::interrupt()).map_err(signal_error)?;
+        let mut terminate = signal(SignalKind::terminate()).map_err(signal_error)?;
+        async move {
+            tokio::select! {
+                _ = interrupt.recv() => {}
+                _ = terminate.recv() => {}
+            }
+        }
+    };
+    #[cfg(windows)]
+    let signal = {
+        let mut interrupt = tokio::signal::windows::ctrl_c().map_err(signal_error)?;
+        async move {
+            interrupt.recv().await;
+        }
+    };
+    #[cfg(not(any(unix, windows)))]
+    let signal = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    let listener = socket
+        .listen(1024)
+        .map_err(|e| AdkError::config(format!("failed to listen on {addr}: {e}")))?;
+    Ok((listener, signal))
 }
 
 /// What serve mode prints on start: where the REST API answers. The server mounts nothing at

@@ -15,7 +15,7 @@ use adk_core::{
 use adk_harness::{Harness, HarnessAgent, HarnessMode, TrustDecision};
 use adk_runner::Runner;
 use adk_server::background::BackgroundState;
-use adk_server::{RequestContextExtractor, SecurityConfig, shutdown_signal};
+use adk_server::{RequestContextExtractor, SecurityConfig};
 use adk_session::{CreateRequest, GetRequest, InMemorySessionService, SessionService};
 use axum::Router;
 use serde_json::{Value, json};
@@ -25,8 +25,8 @@ use super::commands::harness_commands;
 use super::serve::LoopbackOperatorExtractor;
 use crate::console::{ConsoleCommandContext, ConsoleInput, ConsoleIo};
 use crate::launcher::{
-    CONSOLE_CONFIRMATION_TIMEOUT, Launcher, ThinkingDisplayMode, command_completions, drive_turn,
-    find_command, help_text, is_exit_command, terminal_safe,
+    CONSOLE_CONFIRMATION_TIMEOUT, Launcher, ThinkingDisplayMode, bind_socket, command_completions,
+    drive_turn, find_command, help_text, is_exit_command, listen_until_signal, terminal_safe,
 };
 
 /// Session-state key recording the canonical workspace a harness session works in
@@ -1444,17 +1444,7 @@ impl HarnessLauncher {
         let app = this.build_app()?;
         // Bound now, so a taken address fails before anything starts; it accepts no
         // connection until it listens, which a resident kernel's start comes before.
-        let refused = |e: std::io::Error| AdkError::config(format!("failed to bind {addr}: {e}"));
-        let socket = match addr {
-            SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4(),
-            SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6(),
-        }
-        .map_err(refused)?;
-        // As `TcpListener::bind` sets it: a quick restart rebinds at once. Not on Windows,
-        // where it would let another process take the port.
-        #[cfg(not(windows))]
-        socket.set_reuseaddr(true).map_err(refused)?;
-        socket.bind(addr).map_err(refused)?;
+        let socket = bind_socket(addr)?;
         // The apps origin serves the checked apps' pages and nothing else; it ends with the
         // process (spec 3.3 §6.1 `genui-apps`).
         #[cfg(feature = "genui-apps")]
@@ -1470,7 +1460,7 @@ impl HarnessLauncher {
             seal_audit(audit).await;
             return served;
         }
-        let listener = listening(socket, addr)?;
+        let (listener, signal) = listen_until_signal(socket, addr)?;
         println!("ADK-Rust harness serving on http://{addr}");
         println!("  mode {} · shell {}", info.default_mode, terminal_safe(&shell_label(&info)));
         #[cfg(feature = "surface")]
@@ -1481,7 +1471,7 @@ impl HarnessLauncher {
         let served = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
             .with_graceful_shutdown(async move {
                 tokio::select! {
-                    () = shutdown_signal() => {}
+                    () = signal => {}
                     () = stop => {}
                 }
             })
@@ -1526,11 +1516,6 @@ pub(crate) fn shell_label(info: &adk_harness::HarnessInfo) -> String {
     info.shell().map_or_else(|| "none".to_string(), ToString::to_string)
 }
 
-/// Starts accepting connections on `socket`, bound to `addr`.
-fn listening(socket: tokio::net::TcpSocket, addr: SocketAddr) -> Result<tokio::net::TcpListener> {
-    socket.listen(1024).map_err(|e| AdkError::config(format!("failed to listen on {addr}: {e}")))
-}
-
 /// Serves `app` on `socket` with `kernel` resident: the kernel starts before the socket
 /// listens, so a client that reaches the address finds the kernel and its control socket up,
 /// and it drains and stops on Ctrl-C, `SIGTERM` or a Windows service stop (spec 3.2 §7.2,
@@ -1544,22 +1529,10 @@ async fn serve_resident(
     stop_when: impl Future<Output = ()> + Send,
 ) -> Result<()> {
     kernel.start().await.map_err(AdkError::from)?;
-    // One stop for the server and the kernel, registered before the address listens: a
-    // signal that comes as soon as a client can reach it drains both, never ends the process
-    // by the signal's default action.
-    let signal_error = |e: std::io::Error| AdkError::config(format!("signal handler: {e}"));
-    #[cfg(unix)]
-    let (mut interrupt, mut terminate) = {
-        use tokio::signal::unix::{SignalKind, signal};
-        (
-            signal(SignalKind::interrupt()).map_err(signal_error)?,
-            signal(SignalKind::terminate()).map_err(signal_error)?,
-        )
-    };
-    #[cfg(windows)]
-    let mut interrupt = tokio::signal::windows::ctrl_c().map_err(signal_error)?;
-    let listener = match listening(socket, addr) {
-        Ok(listener) => listener,
+    // One stop for the server and the kernel, caught before the address listens: a signal
+    // that comes as soon as a client can reach it drains both.
+    let (listener, signal) = match listen_until_signal(socket, addr) {
+        Ok(listening) => listening,
         Err(error) => {
             if let Err(stop) = kernel.stop().await {
                 tracing::warn!(error = %stop, "could not stop the kernel after the listener failed");
@@ -1598,22 +1571,8 @@ async fn serve_resident(
     });
     // A Windows service is stopped by its manager, not by a signal (spec 3.2 §10 W3);
     // elsewhere `stop_requested` never resolves.
-    #[cfg(unix)]
     tokio::select! {
-        _ = interrupt.recv() => {}
-        _ = terminate.recv() => {}
-        () = adk_kernel::service::stop_requested() => {}
-        () = stop_when => {}
-    }
-    #[cfg(windows)]
-    tokio::select! {
-        _ = interrupt.recv() => {}
-        () = adk_kernel::service::stop_requested() => {}
-        () = stop_when => {}
-    }
-    #[cfg(not(any(unix, windows)))]
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {}
+        () = signal => {}
         () = adk_kernel::service::stop_requested() => {}
         () = stop_when => {}
     }
