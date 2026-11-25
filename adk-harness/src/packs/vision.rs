@@ -48,6 +48,7 @@ use adk_vision::{
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
+use crate::mode::HarnessMode;
 use crate::policy::{CallClasses, ToolKind};
 
 /// The workspace file the egress rules are read from.
@@ -484,6 +485,24 @@ impl CallClasses for VisionClasses {
             return Some(watch_class(args));
         }
         Some(class_for(self.toolset.egress_action(tool, args)))
+    }
+
+    // ReadOnly and Plan are restrictions the person chose: nothing leaves the machine in
+    // them, whatever the egress rules allow.
+    fn denial_in_mode(&self, tool: &str, args: &Value, mode: HarnessMode) -> Option<String> {
+        if !matches!(mode, HarnessMode::ReadOnly | HarnessMode::Plan)
+            || tool == VISION_WATCH_TOOL
+            || !self.toolset.is_tool(tool)
+        {
+            return None;
+        }
+        self.toolset.egress_action(tool, args).map(|_| {
+            format!(
+                "'{tool}' sends an image off this machine, which {} mode does not allow; switch \
+                 to Ask or Auto, or use a backend on the device",
+                mode.as_str()
+            )
+        })
     }
 }
 

@@ -259,8 +259,8 @@ async fn a_disagreement_needs_an_on_device_second_opinion() {
 #[tokio::test]
 async fn an_ask_rule_holds_until_that_exact_image_is_approved() {
     let recorder = arc(InMemoryEgressRecorder::new());
-    let gate =
-        EgressGate::new(EgressPolicy::public_only(), EgressConfig::default(), recorder.clone());
+    let ask = EgressConfig::default().with_default(EgressAction::Ask);
+    let gate = EgressGate::new(EgressPolicy::public_only(), ask, recorder.clone());
     let cloud = arc(ColourDetector::remote("cloud"));
     let runtime =
         VisionRuntime::builder().remote_detector(cloud.clone()).egress_gate(gate).build().unwrap();

@@ -20,9 +20,9 @@ use adk_vision::sam::{SamConfig, SamVideoTracker};
 use adk_vision::{
     CallOptions, DecodeLimits, DecodedImage, Digest, EgressAction, EgressConfig, EgressGate,
     EgressRecord, FrameMeta, FrameSourceId, FramesAnalyzer, GeminiVideoAnalyzer,
-    InMemoryEgressRecorder, LlmDescriber, MediaResolution, RedactionClass, Sampling, SegmentPrompt,
-    SourceClip, SourceImage, TrackId, VideoCodec, VideoRequest, VideoSource, VisibilityPass,
-    VisionCx, VisionError, VisionRuntime,
+    InMemoryEgressRecorder, LlmDescriber, Locality, MediaResolution, RedactionClass, Sampling,
+    SegmentPrompt, SourceClip, SourceImage, TrackId, VideoAnalyzer, VideoCodec, VideoRequest,
+    VideoSource, VisibilityPass, VisionCx, VisionError, VisionRuntime,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -169,7 +169,8 @@ async fn a_clip_leaves_only_through_the_gate() {
     assert_eq!((refusal.step.as_str(), refusal.source), ("redact", crossing.digest()));
 
     // A rule that asks holds the clip by its digest; approving that digest releases it.
-    let (runtime, recorder) = sam_runtime(&server, EgressConfig::default()).await;
+    let ask = EgressConfig::default().with_default(EgressAction::Ask);
+    let (runtime, recorder) = sam_runtime(&server, ask).await;
     let held = runtime.analyze_video(&VisionCx::new(), video, &request).await.unwrap_err();
     let VisionError::EgressHeld { egress, data_class, .. } = held else { panic!("{held}") };
     assert_eq!((egress, data_class.as_str()), (crossing.digest(), "video"));
@@ -329,6 +330,31 @@ async fn gemini_server(answer: &str) -> MockServer {
     server
 }
 
+const GEMINI_HOST: &str = "generativelanguage.googleapis.com";
+
+#[test]
+fn the_gemini_analyzer_sends_to_the_host_its_client_names() {
+    let studio = GeminiModel::new("test-key", "gemini-3.8-flash").unwrap();
+    let analyzer = GeminiVideoAnalyzer::new(Arc::new(studio));
+    assert_eq!(
+        analyzer.descriptor().locality,
+        Locality::Remote { hosts: vec![GEMINI_HOST.into()] }
+    );
+    assert_eq!(analyzer.descriptor().providers, ["gemini"]);
+
+    let gateway = GeminiModel::new_with_base_url(
+        "test-key",
+        "gemini-3.8-flash",
+        "https://llm.example.com/v1beta/",
+    )
+    .unwrap();
+    let analyzer = GeminiVideoAnalyzer::new(Arc::new(gateway));
+    assert_eq!(
+        analyzer.descriptor().locality,
+        Locality::Remote { hosts: vec!["llm.example.com".into()] }
+    );
+}
+
 fn gemini(server: &MockServer) -> GeminiVideoAnalyzer {
     let model = GeminiModel::new_with_base_url(
         "test-key",
@@ -336,7 +362,9 @@ fn gemini(server: &MockServer) -> GeminiVideoAnalyzer {
         format!("{}/v1beta/", server.uri()),
     )
     .unwrap();
+    // The mock server stands in for AI Studio, so the rules see AI Studio's host.
     GeminiVideoAnalyzer::new(Arc::new(model))
+        .with_hosts([GEMINI_HOST])
         .with_media_resolution(MediaResolution::Low)
         .with_processing_wait(
             std::time::Duration::from_millis(10),
@@ -680,6 +708,7 @@ async fn the_recorded_gemini_exchange_replays_and_the_overload_is_reported() {
     .unwrap()
     .with_retry_config(adk_model::RetryConfig::disabled());
     let analyzer = GeminiVideoAnalyzer::new(Arc::new(model))
+        .with_hosts([GEMINI_HOST])
         .with_media_resolution(MediaResolution::Low)
         .with_inline_limit(0)
         .with_processing_wait(
