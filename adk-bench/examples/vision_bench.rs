@@ -310,7 +310,7 @@ mod cloud {
             }
             other => return Err(format!("no describer named {other}")),
         };
-        let mut describer = LlmDescriber::remote(llm, [hosts]).map_err(|e| fail(&e))?;
+        let mut describer = LlmDescriber::remote_with_hosts(llm, [hosts]).map_err(|e| fail(&e))?;
         describer = if backend.starts_with("claude") {
             describer.with_effort(adk_core::Effort::Low).with_max_output_tokens(4_000)
         } else if hosts == "integrate.api.nvidia.com" {

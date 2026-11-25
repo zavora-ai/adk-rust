@@ -126,13 +126,24 @@ impl ImagePrivacyGuardrail {
     }
 
     /// A guardrail for `model`, guarding only when its `data_locality()` is `Remote`.
+    ///
+    /// Images are released to `hosts`, or with none to the hosts the model names
+    /// ([`Llm::data_destinations`]); `provider` egress rules match the providers it names.
     pub fn for_model(
         gate: Arc<EgressGate>,
         model: &dyn Llm,
         hosts: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
+        let destinations = model.data_destinations();
+        let mut hosts: Vec<String> = hosts.into_iter().map(Into::into).collect();
+        if hosts.is_empty() {
+            hosts = adk_core::DataDestination::all_hosts(&destinations);
+        }
         let mut guardrail = Self::new(gate, model.name(), hosts);
         guardrail.locality = model.data_locality();
+        for destination in destinations {
+            guardrail.destination = guardrail.destination.with_provider(destination.provider);
+        }
         guardrail
     }
 

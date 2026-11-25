@@ -172,7 +172,7 @@ impl EgressGate {
             self.refuse_clip(cx, &request, &hosts, Some(digest), "redact", &reason).await?;
             return Err(VisionError::EgressRefused { host: hosts.join(", "), reason });
         }
-        let (action, rule) = self.decide(&hosts, &request.data_class);
+        let (action, rule) = self.decide(request.backend, &request.data_class);
         let decision = match action {
             EgressAction::Allow => EgressDecision::Allowed { rule },
             EgressAction::Ask if request.approved.contains(&digest) => {

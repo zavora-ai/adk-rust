@@ -113,7 +113,7 @@ impl NimConfig {
     ///
     /// The client's construction error, or a URL with no host.
     pub fn describer(&self) -> Result<LlmDescriber> {
-        Ok(LlmDescriber::remote(Arc::new(self.client()?), [self.host()?])?.with_unpriced_hold(0))
+        Ok(LlmDescriber::remote(Arc::new(self.client()?))?.with_unpriced_hold(0))
     }
 
     /// A describer for a NIM on a loopback address.

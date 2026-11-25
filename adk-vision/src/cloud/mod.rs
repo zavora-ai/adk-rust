@@ -27,7 +27,7 @@
 //! use adk_vision::{DescribeSpec, LlmDescriber, VisionRuntime};
 //!
 //! let claude = AnthropicClient::new(AnthropicConfig::new(key, "claude-sonnet-5-5"))?;
-//! let describer = LlmDescriber::remote(Arc::new(claude), ["api.anthropic.com"])?;
+//! let describer = LlmDescriber::remote(Arc::new(claude))?;
 //! let runtime = VisionRuntime::builder()
 //!     .remote_describer(Arc::new(describer))
 //!     .egress_gate(gate)

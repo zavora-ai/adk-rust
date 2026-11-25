@@ -134,6 +134,10 @@ impl Llm for AzureAIClient {
         crate::pricing::PricingCatalog::standard().context_window(Some("azure-ai"), self.name())
     }
 
+    fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+        vec![adk_core::DataDestination::of_url("azure-ai", &self.endpoint)]
+    }
+
     fn name(&self) -> &str {
         &self.model
     }

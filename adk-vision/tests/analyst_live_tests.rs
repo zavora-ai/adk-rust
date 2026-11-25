@@ -74,7 +74,7 @@ async fn s17_an_hour_of_warehouse_video_answered_from_captions() {
             ..Recording::default()
         }),
     });
-    let haiku = LlmDescriber::remote(recorder.clone(), ["api.anthropic.com"]).unwrap();
+    let haiku = LlmDescriber::remote_with_hosts(recorder.clone(), ["api.anthropic.com"]).unwrap();
     let setup = Setup::on_disk().await;
     let runtime = Arc::new(
         adk_vision::VisionRuntime::builder()

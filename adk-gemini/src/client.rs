@@ -1464,6 +1464,22 @@ impl Gemini {
         Ok(Self { client: Arc::new(GeminiClient::with_studio(model, studio)) })
     }
 
+    /// The base URL requests go to: AI Studio's, the one the client was built with, or the
+    /// Vertex AI endpoint of its location.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_gemini::Gemini;
+    ///
+    /// let client = Gemini::new("api-key")?;
+    /// assert!(client.endpoint().unwrap().starts_with("https://generativelanguage.googleapis.com/"));
+    /// # Ok::<(), adk_gemini::ClientError>(())
+    /// ```
+    pub fn endpoint(&self) -> Option<&str> {
+        self.client.backend.endpoint()
+    }
+
     /// Start building a content generation request
     pub fn generate_content(&self) -> ContentBuilder {
         ContentBuilder::new(self.client.clone())

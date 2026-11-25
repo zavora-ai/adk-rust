@@ -549,7 +549,7 @@ async fn a_remote_model_sees_only_released_frames() {
         locality: DataLocality::Remote,
         seen: Mutex::new(Vec::new()),
     });
-    let describer = LlmDescriber::remote(claude.clone(), ["api.anthropic.com"]).unwrap();
+    let describer = LlmDescriber::remote_with_hosts(claude.clone(), ["api.anthropic.com"]).unwrap();
     let recorder = Arc::new(InMemoryEgressRecorder::new());
     let runtime = VisionRuntime::builder()
         .remote_video_analyzer(Arc::new(FramesAnalyzer::remote(&describer)))
@@ -1130,7 +1130,7 @@ mod frames_remote_conformance {
     adk_vision::video_analyzer_conformance_tests! {
         backend = VideoAnalyzerTarget::Remote(Arc::new(
             FramesAnalyzer::remote(
-                &LlmDescriber::remote(judge(DataLocality::Remote), ["api.anthropic.com"])
+                &LlmDescriber::remote_with_hosts(judge(DataLocality::Remote), ["api.anthropic.com"])
                     .unwrap(),
             )
             .with_visibility_pass(VisibilityPass::new().with_frames_per_check(8)),

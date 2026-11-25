@@ -459,6 +459,10 @@ impl Llm for ProviderSearchFallback {
     fn data_locality(&self) -> adk_core::DataLocality {
         self.inner.data_locality()
     }
+
+    fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+        self.inner.data_destinations()
+    }
 }
 
 /// What a provider reported searching and citing in one model response.

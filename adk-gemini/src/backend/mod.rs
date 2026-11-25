@@ -68,6 +68,12 @@ pub(crate) fn decode_generation_response(data: &str) -> Result<GenerationRespons
 /// return `GoogleCloudUnsupported`, so backends only implement what they support.
 #[async_trait]
 pub trait GeminiBackend: Send + Sync + std::fmt::Debug {
+    /// The base URL the backend sends requests to: AI Studio's, a custom one, or a Vertex
+    /// AI endpoint. `None` when the backend does not say.
+    fn endpoint(&self) -> Option<&str> {
+        None
+    }
+
     // ── Core operations (required) ──────────────────────────────────────
 
     /// Generate content (non-streaming).

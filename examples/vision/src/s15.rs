@@ -286,7 +286,7 @@ pub async fn run() -> Result<Checks> {
     );
     let remote_model =
         Perceiver::builder("perceiver").runtime(local.clone()).model(claude.clone()).build();
-    let describer = LlmDescriber::remote(claude.clone(), [ANTHROPIC_HOST])?;
+    let describer = LlmDescriber::remote_with_hosts(claude.clone(), [ANTHROPIC_HOST])?;
     let remote_runtime = VisionRuntime::builder()
         .detector(Arc::new(BeltDetector::new()))
         .remote_describer(Arc::new(describer))

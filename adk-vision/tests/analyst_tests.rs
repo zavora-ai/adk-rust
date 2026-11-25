@@ -292,7 +292,7 @@ async fn the_recorded_live_run_cites_as_it_did_and_costs_what_it_cost_through_th
     let recording = replay.recording.clone();
     let clip = small_clip(recording.duration_ms);
     let setup = Setup::new().await;
-    let haiku = LlmDescriber::remote(replay, ["api.anthropic.com"]).unwrap();
+    let haiku = LlmDescriber::remote_with_hosts(replay, ["api.anthropic.com"]).unwrap();
     let runtime = Arc::new(
         VisionRuntime::builder()
             .remote_video_analyzer(Arc::new(FramesAnalyzer::remote(&haiku)))
@@ -605,7 +605,7 @@ mod oracle_remote_conformance {
 
     adk_vision::video_analyzer_conformance_tests! {
         backend = VideoAnalyzerTarget::Remote(Arc::new(FramesAnalyzer::remote(
-            &LlmDescriber::remote(oracle(&small_clip(600_000), DataLocality::Remote), ["api.anthropic.com"]).unwrap(),
+            &LlmDescriber::remote_with_hosts(oracle(&small_clip(600_000), DataLocality::Remote), ["api.anthropic.com"]).unwrap(),
         ))),
         fixture = caption_fixture().await,
     }

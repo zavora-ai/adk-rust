@@ -272,6 +272,21 @@ impl Llm for OllamaModel {
         }
     }
 
+    // The configured server; a cloud model's data goes on to ollama.com, for which a server
+    // on this machine is only the hop.
+    fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+        let server = adk_core::DataDestination::of_url("ollama", &self.config.host);
+        if !self.model_name.contains("cloud") {
+            return vec![server];
+        }
+        let mut hosts = match adk_core::DataLocality::of_url(&self.config.host) {
+            adk_core::DataLocality::Remote => server.hosts,
+            _ => Vec::new(),
+        };
+        hosts.push("ollama.com".to_string());
+        vec![adk_core::DataDestination::new("ollama", hosts)]
+    }
+
     // OllamaModel uses the default GenericSchemaAdapter from the Llm trait.
     // This explicit override documents the intentional adapter selection.
     fn schema_adapter(&self) -> &dyn SchemaAdapter {

@@ -982,8 +982,8 @@ impl Agent for Reasoner {
 /// Whether the egress rules release an image of `class` to `destination` without asking.
 fn allows(gate: &EgressGate, destination: &BackendDescriptor, class: &DataClass) -> bool {
     match &destination.locality {
-        Locality::Remote { hosts } => {
-            gate.decide(hosts, class).0 == crate::egress::EgressAction::Allow
+        Locality::Remote { .. } => {
+            gate.decide(destination, class).0 == crate::egress::EgressAction::Allow
         }
         _ => true,
     }

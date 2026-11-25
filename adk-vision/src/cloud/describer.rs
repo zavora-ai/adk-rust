@@ -47,7 +47,7 @@ use crate::traits::{DescribeRequest, Describer, Description, ImageRegion};
 /// use adk_vision::{CoordFrame, Describer, LlmDescriber};
 ///
 /// let model = Arc::new(MockLlm::new("claude-sonnet-5-5"));
-/// let describer = LlmDescriber::remote(model, ["api.anthropic.com"]).unwrap();
+/// let describer = LlmDescriber::remote_with_hosts(model, ["api.anthropic.com"]).unwrap();
 /// assert_eq!(describer.descriptor().frame, CoordFrame::SentPixels);
 /// assert_eq!(describer.descriptor().limits.max_long_edge, Some(2576));
 /// ```
@@ -72,26 +72,65 @@ impl<I> std::fmt::Debug for LlmDescriber<I> {
 }
 
 impl LlmDescriber<ReleasedImage> {
-    /// A describer for a model off the machine, which sends to `hosts`; it takes only
-    /// images the egress gate released to it.
+    /// A describer for a model off the machine; it takes only images the egress gate
+    /// released to it.
+    ///
+    /// The hosts and providers come from the model ([`Llm::data_destinations`]): every
+    /// `adk-model` provider names the host of its configured endpoint, so a custom base URL,
+    /// a Vertex location or a Bedrock region is the host the egress policy and rules see.
     ///
     /// # Errors
     ///
-    /// [`VisionError::InvalidInput`] when `hosts` is empty: the egress policy checks each
-    /// host before an image is released.
-    pub fn remote<H: Into<String>>(
+    /// [`VisionError::InvalidInput`] when the model names no host; pass them with
+    /// [`remote_with_hosts`](Self::remote_with_hosts).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use adk_model::anthropic::AnthropicConfig;
+    /// use adk_model::AnthropicClient;
+    /// use adk_vision::{Locality, LlmDescriber};
+    ///
+    /// let claude = AnthropicClient::new(AnthropicConfig::new("key", "claude-sonnet-5-5")).unwrap();
+    /// let describer = LlmDescriber::remote(Arc::new(claude)).unwrap();
+    /// let descriptor = adk_vision::Describer::descriptor(&describer);
+    /// assert_eq!(descriptor.locality, Locality::Remote { hosts: vec!["api.anthropic.com".into()] });
+    /// assert_eq!(descriptor.providers, ["anthropic"]);
+    /// ```
+    pub fn remote(llm: Arc<dyn Llm>) -> Result<Self> {
+        Self::remote_with_hosts(llm, Vec::<String>::new())
+    }
+
+    /// A describer for a model off the machine that sends to `hosts` in place of the hosts
+    /// the model names, for a model that names none or a gateway its client does not know
+    /// about. With no `hosts`, the model's.
+    ///
+    /// # Errors
+    ///
+    /// [`VisionError::InvalidInput`] when neither `hosts` nor the model names a host: the
+    /// egress policy checks each host before an image is released.
+    pub fn remote_with_hosts<H: Into<String>>(
         llm: Arc<dyn Llm>,
         hosts: impl IntoIterator<Item = H>,
     ) -> Result<Self> {
-        let hosts: Vec<String> = hosts.into_iter().map(Into::into).collect();
+        let destinations = llm.data_destinations();
+        let mut hosts: Vec<String> = hosts.into_iter().map(Into::into).collect();
+        if hosts.is_empty() {
+            hosts = adk_core::DataDestination::all_hosts(&destinations);
+        }
         if hosts.is_empty() {
             return Err(VisionError::InvalidInput(format!(
-                "a remote describer names the hosts `{}` sends to, so the egress policy can \
-                 check them; pass at least one host",
+                "model `{}` names no host it sends to, so the egress policy cannot check \
+                 one; pass them with `LlmDescriber::remote_with_hosts`",
                 llm.name()
             )));
         }
-        Ok(Self::with_locality(llm, Locality::Remote { hosts }))
+        let mut describer = Self::with_locality(llm, Locality::Remote { hosts });
+        for destination in destinations {
+            describer.descriptor = describer.descriptor.with_provider(destination.provider);
+        }
+        Ok(describer)
     }
 }
 
@@ -242,7 +281,7 @@ impl<I> LlmDescriber<I> {
     /// use adk_vision::{DescribeSpec, LlmDescriber};
     ///
     /// let model = Arc::new(MockLlm::new("claude-haiku-5-5"));
-    /// let describer = LlmDescriber::remote(model, ["api.anthropic.com"]).unwrap();
+    /// let describer = LlmDescriber::remote_with_hosts(model, ["api.anthropic.com"]).unwrap();
     /// let spec = DescribeSpec::new("Where is the save button?").with_regions()
     ///     .with_max_output_tokens(1_000);
     /// let estimate = describer.preflight(&[(2356, 1530)], &spec);

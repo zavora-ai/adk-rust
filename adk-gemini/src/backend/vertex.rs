@@ -320,6 +320,10 @@ impl VertexBackend {
 
 #[async_trait]
 impl GeminiBackend for VertexBackend {
+    fn endpoint(&self) -> Option<&str> {
+        Some(&self.endpoint)
+    }
+
     async fn generate_content(
         &self,
         request: GenerateContentRequest,

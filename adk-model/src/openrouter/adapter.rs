@@ -239,6 +239,11 @@ impl Llm for OpenRouterClient {
         self.model()
     }
 
+    // OpenRouter routes on to the upstream it picks; the request leaves for OpenRouter.
+    fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+        vec![adk_core::DataDestination::of_url("openrouter", self.config().effective_base_url())]
+    }
+
     #[tracing::instrument(
         name = "model.generate_content",
         skip_all,

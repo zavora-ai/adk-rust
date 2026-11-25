@@ -1190,6 +1190,10 @@ impl Llm for MeteredLlm {
         self.inner.data_locality()
     }
 
+    fn data_destinations(&self) -> Vec<crate::DataDestination> {
+        self.inner.data_destinations()
+    }
+
     fn native_web_search(&self) -> Option<crate::NativeWebSearch> {
         self.inner.native_web_search()
     }

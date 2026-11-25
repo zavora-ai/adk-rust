@@ -44,7 +44,7 @@
 //!     ..Default::default()
 //! });
 //! let haiku = MockLlm::new("claude-haiku-5-5").with_response(response);
-//! let describer = LlmDescriber::remote(Arc::new(haiku), ["api.anthropic.com"]).unwrap();
+//! let describer = LlmDescriber::remote_with_hosts(Arc::new(haiku), ["api.anthropic.com"]).unwrap();
 //! // Every frame sent to it passes the egress gate.
 //! let gate = EgressGate::new(
 //!     EgressPolicy::public_only(),

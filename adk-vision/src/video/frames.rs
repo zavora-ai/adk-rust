@@ -57,7 +57,7 @@ pub const DEFAULT_CAPTION_INSTRUCTIONS: &str = "Describe what happens in this pa
 /// use adk_vision::{FramesAnalyzer, LlmDescriber, VisibilityPass};
 ///
 /// let model = Arc::new(MockLlm::new("claude-sonnet-5-5"));
-/// let describer = LlmDescriber::remote(model, ["api.anthropic.com"]).unwrap();
+/// let describer = LlmDescriber::remote_with_hosts(model, ["api.anthropic.com"]).unwrap();
 /// // Frames sampled at 1 fps: check one in five, then ask over the eleven seconds around
 /// // the first that shows the forklift.
 /// let pass = VisibilityPass::new().with_target("the orange forklift").with_stride(5);
@@ -126,7 +126,7 @@ impl VisibilityPass {
 /// use adk_vision::{FramesAnalyzer, LlmDescriber, VideoAnalyzer};
 ///
 /// let claude = Arc::new(MockLlm::new("claude-sonnet-5-5"));
-/// let describer = LlmDescriber::remote(claude, ["api.anthropic.com"]).unwrap();
+/// let describer = LlmDescriber::remote_with_hosts(claude, ["api.anthropic.com"]).unwrap();
 /// let analyzer = FramesAnalyzer::remote(&describer).with_frames_per_call(16);
 /// assert!(analyzer.descriptor().locality.is_remote());
 /// ```

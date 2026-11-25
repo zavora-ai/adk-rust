@@ -334,7 +334,9 @@ pub use model::{
     ToolDeclarations, ToolDeclarationsIter, ToolDeclarationsKeys, ToolDeclarationsValues,
     UsageMetadata, nullable_count,
 };
-pub use model::{DataLocality, NativeCompaction, NativeWebSearch, NativeWebSearchTool};
+pub use model::{
+    DataDestination, DataLocality, NativeCompaction, NativeWebSearch, NativeWebSearchTool,
+};
 pub use policy::{
     ArgPredicate, DeclarativePolicy, DeclarativePolicyBuilder, PolicyCall, PolicyDecision,
     PolicyRule, StrictestPolicy, ToolPolicy, ToolPolicyRequest,

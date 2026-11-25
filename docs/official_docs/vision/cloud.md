@@ -34,7 +34,7 @@ use adk_model::AnthropicClient;
 use adk_vision::{DescribeSpec, LlmDescriber, VisionRuntime};
 
 let claude = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-5-5"))?;
-let describer = LlmDescriber::remote(Arc::new(claude), ["api.anthropic.com"])?
+let describer = LlmDescriber::remote(Arc::new(claude))?
     .with_effort(Effort::Low)
     .with_max_output_tokens(4_000);
 let runtime = VisionRuntime::builder()

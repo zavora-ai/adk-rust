@@ -669,11 +669,11 @@ fn parse_box(text: &str) -> Result<BBox> {
     Ok(BBox::new(x0, y0, x1, y1))
 }
 
-/// The egress rules: the file when it exists, else every release asks. Faces and personal
-/// text are always redacted, as the harness vision pack redacts them.
+/// The egress rules: the file as written when it exists, else the defaults, under which
+/// every release is allowed and nothing is redacted.
 fn rules(project: &Path, config: Option<&Path>) -> Result<VisionConfig> {
     let path = config.map_or_else(|| project.join(RULES_FILE), Path::to_path_buf);
-    let mut rules = match std::fs::read_to_string(&path) {
+    let rules = match std::fs::read_to_string(&path) {
         Ok(text) => VisionConfig::from_toml_str(&text)
             .with_context(|| format!("{} is invalid", path.display()))?,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound && config.is_none() => {
@@ -681,8 +681,6 @@ fn rules(project: &Path, config: Option<&Path>) -> Result<VisionConfig> {
         }
         Err(err) => return Err(err).with_context(|| format!("could not read {}", path.display())),
     };
-    rules.egress =
-        rules.egress.redacting(RedactionClass::faces()).redacting(RedactionClass::personal_text());
     Ok(rules)
 }
 
@@ -785,7 +783,7 @@ fn describer(
     base_url: Option<String>,
 ) -> Result<adk_vision::LlmDescriber> {
     use adk_core::Llm;
-    let (llm, host): (Arc<dyn Llm>, &str) = match backend {
+    let llm: Arc<dyn Llm> = match backend {
         "claude" => {
             let mut config = adk_model::anthropic::AnthropicConfig::new(
                 key(&["ANTHROPIC_API_KEY"])?,
@@ -794,7 +792,7 @@ fn describer(
             if let Some(url) = base_url {
                 config = config.with_base_url(url);
             }
-            (Arc::new(adk_model::AnthropicClient::new(config)?), "api.anthropic.com")
+            Arc::new(adk_model::AnthropicClient::new(config)?)
         }
         "gemini" => {
             let api_key = key(&["GEMINI_API_KEY", "GOOGLE_API_KEY"])?;
@@ -803,7 +801,7 @@ fn describer(
                 Some(url) => adk_model::GeminiModel::new_with_base_url(api_key, model, url)?,
                 None => adk_model::GeminiModel::new(api_key, model)?,
             };
-            (Arc::new(client), "generativelanguage.googleapis.com")
+            Arc::new(client)
         }
         "nim" => {
             let url =
@@ -827,7 +825,8 @@ fn describer(
              `mistralrs`) runs Qwen3-VL in the process"
         ),
     };
-    Ok(adk_vision::LlmDescriber::remote(llm, [host])?)
+    // The client names its hosts, so a `--base-url` gateway is the host the rules see.
+    Ok(adk_vision::LlmDescriber::remote(llm)?)
 }
 
 #[cfg(feature = "vision-local")]
@@ -1687,33 +1686,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rules_always_redact_faces_and_personal_text_and_default_to_ask() {
+    fn rules_allow_and_redact_nothing_until_the_file_restricts_them() {
         let dir = tempfile::tempdir().unwrap();
         let config = rules(dir.path(), None).unwrap();
-        assert!(config.egress.redact.contains(&RedactionClass::faces()));
-        assert!(config.egress.redact.contains(&RedactionClass::personal_text()));
+        assert!(config.egress.redact.is_empty());
         assert_eq!(
-            config.egress.decide("api.anthropic.com", &DataClass::new("image")).0,
-            EgressAction::Ask
+            config.egress.decide("api.anthropic.com", &[], &DataClass::new("image")).0,
+            EgressAction::Allow
         );
 
         std::fs::create_dir_all(dir.path().join(".adk")).unwrap();
         std::fs::write(
             dir.path().join(RULES_FILE),
-            "[egress]\ndefault = \"deny\"\nredact = []\n\n[[egress.rule]]\nhost = \
-             \"api.anthropic.com\"\nclasses = [\"image_crop\"]\naction = \"allow\"\n",
+            "[egress]\ndefault = \"deny\"\nredact = [\"faces\"]\n\n[[egress.rule]]\nhost = \
+             \"api.anthropic.com\"\nclasses = [\"image_crop\"]\naction = \"allow\"\n\n\
+             [[egress.rule]]\nprovider = \"gemini\"\naction = \"ask\"\n",
         )
         .unwrap();
         let config = rules(dir.path(), None).unwrap();
         assert_eq!(
-            config.egress.decide("api.anthropic.com", &DataClass::new("image_crop")).0,
+            config.egress.decide("api.anthropic.com", &[], &DataClass::new("image_crop")).0,
             EgressAction::Allow
         );
         assert_eq!(
-            config.egress.decide("api.anthropic.com", &DataClass::new("image")).0,
+            config.egress.decide("api.anthropic.com", &[], &DataClass::new("image")).0,
             EgressAction::Deny
         );
-        assert!(config.egress.redact.contains(&RedactionClass::faces()));
+        let gemini = ["gemini".to_string()];
+        assert_eq!(
+            config.egress.decide(
+                "generativelanguage.googleapis.com",
+                &gemini,
+                &DataClass::new("image")
+            ),
+            (EgressAction::Ask, Some(1))
+        );
+        assert_eq!(config.egress.redact, [RedactionClass::faces()]);
     }
 
     #[test]

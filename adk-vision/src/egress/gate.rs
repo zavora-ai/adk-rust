@@ -351,12 +351,43 @@ impl EgressGate {
         classes
     }
 
-    /// The action and rule for an image of `class` bound for `hosts`: the strictest over
-    /// the hosts, `deny` over `ask` over `allow`.
-    pub fn decide(&self, hosts: &[String], class: &DataClass) -> (EgressAction, Option<usize>) {
+    /// The action and rule for an image of `class` bound for `backend`: the strictest over
+    /// its hosts, `deny` over `ask` over `allow`, a `provider` rule matching each host of a
+    /// backend that names that provider. The default for a backend on the device.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use adk_core::egress::EgressPolicy;
+    /// use adk_vision::{
+    ///     BackendDescriptor, CoordFrame, DataClass, EgressAction, EgressConfig, EgressGate,
+    ///     InMemoryEgressRecorder, Locality,
+    /// };
+    ///
+    /// let config = EgressConfig::default().with_provider_rule("anthropic", &[], EgressAction::Ask);
+    /// let gate = EgressGate::new(EgressPolicy::public_only(), config, Arc::new(InMemoryEgressRecorder::new()));
+    /// let claude = BackendDescriptor::new(
+    ///     "claude",
+    ///     Locality::Remote { hosts: vec!["gateway.example.com".into()] },
+    ///     CoordFrame::SentPixels,
+    /// );
+    /// let photo = DataClass::new("photo");
+    /// assert_eq!(gate.decide(&claude, &photo), (EgressAction::Allow, None));
+    /// assert_eq!(gate.decide(&claude.with_provider("anthropic"), &photo), (EgressAction::Ask, Some(0)));
+    /// ```
+    pub fn decide(
+        &self,
+        backend: &BackendDescriptor,
+        class: &DataClass,
+    ) -> (EgressAction, Option<usize>) {
+        let hosts = match &backend.locality {
+            Locality::Remote { hosts } => hosts.as_slice(),
+            Locality::InProcess | Locality::Loopback => &[],
+        };
         hosts
             .iter()
-            .map(|host| self.config.decide(host, class))
+            .map(|host| self.config.decide(host, &backend.providers, class))
             .max_by_key(|(action, _)| *action)
             .unwrap_or((self.config.default, None))
     }
@@ -400,7 +431,7 @@ impl EgressGate {
     pub async fn stage(&self, cx: &VisionCx, request: &ReleaseRequest<'_>) -> Result<StagedEgress> {
         let hosts = remote_hosts(request.backend)?;
         let preview = self.prepare(cx, request, &hosts).await?;
-        let (action, rule) = self.decide(&hosts, &request.data_class);
+        let (action, rule) = self.decide(request.backend, &request.data_class);
         if action == EgressAction::Deny {
             let reason = deny_reason(rule, &request.data_class);
             self.refuse(cx, request, &hosts, Some(preview.egress), "decide", &reason).await?;
@@ -453,7 +484,7 @@ impl EgressGate {
     ) -> Result<ReleasedImage> {
         let hosts = remote_hosts(request.backend)?;
         let preview = self.prepare(cx, &request, &hosts).await?;
-        let (action, rule) = self.decide(&hosts, &request.data_class);
+        let (action, rule) = self.decide(request.backend, &request.data_class);
         let decision = match action {
             EgressAction::Allow => EgressDecision::Allowed { rule },
             EgressAction::Ask if request.approved.contains(&preview.egress) => {
@@ -685,10 +716,10 @@ pub(super) fn deny_reason(rule: Option<usize>, class: &DataClass) -> String {
     }
 }
 
-/// `host` or `host:port`; HTTPS's port when none is given.
+/// `host`, `host:port` or `[v6]:port`; HTTPS's port when none is given.
 pub(super) fn split_host_port(host: &str) -> (&str, u16) {
     match host.rsplit_once(':') {
-        Some((name, port)) if !name.contains(':') => {
+        Some((name, port)) if !name.contains(':') || name.ends_with(']') => {
             port.parse().map_or((host, 443), |port| (name, port))
         }
         _ => (host, 443),

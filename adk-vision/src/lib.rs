@@ -172,8 +172,8 @@ pub use egress::{ClipReleaseRequest, ReleasedClip};
 pub use egress::{
     DataClass, EgressAction, EgressConfig, EgressDecision, EgressEvidence, EgressGate,
     EgressPreview, EgressReceipt, EgressRecord, EgressRecorder, EgressRefusal, EgressRuleConfig,
-    InMemoryEgressRecorder, RedactionClass, Redactor, ReleaseRequest, ReleasedImage, StagedEgress,
-    VisionConfig,
+    InMemoryEgressRecorder, RedactionClass, Redactor, ReleaseRequest, ReleasedImage, RuleTarget,
+    StagedEgress, VisionConfig,
 };
 pub use error::{Result, VisionError};
 #[cfg(feature = "fetch")]

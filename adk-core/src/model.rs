@@ -299,6 +299,127 @@ pub trait Llm: Send + Sync {
     fn data_locality(&self) -> DataLocality {
         DataLocality::Remote
     }
+
+    /// Where a call's request data is sent: each provider the model may call, by the id its
+    /// responses carry in [`LlmResponse::provider`], with the hosts its client connects to.
+    ///
+    /// `adk-model` providers answer from their configured endpoint, so a custom base URL, a
+    /// Vertex or Bedrock region, or an Azure resource names its own host. A loopback server
+    /// names its loopback host; [`data_locality`](Self::data_locality) says whether the data
+    /// leaves the machine. Image egress rules and the privacy guardrail read it to name the
+    /// hosts a remote model's images go to.
+    ///
+    /// The default returns none, meaning the destination is unknown. Wrappers forward to the
+    /// model they wrap; a wrapper over several models answers every model's destinations, or
+    /// none when any of them is unknown.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{DataDestination, Llm, LlmRequest, LlmResponseStream};
+    ///
+    /// struct Hosted;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Llm for Hosted {
+    ///     fn name(&self) -> &str {
+    ///         "claude-sonnet-5-5"
+    ///     }
+    ///     async fn generate_content(&self, _: LlmRequest, _: bool) -> adk_core::Result<LlmResponseStream> {
+    ///         unimplemented!()
+    ///     }
+    ///     fn data_destinations(&self) -> Vec<DataDestination> {
+    ///         vec![DataDestination::of_url("anthropic", "https://api.anthropic.com/v1")]
+    ///     }
+    /// }
+    ///
+    /// let destinations = Hosted.data_destinations();
+    /// assert_eq!(destinations[0].provider, "anthropic");
+    /// assert_eq!(destinations[0].hosts, ["api.anthropic.com"]);
+    /// ```
+    fn data_destinations(&self) -> Vec<DataDestination> {
+        Vec::new()
+    }
+}
+
+/// One provider a model sends request data to, and the hosts its client connects to.
+///
+/// Read from the client's configuration, never from a response: [`Llm::data_destinations`]
+/// returns one per provider a model may call.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::DataDestination;
+///
+/// let vertex = DataDestination::of_url("gemini", "https://europe-west4-aiplatform.googleapis.com/v1");
+/// assert_eq!(vertex.hosts, ["europe-west4-aiplatform.googleapis.com"]);
+///
+/// let ollama = DataDestination::of_url("ollama", "http://localhost:11434");
+/// assert_eq!(ollama.hosts, ["localhost:11434"]);
+///
+/// assert!(DataDestination::of_url("openai", "not a url").hosts.is_empty());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct DataDestination {
+    /// The provider's id, as its responses carry it in [`LlmResponse::provider`]:
+    /// `anthropic`, `gemini`, `openai`, `bedrock`, or the name an OpenAI-compatible client
+    /// is configured with.
+    pub provider: String,
+    /// The hosts request data is sent to, each as `host`, or `host:port` when the port is
+    /// not 443.
+    pub hosts: Vec<String>,
+}
+
+impl DataDestination {
+    /// A destination at `hosts`, each `host` or `host:port`.
+    pub fn new(
+        provider: impl Into<String>,
+        hosts: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        Self { provider: provider.into(), hosts: hosts.into_iter().map(Into::into).collect() }
+    }
+
+    /// The destination of a client whose endpoint is `url`: its host, with the port when
+    /// it is not 443. A URL that does not parse, or names no host, gives no host.
+    pub fn of_url(provider: impl Into<String>, url: &str) -> Self {
+        let host = url::Url::parse(url.trim()).ok().and_then(|parsed| {
+            let host = parsed.host_str()?.trim_end_matches('.').to_ascii_lowercase();
+            Some(match parsed.port_or_known_default() {
+                Some(443) | None => host,
+                Some(port) => format!("{host}:{port}"),
+            })
+        });
+        Self { provider: provider.into(), hosts: host.into_iter().collect() }
+    }
+
+    /// Every destination's hosts, in order and without repeats.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::DataDestination;
+    ///
+    /// let both = [
+    ///     DataDestination::new("anthropic", ["api.anthropic.com"]),
+    ///     DataDestination::new("gemini", ["generativelanguage.googleapis.com", "api.anthropic.com"]),
+    /// ];
+    /// assert_eq!(
+    ///     DataDestination::all_hosts(&both),
+    ///     ["api.anthropic.com", "generativelanguage.googleapis.com"]
+    /// );
+    /// ```
+    pub fn all_hosts(destinations: &[DataDestination]) -> Vec<String> {
+        let mut hosts: Vec<String> = Vec::new();
+        for host in destinations.iter().flat_map(|d| d.hosts.iter()) {
+            if !hosts.contains(host) {
+                hosts.push(host.clone());
+            }
+        }
+        hosts
+    }
 }
 
 /// Where a model call's request data goes, from most to least local.
@@ -1315,10 +1436,59 @@ mod tests {
             fn data_locality(&self) -> DataLocality {
                 DataLocality::InProcess
             }
+            fn data_destinations(&self) -> Vec<DataDestination> {
+                vec![DataDestination::new("local", ["127.0.0.1:8080"])]
+            }
         }
 
         let metered = crate::MeteredLlm::new(std::sync::Arc::new(Local));
         assert_eq!(metered.data_locality(), DataLocality::InProcess);
+        assert_eq!(
+            metered.data_destinations(),
+            vec![DataDestination::new("local", ["127.0.0.1:8080"])]
+        );
+    }
+
+    #[test]
+    fn a_destination_names_the_endpoint_host_and_any_port_but_443() {
+        for (url, host) in [
+            ("https://api.anthropic.com", "api.anthropic.com"),
+            ("https://API.OpenAI.com./v1", "api.openai.com"),
+            (
+                "https://bedrock-runtime.eu-west-1.amazonaws.com:443/x",
+                "bedrock-runtime.eu-west-1.amazonaws.com",
+            ),
+            ("http://localhost:11434", "localhost:11434"),
+            ("http://gpu-box/v1", "gpu-box:80"),
+            ("https://nim.internal:8443/v1", "nim.internal:8443"),
+            ("http://[::1]:8000/v1", "[::1]:8000"),
+        ] {
+            assert_eq!(
+                DataDestination::of_url("p", url),
+                DataDestination::new("p", [host]),
+                "{url}"
+            );
+        }
+        for url in ["not a url", "", "data:text/plain,x"] {
+            assert!(DataDestination::of_url("p", url).hosts.is_empty(), "{url}");
+        }
+    }
+
+    #[test]
+    fn a_model_that_does_not_say_has_no_destination() {
+        struct Silent;
+
+        #[async_trait]
+        impl Llm for Silent {
+            fn name(&self) -> &str {
+                "silent"
+            }
+            async fn generate_content(&self, _: LlmRequest, _: bool) -> Result<LlmResponseStream> {
+                Ok(Box::pin(futures::stream::empty()))
+            }
+        }
+
+        assert!(Silent.data_destinations().is_empty());
     }
 
     #[test]

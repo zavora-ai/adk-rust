@@ -17,43 +17,135 @@ pub enum EgressAction {
     Deny,
 }
 
-/// One `[[egress.rule]]`: the action for a host and, optionally, some data classes.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EgressRuleConfig {
+/// What an `[[egress.rule]]` matches: a host, or every host of one provider.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RuleTarget {
     /// A host name, or `*.example.com` for its subdomains.
-    pub host: String,
+    Host(String),
+    /// A provider id, as a backend names it in
+    /// [`BackendDescriptor::providers`](crate::BackendDescriptor::providers): the id its
+    /// model's responses carry in `LlmResponse::provider`, such as `anthropic`, `gemini`,
+    /// `bedrock` or `nvidia`.
+    Provider(String),
+}
+
+/// One `[[egress.rule]]`: the action for a host or a provider and, optionally, some data
+/// classes.
+///
+/// A rule names exactly one of `host` and `provider`; a rule with both or neither is
+/// refused.
+///
+/// # Example
+///
+/// ```
+/// use adk_vision::{EgressAction, RuleTarget, VisionConfig};
+///
+/// let config = VisionConfig::from_toml_str(r#"
+///     [[egress.rule]]
+///     provider = "anthropic"
+///     action = "ask"
+/// "#).unwrap();
+/// assert_eq!(config.egress.rules[0].target, RuleTarget::Provider("anthropic".into()));
+/// assert_eq!(config.egress.rules[0].action, EgressAction::Ask);
+///
+/// let both = r#"
+///     [[egress.rule]]
+///     host = "api.anthropic.com"
+///     provider = "anthropic"
+///     action = "ask"
+/// "#;
+/// assert!(VisionConfig::from_toml_str(both).is_err());
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "RuleToml", into = "RuleToml")]
+pub struct EgressRuleConfig {
+    /// The host or provider the rule matches.
+    pub target: RuleTarget,
     /// The data classes the rule covers; empty covers every class.
-    #[serde(default)]
     pub classes: Vec<DataClass>,
     /// The action.
     pub action: EgressAction,
 }
 
-impl EgressRuleConfig {
-    fn matches(&self, host: &str, class: &DataClass) -> bool {
-        let host_matches = match self.host.strip_prefix("*.") {
-            Some(suffix) => {
-                host.len() > suffix.len()
-                    && host.ends_with(suffix)
-                    && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
+/// The TOML form of a rule: exactly one of `host` and `provider`.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuleToml {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
+    #[serde(default)]
+    classes: Vec<DataClass>,
+    action: EgressAction,
+}
+
+impl TryFrom<RuleToml> for EgressRuleConfig {
+    type Error = String;
+
+    fn try_from(rule: RuleToml) -> std::result::Result<Self, Self::Error> {
+        let target = match (rule.host, rule.provider) {
+            (Some(host), None) => RuleTarget::Host(host),
+            (None, Some(provider)) => RuleTarget::Provider(provider),
+            (Some(_), Some(_)) => {
+                return Err("an egress rule names `host` or `provider`, not both".into());
             }
-            None => self.host.eq_ignore_ascii_case(host),
+            (None, None) => {
+                return Err("an egress rule names the `host` or the `provider` it covers".into());
+            }
         };
-        host_matches && (self.classes.is_empty() || self.classes.contains(class))
+        Ok(Self { target, classes: rule.classes, action: rule.action })
+    }
+}
+
+impl From<EgressRuleConfig> for RuleToml {
+    fn from(rule: EgressRuleConfig) -> Self {
+        let (host, provider) = match rule.target {
+            RuleTarget::Host(host) => (Some(host), None),
+            RuleTarget::Provider(provider) => (None, Some(provider)),
+        };
+        Self { host, provider, classes: rule.classes, action: rule.action }
+    }
+}
+
+impl EgressRuleConfig {
+    fn matches(&self, host: &str, providers: &[String], class: &DataClass) -> bool {
+        let target_matches = match &self.target {
+            RuleTarget::Host(pattern) => match pattern.strip_prefix("*.") {
+                Some(suffix) => {
+                    host.len() > suffix.len()
+                        && host.ends_with(suffix)
+                        && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
+                }
+                None => pattern.eq_ignore_ascii_case(host),
+            },
+            RuleTarget::Provider(provider) => {
+                providers.iter().any(|p| p.eq_ignore_ascii_case(provider))
+            }
+        };
+        target_matches && (self.classes.is_empty() || self.classes.contains(class))
     }
 }
 
 /// The `[egress]` table: the default action, the redaction classes every release passes
-/// through, and the rules per host and data class.
+/// through, and the rules per host or provider and data class.
 ///
-/// There is no setting that releases before redaction, and unknown keys are refused rather
-/// than ignored (V-I2).
+/// With no table, every image a remote backend is called with leaves unredacted and
+/// unasked. Each restriction is an opt-in: `default = "ask"` or `"deny"`, a rule that asks
+/// or denies for a host or provider, a `redact` class, or `on_device = true`. A chosen
+/// restriction fails closed: a listed class no redactor covers refuses the release
+/// ([`VisionError::RedactionUnavailable`]), and redaction runs before the decision, so an
+/// approval names the redacted image. Unknown keys are refused rather than ignored (V-I2).
 ///
 /// # Example
 ///
 /// ```
 /// use adk_vision::{DataClass, EgressAction, VisionConfig};
+///
+/// let open = VisionConfig::default();
+/// assert_eq!(open.egress.decide("api.anthropic.com", &[], &DataClass::new("photo")).0, EgressAction::Allow);
+/// assert!(open.egress.redact.is_empty());
 ///
 /// let config = VisionConfig::from_toml_str(r#"
 ///     [egress]
@@ -64,21 +156,29 @@ impl EgressRuleConfig {
 ///     host = "generativelanguage.googleapis.com"
 ///     classes = ["document_crop"]
 ///     action = "allow"
+///
+///     [[egress.rule]]
+///     provider = "openrouter"
+///     action = "deny"
 /// "#).unwrap();
 /// let (action, rule) = config
 ///     .egress
-///     .decide("generativelanguage.googleapis.com", &DataClass::new("document_crop"));
+///     .decide("generativelanguage.googleapis.com", &[], &DataClass::new("document_crop"));
 /// assert_eq!((action, rule), (EgressAction::Allow, Some(0)));
-/// assert_eq!(config.egress.decide("api.anthropic.com", &DataClass::new("photo")).0, EgressAction::Ask);
+/// let photo = DataClass::new("photo");
+/// assert_eq!(config.egress.decide("api.anthropic.com", &[], &photo).0, EgressAction::Ask);
+/// let openrouter = ["openrouter".to_string()];
+/// assert_eq!(config.egress.decide("openrouter.ai", &openrouter, &photo), (EgressAction::Deny, Some(1)));
 /// assert!(VisionConfig::from_toml_str("[egress]\nallow_before_redaction = true").is_err());
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EgressConfig {
-    /// The action when no rule matches. `ask` by default (spec 3.7 Q1).
-    #[serde(default = "ask")]
+    /// The action when no rule matches. `allow` by default; `ask` or `deny` opt in to a
+    /// restriction.
+    #[serde(default = "allow")]
     pub default: EgressAction,
-    /// The redaction classes every release passes through.
+    /// The redaction classes every release passes through; none by default.
     #[serde(default)]
     pub redact: Vec<RedactionClass>,
     /// The rules, first match wins.
@@ -90,13 +190,18 @@ pub struct EgressConfig {
     pub on_device: bool,
 }
 
-fn ask() -> EgressAction {
-    EgressAction::Ask
+fn allow() -> EgressAction {
+    EgressAction::Allow
 }
 
 impl Default for EgressConfig {
     fn default() -> Self {
-        Self { default: EgressAction::Ask, redact: Vec::new(), rules: Vec::new(), on_device: false }
+        Self {
+            default: EgressAction::Allow,
+            redact: Vec::new(),
+            rules: Vec::new(),
+            on_device: false,
+        }
     }
 }
 
@@ -131,22 +236,54 @@ impl EgressConfig {
         self
     }
 
-    /// Appends a rule.
+    /// Appends a rule for `host`, or `*.example.com` for its subdomains.
     pub fn with_rule(mut self, host: &str, classes: &[&str], action: EgressAction) -> Self {
         self.rules.push(EgressRuleConfig {
-            host: host.to_string(),
+            target: RuleTarget::Host(host.to_string()),
             classes: classes.iter().map(|&c| DataClass::new(c)).collect(),
             action,
         });
         self
     }
 
-    /// The action for an image of `class` bound for `host`, and the index of the rule that
-    /// decided it (`None` for the default).
-    pub fn decide(&self, host: &str, class: &DataClass) -> (EgressAction, Option<usize>) {
+    /// Appends a rule for every host of `provider`, a provider id such as `anthropic`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_vision::{DataClass, EgressAction, EgressConfig};
+    ///
+    /// let config = EgressConfig::default().with_provider_rule("gemini", &[], EgressAction::Ask);
+    /// let gemini = ["gemini".to_string()];
+    /// let photo = DataClass::new("photo");
+    /// assert_eq!(config.decide("us-central1-aiplatform.googleapis.com", &gemini, &photo).0, EgressAction::Ask);
+    /// assert_eq!(config.decide("api.anthropic.com", &[], &photo).0, EgressAction::Allow);
+    /// ```
+    pub fn with_provider_rule(
+        mut self,
+        provider: &str,
+        classes: &[&str],
+        action: EgressAction,
+    ) -> Self {
+        self.rules.push(EgressRuleConfig {
+            target: RuleTarget::Provider(provider.to_string()),
+            classes: classes.iter().map(|&c| DataClass::new(c)).collect(),
+            action,
+        });
+        self
+    }
+
+    /// The action for an image of `class` bound for `host` of a backend that sends to
+    /// `providers`, and the index of the rule that decided it (`None` for the default).
+    pub fn decide(
+        &self,
+        host: &str,
+        providers: &[String],
+        class: &DataClass,
+    ) -> (EgressAction, Option<usize>) {
         self.rules
             .iter()
-            .position(|rule| rule.matches(host, class))
+            .position(|rule| rule.matches(host, providers, class))
             .map_or((self.default, None), |index| (self.rules[index].action, Some(index)))
     }
 }
@@ -168,7 +305,8 @@ impl VisionConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`VisionError::InvalidInput`] for invalid TOML or an unknown key.
+    /// Returns [`VisionError::InvalidInput`] for invalid TOML, an unknown key, or a rule that
+    /// names both or neither of `host` and `provider`.
     pub fn from_toml_str(text: &str) -> Result<Self> {
         toml::from_str(text)
             .map_err(|e| VisionError::InvalidInput(format!(".adk/vision.toml is invalid: {e}")))

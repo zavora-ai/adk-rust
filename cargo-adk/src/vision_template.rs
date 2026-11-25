@@ -168,7 +168,7 @@ pub fn pack(
     artifacts: Arc<InMemoryArtifactService>,
 ) -> anyhow::Result<VisionPack> {
     let host = host_of(model.name());
-    let describer = Arc::new(LlmDescriber::remote(model, [host])?);
+    let describer = Arc::new(LlmDescriber::remote_with_hosts(model, [host])?);
     let reader = local.reader.clone();
     Ok(VisionPack::new(MediaStore::new(artifacts), move |gate, store| {
         VisionRuntime::builder()
@@ -353,7 +353,7 @@ async fn a_cloud_describe_waits_for_a_person_and_nothing_leaves_on_no() -> anyho
         })
         .await?;
     let provider = Arc::new(ScriptedLlm::new("claude-haiku-5-5", Vec::<ScriptedResponse>::new()));
-    let describer = Arc::new(LlmDescriber::remote(provider.clone(), ["api.anthropic.com"])?);
+    let describer = Arc::new(LlmDescriber::remote_with_hosts(provider.clone(), ["api.anthropic.com"])?);
     let rules = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/.adk/vision.toml"))?;
     let pack = VisionPack::new(MediaStore::new(artifacts.clone()), move |gate, store| {
         VisionRuntime::builder()

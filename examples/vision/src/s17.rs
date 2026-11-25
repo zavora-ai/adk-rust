@@ -193,7 +193,7 @@ pub async fn run() -> Result<Checks> {
         .allow_insecure_http()
         .with_base_url(server.uri());
     let claude: Arc<dyn Llm> = Arc::new(adk_model::AnthropicClient::new(config)?);
-    let haiku = LlmDescriber::remote(claude, [ANTHROPIC_HOST])?;
+    let haiku = LlmDescriber::remote_with_hosts(claude, [ANTHROPIC_HOST])?;
 
     let egress = Arc::new(InMemoryEgressRecorder::new());
     let gate = EgressGate::new(

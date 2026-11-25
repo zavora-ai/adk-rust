@@ -302,6 +302,7 @@ impl SamSegmenter {
             Locality::Remote { hosts: vec![host] },
             CoordFrame::SentPixels,
         )
+        .with_provider(VENDOR)
         .with_price(PriceRef::PerUnit {
             vendor: VENDOR.into(),
             model: config.model.clone(),

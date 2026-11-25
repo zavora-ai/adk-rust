@@ -207,7 +207,7 @@ fn anthropic(server: &MockServer, model: &str) -> LlmDescriber {
         .allow_insecure_http()
         .with_base_url(server.uri());
     let client: Arc<dyn Llm> = Arc::new(adk_model::AnthropicClient::new(config).unwrap());
-    LlmDescriber::remote(client, ["api.anthropic.com"])
+    LlmDescriber::remote_with_hosts(client, ["api.anthropic.com"])
         .unwrap()
         .with_effort(adk_core::Effort::Low)
         .with_max_output_tokens(4_000)
@@ -216,7 +216,7 @@ fn anthropic(server: &MockServer, model: &str) -> LlmDescriber {
 fn nim(server: &MockServer, model: &str) -> LlmDescriber {
     let config = adk_vision::cloud::nim::NimConfig::new(format!("{}/v1", server.uri()), "k", model);
     let client: Arc<dyn Llm> = Arc::new(config.client().unwrap());
-    LlmDescriber::remote(client, ["integrate.api.nvidia.com"])
+    LlmDescriber::remote_with_hosts(client, ["integrate.api.nvidia.com"])
         .unwrap()
         .with_max_output_tokens(1_500)
         .with_unpriced_hold(0)
@@ -227,7 +227,7 @@ fn muse(server: &MockServer) -> LlmDescriber {
         .with_base_url(format!("{}/v1", server.uri()))
         .with_max_tokens(4_000);
     let client: Arc<dyn Llm> = Arc::new(adk_model::MuseClient::new(config).unwrap());
-    LlmDescriber::remote(client, ["api.meta.ai"]).unwrap()
+    LlmDescriber::remote_with_hosts(client, ["api.meta.ai"]).unwrap()
 }
 
 // --- S5 and the drawn shapes, recorded --------------------------------------------------
@@ -379,7 +379,8 @@ async fn gemini_box_2d_is_read_y_first_on_0_to_1000_synthetic() {
         )
         .unwrap(),
     );
-    let describer = LlmDescriber::remote(client, ["generativelanguage.googleapis.com"]).unwrap();
+    let describer =
+        LlmDescriber::remote_with_hosts(client, ["generativelanguage.googleapis.com"]).unwrap();
     let gate = EgressGate::new(
         EgressPolicy::public_only(),
         EgressConfig::default().with_default(EgressAction::Allow),
@@ -474,7 +475,7 @@ fn fixture_answer(adapter: &str) -> String {
 }
 
 fn scripted(model: &str, adapter: &str) -> LlmDescriber {
-    LlmDescriber::remote(
+    LlmDescriber::remote_with_hosts(
         Arc::new(Scripted::new(model, fixture_answer(adapter))),
         ["provider.example.com"],
     )
@@ -482,7 +483,7 @@ fn scripted(model: &str, adapter: &str) -> LlmDescriber {
 }
 
 fn rate_limited(model: &str) -> LlmDescriber {
-    LlmDescriber::remote(
+    LlmDescriber::remote_with_hosts(
         Arc::new(Scripted::failing(model, ErrorCategory::RateLimited)),
         ["provider.example.com"],
     )
@@ -542,7 +543,7 @@ mod text_only_conformance {
 
     adk_vision::describer_conformance_tests! {
         backend = DescriberTarget::Remote(Arc::new(
-            LlmDescriber::remote(Arc::new(Scripted::new("my-fine-tune", "a form")), ["models.example.com"])
+            LlmDescriber::remote_with_hosts(Arc::new(Scripted::new("my-fine-tune", "a form")), ["models.example.com"])
                 .unwrap()
         )),
         fixture = text_fixture(),
@@ -552,7 +553,7 @@ mod text_only_conformance {
 #[tokio::test]
 async fn a_model_with_no_adapter_refuses_regions_and_still_answers() {
     let model = Arc::new(Scripted::new("my-fine-tune", "{\"kind\": \"receipt\"}"));
-    let describer = LlmDescriber::remote(model.clone(), ["models.example.com"]).unwrap();
+    let describer = LlmDescriber::remote_with_hosts(model.clone(), ["models.example.com"]).unwrap();
     assert!(describer.adapter().is_none());
     let gate = EgressGate::new(
         EgressPolicy::public_only(),
@@ -589,7 +590,7 @@ async fn regions_and_a_value_come_back_together_with_the_released_image_first() 
         json!({"value": {"kind": "shapes"}, "regions": [{"label": "red", "box": [100, 80, 260, 200]}]})
             .to_string(),
     ));
-    let describer = LlmDescriber::remote(model.clone(), ["api.anthropic.com"]).unwrap();
+    let describer = LlmDescriber::remote_with_hosts(model.clone(), ["api.anthropic.com"]).unwrap();
     let gate = EgressGate::new(
         EgressPolicy::public_only(),
         EgressConfig::default().with_default(EgressAction::Allow),
@@ -622,7 +623,10 @@ async fn a_local_describer_refuses_a_remote_model() {
     let remote = Arc::new(Scripted::new("claude-sonnet-5-5", "x"));
     let err = LlmDescriber::local(remote).unwrap_err();
     assert!(matches!(err, VisionError::InvalidInput(_)));
-    assert!(LlmDescriber::remote(Arc::new(Scripted::new("m", "x")), Vec::<String>::new()).is_err());
+    assert!(
+        LlmDescriber::remote_with_hosts(Arc::new(Scripted::new("m", "x")), Vec::<String>::new())
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -647,7 +651,8 @@ async fn an_answer_cut_off_at_the_output_cap_is_an_error_not_an_empty_answer() {
             Ok(Box::pin(futures::stream::iter(vec![Ok(response)])))
         }
     }
-    let describer = LlmDescriber::remote(Arc::new(CutOff), ["integrate.api.nvidia.com"]).unwrap();
+    let describer =
+        LlmDescriber::remote_with_hosts(Arc::new(CutOff), ["integrate.api.nvidia.com"]).unwrap();
     let gate = EgressGate::new(
         EgressPolicy::public_only(),
         EgressConfig::default().with_default(EgressAction::Allow),
@@ -672,7 +677,8 @@ async fn an_answer_cut_off_at_the_output_cap_is_an_error_not_an_empty_answer() {
 fn preflight_counts_images_by_each_provider_formula() {
     let spec = DescribeSpec::new("Where is Save?").with_regions().with_max_output_tokens(1_000);
     let claude =
-        LlmDescriber::remote(Arc::new(Scripted::new("claude-sonnet-5-5", "")), ["a.b"]).unwrap();
+        LlmDescriber::remote_with_hosts(Arc::new(Scripted::new("claude-sonnet-5-5", "")), ["a.b"])
+            .unwrap();
     // count_tokens on 2026-11-19: a 2356×1530 image is 4,675 visual tokens on Claude 5.5.
     let p = claude.preflight(&[(2356, 1530)], &spec);
     assert_eq!(p.image_tokens, 4_675);
@@ -685,10 +691,11 @@ fn preflight_counts_images_by_each_provider_formula() {
     assert!((expected..=expected + 2).contains(&bound), "{bound} vs {expected}");
 
     let gemini =
-        LlmDescriber::remote(Arc::new(Scripted::new("gemini-3.8-flash", "")), ["a.b"]).unwrap();
+        LlmDescriber::remote_with_hosts(Arc::new(Scripted::new("gemini-3.8-flash", "")), ["a.b"])
+            .unwrap();
     assert_eq!(gemini.preflight(&[(1920, 1080)], &spec).image_tokens, 6 * 258);
 
-    let nvidia = LlmDescriber::remote(
+    let nvidia = LlmDescriber::remote_with_hosts(
         Arc::new(Scripted::new("nvidia/nemotron-3.5-super-vl-120b-a12b", "")),
         ["a.b"],
     )
@@ -710,7 +717,8 @@ fn preflight_bounds_the_recorded_usage() {
             .iter()
             .map(|k| usage[*k].as_u64().unwrap_or(0))
             .sum::<u64>();
-        let describer = LlmDescriber::remote(Arc::new(Scripted::new(model, "")), ["a.b"]).unwrap();
+        let describer =
+            LlmDescriber::remote_with_hosts(Arc::new(Scripted::new(model, "")), ["a.b"]).unwrap();
         let p = describer.preflight(&[sent], &DescribeSpec::new("x").with_regions());
         // The image is all but the text of the request.
         assert!(p.image_tokens <= input, "{fixture}: {} > {input}", p.image_tokens);

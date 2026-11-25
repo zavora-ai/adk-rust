@@ -19,7 +19,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub use clip::{ClipReleaseRequest, ReleasedClip};
-pub use config::{EgressAction, EgressConfig, EgressRuleConfig, VisionConfig};
+pub use config::{EgressAction, EgressConfig, EgressRuleConfig, RuleTarget, VisionConfig};
 pub use gate::{EgressGate, EgressPreview, ReleaseRequest, StagedEgress};
 
 use crate::backend::BackendId;

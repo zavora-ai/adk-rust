@@ -279,6 +279,10 @@ impl Llm for DeepSeekClient {
         crate::pricing::PricingCatalog::standard().context_window(Some("deepseek"), self.name())
     }
 
+    fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+        vec![adk_core::DataDestination::of_url("deepseek", self.config.effective_base_url())]
+    }
+
     fn name(&self) -> &str {
         &self.config.model
     }

@@ -951,6 +951,13 @@ impl Llm for OpenAICompatible {
         adk_core::DataLocality::of_url(self.completion_url.as_deref().unwrap_or(&self.base_url))
     }
 
+    fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+        vec![adk_core::DataDestination::of_url(
+            &self.provider_name,
+            self.completion_url.as_deref().unwrap_or(&self.base_url),
+        )]
+    }
+
     fn name(&self) -> &str {
         &self.model
     }

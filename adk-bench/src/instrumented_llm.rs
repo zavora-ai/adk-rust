@@ -118,6 +118,10 @@ impl Llm for InstrumentedLlm {
         self.inner.data_locality()
     }
 
+    fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+        self.inner.data_destinations()
+    }
+
     fn name(&self) -> &str {
         self.inner.name()
     }
