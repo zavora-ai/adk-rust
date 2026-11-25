@@ -283,11 +283,12 @@ impl StagedEgress {
 ///    hosts, and an unlisted host is refused here.
 /// 2. **Minimise.** The image is cropped to the request's crop and downscaled to the
 ///    backend's limit; both are recorded in the transform chain.
-/// 3. **Redact.** Every class the configuration requires is found by its [`Redactor`] and
-///    filled with solid colour, then the caller's marked regions. A required class with no
-///    redactor refuses the release.
-/// 4. **Decide.** The rule for the host and data class says `deny`, `ask` or `allow`. `ask`
-///    holds the release unless a person approved this exact egress digest.
+/// 3. **Redact.** Every class the configuration lists, none by default, is found by its
+///    [`Redactor`] and filled with solid colour, then the caller's marked regions. A listed
+///    class with no redactor refuses the release.
+/// 4. **Decide.** The rule for the host or provider and the data class, else the default
+///    `allow`, says `deny`, `ask` or `allow`. `ask` holds the release unless a person
+///    approved this exact egress digest.
 /// 5. **Record.** The receipt goes to the [`EgressRecorder`] before the image is returned;
 ///    a recorder failure refuses the release.
 /// 6. **Release.** The gate constructs the [`ReleasedImage`].

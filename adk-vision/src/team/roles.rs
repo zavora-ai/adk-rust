@@ -840,8 +840,8 @@ impl ReasonerBuilder {
         self
     }
 
-    /// The hosts the model sends to, for the egress policy and records; the model's name by
-    /// default.
+    /// The hosts the model sends to, for the egress policy and records, in place of the hosts
+    /// the model names (`Llm::data_destinations`); the model's name when it names none.
     pub fn hosts(mut self, hosts: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.hosts = hosts.into_iter().map(Into::into).collect();
         self
@@ -890,10 +890,11 @@ impl ReasonerBuilder {
                 model.name()
             )));
         }
-        let hosts = if self.hosts.is_empty() { vec![model.name().to_string()] } else { self.hosts };
-        let locality =
-            if remote { Locality::Remote { hosts: hosts.clone() } } else { Locality::InProcess };
-        let destination = BackendDescriptor::new(model.name(), locality, CoordFrame::SentPixels);
+        let destination = destination_of(model.as_ref(), remote, self.hosts);
+        let hosts = match &destination.locality {
+            Locality::Remote { hosts } => hosts.clone(),
+            _ => Vec::new(),
+        };
         let provider = provider_of(model.name(), self.provider.as_deref());
         #[cfg(feature = "guardrail")]
         let guardrail = self.gate.as_ref().map(|gate| {
@@ -977,6 +978,28 @@ impl Agent for Reasoner {
         let event = text_event(ctx.as_ref(), &self.name, text);
         Ok(Box::pin(futures::stream::iter([Ok(event)])))
     }
+}
+
+/// Where a role's model sends its crops: on the device, or remote at `hosts`, else the hosts
+/// and providers the model names, else its name, so a rule can still name it.
+fn destination_of(model: &dyn Llm, remote: bool, hosts: Vec<String>) -> BackendDescriptor {
+    if !remote {
+        return BackendDescriptor::new(model.name(), Locality::InProcess, CoordFrame::SentPixels);
+    }
+    let destinations = model.data_destinations();
+    let mut hosts = hosts;
+    if hosts.is_empty() {
+        hosts = adk_core::DataDestination::all_hosts(&destinations);
+    }
+    if hosts.is_empty() {
+        hosts.push(model.name().to_string());
+    }
+    let mut descriptor =
+        BackendDescriptor::new(model.name(), Locality::Remote { hosts }, CoordFrame::SentPixels);
+    for destination in destinations {
+        descriptor = descriptor.with_provider(destination.provider);
+    }
+    descriptor
 }
 
 /// Whether the egress rules release an image of `class` to `destination` without asking.
@@ -1380,7 +1403,8 @@ impl VerifierBuilder {
         self
     }
 
-    /// The hosts a remote model sends to; the model's name by default.
+    /// The hosts a remote model sends to, in place of the hosts the model names
+    /// (`Llm::data_destinations`); the model's name when it names none.
     pub fn hosts(mut self, hosts: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.hosts = hosts.into_iter().map(Into::into).collect();
         self
@@ -1445,20 +1469,10 @@ impl VerifierBuilder {
                 self.name
             )));
         }
-        let destination = self.model.as_ref().map(|model| {
-            let locality = if remote {
-                Locality::Remote {
-                    hosts: if self.hosts.is_empty() {
-                        vec![model.name().to_string()]
-                    } else {
-                        self.hosts.clone()
-                    },
-                }
-            } else {
-                Locality::InProcess
-            };
-            BackendDescriptor::new(model.name(), locality, CoordFrame::SentPixels)
-        });
+        let destination = self
+            .model
+            .as_ref()
+            .map(|model| destination_of(model.as_ref(), remote, self.hosts.clone()));
         let provider = match &self.model {
             Some(model) => provider_of(model.name(), self.provider.as_deref()),
             None => self.provider.unwrap_or_else(|| "local".to_string()),
