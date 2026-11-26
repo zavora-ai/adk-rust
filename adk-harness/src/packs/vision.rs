@@ -12,7 +12,7 @@
 //! | Redactors | Only for the classes the rules' `redact` list names: the operator's [`VisionPack::redactor`]s and, with feature `vision-local`, YuNet and RF-DETR Nano for `faces` and PP-OCRv6 for `personal_text` where none covers a listed class. A listed class no redactor covers refuses every release |
 //! | Approvals | The toolset's egress policy joins the operator policy, so a rule that asks holds the call, and the held call carries the exact egress image as evidence |
 //! | Privacy guardrail | Every image in a request to a remote harness model is released through the same gate or replaced by a placeholder; no agent tool removes it |
-//! | Text | What `vision_read` and `vision_describe` return is screened and delivered inside a delimited untrusted block, as fetched text is (spec 3.7 V-I16) |
+//! | Text | What `vision_read`, `vision_describe` and `vision_video` return is screened and delivered inside a delimited untrusted block, as fetched text is (spec 3.7 V-I16) |
 //!
 //! Nothing in the pack is `ComputerUse`: screen actions stay in the computer-use and browser
 //! packs.
@@ -27,6 +27,7 @@
 //! | `vision_redact` | an editor | A new image with regions filled solid black | `Idempotent` |
 //! | `vision_annotate` | an editor | A new image with labelled boxes | `Idempotent` |
 //! | `vision_measure` | a segmenter | Maximum length and area in millimetres under a fiducial's calibration | `ReadOnly` |
+//! | `vision_video` | a video analyzer | Frames in time order asked about, captioned or tracked; answers and captions delivered as screened untrusted text | `ReadOnly` |
 //! | `vision_watch` | [`VisionPack::frame_sources`] | Lists the operator's frame sources; starts or stops a watch condition that wakes a sleeping agent | `Idempotent` |
 //!
 //! A woken turn names the kept frame by the digest its wake payload carries; the image tools
@@ -401,7 +402,7 @@ impl VisionPackRuntime {
             .tools()
             .into_iter()
             .map(|tool| match tool.name() {
-                "vision_read" | "vision_describe" => {
+                "vision_read" | "vision_describe" | "vision_video" => {
                     Arc::new(ScreenedVisionTool { inner: tool }) as Arc<dyn Tool>
                 }
                 _ => tool,
@@ -532,9 +533,9 @@ pub fn watch_class(args: &Value) -> ToolKind {
     }
 }
 
-/// `vision_read` and `vision_describe` with their recognised text screened and delivered
-/// inside a delimited untrusted block: text an image shows is data, never instructions
-/// (spec 3.7 V-I16).
+/// `vision_read`, `vision_describe` and `vision_video` with their recognised text, answers and
+/// captions screened and delivered inside a delimited untrusted block: text an image or a
+/// video shows is data, never instructions (spec 3.7 V-I16).
 struct ScreenedVisionTool {
     inner: Arc<dyn Tool>,
 }
@@ -585,6 +586,17 @@ impl Tool for ScreenedVisionTool {
                 if let Value::Object(block) = block {
                     block.remove("text");
                     block.insert("line".into(), json!(index + 1));
+                }
+            }
+        }
+        if let Some(events) = result.get_mut("events").and_then(Value::as_array_mut) {
+            for (index, event) in events.iter_mut().enumerate() {
+                if let Some(text) = event.get("text").and_then(Value::as_str) {
+                    lines.push(format!("[event {}] {text}", index + 1));
+                }
+                if let Value::Object(event) = event {
+                    event.remove("text");
+                    event.insert("event".into(), json!(index + 1));
                 }
             }
         }

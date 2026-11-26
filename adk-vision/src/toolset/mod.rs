@@ -31,6 +31,7 @@
 //! | `vision_redact` | A new image with regions filled solid black | `Idempotent` |
 //! | `vision_annotate` | A new image with labelled boxes drawn | `Idempotent` |
 //! | `vision_measure` | Maximum length and area in millimetres, from masks under a fiducial's calibration | `ReadOnly` |
+//! | `vision_video` | Frames in time order asked about, captioned in chunks, or tracked by concept | `ReadOnly` |
 //! | `vision_watch` | Lists the registered frame sources, and starts or stops a watch condition on one (feature `stream`, with [`VisionToolsetBuilder::frame_sources`]) | `Idempotent` |
 
 mod answer;
@@ -51,7 +52,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 pub use answer::{ANSWER_ARTIFACT_PREFIX, answer_artifact_name};
-pub use tools::{VISION_TOOL_NAMES, VisionTool, VisionToolKind};
+pub use tools::{MAX_VIDEO_FRAMES, VISION_TOOL_NAMES, VisionTool, VisionToolKind};
 #[cfg(feature = "stream")]
 pub use watch::VISION_WATCH_TOOL;
 
@@ -428,17 +429,22 @@ impl Inner {
             .descriptor(task, &route.primary)
             .cloned()
             .ok_or_else(|| VisionError::BackendNotFound(route.primary.to_string()))?;
-        let image = args
-            .get("image")
-            .and_then(Value::as_str)
-            .ok_or_else(|| VisionError::InvalidInput("`image` is required".into()))?;
+        let images = match kind {
+            VisionToolKind::Video => video_frames(args)?,
+            _ => vec![
+                args.get("image")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| VisionError::InvalidInput("`image` is required".into()))?
+                    .to_string(),
+            ],
+        };
         // Edits keep their region as the operation's; only perception crops what it sends.
         let crop = match kind.is_edit() {
             true => None,
             false => args.get("region").map(tools::bbox_arg).transpose()?,
         };
         let class = if crop.is_some() { self.crop_class.clone() } else { self.image_class.clone() };
-        Ok(Plan { route, descriptor, images: vec![image.to_string()], crop, class })
+        Ok(Plan { route, descriptor, images, crop, class })
     }
 
     /// The egress rule's action for a remote plan, and the destination hosts; `None` for a
@@ -646,6 +652,31 @@ impl Inner {
         }
         cx
     }
+}
+
+/// The frames a `vision_video` call names, oldest first: one to
+/// [`MAX_VIDEO_FRAMES`](tools::MAX_VIDEO_FRAMES).
+fn video_frames(args: &Value) -> Result<Vec<String>> {
+    let frames = args.get("frames").and_then(Value::as_array).ok_or_else(|| {
+        VisionError::InvalidInput("`frames` is required: a list of images".into())
+    })?;
+    if frames.is_empty() || frames.len() > tools::MAX_VIDEO_FRAMES {
+        return Err(VisionError::InvalidInput(format!(
+            "`frames` holds 1 to {} images, not {}; sample fewer frames",
+            tools::MAX_VIDEO_FRAMES,
+            frames.len()
+        )));
+    }
+    frames
+        .iter()
+        .map(|frame| {
+            frame.as_str().map(str::to_string).ok_or_else(|| {
+                VisionError::InvalidInput(format!(
+                    "each frame is a `sha256:` digest or an artifact name, not {frame}"
+                ))
+            })
+        })
+        .collect()
 }
 
 /// The key a call's staged evidence is kept under: the tool and its canonical arguments.

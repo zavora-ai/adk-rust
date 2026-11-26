@@ -133,7 +133,7 @@ through an egress gate. 3.0.0 ships phases A to C of [spec 3.7](../design/spec-3
 | What you get | Where |
 |--------------|-------|
 | Frames from RTSP and local cameras, video files, screens, browser pages and the web home's camera, through one pipeline with the frame governor and a privacy step | [Streams](vision/streams.md) |
-| Anonymous tracks across frames, questions about a clip — Gemini native video or sampled frames on any model — and `sam-3.1` video | [Video and tracking](vision/video.md) |
+| Anonymous tracks across frames, questions about a clip — Gemini native video or sampled frames on any model — and `sam-3.1` video; the `vision_video` tool asks, captions or tracks over frames an agent holds | [Video and tracking](vision/video.md) |
 | Watch conditions that wake a sleeping agent once per tracked object | [Visual wakes](vision/wake.md) |
 | Lengths and areas in millimetres from a fiducial's calibration, and the `vision_measure` tool | [Calibration and measurement](vision/measure.md) |
 | The live camera surface on the web home and the phone: frames with what was found, tracks, zones, the frame governor's state and the source switch | [Live camera](surfaces/live-camera.md) |
