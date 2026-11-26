@@ -349,6 +349,10 @@ name = "track_property_tests"
 required-features = ["track", "conformance"]
 
 [[test]]
+name = "video_tool_tests"
+required-features = ["guardrail"]
+
+[[test]]
 name = "video_tests"
 required-features = ["cloud", "sam", "gemini-video"]
 

@@ -1,6 +1,6 @@
 # Governed Vision Tools
 
-`VisionToolset` gives an agent nine vision tools that run on the governed tool path. A
+`VisionToolset` gives an agent ten vision tools that run on the governed tool path. A
 call that stays on the device runs like any read. A call that would send an image off the
 machine is checked against the egress rules: with none it leaves as it is; a rule that asks
 holds it for a person with the exact image it would send, and a listed redaction class
@@ -31,6 +31,7 @@ adk-vision = { version = "3.0.0", features = ["guardrail"] }
 | `vision_redact` | A new image with regions filled solid black | `Idempotent` | `image`, `regions` |
 | `vision_annotate` | A new image with numbered boxes drawn | `Idempotent` | `image`, `boxes` |
 | `vision_measure` | Maximum length and area in millimetres from masks, under a fiducial's calibration ([measurement](measure.md)) | `ReadOnly` | `image`, `boxes` or `concepts`, `fiducial` or `calibration`, `region`, `backend` |
+| `vision_video` | Asks about frames in time order, captions them in chunks, or tracks objects by concept across them ([below](#vision_video)) | `ReadOnly` | `frames`, `timesMs` or `intervalMs`, one of `question`, `chunkSeconds` or `concepts`, `region`, `backend` |
 | `vision_watch` | Lists the registered frame sources; starts or stops a watch condition that wakes a sleeping agent ([streams](streams.md#frame-sources-and-vision_watch), feature `stream`, with `VisionToolsetBuilder::frame_sources`) | `Idempotent` | `action`, `source`, `name`, `labels`, `minScore`, `minFrames`, `zone`, `zoneAnchor`, `cooldownSeconds` |
 
 - **Images.** An `image` argument is an artifact name in the session or a `sha256:`
@@ -42,6 +43,42 @@ adk-vision = { version = "3.0.0", features = ["guardrail"] }
 - **Data classes.** The operator sets the class an image is released as —
   `VisionToolsetBuilder::data_classes("document", "document_crop")` for whole images and
   crops — never the model, because the egress rules are written per class.
+
+## `vision_video`
+
+`vision_video` hands the runtime's video route (`VisionRuntime::analyze_video`) frames the
+session already holds — a watch's kept frames, a camera's snapshots, images an earlier tool
+made — as one sampled video. It is offered when the runtime has a video analyzer, such as
+`FramesAnalyzer` over Claude or Qwen3-VL, or `SamVideoTracker`.
+
+| Argument | Meaning |
+|----------|---------|
+| `frames` | 1 to 64 images, oldest first, each a `sha256:` digest or an artifact name |
+| `timesMs` | Each frame's time in milliseconds, never decreasing; without it the frames are `intervalMs` apart (default 1000) from 0 |
+| `question` | Ask: the answer, with the events it names as time ranges |
+| `chunkSeconds` | Caption: one caption per chunk of that length |
+| `concepts` | Track: the objects each phrase names, followed across the frames |
+| `region` | Only this part of every frame is sent |
+
+A call names exactly one of `question`, `chunkSeconds` and `concepts`. Event times come from
+the frames' times, never from the model's arithmetic, and each tracked region names its frame
+by index, time and digest, with its track:
+
+```json
+{
+  "frames": ["sha256:1f…", "sha256:9c…", "sha256:4a…"],
+  "text": "A forklift crosses the aisle.",
+  "events": [{ "startMs": 500, "endMs": 1000, "text": "The forklift crosses from the left.", "labels": ["forklift"] }],
+  "tracked": [{ "frame": 1, "atMs": 500, "image": "sha256:9c…", "regions": [{ "box": [120, 100, 200, 220], "label": "forklift", "score": 0.9, "track": 7 }] }],
+  "usage": { "frames": 3, "inputTokens": 1890, "outputTokens": 42, "requests": 1, "costMicroUsd": 820 },
+  "calls": [{ "backend": "claude", "remote": true, "egress": ["sha256:…", "sha256:…", "sha256:…"] }]
+}
+```
+
+For a remote analyzer every frame passes the egress gate as an image does — cropped,
+redacted under the rules' `redact` list and recorded — and a rule that asks holds the call
+once, with every frame it would send as evidence; approval releases exactly those digests.
+The call keeps no answer record, as the annotated viewer shows one image at a time.
 
 ## Wiring
 
@@ -246,7 +283,7 @@ fn harness(
 | Redactors | The operator's `VisionPack::redactor`s; with feature `vision-local`, a default for each listed class none covers (below) |
 | Approvals | The egress policy joins the operator policy; the harness prompter or inbox sees the egress image on the held call |
 | Privacy guardrail | On every request to a remote harness model, releasing to the hosts the model names; no agent tool removes it ([Restricting What Leaves the Machine](../security/image-privacy.md)) |
-| Text | `vision_read` and `vision_describe` deliver recognised text inside an `<untrusted-content source="vision">` block, screened as fetched text is |
+| Text | `vision_read`, `vision_describe` and `vision_video` deliver recognised text, answers and captions inside an `<untrusted-content source="vision">` block, screened as fetched text is |
 
 ### Default Redactors
 

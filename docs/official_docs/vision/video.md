@@ -7,6 +7,8 @@ chunk captions so questions about an hour of video are answered from the chunks 
 which holds the call's frames against the run's budget before anything leaves the machine,
 releases a clip only through the egress gate, and returns every region in source pixels
 with its track. This is phases B and C of [spec 3.7](../../design/spec-3.7-vision.md) (§7.13, §7.15).
+An agent reaches the same call through the governed `vision_video` tool, over frames its
+session holds ([Governed vision tools](governed-tools.md#vision_video)).
 
 | Feature | Adds |
 |---------|------|
