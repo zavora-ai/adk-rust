@@ -35,7 +35,7 @@ use adk_kernel::{
     Wake, WakeSet, WakeSource,
 };
 use adk_server::background::DurableWorkerConfig;
-use adk_vision::stream::{FrameKeeper, FrameSource, FrameSources, NoRedaction, SourceSpec};
+use adk_vision::stream::{FrameKeeper, FrameSource, FrameSources, SourceSpec};
 use adk_vision::{
     DetectQuery, FrameSourceId, GreedyIouTracker, MediaScope, MediaStore, Sampling, Tracker,
     VISION_WATCH_FIRED, VISION_WATCH_REGISTERED, VisionCx, VisionRuntime, WatchCondition,
@@ -175,7 +175,7 @@ async fn wake_once(
     ));
     sources
         .register(
-            SourceSpec::new(source, Arc::new(NoRedaction), keeper, wakes.clone())
+            SourceSpec::new(source, keeper, wakes.clone())
                 .describe("Line 1 conveyor, top camera")
                 .detector(stream_runtime, query)
                 .tracker(Arc::new(|| Box::new(GreedyIouTracker::new(0.2, 4)) as Box<dyn Tracker>))

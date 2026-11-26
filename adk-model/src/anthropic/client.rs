@@ -945,6 +945,10 @@ impl Llm for AnthropicClient {
         crate::pricing::PricingCatalog::standard().context_window(Some("anthropic"), self.name())
     }
 
+    fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+        vec![adk_core::DataDestination::of_url("anthropic", self.client.base_url())]
+    }
+
     fn name(&self) -> &str {
         &self.model
     }

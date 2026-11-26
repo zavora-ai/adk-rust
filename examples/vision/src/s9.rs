@@ -19,7 +19,7 @@ use adk_artifact::{ArtifactService, InMemoryArtifactService, ListRequest};
 use adk_core::audit_log::{AuditActor, AuditTrail, InMemoryAuditRecorder};
 use adk_vision::onnx::{OnnxOptions, RfDetr, Sam2};
 use adk_vision::stream::fixtures::ConveyorClip;
-use adk_vision::stream::{NoRedaction, RtspSource, StreamPipeline, StreamWatch};
+use adk_vision::stream::{RtspSource, StreamPipeline, StreamWatch};
 use adk_vision::{
     BBox, Calibration, CallOptions, DetectQuery, FiducialSpec, FrameSourceId, GreedyIouTracker,
     ManifestSet, MediaScope, MediaStore, ModelManifest, Sampling, SegmentPrompt, Shape, VisionCx,
@@ -149,7 +149,7 @@ pub async fn run() -> Result<Checks> {
     let detector =
         Arc::new(VisionRuntime::builder().detector(Arc::new(BeltDetector::new())).build()?);
     let started = std::time::Instant::now();
-    let summary = StreamPipeline::builder(source, Arc::new(NoRedaction))
+    let summary = StreamPipeline::builder(source)
         .sampling(Sampling::at(5.0))
         .detector(detector, DetectQuery::Classes(vec!["part".into(), "crack".into()]))
         // Cracks on different parts never overlap, so a low IoU floor is safe, and it keeps a

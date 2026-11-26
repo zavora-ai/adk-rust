@@ -165,6 +165,7 @@ pub struct ScriptedLlm {
     requests: Mutex<Vec<LlmRequest>>,
     native_web_search: Option<NativeWebSearch>,
     data_locality: adk_core::DataLocality,
+    data_destinations: Vec<adk_core::DataDestination>,
 }
 
 impl ScriptedLlm {
@@ -182,6 +183,7 @@ impl ScriptedLlm {
             requests: Mutex::new(Vec::new()),
             native_web_search: None,
             data_locality: adk_core::DataLocality::Remote,
+            data_destinations: Vec::new(),
         }
     }
 
@@ -222,6 +224,24 @@ impl ScriptedLlm {
     /// ```
     pub fn with_data_locality(mut self, locality: adk_core::DataLocality) -> Self {
         self.data_locality = locality;
+        self
+    }
+
+    /// Reports `destination` from [`Llm::data_destinations`], so a test stands in for a
+    /// hosted provider's client. None by default.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{DataDestination, Llm};
+    /// use adk_model::{ScriptedLlm, ScriptedResponse};
+    ///
+    /// let claude = ScriptedLlm::new("claude-sonnet-5-5", Vec::<ScriptedResponse>::new())
+    ///     .with_data_destination(DataDestination::new("anthropic", ["api.anthropic.com"]));
+    /// assert_eq!(claude.data_destinations()[0].hosts, ["api.anthropic.com"]);
+    /// ```
+    pub fn with_data_destination(mut self, destination: adk_core::DataDestination) -> Self {
+        self.data_destinations.push(destination);
         self
     }
 
@@ -273,6 +293,10 @@ impl Llm for ScriptedLlm {
 
     fn data_locality(&self) -> adk_core::DataLocality {
         self.data_locality
+    }
+
+    fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+        self.data_destinations.clone()
     }
 
     async fn generate_content(

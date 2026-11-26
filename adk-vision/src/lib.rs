@@ -11,8 +11,9 @@
 //!
 //! [`VisionRuntime`] routes each call to a backend, local first. An on-device backend is
 //! handed a [`SentImage`]; a remote backend only a [`ReleasedImage`], which only the
-//! [`EgressGate`] constructs after it has checked the destination, cropped, redacted,
-//! decided and recorded what leaves. Every call is metered against the run's budget and
+//! [`EgressGate`] constructs after it has checked the destination, cropped, redacted the
+//! classes the rules list, decided and recorded what leaves. With no rules an image leaves
+//! as it is; `ask`, `deny`, `redact` and `on_device` each restrict once chosen. Every call is metered against the run's budget and
 //! spend ledger, local calls at zero cost, and every answer comes back in source pixels.
 //!
 //! # Features
@@ -51,8 +52,8 @@
 //! [`VisionToolset`] — `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`,
 //! `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure`, and with feature
 //! `stream` `vision_watch` over registered frame sources — is always built: each tool runs on
-//! the governed path, a remote call is held with the exact egress image as approval
-//! evidence, and every call, release and edit writes its `vision.*` audit record
+//! the governed path, a remote call a rule asks for is held with the exact egress image as
+//! approval evidence, and every call, release and edit writes its `vision.*` audit record
 //! ([`audit`]).
 //!
 //!
@@ -172,8 +173,8 @@ pub use egress::{ClipReleaseRequest, ReleasedClip};
 pub use egress::{
     DataClass, EgressAction, EgressConfig, EgressDecision, EgressEvidence, EgressGate,
     EgressPreview, EgressReceipt, EgressRecord, EgressRecorder, EgressRefusal, EgressRuleConfig,
-    InMemoryEgressRecorder, RedactionClass, Redactor, ReleaseRequest, ReleasedImage, StagedEgress,
-    VisionConfig,
+    InMemoryEgressRecorder, RedactionClass, Redactor, ReleaseRequest, ReleasedImage, RuleTarget,
+    StagedEgress, VisionConfig,
 };
 pub use error::{Result, VisionError};
 #[cfg(feature = "fetch")]

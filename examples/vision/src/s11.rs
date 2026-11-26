@@ -27,8 +27,8 @@ use adk_core::{
 use adk_vision::sam::{SamConfig, SamVideoTracker};
 use adk_vision::stream::fixtures::{ConveyorClip, ConveyorSpec};
 use adk_vision::stream::{
-    EscalationVerdict, FrameBudget, GovernorChange, GovernorHandle, NoRedaction, Observation,
-    ObservationSink, SourceEvent, StopReason, StreamPipeline,
+    EscalationVerdict, FrameBudget, GovernorChange, GovernorHandle, Observation, ObservationSink,
+    SourceEvent, StopReason, StreamPipeline,
 };
 use adk_vision::{
     DetectQuery, EgressAction, EgressConfig, EgressGate, GreedyIouTracker, InMemoryEgressRecorder,
@@ -362,22 +362,20 @@ pub async fn run() -> Result<Checks> {
     });
     let detector =
         Arc::new(VisionRuntime::builder().detector(Arc::new(BeltDetector::new())).build()?);
-    let line_2 = StreamPipeline::builder(
-        Arc::new(ClipSource::new("line-2", clip.clone(), LOOPS, start())),
-        Arc::new(NoRedaction),
-    )
-    .sampling(Sampling::at(5.0))
-    .budget(
-        FrameBudget::new(5.0)
-            .with_min_local_fps(1.0)
-            .with_local_quota(1_000_000)
-            .with_escalations_per_minute(4)
-            .with_escalation_quota(300),
-    )
-    .detector(detector, DetectQuery::Classes(vec!["part".into(), "crack".into()]))
-    .tracker(Box::new(GreedyIouTracker::new(0.3, 3)))
-    .sink(escalator.clone())
-    .build()?;
+    let line_2 =
+        StreamPipeline::builder(Arc::new(ClipSource::new("line-2", clip.clone(), LOOPS, start())))
+            .sampling(Sampling::at(5.0))
+            .budget(
+                FrameBudget::new(5.0)
+                    .with_min_local_fps(1.0)
+                    .with_local_quota(1_000_000)
+                    .with_escalations_per_minute(4)
+                    .with_escalation_quota(300),
+            )
+            .detector(detector, DetectQuery::Classes(vec!["part".into(), "crack".into()]))
+            .tracker(Box::new(GreedyIouTracker::new(0.3, 3)))
+            .sink(escalator.clone())
+            .build()?;
     let governor = line_2.governor().context("line 2 has a frame governor")?;
     escalator.governor.set(governor.clone()).ok();
 
@@ -389,14 +387,12 @@ pub async fn run() -> Result<Checks> {
         ..ConveyorSpec::default()
     }));
     let log3 = Arc::new(StreamLog::default());
-    let line_3 = StreamPipeline::builder(
-        Arc::new(ClipSource::new("line-3", small, LOOPS, start())),
-        Arc::new(NoRedaction),
-    )
-    .sampling(Sampling::at(5.0))
-    .budget(FrameBudget::new(5.0).with_min_local_fps(1.0).with_local_quota(600))
-    .sink(log3.clone())
-    .build()?;
+    let line_3 =
+        StreamPipeline::builder(Arc::new(ClipSource::new("line-3", small, LOOPS, start())))
+            .sampling(Sampling::at(5.0))
+            .budget(FrameBudget::new(5.0).with_min_local_fps(1.0).with_local_quota(600))
+            .sink(log3.clone())
+            .build()?;
 
     let started = std::time::Instant::now();
     let (two, three) = tokio::join!(line_2.run(&cx), line_3.run(&cx));

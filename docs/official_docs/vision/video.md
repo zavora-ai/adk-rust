@@ -280,7 +280,7 @@ is answered from the chunks a retrieval finds, citing them with their time range
 | Caption | At most `frames_per_chunk` (6) of the chunk's frames, evenly spaced, go to the runtime's video analyzer as one `VideoRequest::Caption` call: metered as `UsageUnit::Frames`, on the device at zero cost, or remote with every frame released through the egress gate |
 | Index | The caption and its labels are embedded by any `adk_rag::EmbeddingProvider` and stored as one chunk in any `VectorStore`, with `startMs`, `endMs`, the keyframe and the clip in its metadata |
 | Remember | With `captions`, each caption is an `adk-memory` entry `[m:ss.s–m:ss.s] caption` with `Part::FileData` references to its keyframe and clip; with `graph`, the clip is a `vision.clip` entity whose observations are the captions, related to a `vision.label` entity for each thing they name |
-| Keyframes | With `keyframes`, each chunk's middle frame passes the `FramePrivacy` hook and is stored as an image artifact; with `visual_memory`, it is also embedded in a `VisualMemory`, so a moment can be found by an example image |
+| Keyframes | With `keyframes`, each chunk's middle frame is stored as an image artifact, after the hook of `keyframe_privacy` when one is given; with `visual_memory`, it is also embedded in a `VisualMemory`, so a moment can be found by an example image |
 | Ask | `ask` has the `answerer` model write the caption it expects the answer's chunk to have, retrieves the `top_k` chunks nearest the question and that caption, and asks the answerer — which sees caption text and time ranges, never frames — for JSON naming the chunks that show the answer, earliest first, and whether the captions show it at all (`supported`); when none does, it cites the closest chunks with `supported` false. A number it was not shown is dropped. Without an answerer, the chunk nearest the question is the answer |
 | Erase | `erase_source` deletes a clip's chunks, captions, graph entity, keyframes and their visual-memory vectors, and writes `vision.analyst.erased`; indexing a clip again erases its earlier chunks first |
 
@@ -289,7 +289,7 @@ use std::sync::Arc;
 use adk_memory::{GraphMemoryService, InMemoryMemoryService};
 use adk_rag::{InMemoryVectorStore, Scope};
 use adk_vision::analyst::{AnalystQuery, Chunking, ClipSource, VideoAnalyst, WordHashEmbedding};
-use adk_vision::stream::{FramePrivacy, FrameSource, NoRedaction};
+use adk_vision::stream::FrameSource;
 use adk_vision::{FramesAnalyzer, LlmDescriber, MediaScope, Sampling, VisionCx, VisionRuntime};
 
 # async fn run(
@@ -313,7 +313,7 @@ let analyst = VideoAnalyst::builder(
 .chunking(Chunking::fixed(30_000))
 .captions(Arc::new(InMemoryMemoryService::new()))
 .graph(Arc::new(graph))
-.keyframes(artifacts, FramePrivacy::new(Arc::new(NoRedaction)))
+.keyframes(artifacts)
 .answerer(&qwen)
 .open()
 .await?;
@@ -339,7 +339,7 @@ if let Some(chunk) = answer.primary() {
 | `frames_per_chunk` | 6 | Frames sent per caption call, evenly spaced over the chunk |
 | `call_options` | none | The video route and the data class remote frames are released as |
 | `captions`, `graph` | off | `adk-memory` entries per chunk; the clip in graph memory |
-| `keyframes`, `visual_memory` | off | Middle frames through the privacy hook into artifacts; their embeddings in a `VisualMemory` built without captions or a graph |
+| `keyframes`, `keyframe_privacy`, `visual_memory` | off | Middle frames into artifacts, through the hook of `keyframe_privacy` when one is given; their embeddings in a `VisualMemory` built without captions or a graph |
 | `answerer` | none | The model that answers from captions; any `LlmDescriber`, local or remote, metered by its token price |
 | `expand_questions` | on | Search for the question together with the caption the answerer expects, so a question in other words than the captions — "when do the lights go out?" over "the picture turns dark" — still finds its chunk |
 
@@ -443,20 +443,21 @@ ambiguous.
 `EgressGate::release_clip` runs the gate's steps for a clip:
 
 1. **Destination.** The adk-core egress policy decides each host.
-2. **Redact.** A clip is not re-encoded on the device, so a configuration that requires any
+2. **Redact.** A clip is not re-encoded on the device, so a configuration that lists any
    redaction class refuses every clip (V-I2). Analyse sampled frames instead; the gate
    redacts each one.
-3. **Decide.** `deny`, `ask` or `allow` for the host and data class; `ask` holds the clip
-   until a person approves its digest.
+3. **Decide.** `deny`, `ask` or `allow` (the default) for the host or provider and the data
+   class; `ask` holds the clip until a person approves its digest.
 4. **Record.** The receipt names the clip's digest as source and egress digest, the
    destination and the estimated cost, before the clip is returned.
 
 ```toml
+# Clips to Gemini go unasked; any other destination asks.
 [egress]
 default = "ask"
 
 [[egress.rule]]
-host = "generativelanguage.googleapis.com"
+provider = "gemini"
 classes = ["video"]
 action = "allow"
 ```

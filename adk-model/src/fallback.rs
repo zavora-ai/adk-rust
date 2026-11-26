@@ -521,6 +521,24 @@ impl Llm for FallbackLlm {
         adk_core::DataLocality::least_local(self.models.iter().map(|model| model.data_locality()))
     }
 
+    // Every model's destinations, since a call may reach any of them; none when any model's
+    // destination is unknown.
+    fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+        let mut destinations = Vec::new();
+        for model in &self.models {
+            let theirs = model.data_destinations();
+            if theirs.is_empty() {
+                return Vec::new();
+            }
+            for destination in theirs {
+                if !destinations.contains(&destination) {
+                    destinations.push(destination);
+                }
+            }
+        }
+        destinations
+    }
+
     /// Prewarms the first model, which serves the next call; the fallbacks are prewarmed too,
     /// and their failures only logged.
     async fn prewarm(&self) -> Result<()> {
@@ -993,5 +1011,31 @@ mod tests {
             format!("{model:?}"),
             "FallbackLlm { models: [\"claude-sonnet-5-5\"], triggers: [Refusal, Retryable] }"
         );
+    }
+
+    #[cfg(all(feature = "anthropic", feature = "gemini"))]
+    #[test]
+    fn a_chain_sends_to_every_models_destination_or_names_none() {
+        use adk_core::DataDestination;
+        let claude = Arc::new(
+            crate::AnthropicClient::new(crate::anthropic::AnthropicConfig::new(
+                "key",
+                "claude-sonnet-5-5",
+            ))
+            .unwrap(),
+        );
+        let gemini = Arc::new(crate::GeminiModel::new("key", "gemini-3.8-flash").unwrap());
+        let chain = FallbackLlm::builder(claude.clone()).fallback(gemini).build();
+        assert_eq!(
+            chain.data_destinations(),
+            [
+                DataDestination::new("anthropic", ["api.anthropic.com"]),
+                DataDestination::new("gemini", ["generativelanguage.googleapis.com"]),
+            ]
+        );
+
+        let unknown = scripted("local", Vec::<ScriptedResponse>::new());
+        let chain = FallbackLlm::builder(claude).fallback(unknown).build();
+        assert!(chain.data_destinations().is_empty());
     }
 }

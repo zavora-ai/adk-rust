@@ -24,7 +24,6 @@ use adk_memory::{GraphMemoryService, InMemoryMemoryService, MemoryService};
 use adk_rag::{InMemoryVectorStore, Scope, VectorStore};
 use adk_vision::analyst::fixtures::{WarehouseClip, WarehouseSpec};
 use adk_vision::analyst::{AnalystQuery, Chunking, ClipSource, VideoAnalyst, WordHashEmbedding};
-use adk_vision::stream::{FramePrivacy, NoRedaction};
 use adk_vision::{
     Digest, EgressAction, EgressConfig, EgressGate, FramesAnalyzer, InMemoryEgressRecorder,
     LlmDescriber, MediaScope, Sampling, VisionCx, VisionRuntime,
@@ -193,7 +192,7 @@ pub async fn run() -> Result<Checks> {
         .allow_insecure_http()
         .with_base_url(server.uri());
     let claude: Arc<dyn Llm> = Arc::new(adk_model::AnthropicClient::new(config)?);
-    let haiku = LlmDescriber::remote(claude, [ANTHROPIC_HOST])?;
+    let haiku = LlmDescriber::remote_with_hosts(claude, [ANTHROPIC_HOST])?;
 
     let egress = Arc::new(InMemoryEgressRecorder::new());
     let gate = EgressGate::new(
@@ -231,7 +230,7 @@ pub async fn run() -> Result<Checks> {
     .frames_per_chunk(recorded.frames_per_chunk)
     .captions(captions.clone())
     .graph(graph.clone())
-    .keyframes(artifacts, FramePrivacy::new(Arc::new(NoRedaction)))
+    .keyframes(artifacts)
     .answerer(&haiku)
     .open()
     .await?;

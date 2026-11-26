@@ -303,7 +303,7 @@ struct Detection {
 /// |-------|--------------|
 /// | Source and sampler | Frames at the sampling rate and size; the source drops what the pipeline cannot keep up with |
 /// | Frame governor | Thins, or pauses, frames to the [`FrameBudget`]; records each change |
-/// | Privacy | The [`PrivacyHook`] redacts every frame first; a failing hook drops the frame |
+/// | Privacy | The [`PrivacyHook`] of [`with_privacy`](StreamPipelineBuilder::with_privacy), when one is given, redacts every frame first; a failing hook drops the frame |
 /// | Detector | [`VisionRuntime::detect_with`], metered in frames, regions in source pixels |
 /// | Tracker | Anonymous track identifiers, reset when the stream starts and stops (V-I8) |
 /// | Sink | [`ObservationSink::observe`] |
@@ -316,7 +316,7 @@ struct Detection {
 ///
 /// ```
 /// use std::sync::{Arc, Mutex};
-/// use adk_vision::stream::{FrameSource, FrameStream, NoRedaction, Observation, ObservationSink, StreamPipeline};
+/// use adk_vision::stream::{FrameSource, FrameStream, Observation, ObservationSink, StreamPipeline};
 /// use adk_vision::{DecodedImage, Frame, FramePixels, FrameSourceId, Sampling, VisionCx};
 /// use futures::StreamExt;
 ///
@@ -355,7 +355,7 @@ struct Detection {
 ///
 /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
 /// let seen = Arc::new(Seen::default());
-/// let pipeline = StreamPipeline::builder(Arc::new(Three(FrameSourceId("cam".into()))), Arc::new(NoRedaction))
+/// let pipeline = StreamPipeline::builder(Arc::new(Three(FrameSourceId("cam".into()))))
 ///     .sampling(Sampling { fps: 1.0, max_long_edge: None })
 ///     .sink(seen.clone())
 ///     .build()
@@ -388,8 +388,8 @@ impl std::fmt::Debug for StreamPipeline {
     }
 }
 
-/// Builds a [`StreamPipeline`]. The privacy hook is required: there is no default, so the
-/// choice to redact nothing is written down as [`NoRedaction`](super::NoRedaction).
+/// Builds a [`StreamPipeline`]. Frames are not redacted unless a hook is given with
+/// [`with_privacy`](Self::with_privacy).
 pub struct StreamPipelineBuilder {
     source: Arc<dyn FrameSource>,
     privacy: Arc<dyn PrivacyHook>,
@@ -411,6 +411,14 @@ impl ObservationSink for Discard {
 }
 
 impl StreamPipelineBuilder {
+    /// Passes every frame through `hook` before any other stage sees it, such as
+    /// [`RedactorPrivacy::blur_faces`](super::RedactorPrivacy::blur_faces); a frame the hook
+    /// fails on is dropped.
+    pub fn with_privacy(mut self, hook: Arc<dyn PrivacyHook>) -> Self {
+        self.privacy = hook;
+        self
+    }
+
     /// Samples the source at `sampling`. Defaults to the budget's local rate when a
     /// [`budget`](Self::budget) is set, and to one frame a second otherwise.
     pub fn sampling(mut self, sampling: Sampling) -> Self {
@@ -485,14 +493,12 @@ impl StreamPipelineBuilder {
 }
 
 impl StreamPipeline {
-    /// A builder over `source`, every frame redacted by `privacy` first.
-    pub fn builder(
-        source: Arc<dyn FrameSource>,
-        privacy: Arc<dyn PrivacyHook>,
-    ) -> StreamPipelineBuilder {
+    /// A builder over `source`, its frames unredacted until
+    /// [`with_privacy`](StreamPipelineBuilder::with_privacy) gives a hook.
+    pub fn builder(source: Arc<dyn FrameSource>) -> StreamPipelineBuilder {
         StreamPipelineBuilder {
             source,
-            privacy,
+            privacy: Arc::new(super::NoRedaction),
             sampling: None,
             detection: None,
             tracker: None,

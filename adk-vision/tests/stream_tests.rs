@@ -187,7 +187,7 @@ async fn s11_the_governor_lowers_the_rate_before_it_pauses_and_resumes_next_peri
         FrameBudget::new(5.0).with_min_local_fps(1.0).with_local_quota(50).with_period_secs(60);
     let sink = Arc::new(Collect::default());
     let (recorder, cx) = audited();
-    let summary = StreamPipeline::builder(Scripted::new(frames), Arc::new(NoRedaction))
+    let summary = StreamPipeline::builder(Scripted::new(frames))
         .budget(budget)
         .sink(sink.clone())
         .build()
@@ -245,10 +245,8 @@ async fn s11_escalation_stops_at_its_quota_bills_at_least_fifty_frames_and_resum
         .with_escalations_per_minute(10)
         .with_escalation_quota(120)
         .with_period_secs(3_600);
-    let pipeline = StreamPipeline::builder(Scripted::new(Vec::new()), Arc::new(NoRedaction))
-        .budget(budget)
-        .build()
-        .unwrap();
+    let pipeline =
+        StreamPipeline::builder(Scripted::new(Vec::new())).budget(budget).build().unwrap();
     let governor = pipeline.governor().unwrap();
     let (recorder, cx) = audited();
     let at = DateTime::from_timestamp(3_600 * 500_000, 0).unwrap();
@@ -292,7 +290,7 @@ async fn the_kill_switch_pauses_the_stream_at_its_next_frame_and_resumes_after_t
     let run = tokio::spawn({
         let sink = sink.clone();
         async move {
-            StreamPipeline::builder(source, Arc::new(NoRedaction))
+            StreamPipeline::builder(source)
                 .sampling(Sampling { fps: 100.0, max_long_edge: None })
                 .sink(sink)
                 .build()
@@ -334,7 +332,7 @@ async fn a_frozen_control_refuses_the_run_before_any_frame() {
     let control = GovernanceControl::new();
     control.freeze("maintenance");
     let cx = VisionCx::new().with_governance(control);
-    let err = StreamPipeline::builder(Scripted::new(Vec::new()), Arc::new(NoRedaction))
+    let err = StreamPipeline::builder(Scripted::new(Vec::new()))
         .build()
         .unwrap()
         .run(&cx)
@@ -382,17 +380,15 @@ async fn s18_every_frame_is_redacted_before_detection_and_before_it_is_kept() {
     let runtime = Arc::new(VisionRuntime::builder().detector(detector.clone()).build().unwrap());
     let sink = Arc::new(Collect::default());
     let (recorder, cx) = audited();
-    StreamPipeline::builder(
-        Scripted::new(vec![frame(0, Duration::ZERO, Utc::now(), drawn)]),
-        Arc::new(LeftHalf),
-    )
-    .detector(runtime, DetectQuery::Classes(vec!["red".into(), "blue".into()]))
-    .sink(sink.clone())
-    .build()
-    .unwrap()
-    .run(&cx)
-    .await
-    .unwrap();
+    StreamPipeline::builder(Scripted::new(vec![frame(0, Duration::ZERO, Utc::now(), drawn)]))
+        .with_privacy(Arc::new(LeftHalf))
+        .detector(runtime, DetectQuery::Classes(vec!["red".into(), "blue".into()]))
+        .sink(sink.clone())
+        .build()
+        .unwrap()
+        .run(&cx)
+        .await
+        .unwrap();
     let observation = sink.observations.lock().unwrap().pop().unwrap();
     // The detector saw only the redacted frame: the red box is gone.
     let labels: Vec<_> = observation.regions.iter().filter_map(|r| r.label.clone()).collect();
@@ -415,6 +411,41 @@ async fn s18_every_frame_is_redacted_before_detection_and_before_it_is_kept() {
     assert_eq!(record.ext["privacy"], "left-half");
     assert_eq!(record.ext["redacted"], 1);
     assert_eq!(record.ext["retentionSecs"], 30 * 86_400);
+}
+
+#[tokio::test]
+async fn a_pipeline_with_no_privacy_hook_keeps_its_frames_unredacted() {
+    let drawn = boxes(
+        64,
+        48,
+        &[("red", BBox::new(4.0, 4.0, 20.0, 20.0)), ("blue", BBox::new(40.0, 20.0, 56.0, 36.0))],
+    );
+    let detector = Arc::new(ColourDetector::local("colours"));
+    let runtime = Arc::new(VisionRuntime::builder().detector(detector).build().unwrap());
+    let sink = Arc::new(Collect::default());
+    let (_recorder, cx) = audited();
+    StreamPipeline::builder(Scripted::new(vec![frame(0, Duration::ZERO, Utc::now(), drawn)]))
+        .detector(runtime, DetectQuery::Classes(vec!["red".into(), "blue".into()]))
+        .sink(sink.clone())
+        .build()
+        .unwrap()
+        .run(&cx)
+        .await
+        .unwrap();
+    let observation = sink.observations.lock().unwrap().pop().unwrap();
+    let mut labels: Vec<_> = observation.regions.iter().filter_map(|r| r.label.clone()).collect();
+    labels.sort();
+    assert_eq!(labels, ["blue", "red"], "the detector saw the whole frame");
+    assert_eq!(observation.image.hook(), "none");
+    assert!(observation.image.redacted().is_empty());
+
+    let artifacts = Arc::new(InMemoryArtifactService::new());
+    let keeper =
+        FrameKeeper::new(artifacts.clone(), MediaScope::new("inspector", "u1", "s1"), source_id());
+    let kept = keeper.keep(&cx, &observation.image, KeepReason::CardEvidence).await.unwrap();
+    assert_eq!(kept.privacy, "none");
+    let stored = MediaStore::new(artifacts).load(&kept.image).await.unwrap();
+    assert!(find_colour(stored.pixels(), palette()["red"]).is_some(), "kept as captured");
 }
 
 /// Fails on odd frames.
@@ -447,7 +478,8 @@ async fn a_failing_privacy_hook_drops_its_frame_and_nothing_downstream_sees_it()
         .map(|i| frame(i, Duration::from_secs(i), Utc::now(), DecodedImage::filled(4, 4, [1; 4])))
         .collect();
     let sink = Arc::new(Collect::default());
-    let summary = StreamPipeline::builder(Scripted::new(frames), Arc::new(FlakyHook))
+    let summary = StreamPipeline::builder(Scripted::new(frames))
+        .with_privacy(Arc::new(FlakyHook))
         .sink(sink.clone())
         .build()
         .unwrap()
@@ -479,7 +511,7 @@ async fn regions_are_in_source_pixels_and_track_ids_reset_with_each_session() {
         let frames =
             (0..5u64).map(|i| frame(i, Duration::from_secs(i), Utc::now(), moving(i))).collect();
         let sink = Arc::new(Collect::default());
-        StreamPipeline::builder(Scripted::new(frames), Arc::new(NoRedaction))
+        StreamPipeline::builder(Scripted::new(frames))
             .detector(runtime.clone(), DetectQuery::Classes(vec!["blue".into()]))
             .tracker(Box::new(GreedyIouTracker::new(0.3, 2)))
             .sink(sink.clone())
@@ -513,9 +545,10 @@ async fn cancellation_stops_the_stream_and_records_why() {
     let token = tokio_util::sync::CancellationToken::new();
     let (recorder, cx) = audited();
     let cx = cx.with_cancellation(token.clone());
-    let run = tokio::spawn(async move {
-        StreamPipeline::builder(source, Arc::new(NoRedaction)).build().unwrap().run(&cx).await
-    });
+    let run =
+        tokio::spawn(
+            async move { StreamPipeline::builder(source).build().unwrap().run(&cx).await },
+        );
     tokio::time::sleep(Duration::from_millis(20)).await;
     token.cancel();
     run.await.unwrap().unwrap();
@@ -628,7 +661,7 @@ async fn governor_steps_reach_the_sink_and_the_trail_in_the_same_order() {
         .collect();
     let sink = Arc::new(Collect::default());
     let (recorder, cx) = audited();
-    StreamPipeline::builder(Scripted::new(frames), Arc::new(NoRedaction))
+    StreamPipeline::builder(Scripted::new(frames))
         .budget(
             FrameBudget::new(1.0).with_min_local_fps(1.0).with_local_quota(5).with_period_secs(60),
         )
@@ -718,7 +751,7 @@ async fn observations_feed_watch_conditions_and_the_wake_frame_is_kept_under_the
         events: Mutex::default(),
     });
     let (recorder, cx) = audited();
-    StreamPipeline::builder(Scripted::new(frames), Arc::new(NoRedaction))
+    StreamPipeline::builder(Scripted::new(frames))
         .detector(runtime, DetectQuery::Classes(vec!["blue".into()]))
         .tracker(Box::new(GreedyIouTracker::new(0.3, 2)))
         .sink(watch.clone())

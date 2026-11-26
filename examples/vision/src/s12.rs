@@ -30,7 +30,7 @@ use adk_surface::{
     Answer, Caller, Command, CommandOutcome, LocalSource, Origin, Place, SurfaceEngine, SurfaceKind,
 };
 use adk_vision::stream::fixtures::{ConveyorClip, ConveyorSpec};
-use adk_vision::stream::{FrameBudget, NoRedaction, RtspSource};
+use adk_vision::stream::{FrameBudget, RtspSource};
 use adk_vision::{
     BBox, BackendDescriptor, DetectQuery, Detector, FrameSourceId, GreedyIouTracker, RawRegion,
     SentImage, VisionCx, VisionRuntime,
@@ -274,7 +274,6 @@ pub async fn run() -> Result<Checks> {
             .passing("parts")
             .with_ingest(Ingest::rtsp(spec.width, spec.height, "this computer")),
         Arc::new(RtspSource::new(FrameSourceId(CAMERA.into()), &server.url())?),
-        Arc::new(NoRedaction),
     )
     .detector(
         Arc::new(VisionRuntime::builder().detector(timed.clone()).build()?),

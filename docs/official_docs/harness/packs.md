@@ -232,10 +232,12 @@ plan whose card a surface closes, as **Stop all** does.
 ## Vision pack
 
 Feature `vision` adds `adk-vision`'s governed tools under the same modes: a call that stays
-on the device is `Read`; one that sends an image off it is `External`, held in Ask and Auto
-with the exact redacted image it would send, and denied in ReadOnly and Plan, unless a
-`.adk/vision.toml` `allow` rule the operator trusts covers its host and data class. The
-image privacy guardrail runs on every request to a remote harness model. See
+on the device is `Read`; one that sends an image off it is `External`, trusted read-only
+under an `allow` rule — the default — and held in Ask and Auto with the exact image it would
+send under a rule that asks. ReadOnly and Plan deny every call that sends an image off the
+machine. `.adk/vision.toml` applies as written; `VisionPack::distrust_workspace_rules` makes
+its `allow` rules ask. The image privacy guardrail runs on every request to a remote harness
+model. See
 [Governed Vision Tools](../vision/governed-tools.md#the-harness-vision-pack).
 
 ## Scenarios

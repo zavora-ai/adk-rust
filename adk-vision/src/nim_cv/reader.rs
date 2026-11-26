@@ -120,6 +120,7 @@ impl NimDocumentReader {
                 Locality::Remote { hosts: Vec::new() },
                 CoordFrame::Normalized { scale: 1, order: AxisOrder::Xy },
             )
+            .with_provider("nvidia")
             // The CV endpoints answered 1920×1080 inline in the probe; larger pages are
             // downscaled and the resize recorded.
             .with_limits(InputLimits::long_edge(2048)),

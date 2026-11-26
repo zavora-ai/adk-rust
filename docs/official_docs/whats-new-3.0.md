@@ -124,7 +124,7 @@ through an egress gate. 3.0.0 ships phases A to C of [spec 3.7](../design/spec-3
 |--------------|-------|
 | Regions in source pixels, model manifests pinned by revision and SHA-256, and the egress gate | [Vision](vision/index.md) |
 | A Document desk: on-device readers and a cloud describer behind the gate | `cargo adk new claims-desk --template vision`, [Getting started](vision/getting-started.md) |
-| Governed vision tools and the image privacy guardrail | [Governed tools](vision/governed-tools.md), [Image privacy](security/image-privacy.md) |
+| Governed vision tools and the image privacy guardrail | [Governed tools](vision/governed-tools.md), [Restricting what leaves the machine](security/image-privacy.md) |
 | Vision fields in evaluation cases (`Turn::expected_vision`) | [Vision evals](vision/evals.md) |
 | Approve with the image that would leave, and an annotated viewer of what an agent saw | [Approve with image](surfaces/approve-with-image.md), [Annotated viewer](surfaces/annotated-viewer.md) |
 

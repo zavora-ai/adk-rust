@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use adk_core::audit_log::{AuditActor, AuditTrail, InMemoryAuditRecorder};
 use adk_surface::camera::{CameraFacts, LiveCamera, PipelineCameras};
-use adk_vision::stream::{DeviceSelector, DeviceSource, FfmpegBinary, NoRedaction};
+use adk_vision::stream::{DeviceSelector, DeviceSource, FfmpegBinary};
 use adk_vision::{FrameSourceId, Sampling};
 
 const APP: &str = "desk";
@@ -83,7 +83,6 @@ async fn off_stops_the_device(source: DeviceSource) {
     let camera = LiveCamera::stream(
         CameraFacts::new("desk", "Desk camera", APP, "s-desk"),
         Arc::new(source),
-        Arc::new(NoRedaction),
     )
     .sampling(Sampling { fps: 5.0, max_long_edge: Some(320) });
     let audit = InMemoryAuditRecorder::new();

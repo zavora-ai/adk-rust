@@ -333,11 +333,20 @@ async fn desk(model: Arc<dyn Llm>, provider: Arc<dyn Llm>, mode: HarnessMode) ->
     });
     let reader =
         Arc::new(LayoutReader { descriptor: on_device("pp-ocrv6"), layout: layout.clone() });
-    desk_with(model, provider, mode, RULES, &[(CARD, card_png())], move |pack| {
+    desk_with(model, provider, mode, Rules::Operator(RULES), &[(CARD, card_png())], move |pack| {
         pack.redactor(Arc::new(PersonRedactor::new(people)))
             .redactor(Arc::new(PersonalTextRedactor::new(reader).with_labelled_fields(["Name"])))
     })
     .await
+}
+
+/// Where a desk's egress rules come from.
+#[derive(Clone, Copy)]
+enum Rules<'a> {
+    /// The operator's `VisionPack::config`.
+    Operator(&'a str),
+    /// The workspace's `.adk/vision.toml`, or no file at all.
+    Workspace(Option<&'a str>),
 }
 
 /// A harness desk whose session holds `images` as artifacts, its vision pack under `rules`
@@ -346,11 +355,15 @@ async fn desk_with(
     model: Arc<dyn Llm>,
     provider: Arc<dyn Llm>,
     mode: HarnessMode,
-    rules: &str,
+    rules: Rules<'_>,
     images: &[(&str, Vec<u8>)],
     pack: impl FnOnce(VisionPack) -> VisionPack,
 ) -> Desk {
     let dir = tempfile::tempdir().unwrap();
+    if let Rules::Workspace(Some(text)) = rules {
+        std::fs::create_dir_all(dir.path().join(".adk")).unwrap();
+        std::fs::write(dir.path().join(".adk/vision.toml"), text).unwrap();
+    }
     let artifacts = Arc::new(InMemoryArtifactService::new());
     for (name, png) in images {
         artifacts
@@ -377,18 +390,19 @@ async fn desk_with(
     })));
     let recorder = Arc::new(InMemoryEgressRecorder::new());
     let factory_describer = describer.clone();
-    let pack = pack(
-        VisionPack::new(MediaStore::new(artifacts.clone()), move |gate, store| {
-            VisionRuntime::builder()
-                .remote_describer(factory_describer)
-                .shared_egress_gate(gate)
-                .media_store(store)
-                .build()
-        })
-        .config(VisionConfig::from_toml_str(rules).unwrap())
-        .recorder(recorder.clone())
-        .model_hosts(["api.anthropic.com"]),
-    );
+    let base = VisionPack::new(MediaStore::new(artifacts.clone()), move |gate, store| {
+        VisionRuntime::builder()
+            .remote_describer(factory_describer)
+            .shared_egress_gate(gate)
+            .media_store(store)
+            .build()
+    })
+    .recorder(recorder.clone())
+    .model_hosts(["api.anthropic.com"]);
+    let pack = pack(match rules {
+        Rules::Operator(text) => base.config(VisionConfig::from_toml_str(text).unwrap()),
+        Rules::Workspace(_) => base,
+    });
     let approver = Arc::new(Approver::default());
     let audit = InMemoryAuditRecorder::new();
     let agent = Arc::new(
@@ -550,22 +564,143 @@ fn calls_are_classed_by_where_their_image_goes() {
 }
 
 #[test]
-fn a_workspace_allow_rule_asks_until_the_operator_trusts_it() {
+fn a_workspace_file_applies_as_written_unless_the_operator_distrusts_it() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join(".adk")).unwrap();
     std::fs::write(
         dir.path().join(".adk/vision.toml"),
-        "[egress]\nredact = []\n[[egress.rule]]\nhost = \"api.anthropic.com\"\naction = \"allow\"\n",
+        "[egress]\ndefault = \"ask\"\n[[egress.rule]]\nhost = \"api.anthropic.com\"\naction = \"allow\"\n",
     )
     .unwrap();
     let class = adk_vision::DataClass::new("document_crop");
-    let untrusted = adk_harness::packs::vision::load_vision_config(dir.path(), false).unwrap();
-    assert_eq!(untrusted.egress.decide("api.anthropic.com", &class).0, EgressAction::Ask);
-    let trusted = adk_harness::packs::vision::load_vision_config(dir.path(), true).unwrap();
-    assert_eq!(trusted.egress.decide("api.anthropic.com", &class).0, EgressAction::Allow);
-    // Faces and personal text are redacted whatever the file says.
-    assert_eq!(trusted.egress.redact.len(), 2);
+    let as_written = adk_harness::packs::vision::load_vision_config(dir.path(), false).unwrap();
+    assert_eq!(as_written.egress.decide("api.anthropic.com", &[], &class).0, EgressAction::Allow);
+    assert!(as_written.egress.redact.is_empty(), "nothing is redacted the file does not list");
+    let distrusted = adk_harness::packs::vision::load_vision_config(dir.path(), true).unwrap();
+    assert_eq!(distrusted.egress.decide("api.anthropic.com", &[], &class).0, EgressAction::Ask);
+
+    let empty = tempfile::tempdir().unwrap();
+    let defaults = adk_harness::packs::vision::load_vision_config(empty.path(), false).unwrap();
+    assert_eq!(defaults, VisionConfig::default());
+    assert_eq!(defaults.egress.decide("api.anthropic.com", &[], &class).0, EgressAction::Allow);
+    let distrusted = adk_harness::packs::vision::load_vision_config(empty.path(), true).unwrap();
+    assert_eq!(distrusted.egress.default, EgressAction::Ask, "with no file every release asks");
 }
+
+/// A run of one `vision_describe` call on the card under `rules` in `mode`, the provider
+/// answering once.
+async fn one_call(
+    mode: HarnessMode,
+    rules: Rules<'_>,
+    pack: impl FnOnce(VisionPack) -> VisionPack,
+) -> (Desk, Vec<adk_core::Event>) {
+    let provider = Arc::new(ScriptedLlm::new(
+        "claude-sonnet-5-5",
+        [ScriptedResponse::text("An identity card of the Republic of Zavoria.")],
+    ));
+    let desk = desk_with(
+        planner(vec![describe_args()]),
+        provider,
+        mode,
+        rules,
+        &[(CARD, card_png())],
+        pack,
+    )
+    .await;
+    let events = send(&desk, "What kind of document is id-card.png?").await;
+    (desk, events)
+}
+
+/// With no rules anywhere, the crop leaves as the agent sent it: no prompt, no redaction,
+/// and the provider sees the portrait and the personal words.
+#[tokio::test]
+async fn with_no_rules_an_image_leaves_unredacted_and_unasked() {
+    let (desk, _) = one_call(HarnessMode::Ask, Rules::Workspace(None), |pack| pack).await;
+
+    assert!(desk.approver.prompts.lock().unwrap().is_empty(), "nothing was asked");
+    let receipts = desk.recorder.released();
+    assert_eq!(receipts.len(), 1);
+    assert!(receipts[0].redactions.is_empty(), "nothing was redacted");
+    assert_eq!(receipts[0].decision, adk_vision::EgressDecision::Allowed { rule: None });
+    let sent = desk.proxy.images.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1);
+    let (pixels, _) = DecodedImage::decode(&sent[0], &Default::default()).unwrap();
+    let still = readable(&desk.layout, &pixels, &receipts[0].chain);
+    assert!(
+        shown(&pixels, &receipts[0].chain, desk.layout.portrait).is_some(),
+        "the portrait shows"
+    );
+    for word in desk.layout.words.iter().filter(|w| w.personal) {
+        assert!(still.contains(&word.text), "{} was covered", word.text);
+    }
+}
+
+/// A workspace `allow` rule releases without asking, as written.
+#[tokio::test]
+async fn a_workspace_allow_rule_applies_as_written() {
+    let (desk, _) =
+        one_call(HarnessMode::Ask, Rules::Workspace(Some(WORKSPACE_RULES)), |pack| pack).await;
+
+    assert!(desk.approver.prompts.lock().unwrap().is_empty());
+    let receipts = desk.recorder.released();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].decision, adk_vision::EgressDecision::Allowed { rule: Some(0) });
+}
+
+/// `distrust_workspace_rules` turns the workspace's `allow` into `ask`: the call is held with
+/// its image, and the person's approval releases it.
+#[tokio::test]
+async fn distrust_workspace_rules_holds_a_workspace_allow() {
+    let (desk, _) = one_call(HarnessMode::Ask, Rules::Workspace(Some(WORKSPACE_RULES)), |pack| {
+        pack.distrust_workspace_rules()
+    })
+    .await;
+
+    let prompts = desk.approver.prompts.lock().unwrap();
+    let held: Vec<_> =
+        prompts.iter().filter(|p| p.request.tool_name == "vision_describe").collect();
+    assert_eq!(held.len(), 1, "the call is held once");
+    assert_eq!(held[0].kind, class_for(Some(EgressAction::Ask)));
+    let receipts = desk.recorder.released();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].decision, adk_vision::EgressDecision::Approved { rule: Some(0) });
+}
+
+/// ReadOnly and Plan send nothing off the machine, even where the rules allow it.
+#[tokio::test]
+async fn read_only_and_plan_deny_a_remote_call_the_rules_allow() {
+    for mode in [HarnessMode::ReadOnly, HarnessMode::Plan] {
+        let (desk, events) = one_call(mode, Rules::Workspace(None), |pack| pack).await;
+
+        let denied = events
+            .iter()
+            .filter_map(|e| e.llm_response.content.as_ref())
+            .flat_map(|c| c.parts.iter())
+            .filter_map(|p| match p {
+                Part::FunctionResponse { function_response, .. } => {
+                    Some(function_response.response.to_string())
+                }
+                _ => None,
+            })
+            .any(|response| response.contains("sends an image off this machine"));
+        assert!(denied, "{mode:?} denied the call for its mode");
+        assert!(desk.approver.prompts.lock().unwrap().is_empty(), "{mode:?} asked");
+        assert!(desk.recorder.released().is_empty(), "{mode:?} released");
+        assert!(desk.proxy.images.lock().unwrap().is_empty(), "{mode:?} sent an image");
+    }
+}
+
+/// A workspace file that releases `document_crop` to Claude without asking and asks for the
+/// rest.
+const WORKSPACE_RULES: &str = r#"
+[egress]
+default = "ask"
+
+[[egress.rule]]
+host = "api.anthropic.com"
+classes = ["document_crop"]
+action = "allow"
+"#;
 
 /// Reads a key from the environment or the workspace `.env`, printing nothing.
 fn env_key(name: &str) -> Option<String> {
@@ -642,7 +777,7 @@ async fn live_an_identity_card_crop_reaches_claude_only_redacted() {
 }
 
 /// Egress rules that release both classes to Claude without asking, so a run makes one
-/// release per call; faces and personal text are still redacted.
+/// release per call, and that opt in to redacting faces and personal text.
 const ALLOW_RULES: &str = r#"
 [egress]
 default = "ask"
@@ -676,8 +811,8 @@ fn refusals(desk: &Desk) -> Vec<adk_vision::EgressRefusal> {
         .collect()
 }
 
-/// Without a redactor for a class the rules require, the remote call is refused at the
-/// redact step and nothing reaches the provider (spec 3.7 Q1, Q3).
+/// Without a redactor for a class the rules list, the remote call is refused at the redact
+/// step and nothing reaches the provider: an opted-in redaction fails closed.
 #[cfg(not(feature = "vision-local"))]
 #[tokio::test]
 async fn a_pack_without_redactors_refuses_every_release() {
@@ -686,7 +821,7 @@ async fn a_pack_without_redactors_refuses_every_release() {
         planner(vec![describe_args()]),
         provider,
         HarnessMode::Ask,
-        ALLOW_RULES,
+        Rules::Operator(ALLOW_RULES),
         &[(CARD, card_png())],
         |pack| pack,
     )
@@ -864,7 +999,7 @@ mod local {
             planner(vec![describe_args()]),
             provider,
             HarnessMode::Ask,
-            ALLOW_RULES,
+            Rules::Operator(ALLOW_RULES),
             &[(CARD, card_png())],
             move |pack| pack.model_fetcher(offline),
         )
@@ -907,11 +1042,15 @@ mod local {
                 ScriptedResponse::text("A baseball field."),
             ],
         ));
-        let desk =
-            desk_with(planner(calls), provider, HarnessMode::Ask, ALLOW_RULES, &images, |pack| {
-                pack
-            })
-            .await;
+        let desk = desk_with(
+            planner(calls),
+            provider,
+            HarnessMode::Ask,
+            Rules::Operator(ALLOW_RULES),
+            &images,
+            |pack| pack,
+        )
+        .await;
 
         let started = std::time::Instant::now();
         send(&desk, "Describe the three images.").await;

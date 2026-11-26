@@ -24,9 +24,7 @@ use adk_surface::camera::{
     LiveCamera, LiveWatch, Offered, PipelineCameras, RaiseCard, StreamState, ZoneChange, ZoneFacts,
 };
 use adk_surface::{Caller, Command, LocalSource, Origin, Place, SurfaceEngine, SurfaceKind};
-use adk_vision::stream::{
-    CameraFeed, FrameBudget, FrameSource, FrameStream, NoRedaction, SurfaceCameraSource,
-};
+use adk_vision::stream::{CameraFeed, FrameBudget, FrameSource, FrameStream, SurfaceCameraSource};
 use adk_vision::{
     BBox, BackendDescriptor, CoordFrame, DecodeLimits, DecodedImage, DetectQuery, Detector,
     FrameSourceId, GreedyIouTracker, Locality, RawRegion, Sampling, SentImage, VisionCx,
@@ -173,7 +171,7 @@ async fn home(configure: impl FnOnce(LiveCamera) -> LiveCamera) -> Home {
     let (source, feed) = SurfaceCameraSource::new(FrameSourceId("line-2".into()));
     feed.switch(true);
     let camera = configure(
-        LiveCamera::stream(facts(), Arc::new(source), Arc::new(NoRedaction))
+        LiveCamera::stream(facts(), Arc::new(source))
             .detector(runtime(), DetectQuery::Classes(vec!["part".into(), "person".into()]))
             .tracker(|| Box::new(GreedyIouTracker::new(0.2, 3)))
             .sampling(Sampling { fps: 5.0, max_long_edge: None }),
@@ -533,7 +531,7 @@ async fn stop_all_pauses_every_camera() {
 /// in it is covered — on the screen and in the kept copy.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_card_keeps_the_shown_frame_with_people_covered() {
-    let home = home(|camera| camera).await;
+    let home = home(LiveCamera::cover_people).await;
     home.push(frame(200, true), start()).await;
     home.push(frame(208, true), start() + chrono::Duration::milliseconds(200)).await;
     until("a frame observed", async || home.counts().observed >= 1).await;
@@ -585,6 +583,21 @@ async fn a_card_keeps_the_shown_frame_with_people_covered() {
     .await;
 }
 
+/// Without `cover_people` or a privacy hook, a frame is shown as the camera sent it.
+#[tokio::test]
+async fn a_camera_with_no_opt_in_shows_people_as_captured() {
+    let home = home(|camera| camera).await;
+    home.push(frame(200, true), start()).await;
+    home.push(frame(208, true), start() + chrono::Duration::milliseconds(200)).await;
+    until("a frame observed", async || home.counts().observed >= 1).await;
+    let held = home.cameras.latest("line-2").await.unwrap();
+    let person = held.frame.overlays.iter().find(|overlay| overlay.label == "person").unwrap();
+    assert!(!person.blurred, "nothing asked for the person to be covered");
+    let (shown, _) = DecodedImage::decode(&held.frame.bytes, &DecodeLimits::default()).unwrap();
+    let [r, g, b, _] = shown.pixel(30, 90);
+    assert!(r > 150 && g < 80 && b < 80, "the person's pixels are shown: {:?}", [r, g, b]);
+}
+
 async fn card_texts(home: &Home) -> Vec<String> {
     let session = home
         .sessions
@@ -622,7 +635,6 @@ async fn the_voice_screens_camera_goes_through_the_pipeline() {
     let camera = LiveCamera::surface(
         CameraFacts::new("this-computer", "This computer's camera", APP, SESSION)
             .with_ingest(Ingest::this_computer(WIDTH, HEIGHT)),
-        Arc::new(NoRedaction),
     )
     .detector(runtime(), DetectQuery::Classes(vec!["part".into()]))
     .sampling(Sampling { fps: 5.0, max_long_edge: None });
@@ -684,7 +696,7 @@ async fn a_lost_source_is_retried_and_reported() {
     let (inner, feed) = SurfaceCameraSource::new(FrameSourceId("line-2".into()));
     feed.switch(true);
     let source = Flaky { id: FrameSourceId("line-2".into()), failures: AtomicU32::new(2), inner };
-    let camera = LiveCamera::stream(facts(), Arc::new(source), Arc::new(NoRedaction))
+    let camera = LiveCamera::stream(facts(), Arc::new(source))
         .detector(runtime(), DetectQuery::Classes(vec!["part".into()]))
         .sampling(Sampling { fps: 5.0, max_long_edge: None });
     let home = home_with(camera, feed).await;
@@ -784,7 +796,7 @@ async fn switching_off_closes_the_source_and_on_opens_it_again() {
         open: Arc::clone(&open),
         opened: Arc::clone(&opened),
     };
-    let camera = LiveCamera::stream(facts(), Arc::new(source), Arc::new(NoRedaction))
+    let camera = LiveCamera::stream(facts(), Arc::new(source))
         .detector(runtime(), DetectQuery::Classes(vec!["part".into()]))
         .sampling(Sampling { fps: 5.0, max_long_edge: None });
     let home = home_with(camera, feed).await;
@@ -841,7 +853,7 @@ async fn stop_all_closes_each_stream_source_and_resume_all_reopens_it() {
         open: Arc::clone(&open),
         opened: Arc::clone(&opened),
     };
-    let camera = LiveCamera::stream(facts(), Arc::new(source), Arc::new(NoRedaction))
+    let camera = LiveCamera::stream(facts(), Arc::new(source))
         .detector(runtime(), DetectQuery::Classes(vec!["part".into()]))
         .sampling(Sampling { fps: 5.0, max_long_edge: None });
     let home = home_with(camera, feed).await;
@@ -936,7 +948,6 @@ async fn browser_home() -> Home {
     let camera = LiveCamera::surface(
         CameraFacts::new("this-computer", "This computer's camera", APP, SESSION)
             .with_ingest(Ingest::this_computer(WIDTH, HEIGHT)),
-        Arc::new(NoRedaction),
     )
     .detector(runtime(), DetectQuery::Classes(vec!["part".into()]))
     .sampling(Sampling { fps: 5.0, max_long_edge: None });
@@ -1056,7 +1067,6 @@ async fn sent_frames_are_paced_owned_and_only_for_a_screens_camera() {
         LiveCamera::stream(
             facts(),
             Arc::new(SurfaceCameraSource::new(FrameSourceId("line-2".into())).0),
-            Arc::new(NoRedaction),
         ),
         SurfaceCameraSource::new(FrameSourceId("unused".into())).1,
     )

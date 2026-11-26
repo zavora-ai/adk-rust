@@ -166,6 +166,15 @@ impl Llm for AzureOpenAIClient {
         self.inner.context_window()
     }
 
+    fn data_locality(&self) -> adk_core::DataLocality {
+        self.inner.data_locality()
+    }
+
+    // The deployment URL on the configured resource, such as `my-resource.openai.azure.com`.
+    fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+        self.inner.data_destinations()
+    }
+
     fn name(&self) -> &str {
         self.inner.name()
     }

@@ -321,6 +321,14 @@ pub trait OriginClasses: std::fmt::Debug + Send + Sync {
 pub trait CallClasses: std::fmt::Debug + Send + Sync {
     /// The class of a call to `tool` with `args`, or `None` for a tool it does not class.
     fn class_of_call(&self, tool: &str, args: &Value) -> Option<ToolKind>;
+
+    /// Why a call to `tool` with `args` is denied in `mode` whatever its class allows, or
+    /// `None`. The vision pack denies a call that sends an image off the machine in
+    /// ReadOnly and Plan. The default denies nothing.
+    fn denial_in_mode(&self, tool: &str, args: &Value, mode: HarnessMode) -> Option<String> {
+        let _ = (tool, args, mode);
+        None
+    }
 }
 
 impl ToolClassRegistry {
@@ -482,6 +490,26 @@ impl ToolClassRegistry {
     /// Whether `name` is a registered harness tool.
     pub fn is_registered(&self, name: &str) -> bool {
         self.classes.contains_key(name)
+    }
+
+    /// Why a call by `agent` to `tool` with `origin` and `args` is denied in `mode`
+    /// ([`CallClasses::denial_in_mode`]), for the harness's own agents and static tools.
+    pub fn denial_in_mode(
+        &self,
+        agent: &str,
+        tool: &str,
+        origin: Option<&ToolOrigin>,
+        args: &Value,
+        mode: HarnessMode,
+    ) -> Option<String> {
+        let static_origin = origin.is_none_or(|origin| origin.source == STATIC_TOOL_ORIGIN);
+        (static_origin && self.agents.contains(agent))
+            .then(|| {
+                self.call_classes
+                    .iter()
+                    .find_map(|classes| classes.denial_in_mode(tool, args, mode))
+            })
+            .flatten()
     }
 
     /// The class of a call by `agent` to `tool` with `origin` and `args`.
@@ -1402,6 +1430,15 @@ impl HarnessPolicy {
         let identity_inert = false;
         let mode =
             if identity_inert && mode == HarnessMode::Auto { HarnessMode::Ask } else { mode };
+        if let Some(reason) = self.inner.registry.denial_in_mode(
+            &request.agent_name,
+            &request.tool_name,
+            origin,
+            &request.args,
+            mode,
+        ) {
+            return deny(PolicyDecision::deny(reason), mode);
+        }
         // Decided on the target the write reaches, so a symlink inside the workspace does not
         // turn a protected file into an ordinary edit (I11, I29).
         // Every path the call writes: an `apply_patch` with a protected path anywhere is the

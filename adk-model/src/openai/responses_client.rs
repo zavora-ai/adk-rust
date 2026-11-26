@@ -1048,6 +1048,14 @@ impl Llm for OpenAIResponsesClient {
         adk_core::DataLocality::of_url(&self.base_url)
     }
 
+    // Named as its responses are billed: `openai` unless the client is configured otherwise.
+    fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+        vec![adk_core::DataDestination::of_url(
+            self.provider_name.as_deref().unwrap_or("openai"),
+            &self.base_url,
+        )]
+    }
+
     fn name(&self) -> &str {
         &self.model
     }

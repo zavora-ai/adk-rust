@@ -8,7 +8,7 @@
 //!
 //! | The surface shows | From |
 //! |---|---|
-//! | The picture and its overlays | Each observation's redacted frame, everyone the detector calls a person covered, with its tracked regions; offered to the hub, whose gate drops it while the camera is off, stopped or paused by Stop all |
+//! | The picture and its overlays | Each observation's frame, after the camera's privacy hook and, with [`LiveCamera::cover_people`], everyone the detector calls a person covered, with its tracked regions; offered to the hub, whose gate drops it while the camera is off, stopped or paused by Stop all |
 //! | "Looking", "Frames today", the steps | The pipeline's [`GovernorHandle`] and the `vision.governor.step`s it took |
 //! | "Asking sam-3.1" | Escalations granted through [`PipelineCameras::escalate`] |
 //! | "Tracks now" | The tracker's anonymous identifiers on the newest frame (V-I8) |
@@ -39,8 +39,8 @@ use adk_core::audit_log::{
 };
 use adk_vision::stream::{
     CameraFeed, EscalationVerdict, FrameBudget, FrameKeeper, FramePrivacy, FrameSource,
-    FrameStream, GovernorChange, GovernorHandle, KeepReason, Observation, ObservationSink,
-    PrivacyHook, RedactedFrame, SourceEvent, StreamPipeline, SurfaceCameraSource,
+    FrameStream, GovernorChange, GovernorHandle, KeepReason, NoRedaction, Observation,
+    ObservationSink, PrivacyHook, RedactedFrame, SourceEvent, StreamPipeline, SurfaceCameraSource,
     VISION_SOURCE_STARTED, VISION_SOURCE_STOPPED,
 };
 use adk_vision::{
@@ -65,8 +65,8 @@ use crate::error::{Result, SurfaceError};
 /// How good a shown frame's JPEG is.
 const SHOWN_QUALITY: u8 = 82;
 
-/// The labels a frame's people go by: covered before a frame is shown or kept (spec 3.7 V-I9,
-/// Q3: the whole box of every detected person).
+/// The labels a frame's people go by: covered before a frame is shown or kept under
+/// [`LiveCamera::cover_people`], the whole box of every detected person.
 const PEOPLE: [&str; 2] = ["person", "face"];
 
 /// How long a camera waits before trying a lost source again, at first and at most.
@@ -152,16 +152,17 @@ enum Input {
 
 /// One camera on the frame pipeline: its facts, its source, and the pipeline's stages.
 ///
-/// The privacy hook is required, as the pipeline's is: the choice to redact nothing is written
-/// down as [`NoRedaction`](adk_vision::stream::NoRedaction). Whatever the hook, every region the
-/// detector labels `person` or `face` is covered before a frame is shown or kept.
+/// Frames are shown and kept as the camera sends them. Two opt-ins restrict that: a privacy
+/// hook ([`with_privacy`](Self::with_privacy)) redacts every frame before any other stage
+/// sees it, and [`cover_people`](Self::cover_people) covers every region the detector labels
+/// `person` or `face` before a frame is shown or kept.
 ///
 /// # Example
 ///
 /// ```rust
 /// use std::sync::Arc;
 /// use adk_surface::camera::{CameraFacts, Ingest, LiveCamera, LiveWatch, ZoneFacts};
-/// use adk_vision::stream::{FrameBudget, NoRedaction, SurfaceCameraSource};
+/// use adk_vision::stream::{FrameBudget, SurfaceCameraSource};
 /// use adk_vision::{FrameSourceId, GreedyIouTracker, WatchCondition};
 ///
 /// let (source, _feed) = SurfaceCameraSource::new(FrameSourceId("line-2".into()));
@@ -169,7 +170,6 @@ enum Input {
 ///     CameraFacts::new("line-2", "Line 2 camera", "inspector", "s-line")
 ///         .with_ingest(Ingest::rtsp(640, 360, "the line 2 server")),
 ///     Arc::new(source),
-///     Arc::new(NoRedaction),
 /// )
 /// .tracker(|| Box::new(GreedyIouTracker::new(0.3, 4)))
 /// .budget(FrameBudget::new(5.0).with_min_local_fps(1.0).with_local_quota(200_000))
@@ -185,6 +185,7 @@ pub struct LiveCamera {
     facts: CameraFacts,
     input: Input,
     privacy: Arc<dyn PrivacyHook>,
+    cover_people: bool,
     detection: Option<(Arc<VisionRuntime>, DetectQuery, CallOptions)>,
     tracker: Option<TrackerFactory>,
     budget: Option<FrameBudget>,
@@ -202,12 +203,8 @@ impl std::fmt::Debug for LiveCamera {
 impl LiveCamera {
     /// A camera whose frames `source` reads: an RTSP camera, a file, a screen. It starts on
     /// unless `facts` says otherwise.
-    pub fn stream(
-        facts: CameraFacts,
-        source: Arc<dyn FrameSource>,
-        privacy: Arc<dyn PrivacyHook>,
-    ) -> Self {
-        Self::with_input(facts, Input::Stream(source), privacy)
+    pub fn stream(facts: CameraFacts, source: Arc<dyn FrameSource>) -> Self {
+        Self::with_input(facts, Input::Stream(source))
     }
 
     /// The web home's own camera (spec 3.7 §7.13 `SurfaceCameraSource`): frames the voice
@@ -215,22 +212,23 @@ impl LiveCamera {
     /// page sends them to `POST /surface/cameras/{camera}/frames` — with no realtime model. It
     /// starts off, says it comes "from the web home", and takes nothing until a person
     /// switches it on.
-    pub fn surface(facts: CameraFacts, privacy: Arc<dyn PrivacyHook>) -> Self {
+    pub fn surface(facts: CameraFacts) -> Self {
         let (source, feed) = SurfaceCameraSource::new(FrameSourceId(facts.id.clone()));
         let facts = match facts.from {
             Some(_) => facts,
             None => facts.from("from the web home"),
         }
         .switched(false);
-        Self::with_input(facts, Input::Screen { source: Arc::new(source), feed }, privacy)
+        Self::with_input(facts, Input::Screen { source: Arc::new(source), feed })
     }
 
-    fn with_input(facts: CameraFacts, input: Input, privacy: Arc<dyn PrivacyHook>) -> Self {
+    fn with_input(facts: CameraFacts, input: Input) -> Self {
         let zones = facts.zones.clone();
         Self {
             facts: CameraFacts { zones, ..facts },
             input,
-            privacy,
+            privacy: Arc::new(NoRedaction),
+            cover_people: false,
             detection: None,
             tracker: None,
             budget: None,
@@ -238,6 +236,22 @@ impl LiveCamera {
             watches: Vec::new(),
             escalation: None,
         }
+    }
+
+    /// Passes every frame through `hook` before any other stage sees it, such as
+    /// `RedactorPrivacy::blur_faces`; a frame the hook fails on is dropped.
+    #[must_use]
+    pub fn with_privacy(mut self, hook: Arc<dyn PrivacyHook>) -> Self {
+        self.privacy = hook;
+        self
+    }
+
+    /// Covers every region the detector labels `person` or `face`, its whole box, before a
+    /// frame is shown or kept.
+    #[must_use]
+    pub fn cover_people(mut self) -> Self {
+        self.cover_people = true;
+        self
     }
 
     /// Detects `query` on every frame through `runtime`'s detection route.
@@ -332,6 +346,7 @@ struct Run {
     id: FrameSourceId,
     input: Input,
     privacy: Arc<dyn PrivacyHook>,
+    cover_people: bool,
     detection: Option<(Arc<VisionRuntime>, DetectQuery, CallOptions)>,
     tracker: Option<TrackerFactory>,
     budget: Option<FrameBudget>,
@@ -510,7 +525,6 @@ impl Shared {
 /// use std::sync::Arc;
 /// use adk_surface::camera::{CameraFacts, LiveCamera, PipelineCameras};
 /// use adk_vision::VisionCx;
-/// use adk_vision::stream::NoRedaction;
 ///
 /// # async fn example(source: Arc<dyn adk_vision::stream::FrameSource>) {
 /// let live = PipelineCameras::builder("inspector", "ana")
@@ -518,7 +532,6 @@ impl Shared {
 ///     .camera(LiveCamera::stream(
 ///         CameraFacts::new("line-2", "Line 2 camera", "inspector", "s-line"),
 ///         source,
-///         Arc::new(NoRedaction),
 ///     ))
 ///     .build()
 ///     .unwrap();
@@ -653,6 +666,7 @@ impl PipelineCamerasBuilder {
                 base: camera.facts,
                 input: camera.input,
                 privacy: camera.privacy,
+                cover_people: camera.cover_people,
                 detection: camera.detection,
                 tracker: camera.tracker,
                 budget: camera.budget,
@@ -923,12 +937,14 @@ impl CameraSource for PipelineCameras {
             f64::from(width) / f64::from(shown.width.max(1)),
             f64::from(height) / f64::from(shown.height.max(1)),
         );
-        // Everyone on the frame is covered again before it is written, whatever was shown
-        // (spec 3.7 V-I9).
+        // What the hook redacted, and under `cover_people` everyone on the frame, is covered
+        // again before it is written, whatever was shown.
         let people: Vec<BBox> = shown
             .overlays
             .iter()
-            .filter(|overlay| overlay.blurred || PEOPLE.contains(&overlay.label.as_str()))
+            .filter(|overlay| {
+                overlay.blurred || (run.cover_people && PEOPLE.contains(&overlay.label.as_str()))
+            })
             .filter_map(|overlay| overlay.bbox)
             .map(|[x0, y0, x1, y1]| {
                 BBox::new(
@@ -1128,7 +1144,8 @@ async fn drive(run: Arc<Run>, shared: Arc<Shared>, hub: WeakCameras) {
                 () = tokio::time::sleep(StdDuration::from_millis(500)) => continue,
             }
         }
-        let mut builder = StreamPipeline::builder(Arc::clone(&watched), Arc::clone(&run.privacy))
+        let mut builder = StreamPipeline::builder(Arc::clone(&watched))
+            .with_privacy(Arc::clone(&run.privacy))
             .sink(Arc::clone(&sink) as Arc<dyn ObservationSink>);
         if let Some(sampling) = run.sampling {
             builder = builder.sampling(sampling);
@@ -1455,7 +1472,7 @@ impl ObservationSink for Sink {
         let people: Vec<BBox> = observation
             .regions
             .iter()
-            .filter(|region| is_person(region))
+            .filter(|region| run.cover_people && is_person(region))
             .filter_map(|region| region.shape.bbox())
             .map(|bbox| {
                 BBox::new(
@@ -1466,7 +1483,8 @@ impl ObservationSink for Sink {
                 )
             })
             .collect();
-        // Everyone the detector found is covered before the frame is shown or kept (V-I9).
+        // Under `cover_people`, everyone the detector found is covered before the frame is
+        // shown or kept.
         let image: Arc<RedactedFrame> = if people.is_empty() {
             Arc::clone(&observation.image)
         } else {
@@ -1574,7 +1592,7 @@ impl ObservationSink for Sink {
                 }
                 let streak = streak_of(&state, region);
                 overlay.frames = streak;
-                if is_person(region) {
+                if run.cover_people && is_person(region) {
                     overlay.blurred = true;
                 } else if let Some(track) = region.track {
                     let centre = f64::midpoint(corners[0], corners[2]);

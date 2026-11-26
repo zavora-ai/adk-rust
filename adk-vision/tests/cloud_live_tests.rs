@@ -188,7 +188,7 @@ async fn claude(model: &str) {
     }
     config = config.with_base_url(url);
     let client: Arc<dyn Llm> = Arc::new(adk_model::AnthropicClient::new(config).unwrap());
-    let describer = LlmDescriber::remote(client, ["api.anthropic.com"])
+    let describer = LlmDescriber::remote_with_hosts(client, ["api.anthropic.com"])
         .unwrap()
         .with_effort(Effort::Low)
         .with_max_output_tokens(4_000);
@@ -211,7 +211,7 @@ async fn nim(model: &str) {
     let Some(key) = key("NVIDIA_API_KEY") else { return };
     let config = NimConfig::new(base("NIM", "https://integrate.api.nvidia.com/v1"), key, model);
     let client: Arc<dyn Llm> = Arc::new(config.client().unwrap());
-    let describer = LlmDescriber::remote(client, ["integrate.api.nvidia.com"])
+    let describer = LlmDescriber::remote_with_hosts(client, ["integrate.api.nvidia.com"])
         .unwrap()
         .with_max_output_tokens(1_500);
     run(model, describer).await;
@@ -237,7 +237,7 @@ async fn gemini_locates_the_drawn_shapes() {
     let url = base("GEMINI", "https://generativelanguage.googleapis.com/v1beta/");
     let client: Arc<dyn Llm> =
         Arc::new(adk_model::GeminiModel::new_with_base_url(key, model, url).unwrap());
-    let describer = LlmDescriber::remote(client, ["generativelanguage.googleapis.com"])
+    let describer = LlmDescriber::remote_with_hosts(client, ["generativelanguage.googleapis.com"])
         .unwrap()
         .with_effort(Effort::Low)
         .with_max_output_tokens(4_000);
@@ -253,6 +253,6 @@ async fn muse_locates_the_drawn_shapes() {
         .with_base_url(base("MUSE", "https://api.meta.ai/v1"))
         .with_max_tokens(4_000);
     let client: Arc<dyn Llm> = Arc::new(adk_model::MuseClient::new(config).unwrap());
-    let describer = LlmDescriber::remote(client, ["api.meta.ai"]).unwrap();
+    let describer = LlmDescriber::remote_with_hosts(client, ["api.meta.ai"]).unwrap();
     run(model, describer).await;
 }

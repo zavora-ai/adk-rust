@@ -278,6 +278,11 @@ pub struct BackendDescriptor {
     pub id: BackendId,
     /// Where it runs.
     pub locality: Locality,
+    /// The providers a remote backend sends to, by the id their responses carry in
+    /// `LlmResponse::provider` (`anthropic`, `gemini`, `bedrock`), which `provider` egress
+    /// rules match; empty when unknown.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<String>,
     /// The coordinate frame its regions are in.
     pub frame: CoordFrame,
     /// How it is billed; `None` for local backends, which record units at zero cost.
@@ -306,6 +311,7 @@ impl BackendDescriptor {
         Self {
             id: BackendId::new(id),
             locality,
+            providers: Vec::new(),
             frame,
             price: None,
             manifest: None,
@@ -313,6 +319,29 @@ impl BackendDescriptor {
             token_estimate: None,
             concepts_per_request: None,
         }
+    }
+
+    /// Names a provider the backend sends to, for `provider` egress rules.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_vision::{BackendDescriptor, CoordFrame, Locality};
+    ///
+    /// let sam = BackendDescriptor::new(
+    ///     "sam-3.1",
+    ///     Locality::Remote { hosts: vec!["api.meta.ai".into()] },
+    ///     CoordFrame::SentPixels,
+    /// )
+    /// .with_provider("muse");
+    /// assert_eq!(sam.providers, ["muse"]);
+    /// ```
+    pub fn with_provider(mut self, provider: impl Into<String>) -> Self {
+        let provider = provider.into();
+        if !self.providers.contains(&provider) {
+            self.providers.push(provider);
+        }
+        self
     }
 
     /// Sets the preflight estimate of a token-billed backend.

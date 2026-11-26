@@ -305,7 +305,7 @@ Signed, agent-run websites (spec 3.5): the AWP 2.0 site contract, the agent edge
 - [Durable Stores](security/durable-stores.md) - Spend ledger, action ledger, approval and audit log store backends, their conformance suite, and the no-duplicate guarantee; where the run, schedule, kernel and harness stores are documented
 - [Audit Log](security/audit-log.md) - Signed, Merkle-hashed audit log with checkpoints (and when they are signed), key rotation, and offline verification
 - [Subject Rights](security/subject-rights.md) - Visitor ids, consent records, and one operation to export, erase, or link a person's data across stores
-- [Image Privacy](security/image-privacy.md) - Faces and personal text redacted on the device before any image leaves; the image privacy guardrail on model requests, tool results and user input
+- [Restricting What Leaves the Machine](security/image-privacy.md) - Opt-in egress rules for images: ask, deny, per host or provider, faces and personal text redacted on the device, the on-device profile; the image privacy guardrail on model requests, tool results and user input
 - [Network Egress Policy](security/egress.md) - Host, port and CIDR allowlists, the shared address classifier, and the egress-guarded HTTP client
 - [Web Bot Auth](security/web-bot-auth.md) - Verified identity for automated clients: RFC 9421 request signatures, key directories, signer and verifier
 

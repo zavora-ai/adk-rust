@@ -187,6 +187,10 @@ mod at_effort {
         fn data_locality(&self) -> adk_core::DataLocality {
             self.inner.data_locality()
         }
+
+        fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+            self.inner.data_destinations()
+        }
     }
 }
 

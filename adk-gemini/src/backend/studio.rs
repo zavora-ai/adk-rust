@@ -232,6 +232,10 @@ impl StudioBackend {
 
 #[async_trait]
 impl GeminiBackend for StudioBackend {
+    fn endpoint(&self) -> Option<&str> {
+        Some(self.base_url.as_str())
+    }
+
     // ── Core ────────────────────────────────────────────────────────────
 
     async fn generate_content(

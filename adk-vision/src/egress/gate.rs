@@ -1,5 +1,6 @@
 //! [`EgressGate`]: destination, minimise, redact, decide, record, release.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -280,14 +281,16 @@ impl StagedEgress {
 ///
 /// 1. **Destination.** Under the on-device profile ([`EgressConfig::on_device`]) every host
 ///    is refused here; otherwise the adk-core [`EgressPolicy`] decides each of the backend's
-///    hosts, and an unlisted host is refused here.
+///    hosts, and an unlisted host is refused here. `private_networks = false`
+///    ([`EgressConfig::private_networks`]) narrows that policy to public addresses.
 /// 2. **Minimise.** The image is cropped to the request's crop and downscaled to the
 ///    backend's limit; both are recorded in the transform chain.
-/// 3. **Redact.** Every class the configuration requires is found by its [`Redactor`] and
-///    filled with solid colour, then the caller's marked regions. A required class with no
-///    redactor refuses the release.
-/// 4. **Decide.** The rule for the host and data class says `deny`, `ask` or `allow`. `ask`
-///    holds the release unless a person approved this exact egress digest.
+/// 3. **Redact.** Every class the configuration lists, none by default, is found by its
+///    [`Redactor`] and filled with solid colour, then the caller's marked regions. A listed
+///    class with no redactor refuses the release.
+/// 4. **Decide.** The rule for the host or provider and the data class, else the default
+///    `allow`, says `deny`, `ask` or `allow`. `ask` holds the release unless a person
+///    approved this exact egress digest.
 /// 5. **Record.** The receipt goes to the [`EgressRecorder`] before the image is returned;
 ///    a recorder failure refuses the release.
 /// 6. **Release.** The gate constructs the [`ReleasedImage`].
@@ -351,12 +354,43 @@ impl EgressGate {
         classes
     }
 
-    /// The action and rule for an image of `class` bound for `hosts`: the strictest over
-    /// the hosts, `deny` over `ask` over `allow`.
-    pub fn decide(&self, hosts: &[String], class: &DataClass) -> (EgressAction, Option<usize>) {
+    /// The action and rule for an image of `class` bound for `backend`: the strictest over
+    /// its hosts, `deny` over `ask` over `allow`, a `provider` rule matching each host of a
+    /// backend that names that provider. The default for a backend on the device.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use adk_core::egress::EgressPolicy;
+    /// use adk_vision::{
+    ///     BackendDescriptor, CoordFrame, DataClass, EgressAction, EgressConfig, EgressGate,
+    ///     InMemoryEgressRecorder, Locality,
+    /// };
+    ///
+    /// let config = EgressConfig::default().with_provider_rule("anthropic", &[], EgressAction::Ask);
+    /// let gate = EgressGate::new(EgressPolicy::allow_private_networks(), config, Arc::new(InMemoryEgressRecorder::new()));
+    /// let claude = BackendDescriptor::new(
+    ///     "claude",
+    ///     Locality::Remote { hosts: vec!["gateway.example.com".into()] },
+    ///     CoordFrame::SentPixels,
+    /// );
+    /// let photo = DataClass::new("photo");
+    /// assert_eq!(gate.decide(&claude, &photo), (EgressAction::Allow, None));
+    /// assert_eq!(gate.decide(&claude.with_provider("anthropic"), &photo), (EgressAction::Ask, Some(0)));
+    /// ```
+    pub fn decide(
+        &self,
+        backend: &BackendDescriptor,
+        class: &DataClass,
+    ) -> (EgressAction, Option<usize>) {
+        let hosts = match &backend.locality {
+            Locality::Remote { hosts } => hosts.as_slice(),
+            Locality::InProcess | Locality::Loopback => &[],
+        };
         hosts
             .iter()
-            .map(|host| self.config.decide(host, class))
+            .map(|host| self.config.decide(host, &backend.providers, class))
             .max_by_key(|(action, _)| *action)
             .unwrap_or((self.config.default, None))
     }
@@ -370,6 +404,16 @@ impl EgressGate {
     /// The egress rules.
     pub fn config(&self) -> &EgressConfig {
         &self.config
+    }
+
+    /// The network policy the destination step applies: the gate's policy, narrowed to
+    /// public addresses under `private_networks = false`.
+    pub(super) fn destination_policy(&self) -> Cow<'_, EgressPolicy> {
+        if self.config.private_networks {
+            Cow::Borrowed(&self.policy)
+        } else {
+            Cow::Owned(self.policy.narrow(&EgressPolicy::public_only()))
+        }
     }
 
     /// Runs the destination, minimise and redact steps and returns what would leave, for an
@@ -400,7 +444,7 @@ impl EgressGate {
     pub async fn stage(&self, cx: &VisionCx, request: &ReleaseRequest<'_>) -> Result<StagedEgress> {
         let hosts = remote_hosts(request.backend)?;
         let preview = self.prepare(cx, request, &hosts).await?;
-        let (action, rule) = self.decide(&hosts, &request.data_class);
+        let (action, rule) = self.decide(request.backend, &request.data_class);
         if action == EgressAction::Deny {
             let reason = deny_reason(rule, &request.data_class);
             self.refuse(cx, request, &hosts, Some(preview.egress), "decide", &reason).await?;
@@ -453,7 +497,7 @@ impl EgressGate {
     ) -> Result<ReleasedImage> {
         let hosts = remote_hosts(request.backend)?;
         let preview = self.prepare(cx, &request, &hosts).await?;
-        let (action, rule) = self.decide(&hosts, &request.data_class);
+        let (action, rule) = self.decide(request.backend, &request.data_class);
         let decision = match action {
             EgressAction::Allow => EgressDecision::Allowed { rule },
             EgressAction::Ask if request.approved.contains(&preview.egress) => {
@@ -534,9 +578,10 @@ impl EgressGate {
             self.refuse(cx, request, hosts, None, "destination", &reason).await?;
             return Err(VisionError::EgressRefused { host: hosts.join(", "), reason });
         }
+        let policy = self.destination_policy();
         for host in hosts {
             let (name, port) = split_host_port(host);
-            if let Err(denial) = self.policy.decide(&EgressTarget::Name { host: name, port }) {
+            if let Err(denial) = policy.decide(&EgressTarget::Name { host: name, port }) {
                 let reason = denial.to_string();
                 self.refuse(cx, request, hosts, None, "destination", &reason).await?;
                 return Err(VisionError::EgressRefused { host: host.clone(), reason });
@@ -685,10 +730,10 @@ pub(super) fn deny_reason(rule: Option<usize>, class: &DataClass) -> String {
     }
 }
 
-/// `host` or `host:port`; HTTPS's port when none is given.
+/// `host`, `host:port` or `[v6]:port`; HTTPS's port when none is given.
 pub(super) fn split_host_port(host: &str) -> (&str, u16) {
     match host.rsplit_once(':') {
-        Some((name, port)) if !name.contains(':') => {
+        Some((name, port)) if !name.contains(':') || name.ends_with(']') => {
             port.parse().map_or((host, 443), |port| (name, port))
         }
         _ => (host, 443),

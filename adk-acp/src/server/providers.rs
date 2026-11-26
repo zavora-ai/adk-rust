@@ -283,6 +283,10 @@ impl Llm for SwitchableModel {
     fn data_locality(&self) -> adk_core::DataLocality {
         self.current().map_or(adk_core::DataLocality::Remote, |model| model.data_locality())
     }
+
+    fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+        self.current().map(|model| model.data_destinations()).unwrap_or_default()
+    }
 }
 
 /// The schema adapter of whichever model backs a [`SwitchableModel`].

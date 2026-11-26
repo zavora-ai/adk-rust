@@ -29,7 +29,7 @@ use crate::traits::{
 
 /// The most a request carries inline: Gemini's 20 MB request limit.
 pub const GEMINI_INLINE_LIMIT: usize = 20 * 1024 * 1024;
-/// The AI Studio host.
+/// The AI Studio host, for a client that names none.
 const GEMINI_HOST: &str = "generativelanguage.googleapis.com";
 /// Uploaded files expire after 48 hours; reuse one for a little less.
 const UPLOAD_REUSE: Duration = Duration::from_secs(47 * 3600);
@@ -78,14 +78,20 @@ impl std::fmt::Debug for GeminiVideoAnalyzer {
 }
 
 impl GeminiVideoAnalyzer {
-    /// Asks `model` on AI Studio.
+    /// Asks `model`, at the hosts its client names: AI Studio, a custom base URL, or a Vertex
+    /// AI endpoint.
     pub fn new(model: Arc<GeminiModel>) -> Self {
         let name = model.name().to_string();
+        let mut hosts = adk_core::DataDestination::all_hosts(&model.data_destinations());
+        if hosts.is_empty() {
+            hosts.push(GEMINI_HOST.into());
+        }
         let descriptor = BackendDescriptor::new(
             name.clone(),
-            Locality::Remote { hosts: vec![GEMINI_HOST.into()] },
+            Locality::Remote { hosts },
             CoordFrame::SentPixels,
         )
+        .with_provider("gemini")
         .with_price(PriceRef::Tokens {
             vendor: adk_core::vendor_for_model(&name).to_string(),
             model: name,

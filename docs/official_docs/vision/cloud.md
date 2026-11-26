@@ -20,10 +20,14 @@ adk-vision = { version = "3.0.0", features = ["cloud", "nim", "sam"] }
 
 ## Describing With Any Model
 
-`LlmDescriber::remote` wraps a model and names the hosts it sends to, so the egress policy
-can check them. The describer sends the released images as inline parts, the caller's
-schema as the response schema and, when regions are asked for, the region format of the
-adapter picked by model ID:
+`LlmDescriber::remote` wraps a model and takes the hosts and providers it sends to from the
+model (`Llm::data_destinations`): every `adk-model` provider names the host of its configured
+endpoint — AI Studio or a Vertex AI location, a Bedrock region, an Azure resource, a custom
+base URL — so the egress policy and the `host` and `provider` rules check where the images
+actually go. `LlmDescriber::remote_with_hosts` names the hosts instead, for a model that names
+none, such as your own `Llm`. The describer sends the released images as inline parts, the
+caller's schema as the response schema and, when regions are asked for, the region format of
+the adapter picked by model ID:
 
 ```rust,ignore
 use std::sync::Arc;
@@ -34,7 +38,7 @@ use adk_model::AnthropicClient;
 use adk_vision::{DescribeSpec, LlmDescriber, VisionRuntime};
 
 let claude = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-5-5"))?;
-let describer = LlmDescriber::remote(Arc::new(claude), ["api.anthropic.com"])?
+let describer = LlmDescriber::remote(Arc::new(claude))?
     .with_effort(Effort::Low)
     .with_max_output_tokens(4_000);
 let runtime = VisionRuntime::builder()

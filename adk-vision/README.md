@@ -23,14 +23,14 @@ Local-first perception for Rust Agent Development Kit (ADK-Rust) agents.
 | Manifests | `ModelManifest`, `LicenceGate`, `VerifiedModel` | Every weight file is pinned by revision and SHA-256 and names its licence; nothing loads unverified |
 | Traits | `Detector`, `Segmenter`, `DocumentReader`, `Embedder`, `Describer`, `Tracker`, `VideoAnalyzer`, `Editor` | One contract per perception task, each with a conformance suite |
 | Runtime | `VisionRuntime` | Local-first routing, metering, cancellation, mapping to source pixels, crop escalation |
-| Egress | `EgressGate`, `ReleasedImage`, `ReleasedClip` | A remote backend only ever receives an image the gate cropped, redacted, approved and recorded, or a clip it checked and recorded |
+| Egress | `EgressGate`, `ReleasedImage`, `ReleasedClip` | A remote backend only ever receives an image the gate cropped and recorded — redacted and approved when the rules opt in — or a clip it checked and recorded |
 | Video | `SourceClip`, `VideoSource`, `FramesAnalyzer`, `VisibilityPass`, `SamVideoTracker` | `analyze_video` holds a call's frames before anything leaves; questions and chunk captions over sampled frames on any model (`cloud`), questions optionally only around the first frame that shows the question's subject; tracks through a clip with `sam-3.1` video (`sam`) |
-| Tools | `VisionToolset` | `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`, `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure`, and `vision_watch` over registered frame sources (`stream`), on the governed path; a remote call is held with the exact egress image and releases only that digest |
+| Tools | `VisionToolset` | `vision_detect`, `vision_segment`, `vision_read`, `vision_describe`, `vision_crop`, `vision_redact`, `vision_annotate`, `vision_measure`, and `vision_watch` over registered frame sources (`stream`), on the governed path; under a rule that asks, a remote call is held with the exact egress image and releases only that digest |
 | Watch | `WatchCondition`, `WatchEvaluator`, `WatchSink` | Conditions held on the device against tracked objects; one event per object, keyed for the kernel's `VisionWakeSource`, never carrying pixels |
 | Memory | `VisualMemory`, `VisualQuery`, `SiglipTextEmbedding` | Image embeddings as `adk-rag` chunks in any vector store, found by text or an example image; one embedding space per collection; captions with artifact references in `adk-memory`; erasure by source (`memory`) |
 | Video analyst | `VideoAnalyst`, `Chunking`, `WordHashEmbedding` | A video cut into fixed or scene chunks, each captioned through the video analyzer and indexed in any vector store with its time range; captions in `adk-memory`, the clip in graph memory, keyframes in visual memory; questions answered citing chunks; cost per hour of video; erasure by clip (`analyst`) |
 | Measurement | `Calibration`, `Measurement` | A fiducial of known size gives pixels per millimetre; maximum length and area from masks with their uncertainty, valid only in the fiducial's plane |
-| Privacy | `FaceRedactor`, `PersonRedactor`, `PersonalTextRedactor`, `ImagePrivacyGuardrail`, `RedactorPrivacy::blur_faces` | Faces and personal text filled solid black on the device before an image leaves — by default YuNet faces with RF-DETR Nano for people with no face found (`onnx`) and PP-OCRv6 (`ocr`), loaded on first use; the same gate on model requests, tool results and user input; faces blurred on streams before any write; the on-device profile (`on_device = true`) that releases nothing |
+| Privacy, opt-in | `FaceRedactor`, `PersonRedactor`, `PersonalTextRedactor`, `ImagePrivacyGuardrail`, `RedactorPrivacy::blur_faces` | When the rules list them, faces and personal text filled solid black on the device before an image leaves — YuNet faces with RF-DETR Nano for people with no face found (`onnx`) and PP-OCRv6 (`ocr`), loaded on first use; the same gate on model requests, tool results and user input; faces blurred on a stream given the hook; the on-device profile (`on_device = true`) that releases nothing |
 
 ```toml
 [dependencies]
@@ -72,7 +72,7 @@ features — `fetch`, `cloud`, `nim`, `sam`, `guardrail` — as `adk_rust::visio
 | `gemini-video` | `GeminiVideoAnalyzer`: Gemini native video, uploading clips above 20 MB once through the File API, at an explicit frame rate and media resolution; implies `cloud` |
 | `memory` | `VisualMemory`: image embeddings as `adk-rag` chunks with the caption, artifact, digest, region, source, capture time and run; text and example-image search with day, kind and source filters; the collection's embedding space recorded and any other refused; captions in `adk-memory` and sources in its graph memory; `erase_source` with a `vision.memory.erased` record; the S16 week corpus |
 | `memory-lancedb` | The visual memory tests against `adk-rag`'s embedded LanceDB backend (needs `protoc`) |
-| `analyst` | `VideoAnalyst`: fixed-window or scene-cut chunks captioned by `VideoRequest::Caption` through the runtime, indexed as `adk-rag` chunks with their time range, keyframe and clip; captions with artifact references in `adk-memory`, the clip and what it shows in graph memory, keyframes through the privacy hook into a `VisualMemory`; `ask` from retrieved captions with chunk citations; cost per hour of video; `erase_source` with a `vision.analyst.erased` record; `WordHashEmbedding`; the S17 warehouse clip (implies `cloud`, `memory`, `stream`) |
+| `analyst` | `VideoAnalyst`: fixed-window or scene-cut chunks captioned by `VideoRequest::Caption` through the runtime, indexed as `adk-rag` chunks with their time range, keyframe and clip; captions with artifact references in `adk-memory`, the clip and what it shows in graph memory, keyframes into a `VisualMemory`, through `keyframe_privacy` when set; `ask` from retrieved captions with chunk citations; cost per hour of video; `erase_source` with a `vision.analyst.erased` record; `WordHashEmbedding`; the S17 warehouse clip (implies `cloud`, `memory`, `stream`) |
 | `team` | `team`: the `Perceiver`, `Reasoner` and `Verifier` roles, each refusing at construction what it may not hold, and `VisionTeam`, which escalates a reasoner/verifier disagreement to a person on one card with both opinions and the frame; implies `guardrail` |
 
 ## Quick Start
@@ -198,17 +198,20 @@ for `ReleasedImage`, so handing a remote backend an unreleased image does not co
 1. **Destination** — the on-device profile refuses every host; otherwise the adk-core
    `EgressPolicy` decides each host.
 2. **Minimise** — crop to the region the call needs, downscale to the backend's limit.
-3. **Redact** — every class in the policy (`faces`, `personal_text`, ...) is filled with
-   solid colour by its `Redactor`; a class with no redactor, or a redactor whose default
-   weights cannot load (`FaceRedactor::on_device`'s person fallback, `PersonRedactor::rf_detr`,
-   `PersonalTextRedactor::pp_ocr`), refuses the release.
-4. **Decide** — the rule for the host and data class says `deny`, `ask` or `allow`; `ask`
-   holds until a person approves that exact egress digest.
+3. **Redact** — every class the rules' `redact` list names (`faces`, `personal_text`,
+   ...) is filled with solid colour by its `Redactor`; a listed class with no redactor, or a
+   redactor whose default weights cannot load (`FaceRedactor::on_device`'s person fallback,
+   `PersonRedactor::rf_detr`, `PersonalTextRedactor::pp_ocr`), refuses the release. The list
+   is empty by default.
+4. **Decide** — the rule for the host or provider and the data class says `deny`, `ask` or
+   `allow`, the default; `ask` holds until a person approves that exact egress digest.
 5. **Record** — the receipt (source and egress digests, chain, redactions, decision) goes to
    the `EgressRecorder` before the image is returned.
 6. **Release**.
 
-The rules live in `.adk/vision.toml`; there is no setting that releases before redaction:
+The rules live in `.adk/vision.toml`. With no file, every image leaves as it is and is
+still recorded; each restriction is an opt-in, enforced once chosen, and a listed redaction
+class always runs before the decision:
 
 ```toml
 [egress]
@@ -218,8 +221,17 @@ redact = ["faces", "personal_text"]
 [[egress.rule]]
 host = "generativelanguage.googleapis.com"
 classes = ["document_crop"]
-action = "ask"
+action = "allow"
+
+[[egress.rule]]
+provider = "openrouter"
+action = "deny"
 ```
+
+A rule names a `host` or a `provider`. `LlmDescriber::remote` takes both from the model
+(`adk_core::Llm::data_destinations`), so a custom base URL, a Vertex AI location or a
+Bedrock region is the host the rules see; `remote_with_hosts` names them by hand. See
+[Restricting What Leaves the Machine](../docs/official_docs/security/image-privacy.md).
 
 ## Routing and Escalation
 
@@ -299,11 +311,11 @@ mod my_detector {
 
 `StreamPipeline` reads a camera, a file, a screen, a browser page or the web home's camera,
 holds it to a `FrameBudget` (lower the rate, stop escalating, pause, resume next period),
-redacts every frame through a required `PrivacyHook` — `RedactorPrivacy::blur_faces` blurs
-faces — before any other stage, detects and
+redacts every frame, when given a `PrivacyHook` with `with_privacy` —
+`RedactorPrivacy::blur_faces` blurs faces — before any other stage, detects and
 tracks on the device, and hands each frame to an `ObservationSink`. Frames stay in memory
 unless a wake, a card or a person keeps them through `FrameKeeper`, which stores only
-redacted frames, for 30 days by default. `StreamWatch` holds watch conditions against the
+frames that passed the privacy step, for 30 days by default. `StreamWatch` holds watch conditions against the
 stream, keeps the frame of each event that passes and wakes a sleeping agent through the
 kernel's `VisionWakeSource`; `FrameSources` and the `vision_watch` tool let an agent start and
 stop those watches on the sources an operator registered. See
@@ -341,7 +353,7 @@ video. See [The video analyst](../docs/official_docs/vision/video.md#the-video-a
   memory and video analyst; face blur on streams and the on-device profile
 - [Vision overview](../docs/official_docs/vision/index.md)
 - [Governed vision tools](../docs/official_docs/vision/governed-tools.md)
-- [Image privacy](../docs/official_docs/security/image-privacy.md)
+- [Restricting what leaves the machine](../docs/official_docs/security/image-privacy.md)
 - [Cloud vision backends](../docs/official_docs/vision/cloud.md)
 - [Vision evals](../docs/official_docs/vision/evals.md)
 - [Vision benchmarks](../docs/official_docs/vision/benchmarks.md)

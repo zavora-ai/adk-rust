@@ -300,7 +300,10 @@ pub async fn run() -> Result<Checks> {
     let model = std::env::var("VISION_GEMINI_MODEL").unwrap_or(model_id);
     let gemini = GeminiModel::new_with_base_url(key, &model, base)?
         .with_retry_config(adk_model::RetryConfig::disabled());
+    // The replay server and the recording proxy stand in for AI Studio, so the rules see its
+    // host rather than the loopback address the client calls.
     let analyzer = GeminiVideoAnalyzer::new(Arc::new(gemini))
+        .with_hosts(["generativelanguage.googleapis.com"])
         .with_media_resolution(MediaResolution::Low)
         .with_inline_limit(0)
         .with_processing_wait(

@@ -449,7 +449,7 @@ impl Inner {
             _ => return None,
         };
         let action = match self.runtime.egress_gate() {
-            Some(gate) => gate.decide(&hosts, &plan.class).0,
+            Some(gate) => gate.decide(&plan.descriptor, &plan.class).0,
             // Without a gate the runtime refuses every remote call.
             None => EgressAction::Deny,
         };

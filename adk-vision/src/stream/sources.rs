@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use super::FrameSource;
 use super::governor::FrameBudget;
 use super::pipeline::{ObservationSink, StopCause, StreamPipeline, StreamSummary};
-use super::privacy::PrivacyHook;
+use super::privacy::{NoRedaction, PrivacyHook};
 use super::retention::FrameKeeper;
 use super::watching::StreamWatch;
 use crate::audit::VISION_AUDIT_KIND;
@@ -41,7 +41,7 @@ pub type TrackerFactory = Arc<dyn Fn() -> Box<dyn Tracker> + Send + Sync>;
 /// | Part | Required | What it is |
 /// |------|----------|------------|
 /// | Source | yes | The [`FrameSource`]: a camera, a file, a screen, a browser, the web home's camera |
-/// | Privacy | yes | The [`PrivacyHook`] every frame passes first |
+/// | Privacy | no | The [`PrivacyHook`] every frame passes first ([`with_privacy`](Self::with_privacy)); none by default |
 /// | Keeper | yes | The [`FrameKeeper`] that stores the frame of each event, in the scope the woken agent loads it from |
 /// | Wakes | yes | The [`WatchSink`] events go to, such as the kernel's `VisionWakeSource` |
 /// | Detector | for a watch | The runtime and query each frame is detected with |
@@ -52,7 +52,7 @@ pub type TrackerFactory = Arc<dyn Fn() -> Box<dyn Tracker> + Send + Sync>;
 /// # Example
 ///
 /// ```ignore
-/// let spec = SourceSpec::new(camera, Arc::new(NoRedaction), keeper, wake_source)
+/// let spec = SourceSpec::new(camera, keeper, wake_source)
 ///     .describe("Line 1 conveyor, top camera")
 ///     .detector(runtime, DetectQuery::Classes(vec!["clock".into()]))
 ///     .tracker(Arc::new(|| Box::new(GreedyIouTracker::new(0.3, 4)) as Box<dyn Tracker>))
@@ -85,17 +85,16 @@ impl std::fmt::Debug for SourceSpec {
 }
 
 impl SourceSpec {
-    /// A source whose frames pass `privacy` first, whose events' frames `keeper` stores and
-    /// whose events go to `wakes`.
+    /// A source whose events' frames `keeper` stores and whose events go to `wakes`. Its
+    /// frames are not redacted unless a hook is given with [`with_privacy`](Self::with_privacy).
     pub fn new(
         source: Arc<dyn FrameSource>,
-        privacy: Arc<dyn PrivacyHook>,
         keeper: Arc<FrameKeeper>,
         wakes: Arc<dyn WatchSink>,
     ) -> Self {
         Self {
             source,
-            privacy,
+            privacy: Arc::new(NoRedaction),
             keeper,
             wakes,
             description: None,
@@ -105,6 +104,13 @@ impl SourceSpec {
             budget: None,
             observer: None,
         }
+    }
+
+    /// Passes every frame through `hook` before any other stage sees it, such as
+    /// `RedactorPrivacy::blur_faces`; a frame the hook fails on is dropped.
+    pub fn with_privacy(mut self, hook: Arc<dyn PrivacyHook>) -> Self {
+        self.privacy = hook;
+        self
     }
 
     /// Says what the source shows, for the agent choosing one.
@@ -179,7 +185,8 @@ impl SourceSpec {
     }
 
     fn pipeline(&self, watch: Arc<StreamWatch>) -> Result<StreamPipeline> {
-        let mut builder = StreamPipeline::builder(self.source.clone(), self.privacy.clone());
+        let mut builder =
+            StreamPipeline::builder(self.source.clone()).with_privacy(self.privacy.clone());
         if let Some(sampling) = self.sampling {
             builder = builder.sampling(sampling);
         }

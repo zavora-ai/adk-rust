@@ -185,10 +185,11 @@ async fn escalate(pipeline: &StreamPipeline, cx: &VisionCx, frames: u64) -> adk_
 
 ## The Privacy Step
 
-Every frame passes a `PrivacyHook` before any other stage sees it. The builder requires one:
-there is no default, so a pipeline that redacts nothing says so with `NoRedaction`, and kept
-frames record `none` as their privacy step. `RedactorPrivacy` runs any on-device egress
-`Redactor` and hides what it finds:
+A stream's frames are not redacted unless you give a hook: `with_privacy(hook)` on
+`StreamPipeline::builder`, `SourceSpec` and `LiveCamera` passes every frame through a
+`PrivacyHook` before any other stage sees it, and a frame the hook fails on is dropped.
+Without one, kept frames record `none` (`NoRedaction`) as their privacy step.
+`RedactorPrivacy` runs any on-device egress `Redactor` and hides what it finds:
 
 | `RedactionMethod` | Hides each box by |
 |-------------------|-------------------|
@@ -204,7 +205,7 @@ and the rest of its person stays; a person seen from behind is blurred whole. Ea
 held for two frames (`RedactorPrivacy::with_hold`): a frame in which YuNet misses a face it
 found just before blurs the face's last place, widened a quarter of its size per frame. Its name, and
 the privacy step kept frames record, is `redactor:faces`. The models load on the first frame,
-each verified against its SHA-256; see [Image Privacy](../security/image-privacy.md#what-is-redacted)
+each verified against its SHA-256; see [Restricting What Leaves the Machine](../security/image-privacy.md#what-is-redacted)
 for the redactor and the face detector's licence.
 
 ```rust
@@ -216,7 +217,9 @@ use adk_vision::{FetchConfig, InMemoryAcceptanceStore, ModelFetcher};
 fn blurred(camera: Arc<RtspSource>) -> adk_vision::Result<StreamPipeline> {
     let fetcher =
         ModelFetcher::new(FetchConfig::from_env(), Arc::new(InMemoryAcceptanceStore::new()));
-    StreamPipeline::builder(camera, Arc::new(RedactorPrivacy::blur_faces(fetcher))).build()
+    StreamPipeline::builder(camera)
+        .with_privacy(Arc::new(RedactorPrivacy::blur_faces(fetcher)))
+        .build()
 }
 ```
 
@@ -254,9 +257,7 @@ each deletion `vision.evidence.purged`, with the frame's digest, never its pixel
 ```rust
 use std::sync::Arc;
 
-use adk_vision::stream::{
-    FrameBudget, NoRedaction, Observation, ObservationSink, RtspSource, StreamPipeline,
-};
+use adk_vision::stream::{FrameBudget, Observation, ObservationSink, RtspSource, StreamPipeline};
 use adk_vision::{DetectQuery, FrameSourceId, GreedyIouTracker, Sampling, VisionCx, VisionRuntime};
 
 /// Prints what the detector found on each frame.
@@ -274,7 +275,7 @@ impl ObservationSink for Print {
 
 async fn inspect(runtime: Arc<VisionRuntime>, url: &str) -> adk_vision::Result<()> {
     let camera = Arc::new(RtspSource::new(FrameSourceId("line-1".into()), url)?);
-    let summary = StreamPipeline::builder(camera, Arc::new(NoRedaction))
+    let summary = StreamPipeline::builder(camera)
         .sampling(Sampling { fps: 5.0, max_long_edge: Some(960) })
         .budget(FrameBudget::new(5.0).with_min_local_fps(1.0).with_local_quota(200_000))
         .detector(runtime, DetectQuery::Classes(vec!["person".into()]))
@@ -292,7 +293,7 @@ async fn inspect(runtime: Arc<VisionRuntime>, url: &str) -> adk_vision::Result<(
 |-------|--------------|
 | Source and sampler | Frames at the sampling rate and size |
 | Frame governor | Thins or pauses frames to the budget; records each change |
-| Privacy | Redacts every frame first; a failing hook drops the frame |
+| Privacy | With `with_privacy(hook)`, redacts every frame first; a failing hook drops the frame. Without one, frames pass unredacted |
 | Detector | `VisionRuntime::detect_with`: metered in `UsageUnit::Frames`, regions in source pixels |
 | Tracker | Anonymous track identifiers, reset when the stream starts and when it stops |
 | Sink | `ObservationSink::observe` with the frame, its digest, regions and calls |
@@ -333,7 +334,7 @@ and delivers the event to a `WatchSink` such as `adk-kernel`'s `VisionWakeSource
 use std::sync::Arc;
 
 use adk_artifact::InMemoryArtifactService;
-use adk_vision::stream::{FrameKeeper, NoRedaction, RtspSource, StreamPipeline, StreamWatch};
+use adk_vision::stream::{FrameKeeper, RtspSource, StreamPipeline, StreamWatch};
 use adk_vision::{
     DetectQuery, FrameSourceId, GreedyIouTracker, MediaScope, Sampling, VisionCx, VisionRuntime,
     WatchCondition, WatchEvaluator, WatchSink,
@@ -353,7 +354,7 @@ async fn watch(
     );
     let conditions = vec![WatchCondition::new("wall-clock", ["clock"]).with_min_frames(3)];
     let watch = StreamWatch::new(WatchEvaluator::new(conditions)?, Arc::new(keeper), wakes);
-    StreamPipeline::builder(Arc::new(RtspSource::new(line, url)?), Arc::new(NoRedaction))
+    StreamPipeline::builder(Arc::new(RtspSource::new(line, url)?))
         .sampling(Sampling::at(2.0))
         .detector(runtime, DetectQuery::Classes(vec!["clock".into()]))
         .tracker(Box::new(GreedyIouTracker::new(0.3, 4)))
@@ -373,14 +374,14 @@ observation on to a second sink, such as the live camera surface.
 
 `FrameSources` is the registry an operator fills and an agent watches through the
 `vision_watch` tool. The operator registers each source with a `SourceSpec` — the source,
-its privacy hook, the keeper, the wake sink, and optionally a description, the detector and
+the keeper, the wake sink, and optionally a privacy hook, a description, the detector and
 its query, a `TrackerFactory`, the sampling, a budget and an observer — and the agent names
 it; the camera URL and its credentials never reach a tool call, a record or a wake.
 
 ```rust
 use std::sync::Arc;
 
-use adk_vision::stream::{FrameKeeper, FrameSource, FrameSources, NoRedaction, SourceSpec};
+use adk_vision::stream::{FrameKeeper, FrameSource, FrameSources, SourceSpec};
 use adk_vision::{
     DetectQuery, FrameSourceId, GreedyIouTracker, Sampling, Tracker, VisionCx, VisionRuntime,
     WatchCondition, WatchSink,
@@ -395,7 +396,7 @@ async fn register(
 ) -> adk_vision::Result<FrameSources> {
     let sources = FrameSources::new(streams);
     sources.register(
-        SourceSpec::new(camera, Arc::new(NoRedaction), keeper, wakes)
+        SourceSpec::new(camera, keeper, wakes)
             .describe("Line 1 conveyor, top camera")
             .detector(runtime, DetectQuery::Classes(vec!["person".into(), "clock".into()]))
             .tracker(Arc::new(|| Box::new(GreedyIouTracker::new(0.3, 4)) as Box<dyn Tracker>))

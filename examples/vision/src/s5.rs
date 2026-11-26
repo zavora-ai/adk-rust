@@ -81,7 +81,7 @@ async fn claude(image: &SourceImage, prompt: &str) -> Result<Vec<Region>> {
         .allow_insecure_http()
         .with_base_url(server.uri());
     let client: Arc<dyn Llm> = Arc::new(adk_model::AnthropicClient::new(config)?);
-    let describer = LlmDescriber::remote(client, ["api.anthropic.com"])?
+    let describer = LlmDescriber::remote_with_hosts(client, ["api.anthropic.com"])?
         .with_effort(adk_core::Effort::Low)
         .with_max_output_tokens(4_000);
     let runtime = VisionRuntime::builder()
@@ -115,7 +115,7 @@ async fn gemini(image: &SourceImage, prompt: &str, answers: &Value) -> Result<Ve
         "gemini-3.7-flash",
         format!("{}/v1beta/", server.uri()),
     )?);
-    let describer = LlmDescriber::remote(client, ["generativelanguage.googleapis.com"])?;
+    let describer = LlmDescriber::remote_with_hosts(client, ["generativelanguage.googleapis.com"])?;
     let runtime = VisionRuntime::builder()
         .remote_describer(Arc::new(describer))
         .egress_gate(open_gate())

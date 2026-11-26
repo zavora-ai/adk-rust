@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 
 use adk_vision::onnx::{OnnxOptions, RfDetr};
 use adk_vision::stream::{
-    DeviceSelector, DeviceSource, NoRedaction, Observation, ObservationSink, StreamPipeline,
+    DeviceSelector, DeviceSource, Observation, ObservationSink, StreamPipeline,
 };
 use adk_vision::{
     DetectQuery, FetchConfig, FrameSourceId, InMemoryAcceptanceStore, ManifestSet, ModelFetcher,
@@ -84,7 +84,7 @@ async fn rf_detr_detects_on_frames_from_a_local_camera() {
         stop: stop.clone(),
         found: Mutex::new(Vec::new()),
     });
-    let summary = StreamPipeline::builder(source, Arc::new(NoRedaction))
+    let summary = StreamPipeline::builder(source)
         .sampling(Sampling { fps: 1.0, max_long_edge: Some(640) })
         .detector(runtime, DetectQuery::Classes(Vec::new()))
         .sink(sink.clone())

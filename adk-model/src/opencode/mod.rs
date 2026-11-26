@@ -215,6 +215,11 @@ impl Llm for OpenCodeClient {
     fn data_locality(&self) -> adk_core::DataLocality {
         self.inner.data_locality()
     }
+    // The protocol client's endpoint, under the provider OpenCode's responses are attributed to.
+    fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+        let hosts = adk_core::DataDestination::all_hosts(&self.inner.data_destinations());
+        vec![adk_core::DataDestination::new(self.provider, hosts)]
+    }
     async fn generate_content(
         &self,
         request: LlmRequest,

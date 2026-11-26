@@ -369,6 +369,10 @@ impl Llm for MuseClient {
         )
     }
 
+    fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+        vec![adk_core::DataDestination::of_url("muse", self.config.effective_base_url())]
+    }
+
     fn name(&self) -> &str {
         &self.config.model
     }

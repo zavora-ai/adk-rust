@@ -147,7 +147,7 @@ fn harness(target: &VideoAnalyzerTarget, gate: bool, budget: RunBudget) -> Harne
         .media_store(MediaStore::new(Arc::new(InMemoryArtifactService::new())));
     if gate {
         builder = builder.egress_gate(EgressGate::new(
-            EgressPolicy::public_only(),
+            EgressPolicy::allow_private_networks(),
             EgressConfig::default().with_default(EgressAction::Allow),
             recorder.clone(),
         ));

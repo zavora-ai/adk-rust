@@ -28,7 +28,6 @@ use adk_vision::analyst::{
 };
 use adk_vision::conformance::{VideoAnalyzerTarget, VideoFixture};
 use adk_vision::memory::VisualMemory;
-use adk_vision::stream::{FramePrivacy, NoRedaction};
 use adk_vision::{
     BackendDescriptor, CoordFrame, Embedder, EmbeddingSpace, FrameMeta, FramesAnalyzer,
     LlmDescriber, Locality, MediaScope, Metric, Sampling, SegmentPrompt, SentImage, SourceImage,
@@ -151,7 +150,7 @@ async fn an_hour_of_warehouse_video_is_chunked_captioned_indexed_answered_and_er
     .frames_per_chunk(3)
     .captions(setup.captions.clone())
     .graph(setup.graph.clone())
-    .keyframes(setup.artifacts.clone(), FramePrivacy::new(Arc::new(NoRedaction)))
+    .keyframes(setup.artifacts.clone())
     .visual_memory(visual)
     .answerer(&describer)
     .open()
@@ -292,7 +291,7 @@ async fn the_recorded_live_run_cites_as_it_did_and_costs_what_it_cost_through_th
     let recording = replay.recording.clone();
     let clip = small_clip(recording.duration_ms);
     let setup = Setup::new().await;
-    let haiku = LlmDescriber::remote(replay, ["api.anthropic.com"]).unwrap();
+    let haiku = LlmDescriber::remote_with_hosts(replay, ["api.anthropic.com"]).unwrap();
     let runtime = Arc::new(
         VisionRuntime::builder()
             .remote_video_analyzer(Arc::new(FramesAnalyzer::remote(&haiku)))
@@ -605,7 +604,7 @@ mod oracle_remote_conformance {
 
     adk_vision::video_analyzer_conformance_tests! {
         backend = VideoAnalyzerTarget::Remote(Arc::new(FramesAnalyzer::remote(
-            &LlmDescriber::remote(oracle(&small_clip(600_000), DataLocality::Remote), ["api.anthropic.com"]).unwrap(),
+            &LlmDescriber::remote_with_hosts(oracle(&small_clip(600_000), DataLocality::Remote), ["api.anthropic.com"]).unwrap(),
         ))),
         fixture = caption_fixture().await,
     }

@@ -1,9 +1,9 @@
 # Getting Started: a Document Desk
 
 A Document desk reads scanned invoices, receipts, contracts and identity cards into tables on
-your computer, and sends an image to a cloud model only when it cannot read a field — and
-then only the field's crop, redacted, after you approve that exact image. This page builds
-one from the `vision` template and walks through what each part does.
+your computer, and asks a cloud model about a field it cannot read, sending that field's
+crop. Redaction and approval are one uncommented line each in `.adk/vision.toml`. This page
+builds one from the `vision` template and walks through what each part does.
 
 > **Note:** `adk-vision` is **Experimental** (spec 3.7). The desk runs PP-OCRv6 and RF-DETR
 > on ONNX Runtime, which `vision-local` downloads at build time.
@@ -28,14 +28,14 @@ adk-rust = { version = "3.0.0", default-features = false, features = ["minimal",
 |---------|----------------|
 | `vision` (implied by `vision-local`) | `adk_rust::vision`: regions, manifests and the fetcher, the egress gate, the cloud describers, the image privacy guardrail; with `harness`, the vision pack |
 | `vision-local` | The on-device backends: PP-OCRv6, PaddleOCR-VL-1.6, RF-DETR, EfficientSAM, SAM 2.1 and SigLIP 2 |
-| `harness`, `cli` | The governed harness agent, and the terminal prompter that asks you before an image leaves |
+| `harness`, `cli` | The governed harness agent, and the terminal prompter that asks you when a rule holds an image |
 
 | File | Holds |
 |------|-------|
 | `src/main.rs` | The model, the harness with the vision pack, and the loop over `inbox/` |
 | `src/desk.rs` | The on-device models, the vision pack and the harness over an artifact store |
-| `.adk/vision.toml` | What may leave the machine, always after redaction |
-| `tests/desk_smoke.rs` | A cloud describe held for a person, refused, with nothing sent |
+| `.adk/vision.toml` | What leaves the machine: everything as written, with each restriction commented |
+| `tests/desk_smoke.rs` | A cloud describe that leaves under the desk's rules, and one held for a person and refused under a rule that asks |
 
 ## 2. Run It
 
@@ -57,9 +57,9 @@ one row per page to `tables/<kind>.csv`. Nothing about these calls leaves the ma
 | Step | Backend | Where |
 |------|---------|-------|
 | Read a page | `pp-ocrv6-tiny` (`PpOcrReader`) | This computer |
-| Find people to cover | `rf-detr-n` (`RfDetr`) behind `PersonRedactor`, or `yunet-2023mar` (`YuNet`) for faces behind `FaceRedactor` | This computer |
-| Find personal text to cover | PP-OCRv6 and the PII patterns behind `PersonalTextRedactor` | This computer |
-| Describe a region the reader could not read | The cloud model (`LlmDescriber::remote`) | The provider, after the egress gate |
+| Describe a region the reader could not read | The cloud model (`LlmDescriber::remote`), at the hosts its client names | The provider, through the egress gate |
+| Find people to cover, when the rules list `faces` | `rf-detr-n` (`RfDetr`) behind `PersonRedactor`, or `yunet-2023mar` (`YuNet`) for faces behind `FaceRedactor` | This computer |
+| Find personal text to cover, when the rules list `personal_text` | PP-OCRv6 and the PII patterns behind `PersonalTextRedactor` | This computer |
 
 `desk::pack` wires them into the vision pack:
 
@@ -77,38 +77,41 @@ VisionPack::new(MediaStore::new(artifacts), move |gate, store| {
 ```
 
 A remote backend takes only a `ReleasedImage`, which only the egress gate constructs, so the
-describer cannot be handed a page the gate has not cropped, redacted and recorded.
+describer cannot be handed a page the gate has not cropped and recorded.
 
-## 4. What May Leave
+## 4. What Leaves
 
-`.adk/vision.toml` holds the rules:
+`.adk/vision.toml` holds the rules. As generated, a crop for the cloud model leaves as it is;
+each restriction is commented, and uncommenting it opts in:
 
 ```toml
 [egress]
-default = "ask"
+default = "allow"
 redact = ["faces", "personal_text"]
 
 [[egress.rule]]
-host = "api.anthropic.com"
+provider = "anthropic"
 classes = ["document"]
 action = "deny"
 
 [[egress.rule]]
-host = "api.anthropic.com"
+provider = "anthropic"
 classes = ["document_crop"]
 action = "ask"
 ```
 
-| Rule | Effect |
-|------|--------|
-| `redact` | Faces (the face, or a detected person's whole box when no face is found; spec 3.7 Q3) and personal text are filled solid before any decision; the pack adds both even if the file leaves them out |
+| Line | Effect once uncommented |
+|------|-------------------------|
+| `redact` | Faces (the face, or a detected person's whole box when no face is found; spec 3.7 Q3) and personal text are filled solid before any decision; a listed class with no redactor refuses the release |
 | `document` → `deny` | A whole page never leaves |
 | `document_crop` → `ask` | A field's crop waits for you: the terminal shows the host, the data class, what was covered and the image's digest, and only that exact image is released |
+| `on_device = true` | No image leaves at all |
 
-A rule that says `allow` releases without asking; in the harness, an `allow` in the
-workspace's own file counts only when the operator trusts it
-(`VisionPack::trust_workspace_rules`). See [Governed Vision Tools](governed-tools.md) and
-[Image Privacy](../security/image-privacy.md).
+A rule names a `host`, or a `provider` for every host that provider's client uses. The
+harness applies the workspace's file as written; an operator who wants a workspace `allow` to
+ask instead calls `VisionPack::distrust_workspace_rules`. ReadOnly and Plan modes send nothing
+off the machine whatever the rules say. See [Governed Vision Tools](governed-tools.md) and
+[Restricting What Leaves the Machine](../security/image-privacy.md).
 
 ## 5. Check What Left
 
@@ -131,7 +134,8 @@ cargo test
 ```
 
 `tests/desk_smoke.rs` plays the agent and the provider with a scripted model: the agent asks
-to describe an identity card, the call is held for a person, the person says no, and the
+to describe an identity card. Under the desk's rules the crop reaches the provider without
+asking; under a rule that asks, the call is held for a person, the person says no, and the
 provider receives nothing. It needs no key and no model download.
 
 ## The Scenarios Behind It

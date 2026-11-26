@@ -1,9 +1,10 @@
 //! The egress boundary (spec 3.7 §7.8): [`ReleasedImage`], the only image a remote backend
 //! accepts, and the [`EgressGate`], the only code that constructs one.
 //!
-//! The gate runs six steps — destination, minimise, redact, decide, record, release — and
-//! redaction always precedes the decision: no configuration releases an image before it
-//! is redacted (V-I2). A `ReleasedImage` has no public constructor (V-I1), and neither has
+//! The gate runs six steps — destination, minimise, redact, decide, record, release. With
+//! no rules an image leaves as it is; a class the rules list is always redacted before the
+//! decision, so no configuration releases an image before its listed classes are covered
+//! (V-I2). A `ReleasedImage` has no public constructor (V-I1), and neither has
 //! a [`ReleasedClip`], the video counterpart a remote video analyzer takes.
 
 mod clip;
@@ -19,7 +20,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub use clip::{ClipReleaseRequest, ReleasedClip};
-pub use config::{EgressAction, EgressConfig, EgressRuleConfig, VisionConfig};
+pub use config::{EgressAction, EgressConfig, EgressRuleConfig, RuleTarget, VisionConfig};
 pub use gate::{EgressGate, EgressPreview, ReleaseRequest, StagedEgress};
 
 use crate::backend::BackendId;

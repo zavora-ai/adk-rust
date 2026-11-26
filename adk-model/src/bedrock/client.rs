@@ -37,6 +37,8 @@ pub struct BedrockClient {
     client: aws_sdk_bedrockruntime::Client,
     model_id: String,
     region: String,
+    /// The runtime endpoint: the configured URL, or the region's.
+    endpoint: String,
     retry_config: RetryConfig,
     prompt_caching: Option<super::config::BedrockCacheConfig>,
     /// Bound on each wait for the next stream event.
@@ -74,6 +76,7 @@ impl BedrockClient {
         Ok(Self {
             client,
             model_id,
+            endpoint: runtime_endpoint(&config),
             region,
             retry_config: RetryConfig::default(),
             prompt_caching,
@@ -129,6 +132,7 @@ impl BedrockClient {
     pub fn from_client(config: BedrockConfig, client: aws_sdk_bedrockruntime::Client) -> Self {
         Self {
             client,
+            endpoint: runtime_endpoint(&config),
             model_id: config.model_id,
             region: config.region,
             retry_config: RetryConfig::disabled(),
@@ -205,6 +209,10 @@ impl Llm for BedrockClient {
         crate::pricing::PricingCatalog::standard().context_window(Some("bedrock"), self.name())
     }
 
+    fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+        vec![adk_core::DataDestination::of_url("bedrock", &self.endpoint)]
+    }
+
     fn name(&self) -> &str {
         &self.model_id
     }
@@ -271,6 +279,15 @@ impl Llm for BedrockClient {
             ))
         }
     }
+}
+
+/// The configured endpoint URL, or the Bedrock runtime endpoint of the configured region.
+fn runtime_endpoint(config: &BedrockConfig) -> String {
+    config.endpoint_url.clone().unwrap_or_else(|| {
+        let domain =
+            if config.region.starts_with("cn-") { "amazonaws.com.cn" } else { "amazonaws.com" };
+        format!("https://bedrock-runtime.{}.{domain}", config.region)
+    })
 }
 
 /// The SDK timeouts for `timeouts`: `connect`, and `idle` as the wait for the response.
@@ -573,6 +590,34 @@ mod tests {
         assert_eq!(
             sdk_timeouts(&client),
             (Some(Duration::from_secs(2)), Some(Duration::from_secs(9)))
+        );
+    }
+
+    #[test]
+    fn the_destination_is_the_regional_runtime_or_the_configured_endpoint() {
+        let destination =
+            |config| BedrockClient::new_with_api_key(config, "key").unwrap().data_destinations();
+        assert_eq!(
+            destination(BedrockConfig::new("eu-west-1", "m")),
+            [adk_core::DataDestination::new(
+                "bedrock",
+                ["bedrock-runtime.eu-west-1.amazonaws.com"]
+            )]
+        );
+        assert_eq!(
+            destination(BedrockConfig::new("cn-north-1", "m")),
+            [adk_core::DataDestination::new(
+                "bedrock",
+                ["bedrock-runtime.cn-north-1.amazonaws.com.cn"]
+            )]
+        );
+        let vpce = "https://vpce-1.bedrock-runtime.us-west-2.vpce.amazonaws.com";
+        assert_eq!(
+            destination(BedrockConfig::new("us-west-2", "m").with_endpoint_url(vpce)),
+            [adk_core::DataDestination::new(
+                "bedrock",
+                ["vpce-1.bedrock-runtime.us-west-2.vpce.amazonaws.com"]
+            )]
         );
     }
 }

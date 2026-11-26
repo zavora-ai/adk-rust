@@ -1,14 +1,15 @@
 //! The vision pack (spec 3.7 X15, feature `vision`).
 //!
 //! `adk-vision`'s `VisionToolset` does the work; the pack is classes, egress rules and the
-//! privacy guardrail, on by default:
+//! privacy guardrail. Out of the box an image leaves as the agent sends it, unredacted and
+//! unasked; each restriction below is an opt-in, enforced once chosen:
 //!
 //! | Piece | What the pack does |
 //! |-------|--------------------|
 //! | Tools | The tools the runtime has a backend for join the harness tools, so RBAC, hooks and the class registry cover them (table below) |
-//! | Classes | A call that stays on the device is `Read`. A call that sends an image off it is `External`: trusted read-only under an `allow` rule, otherwise held in Ask and Auto and denied in ReadOnly and Plan. `vision_watch` lists as `Read`; starting or stopping a watch is `External`, `Idempotent` from a trusted origin |
-//! | Egress rules | `.adk/vision.toml` in the workspace, or the operator's [`VisionPack::config`]. Faces and personal text are always redacted; a workspace file's `allow` rules count only when the operator trusts them ([`VisionPack::trust_workspace_rules`]) |
-//! | Redactors | The operator's [`VisionPack::redactor`]s; with feature `vision-local`, RF-DETR Nano for `faces` and PP-OCRv6 for `personal_text` for each required class none covers. A required class no redactor covers refuses every release |
+//! | Classes | A call that stays on the device is `Read`. A call that sends an image off it is `External`: trusted read-only under an `allow` rule, the default, otherwise held in Ask and Auto. ReadOnly and Plan deny every remote call. `vision_watch` lists as `Read`; starting or stopping a watch is `External`, `Idempotent` from a trusted origin |
+//! | Egress rules | `.adk/vision.toml` in the workspace as written, or the operator's [`VisionPack::config`]; with neither, every release is allowed. [`VisionPack::distrust_workspace_rules`] makes a workspace file's `allow` rules ask |
+//! | Redactors | Only for the classes the rules' `redact` list names: the operator's [`VisionPack::redactor`]s and, with feature `vision-local`, YuNet and RF-DETR Nano for `faces` and PP-OCRv6 for `personal_text` where none covers a listed class. A listed class no redactor covers refuses every release |
 //! | Approvals | The toolset's egress policy joins the operator policy, so a rule that asks holds the call, and the held call carries the exact egress image as evidence |
 //! | Privacy guardrail | Every image in a request to a remote harness model is released through the same gate or replaced by a placeholder; no agent tool removes it |
 //! | Text | What `vision_read` and `vision_describe` return is screened and delivered inside a delimited untrusted block, as fetched text is (spec 3.7 V-I16) |
@@ -47,6 +48,7 @@ use adk_vision::{
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
+use crate::mode::HarnessMode;
 use crate::policy::{CallClasses, ToolKind};
 
 /// The workspace file the egress rules are read from.
@@ -71,8 +73,9 @@ type RuntimeFactory =
 ///
 /// # Default redactors
 ///
-/// Every release redacts `faces` and `personal_text` (spec 3.7 Q1, Q3). For each of the two
-/// the rules require and no [`redactor`](Self::redactor) covers, the pack installs a default:
+/// Nothing is redacted unless the rules' `redact` list names a class. For `faces` or
+/// `personal_text` listed there and covered by no [`redactor`](Self::redactor), the pack
+/// installs a default:
 ///
 /// | Class | Feature `vision-local` | Without it |
 /// |-------|------------------------|------------|
@@ -83,8 +86,8 @@ type RuntimeFactory =
 /// (feature `vision-local`), each file verified against adk-vision's built-in manifest. A
 /// load that fails — `HF_HUB_OFFLINE` with the weights not cached, a digest mismatch —
 /// refuses that release, except that the faces redactor covers whole persons when only
-/// YuNet is missing. Either way the image does not leave unredacted; perception on the
-/// device is unaffected.
+/// YuNet is missing. Either way an image the rules say to redact does not leave
+/// unredacted; perception on the device is unaffected.
 ///
 /// # The on-device profile
 ///
@@ -117,7 +120,7 @@ pub struct VisionPack {
     factory: RuntimeFactory,
     redactors: Vec<Arc<dyn Redactor>>,
     config: Option<VisionConfig>,
-    trust_workspace_rules: bool,
+    distrust_workspace_rules: bool,
     egress: EgressPolicy,
     recorder: Arc<dyn EgressRecorder>,
     model_hosts: Vec<String>,
@@ -151,8 +154,8 @@ impl VisionPack {
             factory: Box::new(factory),
             redactors: Vec::new(),
             config: None,
-            trust_workspace_rules: false,
-            egress: EgressPolicy::public_only(),
+            distrust_workspace_rules: false,
+            egress: EgressPolicy::allow_private_networks(),
             recorder: Arc::new(InMemoryEgressRecorder::new()),
             model_hosts: Vec::new(),
             classes: ("document".to_string(), "document_crop".to_string()),
@@ -204,15 +207,24 @@ impl VisionPack {
         self
     }
 
-    /// Lets the `allow` rules of the workspace's `.adk/vision.toml` release without asking;
-    /// without this, a workspace file can tighten the rules but its `allow` rules ask.
-    pub fn trust_workspace_rules(mut self) -> Self {
-        self.trust_workspace_rules = true;
+    /// Treats the workspace's `.adk/vision.toml` as untrusted: its `allow` rules and an
+    /// `allow` default ask instead, so a file anyone can commit can tighten the rules but
+    /// never release an image unasked. Without this, the file's rules apply as written.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let pack = VisionPack::new(store, factory).distrust_workspace_rules();
+    /// ```
+    pub fn distrust_workspace_rules(mut self) -> Self {
+        self.distrust_workspace_rules = true;
         self
     }
 
-    /// The destination policy the gate checks each backend host against; public hosts by
-    /// default.
+    /// The destination policy the gate checks each backend host against: any host, on a
+    /// public or private network, by default (never a cloud metadata endpoint).
+    /// `EgressPolicy::public_only()`, an allowlist, or `private_networks = false` in the
+    /// rules restrict it.
     pub fn egress_policy(mut self, policy: EgressPolicy) -> Self {
         self.egress = policy;
         self
@@ -225,7 +237,8 @@ impl VisionPack {
     }
 
     /// The hosts the harness model sends requests to, for the privacy guardrail's egress
-    /// records; the guardrail guards a remote model either way.
+    /// rules and records, in place of the hosts the model names
+    /// (`Llm::data_destinations`); the guardrail guards a remote model either way.
     pub fn model_hosts(mut self, hosts: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.model_hosts = hosts.into_iter().map(Into::into).collect();
         self
@@ -242,7 +255,7 @@ impl VisionPack {
     pub(crate) fn into_runtime(self, root: &Path) -> Result<VisionPackRuntime> {
         let config = match self.config {
             Some(config) => config,
-            None => load_vision_config(root, self.trust_workspace_rules)?,
+            None => load_vision_config(root, self.distrust_workspace_rules)?,
         };
         let uncovered: Vec<RedactionClass> =
             [RedactionClass::faces(), RedactionClass::personal_text()]
@@ -316,9 +329,12 @@ impl VisionPack {
     }
 }
 
-/// The egress rules of a workspace: `.adk/vision.toml` when it exists, else every release
-/// asks. Faces and personal text are always redacted; without `trust_allow`, the file's
-/// `allow` rules and default ask instead.
+/// The egress rules of a workspace: `.adk/vision.toml` as written when it exists, else the
+/// defaults, under which every release is allowed and nothing is redacted.
+///
+/// With `distrust_allow`, the file is treated as untrusted: its `allow` rules and an
+/// `allow` default ask instead, and with no file every release asks
+/// ([`VisionPack::distrust_workspace_rules`]).
 ///
 /// # Errors
 ///
@@ -331,18 +347,24 @@ impl VisionPack {
 /// use adk_vision::{EgressAction, RedactionClass};
 ///
 /// let dir = tempfile::tempdir().unwrap();
+/// let open = load_vision_config(dir.path(), false).unwrap();
+/// assert_eq!(open.egress.default, EgressAction::Allow);
+/// assert!(open.egress.redact.is_empty());
+///
 /// std::fs::create_dir_all(dir.path().join(".adk")).unwrap();
 /// std::fs::write(
 ///     dir.path().join(".adk/vision.toml"),
-///     "[egress]\ndefault = \"allow\"\nredact = []\n",
+///     "[egress]\ndefault = \"allow\"\nredact = [\"faces\"]\n",
 /// )
 /// .unwrap();
-/// let config = load_vision_config(dir.path(), false).unwrap();
-/// assert_eq!(config.egress.default, EgressAction::Ask);
-/// assert!(config.egress.redact.contains(&RedactionClass::faces()));
-/// assert!(config.egress.redact.contains(&RedactionClass::personal_text()));
+/// let as_written = load_vision_config(dir.path(), false).unwrap();
+/// assert_eq!(as_written.egress.default, EgressAction::Allow);
+/// assert_eq!(as_written.egress.redact, [RedactionClass::faces()]);
+///
+/// let distrusted = load_vision_config(dir.path(), true).unwrap();
+/// assert_eq!(distrusted.egress.default, EgressAction::Ask);
 /// ```
-pub fn load_vision_config(root: &Path, trust_allow: bool) -> Result<VisionConfig> {
+pub fn load_vision_config(root: &Path, distrust_allow: bool) -> Result<VisionConfig> {
     let path = root.join(VISION_CONFIG_FILE);
     let mut config = match std::fs::read_to_string(&path) {
         Ok(text) => VisionConfig::from_toml_str(&text)
@@ -352,7 +374,7 @@ pub fn load_vision_config(root: &Path, trust_allow: bool) -> Result<VisionConfig
             return Err(AdkError::config(format!("{} could not be read: {err}", path.display())));
         }
     };
-    if !trust_allow {
+    if distrust_allow {
         if config.egress.default == EgressAction::Allow {
             config.egress.default = EgressAction::Ask;
         }
@@ -362,8 +384,6 @@ pub fn load_vision_config(root: &Path, trust_allow: bool) -> Result<VisionConfig
             }
         }
     }
-    config.egress =
-        config.egress.redacting(RedactionClass::faces()).redacting(RedactionClass::personal_text());
     Ok(config)
 }
 
@@ -405,11 +425,13 @@ impl VisionPackRuntime {
         model: &dyn Llm,
         audit: Option<AuditTrail>,
     ) -> Arc<ImagePrivacyGuardrail> {
-        let hosts = if self.model_hosts.is_empty() {
-            vec![model.name().to_string()]
-        } else {
-            self.model_hosts.clone()
-        };
+        let mut hosts = self.model_hosts.clone();
+        if hosts.is_empty() {
+            hosts = adk_core::DataDestination::all_hosts(&model.data_destinations());
+        }
+        if hosts.is_empty() {
+            hosts.push(model.name().to_string());
+        }
         let guardrail = ImagePrivacyGuardrail::for_model(self.gate.clone(), model, hosts);
         Arc::new(match audit {
             Some(trail) => guardrail.with_audit(trail),
@@ -465,6 +487,24 @@ impl CallClasses for VisionClasses {
             return Some(watch_class(args));
         }
         Some(class_for(self.toolset.egress_action(tool, args)))
+    }
+
+    // ReadOnly and Plan are restrictions the person chose: nothing leaves the machine in
+    // them, whatever the egress rules allow.
+    fn denial_in_mode(&self, tool: &str, args: &Value, mode: HarnessMode) -> Option<String> {
+        if !matches!(mode, HarnessMode::ReadOnly | HarnessMode::Plan)
+            || tool == VISION_WATCH_TOOL
+            || !self.toolset.is_tool(tool)
+        {
+            return None;
+        }
+        self.toolset.egress_action(tool, args).map(|_| {
+            format!(
+                "'{tool}' sends an image off this machine, which {} mode does not allow; switch \
+                 to Ask or Auto, or use a backend on the device",
+                mode.as_str()
+            )
+        })
     }
 }
 

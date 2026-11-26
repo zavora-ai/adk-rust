@@ -2356,6 +2356,15 @@ impl Llm for GeminiModel {
         crate::pricing::PricingCatalog::standard().context_window(Some("gemini"), self.name())
     }
 
+    // AI Studio, a custom base URL, or the Vertex AI endpoint of the configured location.
+    fn data_destinations(&self) -> Vec<adk_core::DataDestination> {
+        self.client
+            .endpoint()
+            .map(|url| adk_core::DataDestination::of_url("gemini", url))
+            .into_iter()
+            .collect()
+    }
+
     fn name(&self) -> &str {
         &self.model_name
     }
