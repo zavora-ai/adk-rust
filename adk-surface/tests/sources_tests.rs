@@ -1,6 +1,8 @@
 //! The engine over its other sources (spec 3.3 §6): a kernel reached through its control plane
 //! (`ControlSource` over HTTP and over the kernel's Unix socket, with the approvals inbox read in
-//! full), and a harness with no kernel, whose decided call resumes with an empty turn.
+//! full), and a harness with no kernel, whose decided call resumes with an empty turn. A turn
+//! whose model call fails says so in the thread on a kernel and without one, and the status
+//! line names the parts of the home the server serves.
 
 #![cfg(feature = "web")]
 
@@ -18,10 +20,12 @@ use adk_kernel::control::{
 };
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_surface::{
-    Answer, AnswerLog, Caller, Command, CommandOutcome, ControlSource, InMemoryAnswerLog, Mode,
-    Origin, Risk, Source, SurfaceEngine, SurfaceKind, ThreadItem,
+    Answer, AnswerLog, Caller, Command, CommandOutcome, ControlSource, FeedFrame,
+    InMemoryAnswerLog, Mode, Origin, Risk, Served, Source, Speaker, SurfaceEngine, SurfaceKind,
+    ThreadItem,
 };
 use common::*;
+use futures::StreamExt as _;
 use serde_json::json;
 
 const WITHIN: Duration = Duration::from_secs(15);
@@ -789,4 +793,114 @@ async fn with_one_area_the_surfaces_show_it_as_before() {
     assert_eq!(shown(&capped).await, (1_000_000, Some(2_500_000)));
     plane.shutdown().await.unwrap();
     drop(kernel);
+}
+
+/// A model whose only call fails, as a replay with no recorded answer does.
+fn failing() -> Arc<ScriptedLlm> {
+    Arc::new(ScriptedLlm::new(
+        "scripted",
+        vec![ScriptedResponse::error(adk_core::AdkError::model("no recorded answer for turn 1"))],
+    ))
+}
+
+fn ask(session: &str) -> Command {
+    Command::Send {
+        session_id: session.into(),
+        text: "Is CL-0413 a total loss?".into(),
+        images: Vec::new(),
+    }
+}
+
+/// What a failed turn reads as in the thread of `failing()`.
+fn failed_turn() -> ThreadItem {
+    ThreadItem::TurnFailed {
+        text: "Finance couldn't answer".into(),
+        reason: Some("no recorded answer for turn 1".into()),
+        code: Some("model.internal".into()),
+    }
+}
+
+/// The items of `session`'s thread once a turn of it failed.
+async fn failed_thread(engine: &SurfaceEngine, session: &str) -> Vec<ThreadItem> {
+    eventually("the failed turn in the thread", WITHIN, || async {
+        let items: Vec<ThreadItem> = engine
+            .thread(&web(), session)
+            .await
+            .ok()?
+            .into_iter()
+            .flat_map(|entry| entry.items)
+            .collect();
+        items.iter().any(|item| matches!(item, ThreadItem::TurnFailed { .. })).then_some(items)
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_turn_on_a_kernel_says_why_where_the_reply_would_have_been() {
+    let s = scenario(failing()).await;
+    s.engine.execute(&web(), ask("f1")).await.unwrap();
+    let items = failed_thread(&s.engine, "f1").await;
+    // The person's message, then the failure: nothing else, and no reply.
+    assert!(matches!(&items[0], ThreadItem::Message { from: Speaker::You, .. }), "{items:?}");
+    assert_eq!(items[1..], [failed_turn()]);
+    let rows = s.engine.agents(&web()).await.unwrap();
+    assert_eq!(rows[0].status_text, "Failed");
+
+    // A feed resumed after the entry the failure follows sends that entry again, ending with
+    // the failure; one read from the start carries it in the entry.
+    let thread = s.engine.thread(&web(), "f1").await.unwrap();
+    let shown = thread.iter().find(|entry| entry.items.contains(&failed_turn())).unwrap().clone();
+    let mut resumed = s.engine.feed(web(), "f1".into(), Some(shown.seq));
+    let changed = tokio::time::timeout(WITHIN, async {
+        loop {
+            match resumed.next().await {
+                Some(Ok(FeedFrame::Changed { entry })) => return entry,
+                Some(Ok(_)) => {}
+                other => panic!("the feed ended before the changed entry: {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("the changed entry");
+    assert_eq!(changed, shown);
+    let mut fresh = s.engine.feed(web(), "f1".into(), None);
+    let sent = tokio::time::timeout(WITHIN, async {
+        loop {
+            match fresh.next().await {
+                Some(Ok(FeedFrame::Entry { entry })) if entry.seq == shown.seq => return entry,
+                Some(Ok(FeedFrame::Changed { .. })) => panic!("a fresh feed changes nothing"),
+                Some(Ok(_)) => {}
+                other => panic!("the feed ended before the entry: {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("the entry");
+    assert_eq!(sent, shown);
+    s.kernel.stop().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_turn_without_a_kernel_says_why_too() {
+    let s = scenario_with(failing(), ControlPlaneConfig::default().without_socket(), false).await;
+    s.engine.execute(&web(), ask("f2")).await.unwrap();
+    let items = failed_thread(&s.engine, "f2").await;
+    assert!(matches!(&items[0], ThreadItem::Message { from: Speaker::You, .. }), "{items:?}");
+    assert_eq!(items[1..], [failed_turn()]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_status_line_names_only_the_parts_of_the_home_the_server_serves() {
+    let s = scenario(scripted("unused.txt")).await;
+    let serves = || async { s.engine.status(&web(), None).await.unwrap().serves };
+    // A kernel whose control plane is not mounted, no camera hub, no other router.
+    assert_eq!(serves().await, Vec::<Served>::new());
+    let routes = api(&s.kernel, &s.engine);
+    assert_eq!(serves().await, [Served::Kernel]);
+    s.engine.serve(Served::Website);
+    assert_eq!(serves().await, [Served::Kernel, Served::Website]);
+    let (status, body) = call(&routes, "GET", "/api/surface/status?surface=web", None).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["serves"], json!(["kernel", "website"]));
+    s.kernel.stop().await.unwrap();
 }

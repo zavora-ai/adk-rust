@@ -30,7 +30,7 @@ use crate::error::{Result, SurfaceError};
 use crate::evidence::{EvidenceBytes, EvidenceKept};
 use crate::origin::Caller;
 use crate::source::{
-    AgentState, AlwaysAllowOffer, RuleCommit, Source, SpendToday, Steered, Steering,
+    AgentState, AlwaysAllowOffer, RuleCommit, Source, SpendToday, Steered, Steering, TurnFailure,
 };
 use crate::words;
 
@@ -88,6 +88,8 @@ pub struct LocalSource {
     eval_fixtures: Option<std::path::PathBuf>,
     /// The rules "Always allow" prepared, granted as their decisions resolve.
     prepared: Arc<PreparedRules>,
+    /// The turns a harness or runner ran here that ended in an error; a kernel keeps its own.
+    failed: Arc<FailedTurnLog>,
 }
 
 impl fmt::Debug for LocalSource {
@@ -312,6 +314,7 @@ impl LocalSourceBuilder {
             runs: self.runs,
             eval_fixtures: self.eval_fixtures,
             prepared,
+            failed: Arc::default(),
         })
     }
 }
@@ -451,9 +454,21 @@ impl LocalSource {
             ));
         };
         let stream = stream?;
-        let session = session_id.to_string();
-        tokio::spawn(async move { drain(stream, &session).await });
+        let turn = self.turn_of(user, session);
+        tokio::spawn(drain(stream, self.failed.clone(), turn));
         Ok(())
+    }
+
+    /// Whose turn a stream started here runs: the harness's agent, else the app's runner.
+    fn turn_of(&self, user: &str, session: &str) -> TurnOf {
+        TurnOf {
+            user: user.to_string(),
+            session: session.to_string(),
+            agent: match &self.harness {
+                Some(harness) => harness.agent().info().name.clone(),
+                None => self.app.clone(),
+            },
+        }
     }
 
     /// The harness's pending call for `request`, with the standing rule "Always allow" makes
@@ -634,13 +649,60 @@ pub(crate) fn taken(events: &[Event], steer_id: &str) -> Steered {
     }
 }
 
-/// Runs a turn's stream to its end, so its events reach the session store.
-async fn drain(mut stream: adk_core::EventStream, session: &str) {
+/// Runs a turn's stream to its end, so its events reach the session store; a turn that ends
+/// in an error is recorded in `failed` for the thread to show.
+async fn drain(mut stream: adk_core::EventStream, failed: Arc<FailedTurnLog>, turn: TurnOf) {
     while let Some(event) = stream.next().await {
         if let Err(error) = event {
-            tracing::warn!(session.id = %session, error = %error, "a turn a surface started failed");
+            tracing::warn!(session.id = %turn.session, error = %error, "a turn a surface started failed");
+            failed.record(turn, error.to_string());
             break;
         }
+    }
+}
+
+/// Whose turn a drained stream runs: the user, the session and the agent.
+struct TurnOf {
+    user: String,
+    session: String,
+    agent: String,
+}
+
+/// The most sessions whose failed turns are kept in memory; past it the record starts again.
+const FAILED_SESSIONS: usize = 1_024;
+
+/// The most failed turns kept for one session: its latest.
+const FAILED_PER_SESSION: usize = 16;
+
+/// The turns a harness or runner ran in this process that ended in an error, by user and
+/// session. The session holds no event for a failed model call, so this is what the thread
+/// reads; it lasts as long as the process.
+#[derive(Default)]
+struct FailedTurnLog {
+    by_session: std::sync::Mutex<std::collections::HashMap<(String, String), Vec<TurnFailure>>>,
+}
+
+impl FailedTurnLog {
+    fn record(&self, turn: TurnOf, error: String) {
+        let mut by_session = self.by_session.lock().unwrap_or_else(|e| e.into_inner());
+        let key = (turn.user, turn.session);
+        if by_session.len() >= FAILED_SESSIONS && !by_session.contains_key(&key) {
+            by_session.clear();
+        }
+        let failures = by_session.entry(key).or_default();
+        if failures.len() >= FAILED_PER_SESSION {
+            failures.remove(0);
+        }
+        failures.push(TurnFailure { agent: turn.agent, at: Utc::now(), error: Some(error) });
+    }
+
+    fn of(&self, user: &str, session: &str) -> Vec<TurnFailure> {
+        self.by_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&(user.to_string(), session.to_string()))
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
@@ -1445,6 +1507,30 @@ impl Source for LocalSource {
         Ok(self.active_sessions(user).iter().any(|active| active == session))
     }
 
+    /// A kernel's failed processes of the session, each with the error its run recorded;
+    /// without a kernel, the turns this source started that ended in an error.
+    async fn turn_failures(&self, user: &str, session: &str) -> Result<Vec<TurnFailure>> {
+        if self.kernel.is_none() {
+            return Ok(self.failed.of(user, session));
+        }
+        let mut failures: Vec<TurnFailure> = self
+            .processes(user)
+            .await?
+            .into_iter()
+            .filter(|process| {
+                process.run.session_id.as_deref() == Some(session)
+                    && process.run.state == RunState::Failed
+            })
+            .map(|process| TurnFailure {
+                agent: process.run.target,
+                at: process.run.updated_at,
+                error: process.run.error,
+            })
+            .collect();
+        failures.sort_by_key(|failure| failure.at);
+        Ok(failures)
+    }
+
     async fn waiting_on_decision(&self, user: &str, session: &str) -> Result<bool> {
         if self.kernel.is_some() {
             return Ok(self.processes(user).await?.iter().any(|process| {
@@ -1662,8 +1748,8 @@ impl Source for LocalSource {
             metadata: Default::default(),
         };
         let stream = harness.send_requested(&user_id, &session_id, text, call, context).await?;
-        let session = session.to_string();
-        tokio::spawn(async move { drain(stream, &session).await });
+        let turn = self.turn_of(user, session);
+        tokio::spawn(drain(stream, self.failed.clone(), turn));
         Ok(())
     }
 
@@ -1742,6 +1828,10 @@ impl Source for LocalSource {
 
     fn quiet_hours(&self) -> Option<QuietHours> {
         self.kernel.as_ref().and_then(|(kernel, _)| kernel.config().quiet_hours)
+    }
+
+    fn serves_kernel_routes(&self) -> bool {
+        self.kernel.as_ref().is_some_and(|(kernel, _)| kernel.serves_routes())
     }
 
     fn keeps_ledger(&self) -> bool {
@@ -2034,8 +2124,8 @@ impl LocalSource {
             ));
         };
         let stream = stream?;
-        let session = session_id.to_string();
-        tokio::spawn(async move { drain(stream, &session).await });
+        let turn = self.turn_of(user, session);
+        tokio::spawn(drain(stream, self.failed.clone(), turn));
         Ok(())
     }
 }

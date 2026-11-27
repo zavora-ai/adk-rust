@@ -686,6 +686,7 @@ describe("the HTTP client's memory, record, rule and spending routes", () => {
       vi.fn(async (url: string, init?: RequestInit) => {
         seen.push([init?.method ?? "GET", url, init?.body ? JSON.parse(String(init.body)) : undefined]);
         const body: Record<string, unknown> = {
+          "/api/surface/status?surface=web": { decisions: 0, stopped: false, serves: ["kernel"] },
           "/api/kernel/memory": {
             facts: [{ id: "f1", text: "A", origin: "guess", noticedBy: "work", learnedAt: "" }],
             tidyUps: [{ id: "t1", area: "default", at: new Date().toISOString(), finishedAt: new Date().toISOString(), merged: 1, superseded: 2, forgotten: 0, distilled: 0 }],
@@ -725,6 +726,7 @@ describe("the HTTP client's memory, record, rule and spending routes", () => {
       { agent: "code", area: "default", spentToday: 0 },
     ]);
     expect(seen).toEqual([
+      ["GET", "/api/surface/status?surface=web", undefined],
       ["GET", "/api/kernel/memory", undefined],
       ["POST", "/api/kernel/memory/facts/f%201/confirm", {}],
       ["POST", "/api/kernel/memory/facts/f1/fix", { text: "B" }],

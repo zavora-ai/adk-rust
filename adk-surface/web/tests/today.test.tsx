@@ -507,15 +507,20 @@ describe("the HTTP client's kernel routes", () => {
     answering(seen, (url) => (url.includes("after=") ? page(80, false) : page(40, true)));
     const away = new HttpClient().whileAway();
     const read = await away.read();
-    expect(seen.map(({ url }) => url)).toEqual(["/api/kernel/away?viewer=home", "/api/kernel/away?viewer=home&after=40"]);
+    // The status line is read once first, for what the server serves.
+    expect(seen.map(({ url }) => url)).toEqual([
+      "/api/surface/status?surface=web",
+      "/api/kernel/away?viewer=home",
+      "/api/kernel/away?viewer=home&after=40",
+    ]);
     expect(seen.every(({ init }) => (init?.method ?? "GET") === "GET")).toBe(true);
     expect([read?.through, read?.spentMicroUsd, read?.lines.length, read?.more]).toEqual([80, 200, 2, false]);
 
     await away.markSeen(80);
-    expect(seen[2].url).toBe("/api/kernel/away/seen");
-    expect(JSON.parse(String(seen[2].init?.body))).toEqual({ viewer: "home", through: 80 });
+    expect(seen[3].url).toBe("/api/kernel/away/seen");
+    expect(JSON.parse(String(seen[3].init?.body))).toEqual({ viewer: "home", through: 80 });
     await away.record(22);
-    expect(seen[3].url).toBe("/api/kernel/away/lines/22");
+    expect(seen[4].url).toBe("/api/kernel/away/lines/22");
   });
 
   it("changes an area's settings and pairs a chat account through the kernel's routes", async () => {

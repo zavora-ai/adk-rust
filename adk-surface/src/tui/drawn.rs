@@ -87,7 +87,8 @@ impl Drawings {
                 | ThreadItem::Run { .. }
                 | ThreadItem::Suggestions { .. }
                 | ThreadItem::Decision { .. }
-                | ThreadItem::DrawnSent { .. } => {}
+                | ThreadItem::DrawnSent { .. }
+                | ThreadItem::TurnFailed { .. } => {}
             }
         }
         let forms = crate::genui::form_states(entries, decided)
@@ -974,7 +975,8 @@ pub(crate) fn json_lines(session: &str, entry: &FeedEntry) -> Vec<Value> {
             | ThreadItem::Activity { .. }
             | ThreadItem::Result { .. }
             | ThreadItem::Suggestions { .. }
-            | ThreadItem::Decision { .. } => None,
+            | ThreadItem::Decision { .. }
+            | ThreadItem::TurnFailed { .. } => None,
         })
         .collect()
 }

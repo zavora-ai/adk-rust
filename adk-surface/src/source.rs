@@ -47,6 +47,31 @@ pub struct AgentState {
     pub shell: Option<crate::model::ShellPlace>,
 }
 
+/// A turn of a session that ended in an error, as a source reports it: the thread shows it
+/// where the agent's reply would have been ([`Source::turn_failures`]).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::TurnFailure;
+///
+/// let failed = TurnFailure {
+///     agent: "claims".into(),
+///     at: chrono::Utc::now(),
+///     error: Some("model.internal: no recorded answer for turn 3".into()),
+/// };
+/// assert_eq!(failed.agent, "claims");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnFailure {
+    /// The agent whose turn it was, by its name in the runtime.
+    pub agent: String,
+    /// When the turn ended.
+    pub at: DateTime<Utc>,
+    /// The error as the runtime recorded it, such as `model.internal: no recorded answer`.
+    pub error: Option<String>,
+}
+
 /// Today's spend and the daily limit, in micro-USD (spec 3.3 §8.1 "Daily spending limit").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpendToday {
@@ -430,6 +455,18 @@ pub trait Source: Send + Sync {
         Ok(false)
     }
 
+    /// The turns of `user`'s session `session` that ended in an error, oldest first: a model
+    /// call that failed leaves no event in the session, so the thread shows each where the
+    /// reply would have been. The default reports none.
+    ///
+    /// # Errors
+    ///
+    /// The source's error.
+    async fn turn_failures(&self, user: &str, session: &str) -> Result<Vec<TurnFailure>> {
+        let _ = (user, session);
+        Ok(Vec::new())
+    }
+
     /// Whether a call of the session waits on a decision, whoever may answer it: input typed
     /// meanwhile is queued behind it (spec 3.3 §7.4 rule 2), even when the decision was routed
     /// to approvers other than the session's owner. The default says no; the engine still
@@ -558,6 +595,13 @@ pub trait Source: Send + Sync {
     /// Quiet time, when the source knows it.
     fn quiet_hours(&self) -> Option<QuietHours> {
         None
+    }
+
+    /// Whether this server serves the control-plane routes of the kernel the source runs on
+    /// (`/api/kernel`), so the web home reads them ([`Served::Kernel`](crate::Served::Kernel)).
+    /// `false`, the default.
+    fn serves_kernel_routes(&self) -> bool {
+        false
     }
 
     /// Whether the source keeps the `/proc` ledger [`ledger`](Self::ledger) reads: without

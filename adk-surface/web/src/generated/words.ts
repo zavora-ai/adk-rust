@@ -189,6 +189,7 @@ export const APP_SERVER_DIDNT_ANSWER = "The app's server didn't answer. Try agai
 export const THE_EXACT_IMAGE_THAT_WOULD_LEAVE = "The exact image that would leave";
 export const THE_IMAGE_THAT_LEFT = "The image that left";
 export const THE_IMAGE_THAT_WOULD_HAVE_LEFT = "The image that would have left";
+export const ATTACHED_IMAGE = "Attached image";
 export const ALL_OF_THE_IMAGE = "100% of the image";
 export const NOTHING_COVERED = "nothing covered";
 export const NOTHING_TO_SEND = "Nothing to send.";

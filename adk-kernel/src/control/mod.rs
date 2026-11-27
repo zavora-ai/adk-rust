@@ -601,7 +601,8 @@ pub enum ControlTransport {
 
 /// The control plane's routes over `kernel` (spec 3.2 §7.11), relative to the `/api`
 /// prefix: merge them with `ServerBuilder::add_api_routes`, whose auth middleware puts the
-/// caller's `RequestContext` in the request extensions.
+/// caller's `RequestContext` in the request extensions. Building them sets
+/// [`Kernel::serves_routes`], which tells a web home served beside them to read them.
 ///
 /// # Example
 ///
@@ -612,6 +613,7 @@ pub enum ControlTransport {
 /// # }
 /// ```
 pub fn router(kernel: Kernel) -> Router {
+    kernel.mark_routes_served();
     routes::routes(Arc::new(kernel))
 }
 

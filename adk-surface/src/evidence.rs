@@ -421,7 +421,8 @@ pub struct GoesTo {
 #[serde(rename_all = "camelCase")]
 pub struct CardMedia {
     /// "The exact image that would leave", "The 3 images that would leave", "The image that
-    /// left".
+    /// left" when a feature says where the images go ([`MediaFacts::to`]); otherwise
+    /// "Attached image", "3 attached images".
     pub title: String,
     /// The images, in the order of the call's evidence.
     pub images: Vec<EvidenceImage>,
@@ -703,13 +704,18 @@ pub(crate) fn project(
     } else {
         None
     };
-    let title = match (left, purged, several) {
-        (true, _, false) => words::THE_IMAGE_THAT_LEFT.to_string(),
-        (true, _, true) => words::the_images_that_left(shown.len()),
-        (false, true, false) => words::THE_IMAGE_THAT_WOULD_HAVE_LEFT.to_string(),
-        (false, true, true) => words::the_images_that_would_have_left(shown.len()),
-        (false, false, false) => words::THE_EXACT_IMAGE_THAT_WOULD_LEAVE.to_string(),
-        (false, false, true) => words::the_images_that_would_leave(shown.len()),
+    // The images leave only where a feature says where they go: other evidence is what the
+    // call keeps or acts on, such as a claim photo held with an estimate.
+    let egress = !facts.hosts.is_empty();
+    let title = match (egress, left, purged, several) {
+        (false, _, _, false) => words::ATTACHED_IMAGE.to_string(),
+        (false, _, _, true) => words::attached_images(shown.len()),
+        (true, true, _, false) => words::THE_IMAGE_THAT_LEFT.to_string(),
+        (true, true, _, true) => words::the_images_that_left(shown.len()),
+        (true, false, true, false) => words::THE_IMAGE_THAT_WOULD_HAVE_LEFT.to_string(),
+        (true, false, true, true) => words::the_images_that_would_have_left(shown.len()),
+        (true, false, false, false) => words::THE_EXACT_IMAGE_THAT_WOULD_LEAVE.to_string(),
+        (true, false, false, true) => words::the_images_that_would_leave(shown.len()),
     };
     let goes_to = (!facts.hosts.is_empty()).then(|| GoesTo {
         provider: facts.provider.clone(),
@@ -1119,6 +1125,11 @@ mod tests {
         }
     }
 
+    /// Facts that say where the images go: the call is an egress.
+    fn to_claude() -> MediaFacts {
+        MediaFacts::new().to("Claude", "claude-sonnet-5-5", ["api.anthropic.com"])
+    }
+
     fn the_card() -> ApprovalRequest {
         request(vec![card_image(vec![
             boxed("faces", [48.0, 150.0, 300.0, 468.0]),
@@ -1133,7 +1144,10 @@ mod tests {
     #[test]
     fn the_identity_card_shows_what_was_covered_by_class() {
         let request = the_card();
-        let media = project(&request, &input(&[EvidenceKept::Kept])).unwrap();
+        let facts = to_claude();
+        let mut given = input(&[EvidenceKept::Kept]);
+        given.facts = Some(&facts);
+        let media = project(&request, &given).unwrap();
         let lines: Vec<&str> = media.covered.iter().map(|line| line.text.as_str()).collect();
         assert_eq!(lines, ["1 face", "3 personal text", "2 fields your schema marks personal"]);
         assert_eq!(media.title, "The exact image that would leave");
@@ -1147,6 +1161,20 @@ mod tests {
         assert!(media.sendable());
         assert!(media.can_change);
         assert_eq!(media.fixed_line, words::IMAGES_LEAVE_ONLY_COVERED);
+    }
+
+    #[test]
+    fn images_no_feature_sends_are_attached_not_leaving() {
+        let card = the_card();
+        let media = project(&card, &input(&[EvidenceKept::Kept])).unwrap();
+        assert_eq!(media.title, "Attached image");
+        assert!(media.goes_to.is_none());
+        let mut given = input(&[EvidenceKept::Kept]);
+        given.decided = Some(crate::model::DecidedAnswer::Yes);
+        assert_eq!(project(&card, &given).unwrap().title, "Attached image");
+        let two = request(vec![card_image(Vec::new()), card_image(Vec::new())]);
+        let media = project(&two, &input(&[EvidenceKept::Kept; 2])).unwrap();
+        assert_eq!(media.title, "2 attached images");
     }
 
     #[test]
@@ -1178,7 +1206,9 @@ mod tests {
     #[test]
     fn a_deleted_image_leaves_nothing_to_send() {
         let request = the_card();
+        let facts = to_claude();
         let mut later = input(&[EvidenceKept::Deleted]);
+        later.facts = Some(&facts);
         later.now = request.created_at + Duration::days(31);
         let media = project(&request, &later).unwrap();
         let notice = media.notice.as_ref().unwrap();
@@ -1222,7 +1252,7 @@ mod tests {
             plain(),
             card_image(vec![boxed("schema_field", [80.0, 10.0, 120.0, 40.0])]),
         ]);
-        let mut facts = MediaFacts::new().with_data_class("document_crop");
+        let mut facts = to_claude().with_data_class("document_crop");
         facts.images = vec![
             ImageFacts::new().with_field("PO number").with_why("Handwriting"),
             ImageFacts::new().with_field("Invoice date"),

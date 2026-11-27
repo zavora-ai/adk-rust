@@ -341,7 +341,7 @@ the server's auth middleware authenticates every request.
 | `GET /surface/decisions?surface=&session=` | The caller's open decisions as cards, of one session with `session` |
 | `GET /surface/decisions/{id}` | One decision, waiting or decided |
 | `GET /surface/sessions/{session}/thread` | The session's entries |
-| `GET /surface/sessions/{session}/feed` | Server-sent events: `entry` (with `id` = `seq`), `decisions`, `reset`; resumes after `Last-Event-ID` or `?after=` |
+| `GET /surface/sessions/{session}/feed` | Server-sent events: `entry` (with `id` = `seq`), `decisions`, `reset`, and `changed` for an entry already sent whose turn then failed (no `id`: a reconnect resumes after the last `entry`); resumes after `Last-Event-ID` or `?after=` |
 | `GET /surface/sessions/{session}/queued` | `QueuedResponse`: what the caller typed while a decision of the session was open or a turn ran, sent oldest first once the session is free (§7.4 rule 2) |
 | `GET /surface/agents/{id}/threads` | `AgentThreads`: the caller's threads with the agent (`ThreadSummary` each), for **Thread history** |
 | `GET /surface/agents` | The roster, and `primary`: the agent a message goes to when the person names none (`Source::primary_agent`; `LocalSource`'s kernel target, else its harness's agent), absent when the source has none |

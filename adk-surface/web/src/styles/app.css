@@ -2774,6 +2774,52 @@ button.segment {
   border-left: 1px solid var(--divider);
 }
 
+/* A note the agent wrote between tool calls: a step of its work, not its reply. */
+.work-note {
+  align-self: flex-start;
+  max-width: 680px;
+  padding-left: 10px;
+  border-left: 2px solid var(--divider);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+
+.work-note p + p {
+  margin-top: 6px;
+}
+
+/* A turn that ended in an error, where its reply would have been. */
+.turn-failed {
+  display: flex;
+  align-items: flex-start;
+  align-self: flex-start;
+  gap: 8px;
+  max-width: 680px;
+  padding: 10px 14px;
+  border: 1px solid var(--pill-failed);
+  border-radius: var(--radius);
+  background: var(--pill-failed-bg);
+  color: var(--text);
+  font-size: var(--fs-md);
+  line-height: var(--lh-md);
+  overflow-wrap: anywhere;
+}
+
+.turn-failed .icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 3px;
+  color: var(--failed);
+}
+
+.turn-failed-code {
+  margin-left: 8px;
+  color: var(--label);
+  font-size: var(--fs-sm);
+}
+
 /* A waiting decision leads with its question and what it costs (spec 3.3 §7.1). */
 .decision-ask .decision-heading {
   order: 0;

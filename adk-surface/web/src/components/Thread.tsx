@@ -23,7 +23,19 @@ type Run = Extract<ThreadItem, { kind: "run" }>;
 
 /** One line of a thread, ready to draw. */
 type Line =
-  | { kind: "message"; key: string; from: "you" | "agent"; text: string; images?: ImageData[] }
+  | {
+      kind: "message";
+      key: string;
+      from: "you" | "agent";
+      text: string;
+      images?: ImageData[];
+      /**
+       * Text the agent wrote between tool calls of one turn, a step of its work rather than its
+       * reply: only the turn's last text is the reply.
+       */
+      interim?: boolean;
+    }
+  | { kind: "failed"; key: string; text: string; reason?: string; code?: string }
   | { kind: "activity"; key: string; text: string; result?: Result; run?: Run; at?: string; endAt?: string }
   | { kind: "decision"; key: string; id?: string; tool: string; text: string }
   | { kind: "suggestions"; key: string; replies: string[] }
@@ -56,7 +68,9 @@ type Line =
 /**
  * The thread's lines: activities joined with their results, decisions in place, and what
  * agents drew (spec 3.3 §7.4 rule 5) with the decision and result of each form's send drawn
- * with the form rather than on their own.
+ * with the form rather than on their own. An agent's text with a tool call after it in the
+ * same turn is interim, a step of the turn's work; a turn that ended in an error says so
+ * where its reply would have been.
  */
 export function lines(entries: FeedEntry[]): Line[] {
   const out: Line[] = [];
@@ -166,8 +180,20 @@ export function lines(entries: FeedEntry[]): Line[] {
           break;
         case "drawnSent":
           break;
+        case "turnFailed":
+          out.push({ kind: "failed", key, text: item.text, reason: item.reason ?? undefined, code: item.code ?? undefined });
+          break;
       }
     });
+  }
+  // From the end back: a turn starts with the person's message, and the agent's text before a
+  // later tool call of the same turn is a note on its way, not its answer.
+  let working = false;
+  for (let index = out.length - 1; index >= 0; index--) {
+    const line = out[index]!;
+    if (line.kind === "message" && line.from === "you") working = false;
+    else if (line.kind === "activity") working = true;
+    else if (line.kind === "message" && working) line.interim = true;
   }
   return out;
 }
@@ -253,7 +279,10 @@ export function Thread({
                 ))}
               </div>
             ) : null;
+          case "failed":
+            return <FailedTurn key={line.key} line={line} />;
           case "message":
+            if (line.interim) return <WorkNote key={line.key} text={line.text} />;
             return line.from === "you" ? (
               <div key={line.key} className="message-you-group">
                 {line.images && line.images.length > 0 && <MessageImages images={line.images} />}
@@ -610,19 +639,23 @@ function AppLine({
 export const WORKLOG_FOLD = 3;
 
 type ActivityLine = Extract<Line, { kind: "activity" }>;
-type Unit = { kind: "line"; line: Line } | { kind: "log"; key: string; steps: ActivityLine[] };
+type MessageLine = Extract<Line, { kind: "message" }>;
+/** A step of a turn's work: a tool step, or a note the agent wrote between its tool calls. */
+type Step = ActivityLine | MessageLine;
+type Unit = { kind: "line"; line: Line } | { kind: "log"; key: string; steps: Step[] };
 
 /**
  * The thread's lines with each run of `WORKLOG_FOLD` or more plain tool steps in a row folded
- * into one work-log line. A run of a command keeps its own card; the last step of a thread
- * still working stays in view, outside the fold.
+ * into one work-log line, with the notes the agent wrote between them. A run of a command keeps
+ * its own card; the last step of a thread still working stays in view, outside the fold.
  */
 export function worklog(shown: Line[]): Unit[] {
   const units: Unit[] = [];
-  let steps: ActivityLine[] = [];
+  let steps: Step[] = [];
   const flush = () => {
-    if (steps.length >= WORKLOG_FOLD) {
-      const open = steps[steps.length - 1]?.result === undefined ? steps.pop() : undefined;
+    if (steps.filter((step) => step.kind === "activity").length >= WORKLOG_FOLD) {
+      const last = steps[steps.length - 1];
+      const open = last?.kind === "activity" && last.result === undefined ? steps.pop() : undefined;
       units.push({ kind: "log", key: `log-${steps[0]!.key}`, steps });
       if (open) units.push({ kind: "line", line: open });
     } else {
@@ -631,7 +664,7 @@ export function worklog(shown: Line[]): Unit[] {
     steps = [];
   };
   for (const line of shown) {
-    if (line.kind === "activity" && !line.run) {
+    if ((line.kind === "activity" && !line.run) || (line.kind === "message" && line.interim)) {
       steps.push(line);
       continue;
     }
@@ -643,27 +676,51 @@ export function worklog(shown: Line[]): Unit[] {
 }
 
 /** Steps folded into one line: how many, how many failed, the last one; open for the rest. */
-function WorkLog({ steps }: { steps: ActivityLine[] }) {
-  const failed = steps.filter((step) => step.result && !step.result.ok).length;
-  const last = steps[steps.length - 1]!;
+function WorkLog({ steps }: { steps: Step[] }) {
+  const tools = steps.filter((step): step is ActivityLine => step.kind === "activity");
+  const failed = tools.filter((step) => step.result && !step.result.ok).length;
+  const last = tools[tools.length - 1]!;
   // How long the folded work took: from the first step to the last step's result.
-  const from = Date.parse(steps[0]?.at ?? "");
+  const from = Date.parse(tools[0]?.at ?? "");
   const to = Date.parse(last.endAt ?? last.at ?? "");
   const seconds = Number.isFinite(from) && Number.isFinite(to) && to >= from ? Math.round((to - from) / 1000) : undefined;
   return (
     <details className={`work-log${failed ? " work-log-failed" : ""}`}>
       <summary>
         {seconds !== undefined && seconds > 0 && <span className="work-log-time">{labels.workedFor(seconds)}</span>}
-        <span className="work-log-count">{labels.workSteps(steps.length)}</span>
+        <span className="work-log-count">{labels.workSteps(tools.length)}</span>
         {failed > 0 && <span className="work-log-failed-count">{labels.workFailed(failed)}</span>}
         <span className="work-log-last">{visible(last.text)}</span>
       </summary>
       <div className="work-log-steps">
-        {steps.map((step) => (
-          <ActivityChip key={step.key} line={step} />
-        ))}
+        {steps.map((step) =>
+          step.kind === "activity" ? <ActivityChip key={step.key} line={step} /> : <WorkNote key={step.key} text={step.text} />,
+        )}
       </div>
     </details>
+  );
+}
+
+/** A note the agent wrote between tool calls: part of its work, quieter than a reply. */
+function WorkNote({ text }: { text: string }) {
+  return (
+    <div className="work-note">
+      <MarkdownResponse>{text}</MarkdownResponse>
+    </div>
+  );
+}
+
+/** A turn that ended in an error, where its reply would have been: who could not answer, and why. */
+function FailedTurn({ line }: { line: Extract<Line, { kind: "failed" }> }) {
+  return (
+    <div className="turn-failed" role="note">
+      <Icon name="cross" />
+      <p>
+        <strong>{visible(line.text)}</strong>
+        {line.reason && <span className="turn-failed-reason">: {visible(line.reason)}</span>}
+        {line.code && <code className="turn-failed-code">{visible(line.code)}</code>}
+      </p>
+    </div>
   );
 }
 

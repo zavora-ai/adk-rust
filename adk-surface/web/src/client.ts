@@ -23,6 +23,7 @@ import type {
   PhoneDevicesResponse,
   QueuedResponse,
   SavedExample,
+  Served,
   StatusLine,
   SurfaceKind,
   TakeOverRequest,
@@ -106,6 +107,33 @@ const LIVE_AGENDA = ["proposed", "approved", "scheduled", "running"] as const;
 /** At most this many agenda items of one state are read at once. */
 const AGENDA_LIMIT = 200;
 
+/**
+ * The part of the home an API path (relative to `/api`) belongs to, when it is one a server
+ * serves only beside the engine's own routes; `undefined` for the engine's own routes, which
+ * every server with the home serves (spec 3.3 §6.1).
+ */
+export function partOf(path: string): Served | undefined {
+  if (path.startsWith("/kernel/")) return "kernel";
+  const [, surface, part] = path.split(/[/?]/);
+  if (surface !== "surface") return undefined;
+  switch (part) {
+    case "cameras":
+      return "cameras";
+    case "verbs":
+      return "verbs";
+    case "voice":
+      return "voice";
+    case "website":
+      return "website";
+    case "workflow":
+      return "workflow";
+    case "phone":
+      return "phone";
+    default:
+      return undefined;
+  }
+}
+
 /** A problem document from the server, with its `surface.*`, `approval.*` or other code. */
 export class ApiError extends Error {
   constructor(
@@ -128,6 +156,7 @@ export function problemText(error: unknown): string {
 /** One frame of a session's feed as it arrives (spec 3.3 §6). */
 export type FeedMessage =
   | { type: "entry"; entry: FeedEntry }
+  | { type: "changed"; entry: FeedEntry }
   | { type: "decisions"; cards: DecisionCard[] }
   | { type: "reset"; len: number };
 
@@ -190,6 +219,11 @@ export interface HomeClient {
   viewerClient?(): ViewerClient;
   /** The live camera surface's routes (spec 3.7 §8.2). */
   cameraClient?(): CameraClient;
+  /**
+   * The parts of the home the server serves beside the engine's routes, from its status line;
+   * `undefined` when the server does not say, and every part is asked for.
+   */
+  serves?(): Promise<ReadonlySet<Served> | undefined>;
 }
 
 async function problem(response: Response): Promise<ApiError> {
@@ -223,6 +257,8 @@ async function problem(response: Response): Promise<ApiError> {
  */
 export class HttpClient implements HomeClient {
   private token: string | undefined = readStored<string | undefined>(TOKEN_KEY, undefined);
+  /** What the status line said the server serves, read once and kept fresh by each status read. */
+  private served: Promise<ReadonlySet<Served> | undefined> | undefined;
 
   constructor(
     private readonly base = "/api",
@@ -258,8 +294,31 @@ export class HttpClient implements HomeClient {
     return (text ? JSON.parse(text) : undefined) as T;
   }
 
-  /** A route the server may not mount: `undefined` on 404. */
+  /**
+   * The parts of the home the server serves, from its status line, read once and shared by
+   * every read that waits for it. A server that does not say (`undefined`) is asked for every
+   * part; a failed read is tried again by the next caller.
+   */
+  serves(): Promise<ReadonlySet<Served> | undefined> {
+    // A status read starting now says it; one already under way is shared.
+    if (this.served === undefined) void this.status().catch(() => undefined);
+    return this.served ?? Promise.resolve(undefined);
+  }
+
+  /** Whether the server serves the part `path` belongs to, so the page asks for it at all. */
+  private async serving(path: string): Promise<boolean> {
+    const part = partOf(path);
+    if (part === undefined) return true;
+    const served = await this.serves();
+    return served === undefined || served.has(part);
+  }
+
+  /**
+   * A route the server may not mount: `undefined` without asking when the status line leaves
+   * its part out, and on 404.
+   */
   private async optional<T>(path: string): Promise<T | undefined> {
+    if (!(await this.serving(path))) return undefined;
     try {
       return await this.request<T>(path);
     } catch (error) {
@@ -272,9 +331,20 @@ export class HttpClient implements HomeClient {
     return this.request<T>(path, { method: "POST", body: JSON.stringify(body) });
   }
 
-  status(session?: string) {
+  async status(session?: string) {
     const query = session ? `&session=${encodeURIComponent(session)}` : "";
-    return this.request<StatusLine>(`/surface/status?surface=${this.surface}${query}`);
+    const read = this.request<StatusLine>(`/surface/status?surface=${this.surface}${query}`);
+    // The first status read tells every optional read waiting for it what the server serves.
+    this.served ??= read.then(
+      (status) => (status.serves ? new Set(status.serves) : undefined),
+      () => {
+        this.served = undefined;
+        return undefined;
+      },
+    );
+    const status = await read;
+    if (status.serves) this.served = Promise.resolve(new Set(status.serves));
+    return status;
   }
 
   async agents() {
@@ -452,6 +522,9 @@ export class HttpClient implements HomeClient {
         case "entry":
           yield { type: "entry", entry: data as FeedEntry };
           break;
+        case "changed":
+          yield { type: "changed", entry: data as FeedEntry };
+          break;
         case "decisions":
           yield { type: "decisions", cards: data as DecisionCard[] };
           break;
@@ -510,6 +583,7 @@ export class HttpClient implements HomeClient {
    * `signal` aborts or the stream ends, so the tray changes within one event (spec 3.3 §12).
    */
   async *events(signal: AbortSignal): AsyncIterable<void> {
+    if (!(await this.serving("/kernel/events"))) return;
     const response = await fetch(`${this.base}/kernel/events`, {
       headers: this.headers({ accept: "text/event-stream" }),
       signal,

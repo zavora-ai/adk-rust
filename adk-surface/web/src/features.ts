@@ -1,8 +1,10 @@
 /**
  * Features a server may be built without (spec 3.3 §6.1). The committed page is the same for
- * every Rust feature set, so the home asks at run time: each feature's part of the page reads
- * its own route through `probe`, and stays hidden while the route answers 404, 405 or 501 —
- * a server built without that feature. Any other failure is an error, shown as one.
+ * every Rust feature set, so the home asks at run time. The status line's `serves` names the
+ * parts the server serves beside the engine's routes, and the home reads no route of a part it
+ * leaves out (`HttpClient.serves`). Against a server that does not say, each feature's part of
+ * the page reads its own route through `probe`, and stays hidden while the route answers 404,
+ * 405 or 501 — a server built without that feature. Any other failure is an error, shown as one.
  */
 import { ApiError } from "./client";
 

@@ -374,6 +374,7 @@ export function status(stopped = false): StatusLine {
     decisions: 2,
     stopped,
     stoppedText: stopped ? "All agents stopped" : null,
+    serves: ["kernel"],
   };
 }
 

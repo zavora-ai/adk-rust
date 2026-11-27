@@ -19,7 +19,7 @@
 //! | `GET /surface/decisions` | [`DecisionsResponse`]: the caller's open decisions as cards; `?session=` for one session's; `?decidedSince=` adds those answered since, newest first |
 //! | `GET /surface/decisions/{id}` | [`DecisionCard`]: waiting, or decided with who, where and when |
 //! | `GET /surface/sessions/{session}/thread` | [`ThreadResponse`]: the session's entries, numbered by store position |
-//! | `GET /surface/sessions/{session}/feed` | Server-sent events: `entry` (with `id` = `seq`), `decisions`, `reset`; resumes after `Last-Event-ID` or `?after=` |
+//! | `GET /surface/sessions/{session}/feed` | Server-sent events: `entry` (with `id` = `seq`), `decisions`, `reset`, and `changed` for an entry already sent whose turn then failed; resumes after `Last-Event-ID` or `?after=` |
 //! | `GET /surface/sessions/{session}/queued` | [`QueuedResponse`]: what the caller typed while a decision of the session was open or a turn ran, not yet sent; a message the running turn holds is listed until the turn takes it |
 //! | `GET /surface/agents` | [`AgentsResponse`] |
 //! | `GET /surface/status` | [`StatusLine`]; `?session=` for that session's mode |
@@ -930,6 +930,10 @@ async fn feed(
             }
             Ok(FeedFrame::Reset { len }) => {
                 SseEvent::default().event("reset").json_data(serde_json::json!({ "len": len }))
+            }
+            // No `id`: a changed entry is not where a reconnect resumes.
+            Ok(FeedFrame::Changed { entry }) => {
+                SseEvent::default().event("changed").json_data(&entry)
             }
             Err(error) => SseEvent::default()
                 .event("error")

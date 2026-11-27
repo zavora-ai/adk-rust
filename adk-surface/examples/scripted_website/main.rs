@@ -26,7 +26,7 @@ use adk_core::{InMemoryApprovalStore, RequestContext, SingleAgentLoader, StoreAp
 use adk_server::auth_bridge::{RequestContextError, RequestContextExtractor};
 use adk_server::{ServerBuilder, ServerConfig};
 use adk_session::{InMemorySessionService, SessionService};
-use adk_surface::{LocalSource, Place, SurfaceEngine};
+use adk_surface::{LocalSource, Place, Served, SurfaceEngine};
 use async_trait::async_trait;
 
 /// Admits every request as the owner, as a loopback-only server's extractor does.
@@ -100,6 +100,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .approvals(Arc::new(StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))))
         .build()?;
     let engine = SurfaceEngine::builder(Arc::new(source)).places([Place::web()]).build();
+    // The desk's routes are mounted beside the engine's: the home reads them.
+    engine.serve(Served::Website);
     let config = ServerConfig::new(Arc::new(SingleAgentLoader::new(Arc::new(Steward))), sessions)
         .with_request_context(Arc::new(Owner));
     let app = ServerBuilder::new(config)

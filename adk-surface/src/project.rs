@@ -26,7 +26,7 @@ use crate::model::{
 };
 use crate::origin::{Caller, SurfaceKind};
 use crate::rules::{self, Answer, DecisionFacts};
-use crate::source::{AgentState, SpendToday};
+use crate::source::{AgentState, SpendToday, TurnFailure};
 use crate::words::{self, SaidWhat};
 
 /// How long a call's text may be before it is shown truncated (spec 3.3 §7.1).
@@ -37,6 +37,9 @@ pub const RUN_LINES: usize = 40;
 
 /// The most characters of one output line a thread shows.
 const RUN_LINE_CHARS: usize = 400;
+
+/// The most characters of a failed turn's reason a thread shows.
+const REASON_CHARS: usize = 500;
 
 /// The longest agent name a decision card shows, in characters.
 pub const CARD_NAME_LIMIT: usize = 64;
@@ -834,6 +837,32 @@ impl Projector {
             at: event.timestamp,
             at_text: self.hh_mm(event.timestamp),
             items: self.items(event, links.get(&seq), answered),
+        }
+    }
+
+    /// The thread item of a turn that ended in an error: who could not answer and why. The
+    /// runtime records an error as `component.category: message`; the message is the reason
+    /// and the rest its code.
+    pub(crate) fn turn_failed(&self, failure: &TurnFailure) -> ThreadItem {
+        let error = failure.error.as_deref().map(str::trim).filter(|error| !error.is_empty());
+        let (code, reason) = match error.map(|error| (error, error.split_once(": "))) {
+            Some((_, Some((code, message))))
+                if code.split('.').count() == 2
+                    && code.chars().all(|c| c.is_ascii_lowercase() || c == '_' || c == '.') =>
+            {
+                (Some(code.to_string()), Some(message.trim()))
+            }
+            Some((error, _)) => (None, Some(error)),
+            None => (None, None),
+        };
+        let reason = reason.map(|reason| match reason.char_indices().nth(REASON_CHARS) {
+            Some((cut, _)) => format!("{}…", &reason[..cut]),
+            None => reason.to_string(),
+        });
+        ThreadItem::TurnFailed {
+            text: words::couldnt_answer(&self.agent(&failure.agent).display_name),
+            reason,
+            code,
         }
     }
 
@@ -1856,6 +1885,40 @@ mod tests {
             projector.quiet_view(asked + minutes(6 * 60)).unwrap().text,
             "Quiet until 07:00"
         );
+    }
+
+    #[test]
+    fn a_failed_turn_says_who_could_not_answer_and_why() {
+        let projector = Projector::new(FixedOffset::east_opt(0).unwrap());
+        let failed = |error: Option<&str>| {
+            projector.turn_failed(&TurnFailure {
+                agent: "claims_desk".into(),
+                at: Utc::now(),
+                error: error.map(str::to_string),
+            })
+        };
+        let item = |reason: Option<&str>, code: Option<&str>| ThreadItem::TurnFailed {
+            text: "Claims desk couldn't answer".into(),
+            reason: reason.map(str::to_string),
+            code: code.map(str::to_string),
+        };
+        assert_eq!(
+            failed(Some("model.internal: no recorded answer for turn 3")),
+            item(Some("no recorded answer for turn 3"), Some("model.internal"))
+        );
+        // Text that does not start with a code is the reason whole.
+        assert_eq!(
+            failed(Some("Upstream said: try later")),
+            item(Some("Upstream said: try later"), None)
+        );
+        assert_eq!(failed(Some("  ")), item(None, None));
+        assert_eq!(failed(None), item(None, None));
+        let long = format!("model.unavailable: {}", "x".repeat(REASON_CHARS + 20));
+        let ThreadItem::TurnFailed { reason: Some(reason), .. } = failed(Some(&long)) else {
+            panic!("a reason");
+        };
+        assert_eq!(reason.chars().count(), REASON_CHARS + 1);
+        assert!(reason.ends_with('…'));
     }
 
     #[test]
