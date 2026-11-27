@@ -543,6 +543,22 @@ impl Renderer {
                     lines.push(Line::default());
                     lines.extend(super::drawn::app_lines(&t, app, width));
                 }
+                // Where the reply would have been: who could not answer, and why.
+                ThreadItem::TurnFailed { text, reason, .. } => {
+                    let said = match reason {
+                        Some(reason) => format!("{text}: {reason}"),
+                        None => text.clone(),
+                    };
+                    lines.push(Line::default());
+                    lines.extend(wrap_spans(
+                        vec![
+                            Span::styled("✗ ".to_string(), t.fg(t.palette().failed)),
+                            Span::styled(safe_line(&said), t.secondary()),
+                        ],
+                        width,
+                        2,
+                    ));
+                }
             }
         }
         lines

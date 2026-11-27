@@ -872,7 +872,8 @@ export interface CardMedia {
   sourceHref?: string | null;
   /**
    * "The exact image that would leave", "The 3 images that would leave", "The image that
-   * left".
+   * left" when a feature says where the images go (`MediaFacts::to`); otherwise
+   * "Attached image", "3 attached images".
    */
   title: string;
   /** What they are: "Document crop", "3 document crops". */
@@ -2141,6 +2142,10 @@ export type FeedFrame = {
   /** How many events the store holds now. */
   len: number;
   type: "reset";
+} | {
+  /** The entry, as it reads now. */
+  entry: FeedEntry;
+  type: "changed";
 };
 
 /** Where an agent's files are: none, read, or read and change (spec 3.3 §5.7). */
@@ -3093,6 +3098,20 @@ export interface ScreenPlanView {
 /** What asked for a `DrawnSent` call (spec 3.3 §6.1 `genui`, `genui-apps`). */
 export type SentVia = "form" | "app";
 
+/**
+ * A part of the web home a server serves beside the engine's own routes (spec 3.3 §6.1),
+ * listed in `StatusLine::serves`.
+ * 
+ * adk-surface's routers name their part as they are built:
+ * `web::verbs::router`,
+ * `web::workflow::router`, `voice::router` and
+ * `mobile::router`. The engine names `Cameras` when it has a camera hub and
+ * `Kernel` when its source's kernel built its control-plane routes. A host
+ * names a part mounted from elsewhere with `SurfaceEngine::serve`,
+ * such as the website's desk.
+ */
+export type Served = "kernel" | "cameras" | "verbs" | "voice" | "website" | "workflow" | "phone";
+
 /** The kind of a region's shape. */
 export type ShapeKind = "point" | "box" | "polygon" | "mask" | "keypoints";
 
@@ -3207,6 +3226,12 @@ export interface StatusLine {
   mode?: ModeView | null;
   /** Quiet time, when set. */
   quiet?: QuietView | null;
+  /**
+   * The parts of the home this server serves beside the engine's own routes, in order: the
+   * web home reads no route of a part it leaves out, so a server built or mounted without
+   * one answers no request for it. Absent only from a server older than this field.
+   */
+  serves: Served[];
   /** Spend, when the source knows it. */
   spend?: SpendView | null;
   /** Everything is stopped. */
@@ -3363,6 +3388,17 @@ export type ThreadItem = {
   /** The app. */
   app: AppView;
   kind: "app";
+} | {
+  /** The error's code, for a developer: `model.internal`. */
+  code?: string | null;
+  kind: "turnFailed";
+  /**
+   * Why, as the runtime said it: "no recorded answer for turn 3". Absent when the
+   * runtime recorded no reason.
+   */
+  reason?: string | null;
+  /** "Claims Desk couldn't answer". */
+  text: string;
 };
 
 /** `GET /surface/sessions/{session}/thread` answer. */

@@ -547,6 +547,9 @@ pub(crate) struct KernelInner {
     ledger: Option<Ledger>,
     /// The background sub-agent host ([`KernelBuilder::subagents`]).
     subagents: Option<DurableSubagents>,
+    /// [`control::router`](crate::control::router) built the control plane's routes for a
+    /// server ([`Kernel::serves_routes`]).
+    serves_routes: std::sync::atomic::AtomicBool,
 }
 
 /// What a started kernel runs besides its claim loops.
@@ -1549,6 +1552,28 @@ impl Kernel {
     #[cfg(feature = "proc")]
     pub fn ledger(&self) -> Option<&Ledger> {
         self.inner.ledger.as_ref()
+    }
+
+    /// Whether [`control::router`](crate::control::router) built this kernel's control-plane
+    /// routes for a server, so a page served beside them may read them: the web home reads
+    /// `/api/kernel` only then (spec 3.3 §10).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # fn example(kernel: adk_kernel::Kernel) {
+    /// assert!(!kernel.serves_routes());
+    /// let _routes = adk_kernel::control::router(kernel.clone());
+    /// assert!(kernel.serves_routes());
+    /// # }
+    /// ```
+    pub fn serves_routes(&self) -> bool {
+        self.inner.serves_routes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Records that the control plane's routes were built for a server.
+    pub(crate) fn mark_routes_served(&self) {
+        self.inner.serves_routes.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// What every kernel part shares, for the routes the surfaces need (spec 3.3 §10 K3,
@@ -3164,6 +3189,7 @@ impl KernelBuilder {
                 #[cfg(feature = "proc")]
                 ledger,
                 subagents,
+                serves_routes: std::sync::atomic::AtomicBool::new(false),
             }),
         };
         if let Some(backend) = subagent_backend {

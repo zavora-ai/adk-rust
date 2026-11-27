@@ -25,7 +25,7 @@ use crate::error::{Result, SurfaceError};
 use crate::hints::{CardHint, CardHints};
 use crate::model::{
     AgentRef, AgentRow, Briefing, Decided, DecisionCard, FeedEntry, Mode, ModeView, Reversibility,
-    StatusLine,
+    Served, StatusLine,
 };
 use crate::origin::{Caller, Origin, SurfaceKind};
 use crate::project::{self, Place, Projector};
@@ -526,9 +526,30 @@ pub enum FeedFrame {
         /// How many events the store holds now.
         len: u64,
     },
+    /// An entry already sent changed: the turn after it ended in an error, which a
+    /// [`TurnFailed`](crate::ThreadItem::TurnFailed) item now says. Show it in place of the
+    /// entry with the same `seq`; resuming still goes after the last `seq` of an `Entry`.
+    #[serde(rename_all = "camelCase")]
+    Changed {
+        /// The entry, as it reads now.
+        entry: FeedEntry,
+    },
 }
 
 type Classify<T> = Arc<dyn Fn(&ApprovalRequest) -> T + Send + Sync>;
+
+/// A session's failed turns as thread items, by the `seq` of the entry each follows.
+type FailedTurns = std::collections::BTreeMap<u64, Vec<crate::model::ThreadItem>>;
+
+/// One read of a session's feed: the frames to send, the cursor after them and the id of the
+/// event at it, the open-decision signature and the failed turns the sent entries carry.
+struct FeedRead {
+    frames: Vec<FeedFrame>,
+    sent: u64,
+    last: Option<String>,
+    cards: Vec<(String, u64)>,
+    failed: FailedTurns,
+}
 
 /// Builds a [`SurfaceEngine`].
 pub struct SurfaceEngineBuilder {
@@ -842,6 +863,7 @@ impl SurfaceEngineBuilder {
                 wake: Notify::new(),
                 spoken: Mutex::new(HashMap::new()),
                 changed_images: Mutex::new(HashMap::new()),
+                served: Mutex::new(std::collections::BTreeSet::new()),
             }),
         }
     }
@@ -916,6 +938,9 @@ struct Inner {
     /// Images a person changed through this engine, by the new image's digest: the digest it
     /// replaced, which the card of the call held again names (spec 3.7 §8.2).
     changed_images: Mutex<HashMap<String, String>>,
+    /// The parts of the home served beside the engine's routes that routers and the host named
+    /// ([`SurfaceEngine::serve`]).
+    served: Mutex<std::collections::BTreeSet<Served>>,
 }
 
 /// A send's audit fields, with how many images the message carries when it carries any.
@@ -1689,13 +1714,57 @@ impl SurfaceEngine {
         let events = self.transcript(caller, session).await?;
         let links = self.links(caller, session, &events).await?;
         let answered = project::answered_calls(&events);
+        let failed = self.failed_turns(caller, session, &events).await;
         Ok(events
             .iter()
             .enumerate()
-            .map(|(index, event)| {
-                self.inner.projector.entry(index as u64 + 1, event, &links, &answered)
-            })
+            .map(|(index, event)| self.entry(index as u64 + 1, event, &links, &answered, &failed))
             .collect())
+    }
+
+    /// The entry of the event at `seq`, ending with the turns `failed` says ended in an error
+    /// after it.
+    fn entry(
+        &self,
+        seq: u64,
+        event: &adk_core::Event,
+        links: &HashMap<u64, project::Link>,
+        answered: &HashSet<String>,
+        failed: &FailedTurns,
+    ) -> FeedEntry {
+        let mut entry = self.inner.projector.entry(seq, event, links, answered);
+        entry.items.extend(failed.get(&seq).into_iter().flatten().cloned());
+        entry
+    }
+
+    /// The session's turns that ended in an error, as thread items keyed by the `seq` of the
+    /// last event before each ended. A turn that failed before the session held any event has
+    /// no entry to follow and is left out. When the source cannot say, the thread shows
+    /// without them.
+    async fn failed_turns(
+        &self,
+        caller: &Caller,
+        session: &str,
+        events: &[adk_core::Event],
+    ) -> FailedTurns {
+        let failures = match self.inner.source.turn_failures(caller.user_id(), session).await {
+            Ok(failures) => failures,
+            Err(error) => {
+                tracing::warn!(session.id = %session, error = %error, "the turns that failed could not be read; the thread shows without them");
+                return FailedTurns::new();
+            }
+        };
+        let mut failed = FailedTurns::new();
+        for failure in failures {
+            let Some(index) = events.iter().rposition(|event| event.timestamp <= failure.at) else {
+                continue;
+            };
+            failed
+                .entry(index as u64 + 1)
+                .or_default()
+                .push(self.inner.projector.turn_failed(&failure));
+        }
+        failed
     }
 
     async fn transcript(&self, caller: &Caller, session: &str) -> Result<Vec<adk_core::Event>> {
@@ -1735,6 +1804,11 @@ impl SurfaceEngine {
     /// it got shorter or grew back past what was sent. A client that resumes after `after`
     /// is trusted to hold the store's events up to it.
     ///
+    /// A turn that ends in an error leaves no event, so the entry it follows is sent again as
+    /// [`Changed`](FeedFrame::Changed), ending with a
+    /// [`TurnFailed`](crate::ThreadItem::TurnFailed) item; a resumed stream sends each entry
+    /// before `after` that carries one.
+    ///
     /// The stream ends with an error when the session cannot be read.
     pub fn feed(
         &self,
@@ -1750,6 +1824,9 @@ impl SurfaceEngine {
             /// The id of the event at `sent`, once this stream has read it.
             last: Option<String>,
             cards: Option<Vec<(String, u64)>>,
+            /// The failed turns the entries sent so far carry; `None` before the first read,
+            /// so a resumed stream sends again each entry before `after` whose turn failed.
+            failed: Option<FailedTurns>,
             buffer: VecDeque<FeedFrame>,
             /// The wait for the next change, begun before the last read so nothing that
             /// changes during a read is missed; `None` when a change came during the read.
@@ -1764,6 +1841,7 @@ impl SurfaceEngine {
             sent: after.unwrap_or(0),
             last: None,
             cards: None,
+            failed: None,
             buffer: VecDeque::new(),
             next: None,
             first: true,
@@ -1793,14 +1871,22 @@ impl SurfaceEngine {
                 };
                 match state
                     .engine
-                    .refresh(&state.caller, &state.session, state.sent, &state.last, &state.cards)
+                    .refresh(
+                        &state.caller,
+                        &state.session,
+                        state.sent,
+                        &state.last,
+                        &state.cards,
+                        state.failed.as_ref(),
+                    )
                     .await
                 {
-                    Ok((frames, sent, last, cards)) => {
-                        state.sent = sent;
-                        state.last = last;
-                        state.cards = Some(cards);
-                        state.buffer.extend(frames);
+                    Ok(read) => {
+                        state.sent = read.sent;
+                        state.last = read.last;
+                        state.cards = Some(read.cards);
+                        state.failed = Some(read.failed);
+                        state.buffer.extend(read.frames);
                     }
                     Err(error) => {
                         state.done = true;
@@ -1812,8 +1898,8 @@ impl SurfaceEngine {
         .boxed()
     }
 
-    /// The frames since `sent`, and the new cursor, the id of the event at it, and the
-    /// open-decision signature.
+    /// The frames since `sent`, with the new cursor, the id of the event at it, the
+    /// open-decision signature and the failed turns the sent entries now carry.
     async fn refresh(
         &self,
         caller: &Caller,
@@ -1821,9 +1907,11 @@ impl SurfaceEngine {
         mut sent: u64,
         last: &Option<String>,
         cards: &Option<Vec<(String, u64)>>,
-    ) -> Result<(Vec<FeedFrame>, u64, Option<String>, Vec<(String, u64)>)> {
+        shown: Option<&FailedTurns>,
+    ) -> Result<FeedRead> {
         let events = self.transcript(caller, session).await?;
         let len = events.len() as u64;
+        let failed = self.failed_turns(caller, session, &events).await;
         let mut frames = Vec::new();
         let at_cursor = usize::try_from(sent)
             .ok()
@@ -1837,13 +1925,31 @@ impl SurfaceEngine {
             frames.push(FeedFrame::Reset { len });
             sent = 0;
         }
-        if sent < len {
+        // Entries already sent whose failed turns changed since, such as the person's message
+        // of a turn whose model call has just failed.
+        let none = FailedTurns::new();
+        let before = shown.unwrap_or(&none);
+        let changed: Vec<u64> = failed
+            .keys()
+            .chain(before.keys())
+            .copied()
+            .filter(|seq| *seq <= sent && failed.get(seq) != before.get(seq))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if sent < len || !changed.is_empty() {
             let links = self.links(caller, session, &events).await?;
             let answered = project::answered_calls(&events);
+            for seq in changed {
+                if let Some(event) = usize::try_from(seq - 1).ok().and_then(|at| events.get(at)) {
+                    let entry = self.entry(seq, event, &links, &answered, &failed);
+                    frames.push(FeedFrame::Changed { entry });
+                }
+            }
             for (index, event) in
                 events.iter().enumerate().skip(usize::try_from(sent).unwrap_or(usize::MAX))
             {
-                let entry = self.inner.projector.entry(index as u64 + 1, event, &links, &answered);
+                let entry = self.entry(index as u64 + 1, event, &links, &answered, &failed);
                 frames.push(FeedFrame::Entry { entry });
             }
             sent = len;
@@ -1859,7 +1965,7 @@ impl SurfaceEngine {
         if cards.as_ref() != Some(&signature) {
             frames.push(FeedFrame::Decisions { cards: open });
         }
-        Ok((frames, sent, last, signature))
+        Ok(FeedRead { frames, sent, last, cards: signature, failed })
     }
 
     /// The caller's agents (spec 3.3 §8.1).
@@ -2002,7 +2108,47 @@ impl SurfaceEngine {
             host_utc_offset_minutes: Some(
                 self.now().with_timezone(&Local).offset().local_minus_utc() / 60,
             ),
+            serves: self.serves(),
         })
+    }
+
+    /// Names `part` among the parts of the home this server serves beside the engine's
+    /// routes, so the web home reads its routes ([`StatusLine::serves`]). adk-surface's routers
+    /// name their own as they are built; a host names a part it mounts from elsewhere, such as
+    /// the website's desk.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_session::InMemorySessionService;
+    /// use adk_surface::{LocalSource, Served, SurfaceEngine};
+    ///
+    /// let source = LocalSource::builder("adk-rust")
+    ///     .sessions(Arc::new(InMemorySessionService::new()))
+    ///     .build()
+    ///     .unwrap();
+    /// let engine = SurfaceEngine::builder(Arc::new(source)).build();
+    /// engine.serve(Served::Website);
+    /// assert_eq!(engine.serves(), vec![Served::Website]);
+    /// ```
+    pub fn serve(&self, part: Served) {
+        self.inner.served.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(part);
+    }
+
+    /// The parts of the home this server serves beside the engine's routes, in order: those
+    /// named with [`serve`](Self::serve), the cameras when the engine has a camera hub, and the
+    /// kernel's control plane when the source's kernel built its routes.
+    pub fn serves(&self) -> Vec<Served> {
+        let mut parts =
+            self.inner.served.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        if self.inner.cameras.is_some() {
+            parts.insert(Served::Cameras);
+        }
+        if self.inner.source.serves_kernel_routes() {
+            parts.insert(Served::Kernel);
+        }
+        parts.into_iter().collect()
     }
 
     /// "While you were away" since `since` (spec 3.3 §5.1, §8.1): spend, waiting decisions,

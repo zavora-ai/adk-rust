@@ -214,6 +214,18 @@ pub fn asleep_until(hh_mm: &str) -> String {
     format!("Asleep until {hh_mm}")
 }
 
+/// A turn that ended in an error, in the thread where the reply would have been:
+/// `"Claims Desk couldn't answer"`.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::couldnt_answer("Claims Desk"), "Claims Desk couldn't answer");
+/// ```
+pub fn couldnt_answer(agent: &str) -> String {
+    format!("{agent} couldn't answer")
+}
+
 /// How a mode reads as a status, `"Asks first"`: the third-person form the status line and
 /// a thread's header use for the §8.1 mode words.
 ///
@@ -1354,6 +1366,8 @@ pub const THE_EXACT_IMAGE_THAT_WOULD_LEAVE: &str = "The exact image that would l
 pub const THE_IMAGE_THAT_LEFT: &str = "The image that left";
 /// A card's single image, deleted before anything was sent.
 pub const THE_IMAGE_THAT_WOULD_HAVE_LEFT: &str = "The image that would have left";
+/// A card's single image when no feature says it leaves: evidence the call keeps or acts on.
+pub const ATTACHED_IMAGE: &str = "Attached image";
 /// Every pixel of the image is covered.
 pub const ALL_OF_THE_IMAGE: &str = "100% of the image";
 /// An image no region covers.
@@ -1413,6 +1427,17 @@ pub fn the_images_that_left(count: usize) -> String {
 /// ```
 pub fn the_images_that_would_have_left(count: usize) -> String {
     format!("The {count} images that would have left")
+}
+
+/// A card's images when no feature says they leave: "3 attached images".
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::attached_images(3), "3 attached images");
+/// ```
+pub fn attached_images(count: usize) -> String {
+    format!("{count} attached images")
 }
 
 /// An image's size and format: "1012 × 638 PNG".
@@ -1878,6 +1903,7 @@ mod tests {
         THE_EXACT_IMAGE_THAT_WOULD_LEAVE,
         THE_IMAGE_THAT_LEFT,
         THE_IMAGE_THAT_WOULD_HAVE_LEFT,
+        ATTACHED_IMAGE,
         NOTHING_TO_SEND,
         EVERYTHING_IS_COVERED,
         IMAGE_DELETED,

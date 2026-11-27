@@ -88,7 +88,8 @@ fn web() -> SurfaceKind {
 }
 
 /// The screen actions' routes, relative to `/api` (spec 3.3 §2 item 7): mount with
-/// `ServerBuilder::add_api_routes` beside [`router`](super::router).
+/// `ServerBuilder::add_api_routes` beside [`router`](super::router). Building them names
+/// [`Served::Verbs`](crate::Served::Verbs) on the gate's engine, so the web home reads them.
 ///
 /// # Example
 ///
@@ -101,6 +102,7 @@ fn web() -> SurfaceKind {
 /// # }
 /// ```
 pub fn router(gate: VerbGate) -> Router {
+    gate.engine().serve(crate::Served::Verbs);
     Router::new()
         .route(paths::VERBS, get(verbs))
         .route(paths::CALL, post(call))

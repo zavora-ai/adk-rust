@@ -23,12 +23,23 @@ export function emptyThread(session: string): ThreadState {
   return { session, entries: [], open: [], openKnown: false, last: 0 };
 }
 
-/** The thread after one frame: an entry already seen is dropped, a reset starts over. */
+/**
+ * The thread after one frame: an entry already seen is dropped, a changed entry takes the
+ * place of the one with its `seq`, a reset starts over.
+ */
 export function applyFrame(state: ThreadState, message: FeedMessage): ThreadState {
   switch (message.type) {
     case "entry":
       if (message.entry.seq <= state.last) return state;
       return { ...state, entries: [...state.entries, message.entry], last: message.entry.seq };
+    case "changed": {
+      // The turn after an entry ended in an error: the entry now ends with it.
+      const at = state.entries.findIndex((entry) => entry.seq === message.entry.seq);
+      if (at < 0) return state;
+      const entries = state.entries.slice();
+      entries[at] = message.entry;
+      return { ...state, entries };
+    }
     case "decisions":
       return { ...state, open: message.cards, openKnown: true };
     case "reset":

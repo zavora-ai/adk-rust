@@ -72,6 +72,8 @@ pub(crate) struct Settler {
     reply: bool,
     /// The session recorded something after the baseline: the turn began.
     began: bool,
+    /// The turn ended in an error, as its thread says: who could not answer, and why.
+    failure: Option<String>,
     busy_seen: bool,
     quiet: u8,
     since: Instant,
@@ -85,6 +87,7 @@ impl Settler {
             sent: false,
             reply: false,
             began: false,
+            failure: None,
             busy_seen: false,
             quiet: 0,
             since: Instant::now(),
@@ -120,6 +123,13 @@ impl Settler {
                 | ThreadItem::DrawnRefused { .. }
                 | ThreadItem::DrawnSent { .. }
                 | ThreadItem::App { .. } => self.reply = false,
+                ThreadItem::TurnFailed { text, reason, .. } => {
+                    self.reply = false;
+                    self.failure = Some(match reason {
+                        Some(reason) => format!("{text}: {reason}"),
+                        None => text.clone(),
+                    });
+                }
             }
         }
     }
@@ -200,8 +210,8 @@ impl Settler {
                 row.session_id.as_deref() == Some(session) && row.status == AgentStatus::Failed
             })
         });
-        if failed {
-            return Some(End::error(words::FAILED));
+        if failed || self.failure.is_some() {
+            return Some(End::error(self.failure.clone().unwrap_or_else(|| words::FAILED.into())));
         }
         if let Some(spend) = budget {
             return Some(End::budget(&spend.text));
@@ -439,6 +449,7 @@ pub(crate) async fn run<W: Write + Send>(
                             closed(&mut out, engine, caller, &was, &now, &mut told).await?;
                         }
                         FeedFrame::Reset { .. } => last = 0,
+                        FeedFrame::Changed { entry } => settler.observe(entry),
                     }
                     frame_line(&mut out, &frame)?;
                     // `drawn`, `drawn.submitted` and `drawn.refused` (spec 3.3 §5.2).

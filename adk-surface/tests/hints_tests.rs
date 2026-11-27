@@ -462,7 +462,7 @@ async fn every_card_the_engine_draws_carries_the_hint() {
     let open = loop {
         match feed.next().await.expect("the feed ended").unwrap() {
             FeedFrame::Decisions { cards } => break cards,
-            FeedFrame::Entry { .. } | FeedFrame::Reset { .. } => {}
+            FeedFrame::Entry { .. } | FeedFrame::Reset { .. } | FeedFrame::Changed { .. } => {}
         }
     };
     assert_eq!(heading(open), expected);

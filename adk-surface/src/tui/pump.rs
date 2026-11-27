@@ -366,6 +366,8 @@ async fn read_feed(
                                 }
                             }
                             FeedFrame::Reset { .. } => after = None,
+                            // A failed turn adds no decision and moves no cursor.
+                            FeedFrame::Changed { .. } => {}
                             FeedFrame::Decisions { cards } => {
                                 let now: HashSet<String> =
                                     cards.iter().map(|card| card.id.clone()).collect();

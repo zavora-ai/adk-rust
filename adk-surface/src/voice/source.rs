@@ -241,6 +241,14 @@ impl Source for VoiceSource {
         self.inner.busy(user, session).await
     }
 
+    async fn turn_failures(
+        &self,
+        user: &str,
+        session: &str,
+    ) -> Result<Vec<crate::source::TurnFailure>> {
+        self.inner.turn_failures(user, session).await
+    }
+
     async fn waiting_on_decision(&self, user: &str, session: &str) -> Result<bool> {
         self.inner.waiting_on_decision(user, session).await
     }
@@ -285,6 +293,10 @@ impl Source for VoiceSource {
 
     fn quiet_hours(&self) -> Option<QuietHours> {
         self.inner.quiet_hours()
+    }
+
+    fn serves_kernel_routes(&self) -> bool {
+        self.inner.serves_kernel_routes()
     }
 
     fn keeps_ledger(&self) -> bool {

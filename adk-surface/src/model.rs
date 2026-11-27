@@ -173,6 +173,42 @@ pub struct StatusLine {
     /// (spec 3.3 §5.1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_utc_offset_minutes: Option<i32>,
+    /// The parts of the home this server serves beside the engine's own routes, in order: the
+    /// web home reads no route of a part it leaves out, so a server built or mounted without
+    /// one answers no request for it. Absent only from a server older than this field.
+    #[serde(default)]
+    pub serves: Vec<Served>,
+}
+
+/// A part of the web home a server serves beside the engine's own routes (spec 3.3 §6.1),
+/// listed in [`StatusLine::serves`].
+///
+/// adk-surface's routers name their part as they are built: `web::verbs::router` (feature
+/// `verb-ui`), `web::workflow::router` (`workflow`), `voice::router` (`voice`) and
+/// `mobile::router` (`mobile`). The engine names [`Cameras`](Self::Cameras) when it has a camera hub and
+/// [`Kernel`](Self::Kernel) when its source's kernel built its control-plane routes. A host
+/// names a part mounted from elsewhere with [`SurfaceEngine::serve`](crate::SurfaceEngine::serve),
+/// such as the website's desk.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum Served {
+    /// The kernel's control plane under `/api/kernel`: processes, the agenda, "While you were
+    /// away", settings, devices, memory and the record.
+    Kernel,
+    /// The live camera surface under `/api/surface/cameras`.
+    Cameras,
+    /// Screen actions under `/api/surface/verbs` (`verb-ui`).
+    Verbs,
+    /// Voice under `/api/surface/voice` (`voice`).
+    Voice,
+    /// The website's views under `/api/surface/website` (`website`).
+    Website,
+    /// The workflow observer under `/api/surface/workflow` (`workflow`).
+    Workflow,
+    /// The phone's routes under `/api/surface/phone` (`mobile`).
+    Phone,
 }
 
 /// The exact call a decision is about (spec 3.3 §7.1).
@@ -817,6 +853,22 @@ pub enum ThreadItem {
     App {
         /// The app.
         app: Box<crate::genui::AppView>,
+    },
+    /// The turn ended in an error, where the agent's reply would have been: a failed model
+    /// call leaves no event of its own, so the source's record of the turn says it
+    /// ([`Source::turn_failures`](crate::Source::turn_failures)). It follows the last event of
+    /// the session before the turn ended.
+    #[serde(rename_all = "camelCase")]
+    TurnFailed {
+        /// "Claims Desk couldn't answer".
+        text: String,
+        /// Why, as the runtime said it: "no recorded answer for turn 3". Absent when the
+        /// runtime recorded no reason.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        /// The error's code, for a developer: `model.internal`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
     },
 }
 

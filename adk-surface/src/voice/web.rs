@@ -76,7 +76,8 @@ fn unauthenticated() -> Response {
 /// | `POST /surface/voice/sessions` | [`VoiceTicketRequest`] → [`VoiceTicket`]; `401` without a caller, `403` for a `sessionId` that is not one of the caller's voice conversations |
 ///
 /// A ticket works once, within [`TICKET_TTL`], for the caller it was issued to, and is never
-/// part of a URL or a log line.
+/// part of a URL or a log line. Building the routes names
+/// [`Served::Voice`](crate::Served::Voice) on the hub's engine, so the web home reads them.
 ///
 /// # Example
 ///
@@ -89,6 +90,7 @@ fn unauthenticated() -> Response {
 /// # }
 /// ```
 pub fn router(hub: VoiceHub) -> Router {
+    hub.engine().serve(crate::Served::Voice);
     Router::new()
         .route(paths::VOICE, get(models))
         .route(paths::SESSIONS, post(ticket))

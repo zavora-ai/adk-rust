@@ -23,6 +23,7 @@ The engine projects them into `DecisionCard::media`:
 | **Covered before it leaves**, by class, and **100% of the image** | The regions the gate filled |
 | **Goes to**, **What it is**, **Estimated cost**, **Cut from** | A feature's `MediaFacts`, through a `CardHint` |
 | **Kept as evidence until 18 Dec**, or the image deleted | The source and the retention (30 days unless a feature says otherwise) |
+| The title | "The exact image that would leave" (and "The image that left" once allowed) when the feature's `MediaFacts::to` says where the images go; otherwise **Attached image** or "3 attached images", for evidence the call keeps or acts on, such as a claim photo held with an estimate |
 
 ```rust
 use std::sync::Arc;

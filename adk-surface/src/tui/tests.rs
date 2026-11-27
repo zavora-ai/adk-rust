@@ -306,6 +306,7 @@ fn stopped() -> crate::model::StatusLine {
         stopped: true,
         stopped_text: Some(crate::words::ALL_AGENTS_STOPPED.into()),
         host_utc_offset_minutes: None,
+        serves: Vec::new(),
     }
 }
 
@@ -326,6 +327,32 @@ fn screen_text(app: &App, appearance: Appearance, cols: u16, rows: u16) -> Vec<S
 
 fn thread_entry(seq: u64, items: Vec<ThreadItem>) -> FeedEntry {
     FeedEntry { seq, at: Utc::now(), at_text: "17:58".into(), items }
+}
+
+/// A turn whose model call failed: the entry of the person's message is sent again ending with
+/// the failure, which the thread shows where the reply would have been.
+#[test]
+fn a_failed_turn_reads_where_the_reply_would_have_been() {
+    let shown = Instant::now();
+    let mut app = app_with(Vec::new(), shown);
+    let asked = ThreadItem::Message {
+        from: Speaker::You,
+        author: "You".into(),
+        text: "Is CL-0413 a total loss?".into(),
+        images: Vec::new(),
+    };
+    let entry = thread_entry(1, vec![asked.clone()]);
+    app.update(frame(FeedFrame::Entry { entry: entry.clone() }), shown);
+    let failed = ThreadItem::TurnFailed {
+        text: "Claims Desk couldn't answer".into(),
+        reason: Some("no recorded answer for turn 3".into()),
+        code: Some("model.internal".into()),
+    };
+    let changed = FeedEntry { items: vec![asked, failed], ..entry };
+    app.update(frame(FeedFrame::Changed { entry: changed.clone() }), shown);
+    assert_eq!(app.entries, [changed]);
+    let all = screen_text(&app, Appearance::Light, 150, 40).join("\n");
+    assert!(all.contains("✗ Claims Desk couldn't answer: no recorded answer for turn 3"), "{all}");
 }
 
 #[test]

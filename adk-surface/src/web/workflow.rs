@@ -91,7 +91,8 @@ struct Routes {
     engine: SurfaceEngine,
 }
 
-/// The Runs tab's routes, relative to `/api` (spec 3.3 §12).
+/// The Runs tab's routes, relative to `/api` (spec 3.3 §12). Building them names
+/// [`Served::Workflow`](crate::Served::Workflow) on `engine`, so the web home reads them.
 ///
 /// # Example
 ///
@@ -109,6 +110,7 @@ struct Routes {
 /// # }
 /// ```
 pub fn router(workflows: Workflows, engine: SurfaceEngine) -> Router {
+    engine.serve(crate::Served::Workflow);
     Router::new()
         .route(paths::GRAPHS, get(graphs))
         .route(paths::RUNS, get(runs))

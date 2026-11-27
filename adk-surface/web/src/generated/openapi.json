@@ -2454,7 +2454,7 @@
             ]
           },
           "title": {
-            "description": "\"The exact image that would leave\", \"The 3 images that would leave\", \"The image that\nleft\".",
+            "description": "\"The exact image that would leave\", \"The 3 images that would leave\", \"The image that\nleft\" when a feature says where the images go (`MediaFacts::to`); otherwise\n\"Attached image\", \"3 attached images\".",
             "type": "string"
           },
           "what": {
@@ -6107,6 +6107,24 @@
               "len"
             ],
             "type": "object"
+          },
+          {
+            "description": "An entry already sent changed: the turn after it ended in an error, which a\n`TurnFailed` item now says. Show it in place of the\nentry with the same `seq`; resuming still goes after the last `seq` of an `Entry`.",
+            "properties": {
+              "entry": {
+                "$ref": "#/components/schemas/FeedEntry",
+                "description": "The entry, as it reads now."
+              },
+              "type": {
+                "const": "changed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "entry"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -9003,6 +9021,46 @@
           }
         ]
       },
+      "Served": {
+        "description": "A part of the web home a server serves beside the engine's own routes (spec 3.3 §6.1),\nlisted in `StatusLine::serves`.\n\nadk-surface's routers name their part as they are built:\n`web::verbs::router`,\n`web::workflow::router`, `voice::router` and\n`mobile::router`. The engine names `Cameras` when it has a camera hub and\n`Kernel` when its source's kernel built its control-plane routes. A host\nnames a part mounted from elsewhere with `SurfaceEngine::serve`,\nsuch as the website's desk.",
+        "oneOf": [
+          {
+            "const": "kernel",
+            "description": "The kernel's control plane under `/api/kernel`: processes, the agenda, \"While you were\naway\", settings, devices, memory and the record.",
+            "type": "string"
+          },
+          {
+            "const": "cameras",
+            "description": "The live camera surface under `/api/surface/cameras`.",
+            "type": "string"
+          },
+          {
+            "const": "verbs",
+            "description": "Screen actions under `/api/surface/verbs` (`verb-ui`).",
+            "type": "string"
+          },
+          {
+            "const": "voice",
+            "description": "Voice under `/api/surface/voice` (`voice`).",
+            "type": "string"
+          },
+          {
+            "const": "website",
+            "description": "The website's views under `/api/surface/website` (`website`).",
+            "type": "string"
+          },
+          {
+            "const": "workflow",
+            "description": "The workflow observer under `/api/surface/workflow` (`workflow`).",
+            "type": "string"
+          },
+          {
+            "const": "phone",
+            "description": "The phone's routes under `/api/surface/phone` (`mobile`).",
+            "type": "string"
+          }
+        ]
+      },
       "ShapeKind": {
         "description": "The kind of a region's shape.",
         "oneOf": [
@@ -9415,6 +9473,14 @@
             ],
             "description": "Quiet time, when set."
           },
+          "serves": {
+            "default": [],
+            "description": "The parts of the home this server serves beside the engine's own routes, in order: the\nweb home reads no route of a part it leaves out, so a server built or mounted without\none answers no request for it. Absent only from a server older than this field.",
+            "items": {
+              "$ref": "#/components/schemas/Served"
+            },
+            "type": "array"
+          },
           "spend": {
             "anyOf": [
               {
@@ -9440,7 +9506,8 @@
         },
         "required": [
           "decisions",
-          "stopped"
+          "stopped",
+          "serves"
         ],
         "type": "object"
       },
@@ -9911,6 +9978,38 @@
             "required": [
               "kind",
               "app"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The turn ended in an error, where the agent's reply would have been: a failed model\ncall leaves no event of its own, so the source's record of the turn says it\n(`Source::turn_failures`). It follows the last event of\nthe session before the turn ended.",
+            "properties": {
+              "code": {
+                "description": "The error's code, for a developer: `model.internal`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "turnFailed",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Why, as the runtime said it: \"no recorded answer for turn 3\". Absent when the\nruntime recorded no reason.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "description": "\"Claims Desk couldn't answer\".",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text"
             ],
             "type": "object"
           }

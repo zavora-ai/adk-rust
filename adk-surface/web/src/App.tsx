@@ -1,7 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ImageLoaderContext, sameOriginLoader } from "./evidence/images";
 import type { ImageLoader } from "./evidence/images";
-import type { Command, DecisionCard, Origin } from "./generated/api";
+import type { Command, DecisionCard, Origin, Served } from "./generated/api";
 import type { HomeClient } from "./client";
 import { ApiError, problemText } from "./client";
 import type { TakeOverSeam } from "./components/DecisionCard";
@@ -142,12 +142,30 @@ export function App({
   const status = usePoll(() => client.status(conversation.current));
   const agents = usePoll(() => client.agents());
   const decisions = usePoll(() => client.decisions());
+  // A part of the home the status line leaves out is never asked for, so a server built or
+  // mounted without it answers no request for it (spec 3.3 §6.1).
+  const serving = useCallback(
+    async (part: Served) => {
+      const served = await client.serves?.();
+      return served === undefined || served.has(part);
+    },
+    [client],
+  );
   // Whether the server serves a website: its tab shows only then (spec 3.5 §8.2).
-  const site = usePoll(async () => (website ? ((await website.home()) ?? null) : null), 60_000);
+  const site = usePoll(
+    async () => (website && (await serving("website")) ? ((await website.home()) ?? null) : null),
+    60_000,
+  );
   // Whether the server takes screen actions, and what Coming up may be snoozed to (spec 3.3 §2 item 7).
-  const screens = usePoll(async () => (verbs ? ((await verbs.list()) ?? null) : null), 10_000);
+  const screens = usePoll(
+    async () => (verbs && (await serving("verbs")) ? ((await verbs.list()) ?? null) : null),
+    10_000,
+  );
   // Whether the server observes graph runs: the developer panel's Runs tab shows only then.
-  const graphs = usePoll(async () => (workflow ? ((await workflow.graphs()) ?? null) : null), 60_000);
+  const graphs = usePoll(
+    async () => (workflow && (await serving("workflow")) ? ((await workflow.graphs()) ?? null) : null),
+    60_000,
+  );
   // Whether the roster ends with New agent, and the primary agent a description goes to.
   const roster = usePoll(async () => (client.agentsWithPrimary ? await client.agentsWithPrimary() : undefined), 10_000);
   const agentsSeam = useMemo(() => client.agentsSeam?.(), [client]);
@@ -303,7 +321,7 @@ export function App({
   // no cameras says so once and is not asked again.
   const noCameras = useRef(false);
   const cameras = usePoll(async () => {
-    if (!cameraClient || noCameras.current) return null;
+    if (!cameraClient || noCameras.current || !(await serving("cameras"))) return null;
     try {
       return await cameraClient.cameras();
     } catch (error) {

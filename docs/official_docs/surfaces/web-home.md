@@ -119,6 +119,27 @@ for processes, quiet time, spend and the `/proc` ledger; mount
 `adk_kernel::control::router(kernel)` beside the engine so the home can read the process table
 and the agenda. [The Engine](index.md#sources) lists what each source adds.
 
+### What the home reads
+
+The home reads only the parts of the page the server serves. `GET /surface/status` lists them in
+`serves` (`StatusLine::serves`, `Served`), and the home sends no request to a part the list
+leaves out, so a server mounted without one logs no error for it and the page's console stays
+clean.
+
+| Part (`Served`) | Named when |
+|---|---|
+| `kernel` | `adk_kernel::control::router` was built for the kernel the source runs on (`Kernel::serves_routes`) |
+| `cameras` | The engine has a camera hub (`SurfaceEngineBuilder::cameras`) |
+| `verbs` | `adk_surface::web::verbs::router` was built over the engine |
+| `workflow` | `adk_surface::web::workflow::router` was built over the engine |
+| `voice` | `adk_surface::voice::router` was built over the engine |
+| `phone` | `adk_surface::mobile::router` was built over the engine |
+| `website` | The host calls `engine.serve(Served::Website)` beside `adk_surface::web::website::router` |
+
+A route mounted from elsewhere is named with `SurfaceEngine::serve`. Against a server whose
+status line has no `serves`, the home asks each part and hides those that answer `404`, `405`
+or `501`.
+
 The page is public like any static asset; its content security policy allows scripts, styles
 and fonts from the server only and no framing. `/` and `/ui` redirect to `/ui/`, and each
 section (`/ui/decisions`, `/ui/today`, `/ui/memory`, `/ui/developer`) and a drawing's own
@@ -156,6 +177,8 @@ technology, and Decisions carries the count of what waits.
 | Where its commands run | The thread's header says where the agent's commands run (`AgentRow.shell`), from the harness's isolation: in the OS sandbox and its enforcer, a container, a remote sandbox, on this computer, or in a sandbox that is unavailable. A run in a sandbox carries **Sandbox** |
 | Images in a message | The message box takes up to four PNG, JPEG, WebP or GIF images, picked, pasted or dropped, and sends them with the text (`send`, `queue` and `newThread` carry `images`). The engine checks each one's bytes against its type, and a message with images waits for the next turn instead of steering the running one. The thread shows the person's images; a click opens one |
 | The work log | Three or more plain tool steps in a row fold into one line: how many, how many failed, the last, and how long they took. A step still working stays outside the fold, and a run keeps its own card |
+| Notes between tool calls | Text the agent writes before a later tool call of the same turn is a note on its work, shown quietly with the steps and folded with them; only the turn's last text reads as its reply |
+| A turn that failed | A model call that fails leaves no event in the session, so the thread reads the turn's error from the source (`Source::turn_failures`: a kernel's failed run, or a turn a harness or runner ran) and shows it where the reply would have been: "Claims Desk couldn't answer: no recorded answer for turn 3", with the error's code (`ThreadItem::TurnFailed`). A thread already open receives it as a `changed` frame of the feed |
 | **Show beside** | Keeps a drawing in a canvas next to the thread, with tabs for its latest version, its earlier versions and its A2UI; the thread keeps a line with **Bring back**. **Open in its own window** shows it at `/ui/canvas`, following the session |
 | **Thread history** | The person's earlier threads with the agent (`GET /surface/agents/{id}/threads`) |
 | **Stop the turn** | While the agent works on the thread, the message box offers it: `stopTurn` stops the person's own running turn — a kernel kills the session's running and queued runs, a harness or a runner interrupts its run in flight — and the thread says so |
@@ -348,7 +371,7 @@ place an answer is given.
 | Typing while a decision is open | Queued as the next message and shown as "Sent after this card is answered", never an answer (S-I4); the page reads the queue back from `GET /surface/sessions/{session}/queued`, so a reload or a switch of threads still shows it |
 | Typing while a turn runs | The page sends `send` as always, and the engine offers the message to the running turn, which takes it after its current tool step: the thread shows it there and it leaves the queue. A turn that ends first leaves it queued as the next message, once. See [Steering a running turn](index.md#steering-a-running-turn) |
 | High risk | Offered as **Confirm it's you and approve**; the server, not the page, says the person confirmed it is them |
-| A call with images | The exact image that would leave, with its regions, what was covered, where it goes and the cost, loaded as the viewer; **Allow once** names its digest, and **Tighten the crop** and **Add a redaction** hold the call again with a new image. See [Approve with the Image](approve-with-image.md) |
+| A call with images | The exact image that would leave, with its regions, what was covered, where it goes and the cost, loaded as the viewer; **Allow once** names its digest, and **Tighten the crop** and **Add a redaction** hold the call again with a new image. An image no feature says leaves, such as a claim photo held with an estimate, is titled **Attached image**. See [Approve with the Image](approve-with-image.md) |
 | A vision tool's answer | The tool line links to the annotated viewer at `/ui/vision/<session>/<image>`: the regions it found over the image, filterable, with each region's backend, frame and transform chain; compare backends, correct a region and save it as an eval case, export the `RegionSet`. See [The Annotated Viewer](annotated-viewer.md) |
 | An agent that watches a camera | Its thread links to the live camera surface at `/ui/cameras/<camera>`: live frames with overlays, the frame governor, watches and zones; **Camera on / Off**, **Stop the stream**, edit a zone, raise a card from a frame. See [The Live Camera Surface](live-camera.md) |
 

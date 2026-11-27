@@ -137,7 +137,9 @@ describe("the HTTP client", () => {
                 ? { code: "ABCD-2345", url: "http://localhost/ui/pair#code=ABCD-2345", expiresAt: "", scopes: ["decide", "read", "stop"] }
                 : url === "/api/surface/phone/devices"
                   ? { devices: [{ deviceId: "d1", passkey: true, push: true }], computerPasskeys: [{ id: "k1", createdAt: "" }] }
-                  : {};
+                  : url === "/api/surface/status?surface=web"
+                    ? { decisions: 0, stopped: false, serves: ["kernel", "phone"] }
+                    : {};
         return new Response(JSON.stringify(body), { status: 200 });
       }),
     );
@@ -154,7 +156,9 @@ describe("the HTTP client", () => {
     await devices.remove("channel:c1");
     await devices.remove("passkey:k1");
     expect(await devices.pair()).toEqual({ code: "ABCD-2345", url: "http://localhost/ui/pair#code=ABCD-2345", expiresAt: "" });
-    expect(seen.slice(3).map(({ url, init }) => [init?.method ?? "GET", url])).toEqual([
+    // The status line says the kernel and the phone are served, read once before the list.
+    expect(seen[0]?.url).toBe("/api/surface/status?surface=web");
+    expect(seen.slice(4).map(({ url, init }) => [init?.method ?? "GET", url])).toEqual([
       ["POST", "/api/kernel/devices/d1/revoke"],
       ["POST", "/api/kernel/channels/c1/revoke"],
       ["DELETE", "/api/surface/phone/passkey/k1"],

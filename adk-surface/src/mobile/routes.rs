@@ -29,7 +29,8 @@ use crate::web::{
 
 /// The phone's routes, relative to `/api` (spec 3.3 §5.4, §8.2): mount them with
 /// `ServerBuilder::add_api_routes` beside [`web::router`](crate::web::router) and
-/// [`web::devices_router`](crate::web::devices_router) over the same engine. See the
+/// [`web::devices_router`](crate::web::devices_router) over the same engine; building them
+/// names [`Served::Phone`](crate::Served::Phone) on it, so the web home reads them. See the
 /// [module](super) for the table.
 ///
 /// # Example
@@ -43,6 +44,7 @@ use crate::web::{
 /// # }
 /// ```
 pub fn router(phone: Phone) -> Router {
+    phone.inner.engine.serve(crate::Served::Phone);
     Router::new()
         .route(paths::PHONE, get(info))
         .route(paths::PHONE_PUSH, put(subscribe).delete(unsubscribe))

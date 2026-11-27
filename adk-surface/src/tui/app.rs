@@ -885,6 +885,11 @@ impl App {
                 self.entries.clear();
                 self.scroll = 0;
             }
+            FeedFrame::Changed { entry } => {
+                if let Some(shown) = self.entries.iter_mut().find(|shown| shown.seq == entry.seq) {
+                    *shown = entry;
+                }
+            }
         }
     }
 

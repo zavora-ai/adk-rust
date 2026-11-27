@@ -28,7 +28,7 @@ use crate::error::{Result, SurfaceError};
 use crate::inbox::Inbox;
 use crate::origin::Caller;
 use crate::source::{
-    AgentState, AlwaysAllowOffer, RuleCommit, Source, SpendToday, Steered, Steering,
+    AgentState, AlwaysAllowOffer, RuleCommit, Source, SpendToday, Steered, Steering, TurnFailure,
 };
 
 /// How long the feed waits for a bus event before it reads the session again anyway, while a
@@ -609,6 +609,25 @@ impl Source for ControlSource {
         Ok(self.processes(user).await?.iter().any(|process| {
             process.run.session_id.as_deref() == Some(session) && runs(process.run.state)
         }))
+    }
+
+    async fn turn_failures(&self, user: &str, session: &str) -> Result<Vec<TurnFailure>> {
+        let mut failures: Vec<TurnFailure> = self
+            .processes(user)
+            .await?
+            .into_iter()
+            .filter(|process| {
+                process.run.session_id.as_deref() == Some(session)
+                    && process.run.state == RunState::Failed
+            })
+            .map(|process| TurnFailure {
+                agent: process.run.target,
+                at: process.run.updated_at,
+                error: process.run.error,
+            })
+            .collect();
+        failures.sort_by_key(|failure| failure.at);
+        Ok(failures)
     }
 
     async fn waiting_on_decision(&self, user: &str, session: &str) -> Result<bool> {
