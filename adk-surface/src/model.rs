@@ -183,10 +183,9 @@ pub struct StatusLine {
 /// A part of the web home a server serves beside the engine's own routes (spec 3.3 §6.1),
 /// listed in [`StatusLine::serves`].
 ///
-/// adk-surface's routers name their part as they are built:
-/// [`web::verbs::router`](crate::web::verbs::router),
-/// [`web::workflow::router`](crate::web::workflow::router), `voice::router` and
-/// `mobile::router`. The engine names [`Cameras`](Self::Cameras) when it has a camera hub and
+/// adk-surface's routers name their part as they are built: `web::verbs::router` (feature
+/// `verb-ui`), `web::workflow::router` (`workflow`), `voice::router` (`voice`) and
+/// `mobile::router` (`mobile`). The engine names [`Cameras`](Self::Cameras) when it has a camera hub and
 /// [`Kernel`](Self::Kernel) when its source's kernel built its control-plane routes. A host
 /// names a part mounted from elsewhere with [`SurfaceEngine::serve`](crate::SurfaceEngine::serve),
 /// such as the website's desk.
