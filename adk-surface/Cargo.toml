@@ -172,7 +172,7 @@ getrandom = { version = "0.3", optional = true }
 # The WhatsApp webhook's `X-Hub-Signature-256` (`whatsapp`).
 hmac = { version = "0.12", optional = true }
 # The Bot Connector's token on every Teams activity (`teams`).
-jsonwebtoken = { version = "11", features = ["aws_lc_rs"], optional = true }
+jsonwebtoken = { version = "12", features = ["aws_lc_rs"], optional = true }
 # Slack's Socket Mode and Discord's Gateway (`slack`, `discord`).
 tokio-tungstenite = { version = "0.29", optional = true, features = ["rustls-tls-native-roots", "connect"] }
 # "Confirm it's you" (`mobile`): passkey registration and assertions. Its core links OpenSSL.
@@ -214,7 +214,7 @@ axum = "0.8"
 # The Teams tests' signing key, its JWKS and signed Bot Connector tokens.
 aws-lc-rs = "1.18"
 base64 = "0.22"
-jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "12", features = ["aws_lc_rs"] }
 dotenvy = "0.15"
 proptest = "1.5"
 tempfile = "3"
