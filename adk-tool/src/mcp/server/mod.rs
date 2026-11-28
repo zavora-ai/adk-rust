@@ -9,7 +9,7 @@
 //! | Part | Type | Role |
 //! |------|------|------|
 //! | Server | [`McpServer`] | Lists the tools and answers `tools/call`; an rmcp `ServerHandler` |
-//! | Executor | [`McpCallExecutor`] | Runs or refuses every call; [`DirectExecutor`] by default |
+//! | Executor | [`McpCallExecutor`] | Runs or refuses every call; by default a [`GovernedExecutor`], which runs a call only when its tool policy permits it |
 //! | Tasks | [`McpTaskHost`] | Answers `tasks/get`, `tasks/update` and `tasks/cancel` for calls the executor turned into tasks (SEP-2663); none by default |
 //! | Caller | [`McpCallerResolver`] | Turns each HTTP request into the [`McpCaller`] the executor sees |
 //! | Router | [`McpRouterBuilder`] | The `axum::Router`: Streamable HTTP, the Server Card at `{endpoint}/server-card` (SEP-2127) with its `/.well-known/mcp/server-card.json` alias (spec 3.5 §7.9), and `/.well-known/ai-catalog.json` |
@@ -20,7 +20,7 @@
 //! ```rust,no_run
 //! use std::sync::Arc;
 //!
-//! use adk_core::{AdkError, Url};
+//! use adk_core::{DeclarativePolicy, RunConfig, Url};
 //! use adk_tool::FunctionTool;
 //! use adk_tool::mcp::server::{McpRouterBuilder, McpServer};
 //! use serde_json::json;
@@ -35,6 +35,11 @@
 //! let server = McpServer::builder("com.example/solar", "1.0.0")
 //!     .description("Quotes for Example Solar installations")
 //!     .tool(quote)
+//!     .tool_governance(
+//!         RunConfig::builder()
+//!             .tool_policy(Arc::new(DeclarativePolicy::builder().allow_read_only().build()))
+//!             .build(),
+//!     )
 //!     .build()?;
 //! let router = McpRouterBuilder::new(server)
 //!     .public_url(Url::parse("http://127.0.0.1:8080/mcp")?)
@@ -59,7 +64,9 @@ pub use card::{
     SERVER_CARD_WELL_KNOWN_PATH, ServerCard, ServerCardHeader, ServerCardIcon, ServerCardInput,
     ServerCardRemote, ServerCardRepository,
 };
-pub use executor::{DirectExecutor, McpCallExecutor, McpToolCall, McpToolOutcome};
+pub use executor::{
+    GovernedExecutor, McpCallExecutor, McpToolCall, McpToolOutcome, UngovernedExecutor,
+};
 pub use http::{McpRouterBuilder, McpSessions};
 pub use task::{McpRequestPeer, McpTaskHost};
 
@@ -69,8 +76,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use adk_core::{
-    AdkError, ErrorCategory, ErrorComponent, Result, RetryHint, TOOL_ERROR_MESSAGE_LIMIT, Tool,
-    ToolEffect, Url, tool_error_response,
+    AdkError, ErrorCategory, ErrorComponent, Result, RetryHint, RunConfig,
+    TOOL_ERROR_MESSAGE_LIMIT, Tool, ToolEffect, Url, tool_error_response,
 };
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ContentBlock,
@@ -106,6 +113,11 @@ const QUOTED_NAME_LIMIT: usize = 128;
 /// the server's [`open_world`](McpServerBuilder::open_world) default. `tools/call` checks the
 /// arguments against the parameters schema, then hands the call to the
 /// [`McpCallExecutor`] under the [call timeout](McpServerBuilder::call_timeout).
+///
+/// The default executor is a [`GovernedExecutor`]: each call goes through
+/// `adk_core::authorize_tool_call` under the config passed to
+/// [`tool_governance`](McpServerBuilder::tool_governance), and a server given none refuses
+/// every call.
 ///
 /// The server is an rmcp `ServerHandler`, so it also serves stdio; there every caller is the
 /// [local caller](McpServerBuilder::local_caller), anonymous unless set.
@@ -544,6 +556,7 @@ pub struct McpServerBuilder {
     instructions: Option<String>,
     tools: Vec<Arc<dyn Tool>>,
     executor: Option<Arc<dyn McpCallExecutor>>,
+    governance: Option<RunConfig>,
     task_host: Option<Arc<dyn McpTaskHost>>,
     local_caller: McpCaller,
     open_world: bool,
@@ -563,6 +576,7 @@ impl McpServerBuilder {
             instructions: None,
             tools: Vec::new(),
             executor: None,
+            governance: None,
             task_host: None,
             local_caller: McpCaller::anonymous(),
             open_world: true,
@@ -618,7 +632,47 @@ impl McpServerBuilder {
         self
     }
 
-    /// Runs calls through `executor` instead of [`DirectExecutor`].
+    /// Governs every call through `adk_core::authorize_tool_call` under `config`, with a
+    /// [`GovernedExecutor`]: its `tool_policy`, `governance` kill switches, confirmation
+    /// handler, approvals, approval store, action ledger and audit trail apply as they do to an
+    /// agent's calls.
+    ///
+    /// Without it, and without an [`executor`](Self::executor), the server refuses every call.
+    /// A config without a `tool_policy` refuses every call too.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use adk_core::{DeclarativePolicy, GovernanceControl, RunConfig};
+    /// use adk_tool::mcp::server::McpServer;
+    ///
+    /// let control = GovernanceControl::new();
+    /// let policy = DeclarativePolicy::builder()
+    ///     .allow_read_only()
+    ///     .require_approval("book_install", "a person confirms each booking")
+    ///     .build();
+    /// let server = McpServer::builder("com.example/solar", "1.0.0")
+    ///     .description("Quotes and bookings for Example Solar")
+    ///     .tool_governance(
+    ///         RunConfig::builder().tool_policy(Arc::new(policy)).governance(control.clone()).build(),
+    ///     )
+    ///     .build()?;
+    /// control.freeze("incident 4012"); // every call is now refused
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    pub fn tool_governance(mut self, config: RunConfig) -> Self {
+        self.governance = Some(config);
+        self
+    }
+
+    /// Runs calls through `executor` instead of a [`GovernedExecutor`].
+    ///
+    /// The executor owns authorization: it routes each call through
+    /// `adk_core::authorize_tool_call` itself, as `adk-server`'s executors do, or is an
+    /// [`UngovernedExecutor`], the explicit opt-out under which every visible tool runs for any
+    /// caller.
     pub fn executor(mut self, executor: Arc<dyn McpCallExecutor>) -> Self {
         self.executor = Some(executor);
         self
@@ -661,8 +715,9 @@ impl McpServerBuilder {
     /// # Errors
     ///
     /// Returns an `InvalidInput` error when the name, version, description or title break the
-    /// SEP-2127 card schema, when two tools share a name, or when a tool's parameters schema is
-    /// not a JSON Schema object of type `object`.
+    /// SEP-2127 card schema, when two tools share a name, when a tool's parameters schema is
+    /// not a JSON Schema object of type `object`, or when both an executor and a governance
+    /// config are set.
     pub fn build(self) -> Result<McpServer> {
         check_name(&self.name)?;
         check_version(&self.version)?;
@@ -691,8 +746,20 @@ impl McpServerBuilder {
             let definition = definition(tool.as_ref(), input_schema, self.open_world);
             entries.push(Entry { tool, definition, validator });
         }
-        let executor =
-            self.executor.unwrap_or_else(|| Arc::new(DirectExecutor::new(self.name.clone())));
+        let executor = match (self.executor, self.governance) {
+            (Some(_), Some(_)) => {
+                return Err(invalid(
+                    "mcp.server.executor_and_governance",
+                    "set `executor(..)` or `tool_governance(..)`, not both: a custom executor \
+                     governs its own calls, so the governance config would be ignored",
+                ));
+            }
+            (Some(executor), None) => executor,
+            (None, config) => {
+                Arc::new(GovernedExecutor::new(self.name.clone(), config.unwrap_or_default()))
+                    as Arc<dyn McpCallExecutor>
+            }
+        };
         Ok(McpServer {
             inner: Arc::new(Inner {
                 name: self.name,
