@@ -323,4 +323,4 @@ Signed, agent-run websites (spec 3.5): the AWP 2.0 site contract, the agent edge
 
 ## Validation Status
 
-Copy-paste Cargo commands and dependency snippets in the README and official docs are validated by `scripts/check-doc-examples.sh`, and their versions and `adk-rust` feature names by `scripts/check-doc-versions.sh`. CI also checks cargo-adk scaffolds with `scripts/check-cargo-adk-templates.sh`, rejects duplicate example target names with `scripts/check-example-name-collisions.sh`, and compiles every standalone example under `examples/` with `scripts/check-examples-compile.sh`.
+Copy-paste Cargo commands and dependency snippets in the README and official docs are validated by `scripts/check-doc-examples.sh`, and their versions and `adk-rust` feature names by `scripts/check-doc-versions.sh`. CI also generates a project for every cargo-adk template, pattern and addon and compiles it with `scripts/check-cargo-adk-templates.sh`, rejects duplicate example target names with `scripts/check-example-name-collisions.sh`, and compiles every standalone example under `examples/` with `scripts/check-examples-compile.sh`.

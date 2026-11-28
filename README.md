@@ -223,7 +223,7 @@ cargo adk new my-agent --template autonomous # unattended agent: goals and a sch
 cargo adk new my-site --template website     # AWP 2.0 website: content, theme, charter, data and its edge
 cargo adk new my-desk --template vision      # Document desk: perception on the device, a gated cloud describer
 
-# Compose addons with any template
+# Compose addons with a template
 cargo adk new my-agent --template tools --addon telemetry --addon sessions
 cargo adk new my-agent --addon mcp --addon guardrails
 
@@ -238,17 +238,17 @@ cargo run
 |----------|--------------|
 | `llm` (alias `basic`) | Single LLM agent with tool calling |
 | `tools` | LLM agent with `#[tool]` custom tools |
-| `sequential` | Multi-agent pipeline executing in order |
-| `parallel` | Parallel execution with result aggregation |
-| `loop` | Iterates until a condition is met |
-| `conditional` | Routes based on LLM decisions |
+| `sequential` | Two agents in order: a researcher, then a writer |
+| `parallel` | Two specialists at once, then an aggregator that combines their answers |
+| `loop` | A writer and a critic that loop until the critic calls `exit_loop` |
+| `conditional` | Routes each request to a specialist on the model's classification |
 | `graph` | Graph workflow with an agent node and per-step checkpoints |
 | `realtime` | Gemini Live voice agent with transcripts |
 | `rag` | Vector search over a knowledge base |
 | `api` | REST server exposing the agent over HTTP |
 | `agent-engine` | Gemini Enterprise Agent Engine BYOC container and Terraform deployment |
 | `openai` | OpenAI-powered agent |
-| `custom` | Manual `Agent` trait implementation |
+| `custom` | Manual `Agent` trait implementation that calls the model itself |
 | `harness` | Governed harness agent: modes, approvals, a shell, `AGENTS.md` and skills, at the console or served |
 | `autonomous` | An agent that runs unattended: a rubric-graded goal and a schedule on the kernel, durable stores, an approval-gated side effect, a budget and the OS sandbox |
 | `website` | An AWP 2.0 site project and the edge binary that serves it |
@@ -258,26 +258,32 @@ cargo run
 
 | Template | What you get |
 |----------|--------------|
-| `production` | LLM agent with server, auth, sessions and telemetry |
-| `multi-agent` | Supervisor over sub-agents, with telemetry |
-| `pipeline` | Sequential data processing with session state |
-| `chatbot` | Conversational agent with memory and an HTTP interface |
+| `production` | `llm` served over A2A with the `server`, `auth`, `sessions` and `telemetry` addons |
+| `multi-agent` | `sequential` with OpenTelemetry tracing |
+| `pipeline` | `sequential` with tracing and an in-memory session service |
+| `chatbot` | `llm` served over A2A with the `sessions` and `memory` addons |
 | `a2a-server` (alias `a2a`) | A2A protocol server with session management |
 | `managed-agents` | Anthropic Managed Agents API session with SSE streaming |
 
-**Addons** — composable with any template, and with each other.
+**Addons** — composable with most templates, and with each other. `telemetry`, `server` and
+`docker` work as generated; the others turn on a feature and build a starting point that you
+wire into the agent yourself.
 
 | Addon | Adds |
 |-------|------|
-| `telemetry` | OpenTelemetry tracing |
-| `auth` | API key and JWT authentication |
-| `sessions` | Session state management |
-| `memory` | Semantic memory and RAG |
-| `mcp` | MCP tool integration |
-| `guardrails` | Input and output validation |
-| `eval` | Evaluation framework |
-| `browser` | Browser automation |
-| `server` | HTTP server with A2A |
+| `telemetry` | OpenTelemetry tracing: OTLP export when `OTEL_EXPORTER_OTLP_ENDPOINT` is set |
+| `auth` | The `auth` feature and `AUTH_API_KEY`; nothing checks requests until you add it |
+| `sessions` | An in-memory session service to pass to a runner or server |
+| `memory` | An in-memory semantic memory service to pass to a runner |
+| `mcp` | The MCP client feature, with the connection code in a comment |
+| `guardrails` | Input guardrails (harmful content, PII) to pass to the agent builder |
+| `eval` | The `eval` feature, for scoring the agent against eval sets |
+| `browser` | A WebDriver `BrowserToolset` to pass to the agent builder |
+| `server` | The agent served over A2A |
+| `docker` | `Dockerfile`, a static `Dockerfile.static` and `.dockerignore` |
+
+CI generates every template, pattern and addon and compiles each project
+(`scripts/check-cargo-adk-templates.sh`).
 
 `cargo adk build` compiles the project without deploying, and `cargo adk validate`
 checks an agent definition without building. `cargo adk templates` and

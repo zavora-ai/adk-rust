@@ -47,22 +47,22 @@ The built-in registry contains 17 composable templates.
 | `rag` | An agent with a vector-search knowledge path | Answers must use a private document or knowledge collection |
 | `api` | An agent exposed through an HTTP API | Another application will call the agent over the network |
 | `openai` | An LLM agent configured for OpenAI | OpenAI is the intended starting provider |
-| `sequential` | Multiple agents executed in a fixed order | Each stage depends on the previous stage's work |
-| `parallel` | Concurrent specialists with aggregated results | Independent work can run at the same time |
-| `loop` | Repeated execution until a condition is met | A reviewer, repair, or refinement cycle needs a bounded loop |
-| `conditional` | Decision-based routing between agents | Different requests need different specialists or paths |
+| `sequential` | A `SequentialAgent`: a researcher, then a writer | Each stage depends on the previous stage's work |
+| `parallel` | A `ParallelAgent` of two specialists, then an aggregator that combines their answers from session state | Independent work can run at the same time |
+| `loop` | A `LoopAgent` of a writer and a critic that ends when the critic calls `exit_loop`, after at most five rounds | A reviewer, repair, or refinement cycle needs a bounded loop |
+| `conditional` | An `LlmConditionalAgent` that routes each request to a `technical` or `general` agent | Different requests need different specialists or paths |
 | `graph` | A `GraphAgent` with an agent node and a checkpointer that carries the conversation between turns | Work must resume, branch, join, or survive process failure |
 | `realtime` | A Gemini Live session: typed text in, a spoken answer and its transcript out (`--provider gemini` only) | The product needs a live voice conversation |
-| `custom` | A manual implementation of the `Agent` trait | The execution contract cannot be expressed by a built-in agent |
+| `custom` | A manual implementation of the `Agent` trait that sends the user's message to the model | The execution contract cannot be expressed by a built-in agent |
 | `agent-engine` | A Gemini Enterprise Agent Engine BYOC container with `Dockerfile` and `deploy/terraform/` | The agent deploys to Agent Runtime as a prebuilt container |
 | `harness` | A governed harness agent with modes, approvals, a shell, `AGENTS.md` and a skill, at the console or served (see [The Harness](../harness/index.md)) | A person works with the agent in a project, approving what it does |
 | `autonomous` | An agent that works toward a rubric-graded goal and wakes on a schedule on the agent kernel, with durable SQLite stores, an approval-gated side effect, a run budget, a spend cap, a signed audit log and the OS sandbox (see [Build an autonomous agent](../autonomy/index.md)) | The agent runs unattended |
 | `website` | An AWP 2.0 site project — content, theme, a draft charter, data — and an edge binary that serves the published site and its capabilities (see [Spin up an AWP website](../deployment/website-quickstart.md)) | The product is a website with an agent edge |
 | `vision` | A Document desk: a harness with the vision pack, PP-OCRv6 and RF-DETR on the device, and a cloud describer behind the egress gate (`--provider anthropic` by default; see [Vision: Getting Started](../vision/getting-started.md)) | The agent reads scanned documents and images |
 
-`harness`, `autonomous` and `vision` take no `server` or `docker` add-on, since their launcher
-serves them itself; `website` takes no add-on, since its edge binary replaces the generated
-`main.rs`.
+`harness`, `autonomous` and `vision` take no `server`, `docker` or `telemetry` add-on, since their
+launcher serves them itself and installs its own span exporter; `website` takes no add-on, since
+its edge binary replaces the generated `main.rs`.
 
 `cargo adk templates` also lists `managed-agents`, an Anthropic Managed Agents session with SSE
 streaming. A separate generator creates it, and `--addon` flags do not apply to it.
@@ -76,17 +76,22 @@ Repeat `--addon` to compose capabilities. The generator resolves their feature
 flags, imports, initialization fragments, environment examples, and generated
 files in a stable priority order.
 
+`telemetry`, `server` and `docker` work as generated. The other add-ons enable
+a feature and add a starting point to `src/main.rs`: a service or toolset built
+after the agent, or a comment with the code to add. Wiring it into the agent or
+runner is left to you.
+
 | Add-on | What it adds | Typical reason to use it |
 |---|---|---|
-| `telemetry` | OpenTelemetry tracing setup | Follow requests across model, agent, and tool boundaries |
-| `auth` | API-key and JWT authentication scaffolding | Protect a deployed agent endpoint |
-| `sessions` | Session state service setup | Continue a conversation or workflow with stored state |
-| `memory` | Semantic memory and RAG integration | Retrieve relevant knowledge beyond the current conversation |
-| `mcp` | MCP feature wiring and client starting point | Connect capabilities owned by another process or service |
-| `guardrails` | Input and output validation hooks | Enforce product rules before and after agent execution |
-| `eval` | Evaluation harness scaffolding | Measure behavior against repeatable cases before release |
-| `browser` | Browser automation integration | Let an approved agent operate a web interface |
-| `server` | Axum HTTP and A2A server setup | Publish the agent for remote callers |
+| `telemetry` | ADK telemetry as the tracing subscriber; spans go over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT` when it is set | Follow requests across model, agent, and tool boundaries |
+| `auth` | The `auth` feature and `AUTH_API_KEY` read from the environment; nothing checks requests yet | Start protecting a deployed agent endpoint |
+| `sessions` | An `InMemorySessionService` | Continue a conversation or workflow with stored state |
+| `memory` | An `InMemoryMemoryService` | Retrieve relevant knowledge beyond the current conversation |
+| `mcp` | The MCP client feature, with the connection code in a comment | Connect capabilities owned by another process or service |
+| `guardrails` | An input `GuardrailSet` that blocks harmful content and redacts PII | Enforce product rules before and after agent execution |
+| `eval` | The `eval` feature | Measure behavior against repeatable cases before release |
+| `browser` | A `BrowserToolset` over a WebDriver session | Let an approved agent operate a web interface |
+| `server` | The agent served over A2A with `A2aServer` | Publish the agent for remote callers |
 | `docker` | Multi-stage container build files (`Dockerfile`, `Dockerfile.static`, `.dockerignore`) | Package the agent as a minimal container image |
 
 Example:
@@ -113,9 +118,9 @@ There is no separate `--pattern` flag.
 | Pattern | Composition | Product starting point |
 |---|---|---|
 | `multi-agent` | `sequential` + telemetry | A visible multi-stage workflow |
-| `production` | `llm` + server + auth + sessions + telemetry | An authenticated, observable agent service |
+| `production` | `llm` + server + auth + sessions + telemetry | An observable agent service, with authentication still to add |
 | `pipeline` | `sequential` + sessions + telemetry | A stateful processing pipeline |
-| `chatbot` | `llm` + sessions + memory + server | A conversational HTTP product with recall |
+| `chatbot` | `llm` + sessions + memory + server | A conversational HTTP product, with memory still to wire in |
 | `a2a-server` | `llm` + server + sessions | An independently deployed A2A agent |
 
 `a2a` remains an alias for `a2a-server`.

@@ -63,10 +63,10 @@ cargo adk new my_agent --template openai
 # A2A protocol agent with builder API
 cargo adk new my_agent --template a2a
 
-# Use any provider with any template
+# Use another provider with a template
 cargo adk new my_agent --template tools --provider anthropic
 
-# Add optional addons to any template
+# Add optional addons to a template
 cargo adk new my_agent --template tools --addon docker --addon telemetry
 ```
 

@@ -227,13 +227,13 @@ cargo adk eval --ledger ledger.jsonl --format json --output ledger-report.json
 | Template | What you get |
 |----------|--------------|
 | `llm` (alias `basic`, the default) | Single LLM agent with tool calling and an interactive console |
-| `sequential` | Sequential multi-agent pipeline |
-| `parallel` | Parallel multi-agent execution with result aggregation |
-| `loop` | Loop agent that iterates until a condition is met |
-| `conditional` | Conditional agent that routes on an LLM decision |
-| `graph` | Graph workflow with checkpoints and durable execution |
-| `realtime` | Realtime bidirectional audio/video streaming agent |
-| `custom` | Custom agent with a manual trait implementation |
+| `sequential` | `SequentialAgent`: a researcher, then a writer, sharing one model |
+| `parallel` | `ParallelAgent`: two specialists at once, each storing its answer under an output key, then an aggregator that combines them |
+| `loop` | `LoopAgent`: a writer and a critic, looping until the critic calls `exit_loop` (at most five rounds) |
+| `conditional` | `LlmConditionalAgent`: the model classifies each request and routes it to a `technical` or `general` agent |
+| `graph` | Graph workflow with an agent node and per-step checkpoints in memory |
+| `realtime` | Gemini Live voice agent: type a message, get a spoken answer and its transcript (`--provider gemini` only) |
+| `custom` | Custom agent with a manual `Agent` implementation that sends the user's message to the model |
 | `tools` | LLM agent with `#[tool]` custom tools |
 | `rag` | RAG agent with vector search over a knowledge base |
 | `api` | REST API server exposing the agent over HTTP |
@@ -245,7 +245,7 @@ cargo adk eval --ledger ledger.jsonl --format json --output ledger-report.json
 | `website` | An AWP 2.0 website (spec 3.5 §7.17): the site project `adk-website new` scaffolds — `site.toml`, the `paper` theme, a business draft charter with its own site id, capabilities, public terms, draft legal pages, `data/`, the holding page — and an edge binary: `cargo run` serves the release `adk-rust site publish` puts in `data/host` with `search_site` on the AWP edge, `cargo run -- check` builds and runs the launch gate; a smoke test. Takes no addon |
 | `managed-agents` | Anthropic Managed Agents session with SSE streaming |
 
-Each template generates `Cargo.toml` with the right dependencies and features, a `src/main.rs` that compiles and runs, `.env.example` with the required API key variables, `README.md`, and `.gitignore`.
+Each template generates `Cargo.toml` with the right dependencies and features, a `src/main.rs` that compiles and runs, `.env.example` with the required API key variables, `README.md`, and `.gitignore`. CI generates a project for every template, pattern and addon and compiles it, failing on any warning in the generated code (`scripts/check-cargo-adk-templates.sh`).
 
 ## Composable Template System
 
@@ -264,18 +264,25 @@ cargo adk new my-agent --template llm --addon server --addon telemetry --addon d
 
 ### Addons (10)
 
+`telemetry`, `server` and `docker` work as generated. The others turn on an `adk-rust` feature
+and add a starting point to `src/main.rs` — a service or toolset built after the agent, or a
+comment — that you wire into the agent yourself.
+
 | Addon | What it adds |
 |-------|--------------|
-| `telemetry` | OpenTelemetry tracing integration |
-| `auth` | API key and JWT authentication |
-| `sessions` | Session state management and persistence |
-| `memory` | Semantic memory and RAG search integration |
-| `mcp` | Model Context Protocol server connections |
-| `guardrails` | Input/output validation and content filtering |
-| `eval` | Evaluation framework for agent quality testing |
-| `browser` | Browser automation tools via WebDriver |
-| `server` | HTTP server with A2A protocol support |
+| `telemetry` | ADK telemetry as the subscriber (`telemetry-otlp`): spans exported over OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, the console log either way |
+| `auth` | The `auth` feature (adk-auth) and `AUTH_API_KEY` read from the environment; nothing checks requests until you add it |
+| `sessions` | An `InMemorySessionService` to pass to a runner or server |
+| `memory` | An `InMemoryMemoryService` to pass to a runner through `MemoryServiceAdapter` |
+| `mcp` | The MCP client feature, with the code that connects a server and adds its `McpToolset` in a comment |
+| `guardrails` | An input `GuardrailSet` (harmful content, PII redaction) to pass with `.input_guardrails(..)` |
+| `eval` | The `eval` feature (adk-eval), for scoring the agent against eval sets |
+| `browser` | A `BrowserToolset` over a WebDriver session (`WEBDRIVER_URL`) to pass with `.toolset(..)` |
+| `server` | The agent served over A2A by `A2aServer` on `BIND_HOST:PORT` |
 | `docker` | Container packaging: `Dockerfile`, `Dockerfile.static`, `.dockerignore` |
+
+`harness`, `autonomous` and `vision` take no `server`, `docker` or `telemetry` addon: their
+launcher serves the agent and installs its own span exporter. `website` takes no addon.
 
 The `api` template and the `server` addon listen on `BIND_HOST` (default `127.0.0.1`); the generated Dockerfiles set `BIND_HOST=0.0.0.0`. A server that listens beyond loopback answers only the host names it is configured with (`SecurityConfig::allowed_hosts`).
 
@@ -291,10 +298,10 @@ Pre-composed combinations of a base template and addons. Patterns share the `--t
 
 | Pattern | Base | Addons | Use case |
 |---------|------|--------|----------|
-| `multi-agent` | sequential | telemetry | Multi-agent supervisor with observability |
-| `production` | llm | server, auth, sessions, telemetry | Agent service with HTTP, auth, sessions and telemetry |
-| `pipeline` | sequential | sessions, telemetry | Sequential data processing pipeline |
-| `chatbot` | llm | sessions, memory, server | Conversational chatbot with memory and HTTP interface |
+| `multi-agent` | sequential | telemetry | Two agents in sequence with tracing |
+| `production` | llm | server, auth, sessions, telemetry | An agent served over A2A with tracing, and the auth and sessions starting points |
+| `pipeline` | sequential | sessions, telemetry | Sequential agents with tracing and a session service |
+| `chatbot` | llm | sessions, memory, server | An agent served over A2A, with session and memory services to wire in |
 | `a2a-server` (alias `a2a`) | llm | server, sessions | A2A protocol server with session management |
 
 ```bash
