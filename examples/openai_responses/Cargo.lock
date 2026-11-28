@@ -40,6 +40,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-devtools"
+version = "3.0.0"
+dependencies = [
+ "adk-core",
+ "adk-sandbox",
+ "async-trait",
+ "glob",
+ "libc",
+ "regex",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "walkdir",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "adk-gemini"
 version = "3.0.0"
 dependencies = [
@@ -67,8 +86,10 @@ version = "3.0.0"
 dependencies = [
  "adk-agent",
  "adk-core",
+ "adk-devtools",
  "adk-model",
  "adk-runner",
+ "adk-sandbox",
  "adk-session",
  "adk-tool",
  "async-stream",
@@ -77,6 +98,7 @@ dependencies = [
  "futures",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -922,6 +944,12 @@ dependencies = [
  "wasip3",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "glob"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "h2"

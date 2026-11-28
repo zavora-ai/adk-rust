@@ -24,9 +24,13 @@ adk-model = { workspace = true }
 adk-runner = { workspace = true }
 adk-session.workspace = true
 adk-tool.workspace = true
-
-# Optional dependencies
-adk-sandbox = { workspace = true, optional = true }
+# The built-in tools: `filesystem` through the workspace-contained file tools, `bash` and
+# `code_execution` through `BashTool` with a launcher that confines each command.
+adk-devtools.workspace = true
+# The OS enforcers that confine the built-in tools by default (Seatbelt on macOS, bubblewrap
+# on Linux); only the target platform's enforcer compiles.
+adk-sandbox = { workspace = true, features = ["sandbox-macos", "sandbox-linux"] }
+tempfile = "3.20"
 
 async-trait.workspace = true
 async-stream.workspace = true
@@ -43,9 +47,8 @@ tracing.workspace = true
 
 [features]
 default = []
-sandbox = ["dep:adk-sandbox"]
 memory = []
-full = ["sandbox", "memory"]
+full = ["memory"]
 # Model providers `DefaultModelResolver` can construct.
 gemini = ["adk-model/gemini"]
 openai = ["adk-model/openai"]

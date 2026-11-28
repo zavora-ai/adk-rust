@@ -304,8 +304,10 @@ version = "3.0.0"
 dependencies = [
  "adk-agent",
  "adk-core",
+ "adk-devtools",
  "adk-model",
  "adk-runner",
+ "adk-sandbox",
  "adk-session",
  "adk-tool",
  "async-stream",
@@ -314,6 +316,7 @@ dependencies = [
  "futures",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-stream",
