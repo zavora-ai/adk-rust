@@ -15,6 +15,8 @@
 //! - `tokio::broadcast` — fan-out to stream subscribers
 //! - [`Runner`] — drives the agent through the real LLM
 //! - [`SessionUsageTracker`] — tracks per-turn and cumulative token usage
+//! - [`GovernanceControl`], [`ToolPolicy`], [`ActionLedger`] — the operator's kill switch,
+//!   tool policy and action ledger, given to every turn's Runner
 //!
 //! # Control Flow
 //!
@@ -56,9 +58,9 @@ use tracing::{debug, info, warn};
 #[cfg(feature = "memory")]
 use adk_core::Memory;
 use adk_core::{
-    Agent, ClaimedRun, Content, Event, FunctionResponseData, NewRun, OnConflict, Part,
-    RunCheckpointRef, RunConfig, RunOutcome, RunState as DurableRunState, SessionId, ToolApproval,
-    UserId,
+    ActionLedger, Agent, ClaimedRun, Content, Event, FunctionResponseData, GovernanceControl,
+    NewRun, OnConflict, Part, RunCheckpointRef, RunConfig, RunOutcome, RunState as DurableRunState,
+    SessionId, ToolApproval, ToolPolicy, UserId,
 };
 use adk_runner::Runner;
 use adk_session::service::SessionService;
@@ -150,6 +152,12 @@ pub struct SessionLoop {
     stores: ManagedStores,
     /// How runs are claimed, heartbeated, and parked.
     durable: DurableConfig,
+    /// The kill switch every turn's Runner shares.
+    governance: GovernanceControl,
+    /// The policy every turn's tool calls are evaluated against.
+    tool_policy: Option<Arc<dyn ToolPolicy>>,
+    /// The ledger every turn's non-idempotent tool calls are recorded in.
+    action_ledger: Option<Arc<dyn ActionLedger>>,
 }
 
 /// What one turn of the agent produced besides session events.
@@ -214,6 +222,9 @@ impl SessionLoop {
             custom_tools: None,
             stores: ManagedStores::in_memory(),
             durable: DurableConfig::default(),
+            governance: GovernanceControl::new(),
+            tool_policy: None,
+            action_ledger: None,
         }
     }
 
@@ -322,6 +333,32 @@ impl SessionLoop {
     /// treated as custom.
     pub fn with_custom_tools(mut self, names: impl IntoIterator<Item = String>) -> Self {
         self.custom_tools = Some(names.into_iter().collect());
+        self
+    }
+
+    /// Shares `control` with every turn's Runner, so freezing it refuses new turns and stops
+    /// a running one before its next model or tool call. Without it the loop has a control
+    /// of its own that nothing else can reach.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let session_loop = SessionLoop::new(/* ... */).with_governance(control.clone());
+    /// ```
+    pub fn with_governance(mut self, control: GovernanceControl) -> Self {
+        self.governance = control;
+        self
+    }
+
+    /// Evaluates every tool call of every turn against `policy`.
+    pub fn with_tool_policy(mut self, policy: Arc<dyn ToolPolicy>) -> Self {
+        self.tool_policy = Some(policy);
+        self
+    }
+
+    /// Records every non-idempotent tool call of every turn in `ledger`.
+    pub fn with_action_ledger(mut self, ledger: Arc<dyn ActionLedger>) -> Self {
+        self.action_ledger = Some(ledger);
         self
     }
 
@@ -1028,14 +1065,21 @@ impl SessionLoop {
         }
     }
 
-    /// Build a Runner instance for this turn.
+    /// Build a Runner instance for this turn, under the operator's kill switch, tool policy
+    /// and action ledger.
     fn build_runner(&self) -> Result<Runner, RuntimeError> {
-        #[allow(unused_mut)]
         let mut builder = Runner::builder()
             .app_name(self.owner.0.as_str())
             .agent(Arc::clone(&self.agent))
             .session_service(Arc::clone(&self.session_service))
-            .cancellation_token(self.cancel_token.clone());
+            .cancellation_token(self.cancel_token.clone())
+            .governance(self.governance.clone());
+        if let Some(policy) = &self.tool_policy {
+            builder = builder.tool_policy(Arc::clone(policy));
+        }
+        if let Some(ledger) = &self.action_ledger {
+            builder = builder.action_ledger(Arc::clone(ledger));
+        }
 
         #[cfg(feature = "memory")]
         if let Some(ref memory) = self.memory {

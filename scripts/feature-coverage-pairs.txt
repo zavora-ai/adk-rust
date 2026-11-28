@@ -309,8 +309,8 @@
 2 adk-kernel mongodb
 2 adk-kernel firestore
 2 adk-kernel neo4j
-# Two entries on purpose: `memory` alone left `sandbox` unbuilt, and a renamed
-# EnforcedLimits field kept its old name at a call site for two releases.
+# `memory` gates the memory wiring; `full` is the bundle a manifest names. The OS sandbox of
+# the built-in tools links in every build, so the default build covers it.
 3 adk-managed memory
 3 adk-managed full
 # `DefaultModelResolver` constructs each provider only under its feature.

@@ -22,6 +22,7 @@ use adk_core::{
     ApprovalDecision, ApprovalPolicy, ApprovalService, ApproverSelector, InboxQuery, Llm,
     LlmRequest, LlmResponseStream, Part, StoreApprovalService, principal::SubjectRef,
 };
+use adk_managed::builtin::BuiltinTools;
 use adk_managed::durable::{DurableConfig, ManagedStores};
 use adk_managed::resolver::{ModelResolver, ResolverResult};
 use adk_managed::state_store::{
@@ -262,6 +263,13 @@ async fn runtime(
     DefaultManagedAgentRuntime::new(Arc::new(Resolver(llm.clone())), sessions)
         .with_stores(stores)
         .with_durable_config(config)
+        .with_builtin_tools(host_tools())
+}
+
+/// These tests prove how confirmations route, not confinement, so the guarded `bash` runs on
+/// the host, which every CI platform has; `tool_governance_tests` covers the OS sandbox.
+fn host_tools() -> BuiltinTools {
+    BuiltinTools::unsafe_unconfined_host()
 }
 
 // ─── Event helpers ────────────────────────────────────────────────────────────
@@ -659,7 +667,8 @@ async fn an_approval_service_decision_wakes_the_run() {
     );
     let runtime = DefaultManagedAgentRuntime::new(Arc::new(Resolver(llm.clone())), sessions)
         .with_stores(stores.with_approval_service(service.clone()))
-        .with_durable_config(fast());
+        .with_durable_config(fast())
+        .with_builtin_tools(host_tools());
     let (session, mut stream) = start(&runtime, guarded_bash_agent()).await;
 
     runtime.send_event(&session, text("run it")).await.unwrap();

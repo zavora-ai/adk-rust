@@ -7,7 +7,7 @@ name: Sandbox Linux
 # note. This job installs bubblewrap, lifts the restriction as the spec describes, and
 # runs the same tests with `ADK_SANDBOX_REQUIRE_ENFORCER=1`, under which a test that would
 # skip fails instead. It runs on every push to main, on a pull request that touches the
-# sandbox, the harness shell, or this file, and on demand.
+# sandbox, the harness shell, the managed runtime's built-in tools, or this file, and on demand.
 
 on:
   push:
@@ -20,6 +20,8 @@ on:
       - 'adk-harness/tests/shell_sandbox_tests.rs'
       - 'adk-kernel/src/drivers/**'
       - 'adk-kernel/tests/driver_sandbox_tests.rs'
+      - 'adk-managed/src/builtin.rs'
+      - 'adk-managed/tests/tool_governance_tests.rs'
       - '.github/workflows/sandbox-linux.yml'
       - '.github/actions/setup-rust/**'
       - '.github/actions/apt-install/**'
@@ -90,3 +92,6 @@ jobs:
 
     - name: Driver sandbox tests (adk-kernel)
       run: cargo nextest run -p adk-kernel --test integration -E 'test(/^driver_sandbox_tests::/)' --no-fail-fast
+
+    - name: Built-in tool confinement tests (adk-managed)
+      run: cargo nextest run -p adk-managed --test tool_governance_tests --no-fail-fast

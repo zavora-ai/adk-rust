@@ -27,6 +27,8 @@ This is the execution engine inside a managed agent service. It is a **library**
 - **Parked tool calls**: Custom tool calls and tool confirmations end the turn with `requires_action` and park its durable run until answered or expired
 - **Model resolution**: `DefaultModelResolver` builds Gemini, OpenAI, Anthropic, Ollama, and OpenAI-compatible models under provider features
 - **Agent resolution**: an `AgentResolver` set with `with_agent_resolver` builds definitions before `build_agent`, on `create` and on every rebuild; `adk-harness`'s `HarnessResolver` builds a harness from a `HarnessDef` this way
+- **Confined built-in tools**: `bash` and `code_execution` run under the platform's OS sandbox in a workspace of the session's own, and are refused where no sandbox runs; `filesystem` stays inside that workspace
+- **Governed turns**: every turn's `Runner` shares the operator's `GovernanceControl`, `ToolPolicy` and action ledger, so a freeze stops managed turns
 - **Composable**: Injected services (sessions, sandbox, memory) — no platform dependencies
 - **Additive**: Feature-gated; existing `Runner`/`LlmAgent` unchanged when feature is off
 
@@ -301,6 +303,73 @@ in place of the call's pending response. Confirmations work the same way through
 `user.tool_confirmation`, or through an approval service set with
 `ManagedStores::with_approval_service`. An expired call is answered with an expiry error.
 
+### Built-in Tools
+
+`bash`, `code_execution` and `filesystem` run in a workspace of the session's own,
+`<workspace root>/<session id>/workspace`. `BuiltinTools`, set with `with_builtin_tools`,
+decides what confines the commands:
+
+| `BuiltinTools` | `bash`, `code_execution` | `filesystem` |
+|----------------|--------------------------|--------------|
+| `os_sandbox()` (default) | Seatbelt on macOS, bubblewrap on Linux: writes only to the workspace and a scratch home, reads only those and the system runtime, no network. Refused with `managed.builtin.sandbox_unavailable` where no enforcer runs, Windows included | The session workspace |
+| `sandbox_backend(backend)`, or `with_sandbox(backend)` on the runtime | The `SandboxBackend`, with its own isolation | The session workspace |
+| `unsafe_unconfined_host()` | On the host as the runtime's user; nothing confines them | The session workspace |
+
+`filesystem` refuses a path that escapes the workspace, lexically or through a symbolic link.
+Commands get an allowlist of environment variables, never the runtime's own environment, and
+a timeout (`with_timeout`, 120 s by default) that a call can shorten but not extend.
+`BuiltinTools::probe` reports at startup whether the configured isolation can run.
+
+```rust
+use std::sync::Arc;
+
+use adk_managed::DefaultManagedAgentRuntime;
+use adk_managed::builtin::BuiltinTools;
+use adk_managed::resolver::DefaultModelResolver;
+use adk_session::InMemorySessionService;
+
+let tools = BuiltinTools::os_sandbox().with_workspace_root("/srv/adk/workspaces");
+if let Err(error) = tools.probe() {
+    eprintln!("built-in commands will be refused: {error}");
+}
+let runtime = DefaultManagedAgentRuntime::new(
+    Arc::new(DefaultModelResolver::new()),
+    Arc::new(InMemorySessionService::new()),
+)
+.with_builtin_tools(tools);
+```
+
+### Governance
+
+Every turn runs on a `Runner` built with the runtime's kill switch, tool policy and action
+ledger:
+
+| Setting | Effect on every turn |
+|---------|----------------------|
+| `with_governance(control)` | Freezing `control` refuses new turns, stops a running turn before its next model or tool call, and refuses a call waiting on a decision. Without it the runtime has its own control, `runtime.governance()` |
+| `with_tool_policy(policy)` | Each tool call is allowed, denied, or held for approval by `policy` |
+| `with_action_ledger(ledger)` | Each non-idempotent tool call is recorded, so a recovered turn answers a call that already ran instead of repeating it |
+
+```rust
+use std::sync::Arc;
+
+use adk_core::{GovernanceControl, InMemoryActionLedger};
+use adk_managed::DefaultManagedAgentRuntime;
+use adk_managed::resolver::DefaultModelResolver;
+use adk_session::InMemorySessionService;
+
+let control = GovernanceControl::new();
+let runtime = DefaultManagedAgentRuntime::new(
+    Arc::new(DefaultModelResolver::new()),
+    Arc::new(InMemorySessionService::new()),
+)
+.with_governance(control.clone())
+.with_action_ledger(Arc::new(InMemoryActionLedger::new()));
+
+control.freeze("incident 4012");
+assert!(runtime.governance().is_frozen());
+```
+
 ### Event Replay (SSE Reconnection)
 
 ```rust
@@ -387,6 +456,7 @@ adk-managed/src/
 │   └── error.rs            # RuntimeError
 ├── resolver.rs             # ModelRef → Arc<dyn Llm>
 ├── agent_builder.rs        # ManagedAgentDef → runnable agent
+├── builtin.rs              # BuiltinTools: confinement and session workspaces of the built-in tools
 ├── session_loop.rs         # Supervised loop: run turns on durable runs, park, checkpoint
 ├── durable.rs              # ManagedStores, DurableConfig
 ├── state_store.rs          # ManagedStateStore and its backends
@@ -403,9 +473,8 @@ adk-managed/src/
 
 | Flag | Description |
 |------|-------------|
-| `sandbox` | Enable `adk-sandbox` integration for isolated tool execution |
 | `memory` | Cross-session memory through an `adk_core::Memory` service (`with_memory`); links no extra crate |
-| `full` | `sandbox` and `memory` |
+| `full` | `memory` |
 | `gemini`, `openai`, `anthropic`, `ollama` | Let `DefaultModelResolver` build that provider's models |
 | `all-providers` | Every provider feature |
 
@@ -432,6 +501,10 @@ Runs fixture F-1 end-to-end with `ScriptedLlm` (no API key required). Platform t
 | `ScriptedLlm` is `adk_model::ScriptedLlm`; a call past the last turn fails with `model.scripted.exhausted`; `requests()` and `remaining()` replace `turns_consumed()` and `total_turns()` | — |
 | `DefaultModelResolver` is no longer a unit struct | Build it with `DefaultModelResolver::new()` |
 | `ManagedStores`, `DurableConfig`, `SessionServiceStateStore`, and provider features for `DefaultModelResolver` are new | — |
+| Built-in `bash` and `code_execution` run under the OS sandbox and are refused where none runs; `filesystem` keeps to the session workspace | To run them on the host unconfined, `with_builtin_tools(BuiltinTools::unsafe_unconfined_host())` |
+| The `sandbox` feature is removed; `adk-sandbox` always links, and `with_sandbox` takes effect without a feature | Drop `sandbox` from the dependency's features |
+| `build_agent` takes `&BuiltinTools` in place of an optional sandbox backend; `ManagedBuiltinTool::new` takes a `BuiltinTools`; `DefaultManagedAgentRuntime::sandbox()` is `builtin_tools()` | Pass `&BuiltinTools::default()` |
+| Every turn shares the runtime's `GovernanceControl`, `ToolPolicy` and action ledger | Set them with `with_governance`, `with_tool_policy` and `with_action_ledger` |
 
 See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.md) and the [changelog](../CHANGELOG.md) for the full list.
 

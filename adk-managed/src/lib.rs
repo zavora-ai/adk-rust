@@ -39,19 +39,32 @@
 //! restart: a new runtime instance rebuilds it from the [`ManagedStateStore`] and resumes
 //! it when the answer arrives. See [`durable`].
 //!
+//! ## Built-in tools and governance
+//!
+//! The built-in `bash` and `code_execution` tools run confined by the platform's OS sandbox
+//! (Seatbelt on macOS, bubblewrap on Linux) in a workspace of the session's own, and are
+//! refused where no sandbox runs, Windows included; `filesystem` stays inside that workspace.
+//! Running them unconfined on the host takes
+//! [`BuiltinTools::unsafe_unconfined_host`](builtin::BuiltinTools::unsafe_unconfined_host).
+//! See [`builtin`].
+//!
+//! Every turn's `Runner` shares the runtime's `GovernanceControl`, so an operator freeze
+//! stops managed turns, and evaluates tool calls against the runtime's `ToolPolicy` and
+//! records them in its `ActionLedger` when it has them.
+//!
 //! ## Features
 //!
 //! No feature is on by default.
 //!
 //! | Feature | Enables |
 //! |---------|---------|
-//! | `sandbox` | `adk-sandbox` integration for isolated tool execution |
 //! | `memory` | Cross-session memory through an `adk_core::Memory` service (`with_memory`); links no extra crate |
-//! | `full` | `sandbox` and `memory` |
+//! | `full` | `memory` |
 //! | `gemini`, `openai`, `anthropic`, `ollama` | `DefaultModelResolver` builds that provider's models |
 //! | `all-providers` | Every provider feature |
 
 pub mod agent_builder;
+pub mod builtin;
 pub mod checkpoint;
 pub mod default_runtime;
 pub mod durable;
@@ -70,6 +83,7 @@ pub mod usage;
 pub use agent_builder::{
     AgentResolver, BuildError, ManagedBuiltinTool, ManagedCustomTool, build_agent,
 };
+pub use builtin::{BuiltinIsolation, BuiltinTools};
 pub use checkpoint::{CheckpointManager, RunState};
 pub use default_runtime::DefaultManagedAgentRuntime;
 pub use durable::{DurableConfig, ManagedStores};

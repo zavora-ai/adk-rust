@@ -327,6 +327,108 @@ that may host the same sessions needs the same resolver.
 
 See [Serving the harness](../harness/serving.md#on-the-managed-runtime) for the harness.
 
+### Built-in Tools
+
+The built-in tools of a definition built by `build_agent` run in a workspace of the session's
+own, `<workspace root>/<session id>/workspace`, beside a scratch home that serves as `HOME` and
+`TMPDIR`. `BuiltinTools`, set with `DefaultManagedAgentRuntime::with_builtin_tools`, decides what
+confines `bash` and `code_execution`:
+
+| `BuiltinTools` | `bash`, `code_execution` | `filesystem` |
+|----------------|--------------------------|--------------|
+| `os_sandbox()` (default) | Under the platform's OS enforcer: writes only to the workspace and the scratch home, reads only those and the system runtime, no network unless `with_network(true)` | The session workspace |
+| `sandbox_backend(backend)`, or `with_sandbox(backend)` on the runtime | Through the `SandboxBackend`, which provides its own isolation; a `ProcessBackend` without an enforcer confines nothing | The session workspace |
+| `unsafe_unconfined_host()` | On the host as the runtime's user, starting in the workspace; nothing confines them | The session workspace |
+
+Under `os_sandbox()` each platform behaves as follows:
+
+| Platform | Enforcer | Without it |
+|----------|----------|------------|
+| macOS | Seatbelt (`sandbox-exec`), which grants the system runtime itself | — |
+| Linux | bubblewrap, with `/usr`, `/etc` and the top-level program and library directories mounted read-only | The call is refused with `managed.builtin.sandbox_unavailable`; install `bwrap` and allow unprivileged user namespaces |
+| Windows | None for a generic confined command | The call is refused with `managed.builtin.sandbox_unavailable`; use a sandbox backend or `unsafe_unconfined_host()` |
+
+A refused call creates nothing and runs nothing; the model receives the error, whose message
+names the alternatives. `BuiltinTools::probe` reports at startup whether the configured
+isolation can run, and names the enforcer or backend.
+
+Every mode keeps these:
+
+- **Workspace containment**: `filesystem` resolves each path inside the session workspace and
+  refuses one that escapes it, lexically or through a symbolic link, with
+  `devtools.path_escape`. Its `read` and `write` are `adk-devtools`' `read_file` and
+  `write_file`; `list` returns the entries of a directory in the workspace.
+- **Environment allowlist**: a command never inherits the runtime's environment, which holds
+  provider keys. A confined command gets `PATH`, `HOME`, `TMPDIR` and the locale variables; a
+  host command gets `adk-devtools`' `DEFAULT_ENV_ALLOWLIST`.
+- **Timeout**: `with_timeout` (120 s by default) is a ceiling a call can lower with
+  `timeout_secs`; the command's process group is stopped when it exits.
+
+Workspaces live under `with_workspace_root(root)`, or a private temporary directory created on
+first use. Deleting a session deletes its workspace.
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+
+use adk_managed::DefaultManagedAgentRuntime;
+use adk_managed::builtin::BuiltinTools;
+use adk_managed::resolver::DefaultModelResolver;
+use adk_session::InMemorySessionService;
+
+fn runtime() -> DefaultManagedAgentRuntime {
+    let tools = BuiltinTools::os_sandbox()
+        .with_workspace_root("/srv/adk/workspaces")
+        .with_timeout(Duration::from_secs(60));
+    if let Err(error) = tools.probe() {
+        tracing::warn!(error = %error, "built-in commands will be refused on this host");
+    }
+    DefaultManagedAgentRuntime::new(
+        Arc::new(DefaultModelResolver::new()),
+        Arc::new(InMemorySessionService::new()),
+    )
+    .with_builtin_tools(tools)
+}
+```
+
+An agent an `AgentResolver` builds brings its own tools: the harness, for one, applies its own
+shell policy.
+
+### Governance
+
+Every turn runs on a `Runner` the session builds for it, and each one is built with the
+runtime's kill switch, tool policy and action ledger. They reach agents an `AgentResolver`
+builds as well, and agents behind an agent tool, through the run's configuration.
+
+| Setting | Effect on every turn |
+|---------|----------------------|
+| `with_governance(control)` | Freezing `control` refuses a turn at its start, stops a running turn before its next model or tool call, and refuses a call waiting on a decision; the session reports the freeze reason as an `error` event and stays usable after `unfreeze`. Without it the runtime has its own control, `runtime.governance()` |
+| `with_tool_policy(policy)` | Each tool call is allowed, denied, or held for approval by `policy`; a denied call never runs and the model receives the reason |
+| `with_action_ledger(ledger)` | Each non-idempotent tool call is recorded, so a turn recovered after its worker stopped answers a call that already ran instead of repeating it |
+
+```rust
+use std::sync::Arc;
+
+use adk_core::{DeclarativePolicy, GovernanceControl, InMemoryActionLedger};
+use adk_managed::DefaultManagedAgentRuntime;
+use adk_managed::resolver::DefaultModelResolver;
+use adk_session::InMemorySessionService;
+
+fn runtime(control: GovernanceControl) -> DefaultManagedAgentRuntime {
+    DefaultManagedAgentRuntime::new(
+        Arc::new(DefaultModelResolver::new()),
+        Arc::new(InMemorySessionService::new()),
+    )
+    .with_governance(control)
+    .with_tool_policy(Arc::new(DeclarativePolicy::builder().allow_read_only().build()))
+    .with_action_ledger(Arc::new(InMemoryActionLedger::new()))
+}
+```
+
+A definition's `permission_policy` still decides which calls wait on `user.tool_confirmation`;
+the tool policy applies on top of it. See [Tool Authorization](../security/tool-authorization.md)
+for the order the mechanisms are evaluated in.
+
 ### Event Replay
 
 Support SSE `Last-Event-ID` reconnection via sequence-based replay:
@@ -519,9 +621,11 @@ configuration that requests either:
 ```text
 invalid request: EnvironmentConfig cannot be honoured by this runtime: sessions run
 in-process, so per-session environment variables and working directories would have to mutate
-process-global state shared with other sessions. Pass `None`, or configure a sandboxed runtime.
+process-global state shared with other sessions. Pass `None`: built-in tools already start in a
+workspace of the session's own.
 ```
 
 Sessions run in-process, so applying per-session environment variables or a working directory
-would mutate state shared with every other session. Pass `None`, or run the session in a
-sandboxed runtime.
+would mutate state shared with every other session. Pass `None`: the built-in tools already start
+in the session's workspace and get an allowlisted environment (see
+[Built-in Tools](#built-in-tools)).

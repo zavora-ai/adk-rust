@@ -1,7 +1,7 @@
 //! Default implementation of the [`ManagedAgentRuntime`] trait.
 //!
 //! [`DefaultManagedAgentRuntime`] composes existing ADK crates (`Runner`,
-//! `SessionService`, optional sandbox and memory) behind the unified lifecycle
+//! `SessionService`, the built-in tools' sandbox, optional memory) behind the unified lifecycle
 //! trait. It manages active sessions as supervised background tasks, runs every turn under
 //! a durable run, and checkpoints session state after every event.
 //!
@@ -23,6 +23,18 @@
 //! process and its restart, therefore serve the same sessions. Call
 //! [`DefaultManagedAgentRuntime::recover`] at startup to host every stored session that
 //! has a run in progress, so expiries are enforced without waiting for a client.
+//!
+//! # Governance
+//!
+//! Every turn runs on a `Runner` built with the runtime's [`GovernanceControl`] — its own, or
+//! the operator's from [`with_governance`](DefaultManagedAgentRuntime::with_governance) — and
+//! with the [`ToolPolicy`] and [`ActionLedger`] it was given. Freezing the control refuses new
+//! turns and stops a running one before its next model or tool call.
+//!
+//! # Built-in tools
+//!
+//! `bash` and `code_execution` run confined by the platform's OS sandbox in a workspace of
+//! the session's own, and are refused where no sandbox runs; see [`crate::builtin`].
 //!
 //! # Example
 //!
@@ -53,11 +65,12 @@ use tracing::{debug, info};
 use adk_core::Agent;
 #[cfg(feature = "memory")]
 use adk_core::Memory;
-#[cfg(feature = "sandbox")]
+use adk_core::{ActionLedger, GovernanceControl, ToolPolicy};
 use adk_sandbox::SandboxBackend;
 use adk_session::service::{CreateRequest, SessionService};
 
 use crate::agent_builder::{AgentResolver, BuildError, build_agent};
+use crate::builtin::{BuiltinIsolation, BuiltinTools};
 use crate::checkpoint::CheckpointManager;
 use crate::durable::{DurableConfig, ManagedStores};
 use crate::replay::create_event_stream;
@@ -120,7 +133,8 @@ pub(crate) struct ActiveSession {
 /// Default implementation of the managed agent runtime.
 ///
 /// Composed from a [`ModelResolver`] + a pluggable [`SessionService`] + the
-/// [`ManagedStores`] sessions park and resume on + optional sandbox and memory. Has no
+/// [`ManagedStores`] sessions park and resume on + the built-in tools' sandbox + the operator's
+/// kill switch, tool policy and action ledger + optional memory. Has no
 /// platform dependencies — the platform injects its own implementations of these traits.
 ///
 /// # Example
@@ -152,9 +166,14 @@ pub struct DefaultManagedAgentRuntime {
     durable: DurableConfig,
     /// Builds definitions before `build_agent` does (spec 3.1 §7.18).
     agent_resolver: Option<Arc<dyn AgentResolver>>,
-    /// Optional sandbox backend for isolated built-in tool execution.
-    #[cfg(feature = "sandbox")]
-    sandbox: Option<Arc<dyn SandboxBackend>>,
+    /// Where the built-in tools run and what confines them.
+    builtin_tools: BuiltinTools,
+    /// The kill switch every turn's Runner shares.
+    governance: GovernanceControl,
+    /// The policy every turn's tool calls are evaluated against.
+    tool_policy: Option<Arc<dyn ToolPolicy>>,
+    /// The ledger every turn's non-idempotent tool calls are recorded in.
+    action_ledger: Option<Arc<dyn ActionLedger>>,
     /// Optional memory service for cross-session persistent memory.
     #[cfg(feature = "memory")]
     memory: Option<Arc<dyn Memory>>,
@@ -192,8 +211,10 @@ impl DefaultManagedAgentRuntime {
             stores: ManagedStores::in_memory(),
             durable: DurableConfig::default(),
             agent_resolver: None,
-            #[cfg(feature = "sandbox")]
-            sandbox: None,
+            builtin_tools: BuiltinTools::default(),
+            governance: GovernanceControl::new(),
+            tool_policy: None,
+            action_ledger: None,
             #[cfg(feature = "memory")]
             memory: None,
             agents: Arc::new(RwLock::new(HashMap::new())),
@@ -298,11 +319,100 @@ impl DefaultManagedAgentRuntime {
         &self.stores
     }
 
-    /// Set the sandbox backend for isolated built-in tool execution.
-    #[cfg(feature = "sandbox")]
-    pub fn with_sandbox(mut self, sandbox: Arc<dyn SandboxBackend>) -> Self {
-        self.sandbox = Some(sandbox);
+    /// Runs the built-in tools as `tools` says: their isolation, workspace root and timeout.
+    ///
+    /// The default, [`BuiltinTools::os_sandbox`], confines `bash` and `code_execution` with
+    /// the platform's OS sandbox and refuses them where none runs. Running them on the host
+    /// unconfined takes [`BuiltinTools::unsafe_unconfined_host`].
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use adk_managed::builtin::BuiltinTools;
+    /// use adk_managed::resolver::DefaultModelResolver;
+    /// use adk_managed::DefaultManagedAgentRuntime;
+    /// use adk_session::InMemorySessionService;
+    ///
+    /// let runtime = DefaultManagedAgentRuntime::new(
+    ///     Arc::new(DefaultModelResolver::new()),
+    ///     Arc::new(InMemorySessionService::new()),
+    /// )
+    /// .with_builtin_tools(BuiltinTools::os_sandbox().with_workspace_root("/srv/adk/workspaces"));
+    /// # let _ = runtime;
+    /// ```
+    #[must_use]
+    pub fn with_builtin_tools(mut self, tools: BuiltinTools) -> Self {
+        self.builtin_tools = tools;
         self
+    }
+
+    /// Runs the built-in `bash` and `code_execution` tools through `sandbox`, which provides
+    /// their isolation, keeping the configured workspace root and timeout.
+    #[must_use]
+    pub fn with_sandbox(mut self, sandbox: Arc<dyn SandboxBackend>) -> Self {
+        self.builtin_tools = self.builtin_tools.with_isolation(BuiltinIsolation::Backend(sandbox));
+        self
+    }
+
+    /// Shares the operator's kill switch with every turn.
+    ///
+    /// Without one the runtime has a control of its own, reachable through
+    /// [`governance`](Self::governance). Freezing it refuses new turns, stops a running
+    /// turn before its next model or tool call, and refuses a call waiting on a decision.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use adk_core::GovernanceControl;
+    /// use adk_managed::resolver::DefaultModelResolver;
+    /// use adk_managed::DefaultManagedAgentRuntime;
+    /// use adk_session::InMemorySessionService;
+    ///
+    /// let control = GovernanceControl::new();
+    /// let runtime = DefaultManagedAgentRuntime::new(
+    ///     Arc::new(DefaultModelResolver::new()),
+    ///     Arc::new(InMemorySessionService::new()),
+    /// )
+    /// .with_governance(control.clone());
+    ///
+    /// control.freeze("incident 4012");
+    /// assert!(runtime.governance().is_frozen());
+    /// ```
+    #[must_use]
+    pub fn with_governance(mut self, control: GovernanceControl) -> Self {
+        self.governance = control;
+        self
+    }
+
+    /// Evaluates every tool call of every turn against `policy`, which can allow, deny, or
+    /// require approval. A run that carries a policy of its own keeps it.
+    #[must_use]
+    pub fn with_tool_policy(mut self, policy: Arc<dyn ToolPolicy>) -> Self {
+        self.tool_policy = Some(policy);
+        self
+    }
+
+    /// Records every non-idempotent tool call of every turn in `ledger`, so a turn recovered
+    /// after its worker stopped answers a call that already ran instead of repeating it.
+    /// Every runtime instance that may host the same sessions needs the same ledger.
+    #[must_use]
+    pub fn with_action_ledger(mut self, ledger: Arc<dyn ActionLedger>) -> Self {
+        self.action_ledger = Some(ledger);
+        self
+    }
+
+    /// The kill switch every turn's Runner shares.
+    pub fn governance(&self) -> &GovernanceControl {
+        &self.governance
+    }
+
+    /// Where the built-in tools run and what confines them.
+    pub fn builtin_tools(&self) -> &BuiltinTools {
+        &self.builtin_tools
     }
 
     /// Set the memory service for cross-session persistent memory.
@@ -320,12 +430,6 @@ impl DefaultManagedAgentRuntime {
     /// Get a reference to the session service.
     pub fn session_service(&self) -> &Arc<dyn SessionService> {
         &self.session_service
-    }
-
-    /// Get a reference to the optional sandbox backend.
-    #[cfg(feature = "sandbox")]
-    pub fn sandbox(&self) -> Option<&Arc<dyn SandboxBackend>> {
-        self.sandbox.as_ref()
     }
 
     /// Get a reference to the optional memory service.
@@ -377,11 +481,7 @@ impl DefaultManagedAgentRuntime {
                 message: e.to_string(),
             }
         })?;
-        #[cfg(feature = "sandbox")]
-        let built = build_agent(def, model, self.sandbox.clone());
-        #[cfg(not(feature = "sandbox"))]
-        let built = build_agent(def, model);
-        built.map_err(|e| match e {
+        build_agent(def, model, &self.builtin_tools).map_err(|e| match e {
             BuildError::InvalidDef(msg) => RuntimeError::invalid_request(msg),
             BuildError::BuildFailed(msg) => RuntimeError::internal(msg),
         })
@@ -468,7 +568,16 @@ impl DefaultManagedAgentRuntime {
             .with_owner(record.app_name.as_str(), record.user_id.as_str())
             .with_stores(self.stores.clone())
             .with_durable_config(self.durable.clone())
-            .with_custom_tools(custom_tools);
+            .with_custom_tools(custom_tools)
+            .with_governance(self.governance.clone());
+        let session_loop = match &self.tool_policy {
+            Some(policy) => session_loop.with_tool_policy(Arc::clone(policy)),
+            None => session_loop,
+        };
+        let session_loop = match &self.action_ledger {
+            Some(ledger) => session_loop.with_action_ledger(Arc::clone(ledger)),
+            None => session_loop,
+        };
         tokio::spawn(session_loop.run());
 
         ActiveSession {
@@ -600,7 +709,8 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
                 message: "EnvironmentConfig cannot be honoured by this runtime: sessions run \
                           in-process, so per-session environment variables and working \
                           directories would have to mutate process-global state shared with \
-                          other sessions. Pass `None`, or configure a sandboxed runtime."
+                          other sessions. Pass `None`: built-in tools already start in a \
+                          workspace of the session's own."
                     .to_string(),
                 param: Some("env".to_string()),
             });
@@ -801,6 +911,7 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
                 ))
             })?;
         self.stores.state.delete(&identity.session_id).await?;
+        self.builtin_tools.remove_session_workspace(&identity.session_id).await;
 
         debug!(
             session_id = %session.0,
@@ -893,13 +1004,13 @@ mod tests {
 
         let _runtime = DefaultManagedAgentRuntime::new(resolver, sessions);
 
-        #[cfg(feature = "sandbox")]
-        assert!(_runtime.sandbox().is_none());
+        assert!(matches!(_runtime.builtin_tools().isolation(), BuiltinIsolation::OsSandbox));
+        assert!(!_runtime.governance().is_frozen());
         #[cfg(feature = "memory")]
         assert!(_runtime.memory().is_none());
     }
 
-    #[cfg(all(feature = "sandbox", feature = "memory"))]
+    #[cfg(feature = "memory")]
     #[test]
     fn test_new_with_sandbox_and_memory() {
         use adk_sandbox::{
@@ -955,7 +1066,7 @@ mod tests {
             .with_sandbox(Arc::new(FakeSandbox))
             .with_memory(Arc::new(FakeMemory));
 
-        assert!(runtime.sandbox().is_some());
+        assert!(matches!(runtime.builtin_tools().isolation(), BuiltinIsolation::Backend(_)));
         assert!(runtime.memory().is_some());
     }
 
