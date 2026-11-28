@@ -48,7 +48,7 @@ as a Streamable HTTP server with an MCP Server Card; hand-written servers use
 | Connect one known local server | `McpToolset` + `TokioChildProcess` | The application starts the child process |
 | Connect one remote MCP service | `McpHttpClientBuilder` | The remote deployment owns availability |
 | Change local server definitions at runtime | `McpServerManager` | The application owns a local registry and child processes |
-| Publish ADK-Rust tools as an MCP server | `McpServer` + `McpRouterBuilder` (`mcp-server`) | Your executor owns authorization and side effects |
+| Publish ADK-Rust tools as an MCP server | `McpServer` + `McpRouterBuilder` (`mcp-server`) | The governed path owns authorization under the `tool_governance` config; with none, every call is refused |
 | Serve an agent over MCP, with tasks and elicitation | `adk_server::mcp::McpAgentHost` (`adk-server` `mcp`) | The agent's governed path owns authorization; durable runs own the tasks |
 | Publish a hand-written MCP server | `adk_tool::mcp::rmcp` | Your service owns schemas, authorization, and side effects |
 | Keep a deprecated sampling integration working | `mcp-sampling` feature | Compatibility only under SEP-2577 |

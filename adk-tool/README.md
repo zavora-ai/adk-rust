@@ -742,7 +742,7 @@ its `ToolEffect` sets the annotations:
 ```rust
 use std::sync::Arc;
 
-use adk_core::Url;
+use adk_core::{DeclarativePolicy, RunConfig, Url};
 use adk_tool::FunctionTool;
 use adk_tool::mcp::server::{McpRouterBuilder, McpServer};
 use serde_json::json;
@@ -752,9 +752,11 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         Ok(json!({ "kw": args["kw"], "price": 4200 }))
     })
     .with_read_only(true);
+    let policy = DeclarativePolicy::builder().allow_read_only().build();
     let server = McpServer::builder("com.example/solar", "1.0.0")
         .description("Quotes for Example Solar installations")
         .tool(Arc::new(quote))
+        .tool_governance(RunConfig::builder().tool_policy(Arc::new(policy)).build())
         .build()?;
     let router = McpRouterBuilder::new(server)
         .public_url(Url::parse("http://127.0.0.1:8080/mcp")?)
@@ -767,7 +769,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
 | Hook | Default | Role |
 |------|---------|------|
-| `McpCallExecutor` | `DirectExecutor` (`Tool::execute` with a `SimpleToolContext`) | Runs or refuses every call; filters `tools/list` with `is_visible` |
+| `McpCallExecutor` | `GovernedExecutor`: `adk_core::authorize_tool_call` and the action ledger under the `tool_governance` config; with none, or no `tool_policy`, every call is refused | Runs or refuses every call; filters `tools/list` with `is_visible`. `UngovernedExecutor` is the explicit opt-out, under which any caller runs any visible tool |
 | `McpCallerResolver` | `AnonymousCallers` | Turns each HTTP request into the `McpCaller` the executor receives; an error refuses the request with its HTTP status |
 
 The router serves the endpoint at `/mcp` and, with a public URL, the Server Card at
