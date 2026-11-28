@@ -12,6 +12,7 @@ Two paths publish an MCP server:
 
 ```toml
 [dependencies]
+adk-core = "3.0.0"
 adk-tool = { version = "3.0.0", features = ["mcp-server"] }
 axum = "0.8"
 serde_json = "1"
@@ -20,12 +21,13 @@ tokio = { version = "1", features = ["full"] }
 
 `McpServer` lists each tool from its own declaration and answers `tools/call`;
 `McpRouterBuilder` serves it over MCP Streamable HTTP as an `axum::Router` that an
-application, or the AWP agent edge, mounts.
+application, or the AWP agent edge, mounts. Every call goes through the governed path under
+the config passed to `tool_governance`; this one runs read-only tools only.
 
 ```rust
 use std::sync::Arc;
 
-use adk_core::Url;
+use adk_core::{DeclarativePolicy, RunConfig, Url};
 use adk_tool::FunctionTool;
 use adk_tool::mcp::server::{McpRouterBuilder, McpServer, ServerCardHeader};
 use serde_json::json;
@@ -36,10 +38,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(json!({ "kw": args["kw"], "price": 4200 }))
     })
     .with_read_only(true);
+    let policy = DeclarativePolicy::builder().allow_read_only().build();
     let server = McpServer::builder("com.example/solar", "1.0.0")
         .description("Quotes for Example Solar installations")
         .title("Example Solar")
         .tool(Arc::new(quote))
+        .tool_governance(RunConfig::builder().tool_policy(Arc::new(policy)).build())
         .build()?;
     let router = McpRouterBuilder::new(server)
         .public_url(Url::parse("http://127.0.0.1:8080/mcp")?)
@@ -72,7 +76,7 @@ can correct them, and never reach the tool.
 | Hook | Default | Role |
 |---|---|---|
 | `McpCallerResolver` | `AnonymousCallers` | Runs for every request to the endpoint and returns the `McpCaller` (an id, whether it authenticated, typed extensions); an error refuses the request with its HTTP status, and `401` carries `WWW-Authenticate: Bearer` |
-| `McpCallExecutor::execute` | `DirectExecutor`: `Tool::execute` with a `SimpleToolContext` | Receives every call to a visible tool with valid arguments, with its caller, JSON-RPC request id and session; returns `Completed(value)`, `Failed(error)` or a refusal |
+| `McpCallExecutor::execute` | `GovernedExecutor` under the `tool_governance` config: refuses every call when none is set (see [Governed calls](#governed-calls)) | Receives every call to a visible tool with valid arguments, with its caller, JSON-RPC request id and session; returns `Completed(value)`, `Failed(error)` or a refusal |
 | `McpCallExecutor::is_visible` | Every tool | Filters `tools/list` per caller; a call to a hidden tool is answered as a call to an unknown tool |
 | `McpTaskHost` | None | Set with `task_host`: declares the tasks extension (SEP-2663) and answers `tasks/get`, `tasks/update` and `tasks/cancel` with the resolved caller |
 | `local_caller` | `McpCaller::anonymous()` | The caller of requests without an HTTP request, such as over stdio |
@@ -85,10 +89,76 @@ other client receives JSON-RPC `-32603` for such an answer. `McpToolCall::peer` 
 `notifications/progress` when the request carried a `progressToken`, and asks a client before
 `2026-07-28` with `elicitation/create`.
 
-An executor is where calls enter a governed path, such as `adk_core::authorize_tool_call`
-and the action ledger. The JSON-RPC request id is unique only within its session, so an
-executor that needs an idempotency key builds one from the caller and session or reads one
-the resolver attached to the caller.
+A custom executor set with `executor(..)` owns authorization: it routes each call through
+`adk_core::authorize_tool_call` and the action ledger itself, as `adk-server`'s
+`McpAgentHost` and AWP edge executors do. The JSON-RPC request id is unique only within its
+session, so an executor that needs an idempotency key builds one from the caller and session
+or reads one the resolver attached to the caller. `executor(..)` and `tool_governance(..)`
+are exclusive; `build()` refuses both with `mcp.server.executor_and_governance`.
+
+### Governed calls
+
+The default `GovernedExecutor` runs each call through `adk_core::authorize_tool_call` — the
+same governed path an `LlmAgent` call takes — under the `RunConfig` passed to
+`McpServerBuilder::tool_governance`, then through the action ledger, before `Tool::execute`:
+
+| Step | From the config | A call it stops |
+|---|---|---|
+| Kill switch | `governance(control)` | Refused with `governance.frozen` (or `governance.stale`), checked again after the ledger write |
+| Consent, egress, policy | `consent_gate`, `egress_policy`, `tool_policy` | Refused with `mcp.server.call_refused` and the reason |
+| Confirmation | `tool_approvals`, `approval_store`, `tool_reviewer`, `tool_confirmation_handler` | Held with `mcp.server.call_held` when the config has an approval store; otherwise refused with `mcp.server.no_approver` |
+| Action ledger | `action_ledger`, for `NonIdempotent` tools | A replayed request (same caller, session and request id) is answered from its record and not run again |
+| Audit | `audit` | Each decision is recorded before it takes effect |
+
+| Rule | Why |
+|---|---|
+| No `tool_governance`, or a config without a `tool_policy`, refuses every call | A server's callers are remote, so a server with no rule runs no tool |
+| The MCP client never decides a confirmation; call-ID decisions in the config are dropped | The client chooses the request id, and MCP leaves human-in-the-loop to the client as a recommendation only |
+| A held call runs when the client calls it again with the same arguments, in the same session, after an approver decided it in the approval store | A decision binds to the call's fingerprint |
+| The acting user is the caller's id, from the `McpCallerResolver` or `local_caller`; the acting agent is the server's name | Never a name the client supplies |
+
+Each refusal is a JSON-RPC error whose message carries the reason, such as
+`tool.forbidden (mcp.server.call_refused): Tool 'book_install' denied by policy: ...`. A
+confirmation handler's wait counts against the call timeout.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::audit_log::{AuditTrail, InMemoryAuditRecorder};
+use adk_core::{
+    DeclarativePolicy, GovernanceControl, InMemoryActionLedger, InMemoryApprovalStore, RunConfig,
+};
+use adk_tool::mcp::server::McpServer;
+
+fn main() -> Result<(), adk_core::AdkError> {
+    let control = GovernanceControl::new();
+    let policy = DeclarativePolicy::builder()
+        .allow_read_only()
+        .require_approval("book_install", "a person confirms each booking")
+        .build();
+    let server = McpServer::builder("com.example/solar", "1.0.0")
+        .description("Quotes and bookings for Example Solar")
+        .tool_governance(
+            RunConfig::builder()
+                .tool_policy(Arc::new(policy))
+                .governance(control.clone())
+                .approval_store(Arc::new(InMemoryApprovalStore::new()))
+                .action_ledger(Arc::new(InMemoryActionLedger::new()))
+                .audit(AuditTrail::new(Arc::new(InMemoryAuditRecorder::new())))
+                .build(),
+        )
+        .build()?;
+    control.freeze("incident 4012"); // every call to `server` is now refused
+    let _ = server;
+    Ok(())
+}
+```
+
+> **Important:** `UngovernedExecutor` is the explicit opt-out:
+> `executor(Arc::new(UngovernedExecutor::new(name)))` calls `Tool::execute` with no policy,
+> kill switch, confirmation, ledger or audit, so any caller that reaches the server runs any
+> tool it can see. Use it inside an executor that decides each call first, or in a test
+> fixture.
 
 ### Errors
 
@@ -96,6 +166,7 @@ the resolver attached to the caller.
 |---|---|
 | Unknown or hidden tool | JSON-RPC `-32602`, `unknown tool '<name>'` |
 | Arguments that do not match the schema | Result with `isError: true` and the validation message |
+| The governed path refused or held the call | JSON-RPC `-32603`, category `forbidden`, code `governance.frozen`, `mcp.server.call_refused`, `mcp.server.call_held` or `mcp.server.no_approver`, with the reason |
 | The tool ran and failed (`Failed`) | Result with `isError: true`: the error's component, category and code, plus its message only for a rejection category |
 | The executor refused (`Err`) | JSON-RPC `-32602` for `InvalidInput`, `NotFound` and `Unsupported`, otherwise `-32603`; the message adds the error's text only for a rejection category; `data` carries `category`, `code` and `retryable` |
 | The call ran past the call timeout (60 s by default) | JSON-RPC `-32603` with category `timeout`; not marked retryable for a non-idempotent tool |

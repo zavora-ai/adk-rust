@@ -1602,6 +1602,15 @@ unfreeze. See [Server](../deployment/server.md#kill-switch).
 Realtime tool calls go through the same governed path — see
 [Realtime Tools](../realtime/tools.md#the-governed-path).
 
+Calls that `adk-tool`'s MCP server (`McpServer`) serves go through the same governed path by
+default: its `GovernedExecutor` runs each one under the `RunConfig` passed to
+`McpServerBuilder::tool_governance`, whose `governance(control)` attaches the switch. A frozen
+control refuses the call with `governance.frozen`, a server with no config or no `tool_policy`
+refuses every call, and an approval-required call with no approval store or handler is refused
+with `mcp.server.no_approver`, since the MCP client never decides a confirmation.
+`UngovernedExecutor` is the explicit opt-out — see
+[Publish an MCP server](../mcp/server.md#governed-calls).
+
 ## Audit Records
 
 `Runner::builder().audit_log(recorder)` makes the governed path record each decision before

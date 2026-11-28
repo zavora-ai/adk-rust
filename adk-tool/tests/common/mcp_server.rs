@@ -12,8 +12,8 @@ use adk_core::{
     ToolEffect, Url,
 };
 use adk_tool::mcp::server::{
-    DirectExecutor, McpCallExecutor, McpCaller, McpCallerResolver, McpHttpRequest,
-    McpRouterBuilder, McpServer, McpToolCall, McpToolOutcome,
+    McpCallExecutor, McpCaller, McpCallerResolver, McpHttpRequest, McpRouterBuilder, McpServer,
+    McpToolCall, McpToolOutcome, UngovernedExecutor,
 };
 use adk_tool::{FunctionTool, SimpleToolContext};
 use async_trait::async_trait;
@@ -129,12 +129,12 @@ pub struct Seen {
 #[derive(Clone)]
 pub struct GateExecutor {
     pub seen: Arc<Mutex<Vec<Seen>>>,
-    inner: DirectExecutor,
+    inner: UngovernedExecutor,
 }
 
 impl GateExecutor {
     pub fn new() -> Self {
-        Self { seen: Arc::default(), inner: DirectExecutor::new("com.example/solar") }
+        Self { seen: Arc::default(), inner: UngovernedExecutor::new("com.example/solar") }
     }
 
     pub fn seen(&self) -> Vec<Seen> {

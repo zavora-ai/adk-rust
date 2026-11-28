@@ -8,11 +8,11 @@ mod fixture;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use adk_core::{Tool, ToolEffect, Toolset};
+use adk_core::{DeclarativePolicy, RunConfig, Tool, ToolEffect, Toolset};
 use adk_tool::mcp::rmcp::ServiceExt;
 use adk_tool::mcp::rmcp::model::{CallToolRequestParams, ErrorCode};
 use adk_tool::mcp::rmcp::transport::StreamableHttpClientTransport;
-use adk_tool::mcp::server::{McpCaller, McpSessions};
+use adk_tool::mcp::server::{McpCaller, McpServer, McpSessions};
 use adk_tool::mcp::{McpAuth, McpHttpClientBuilder};
 use fixture::*;
 use serde_json::{Value, json};
@@ -215,6 +215,36 @@ async fn a_refusal_reaches_the_client_as_a_json_rpc_error() {
         }))
     );
     client.cancel().await.unwrap();
+}
+
+/// The default executor governs every call: with no tool policy nothing runs, and a policy
+/// runs exactly the calls it permits.
+#[tokio::test]
+async fn the_default_executor_runs_only_what_the_tool_policy_permits() {
+    let builder = || {
+        McpServer::builder("com.example/solar", "1.0.0")
+            .description("Quotes and bookings for Example Solar")
+            .tools(tools())
+    };
+    let unconfigured = start(builder().build().unwrap(), |router| router).await;
+    let tools = listed(&unconfigured, McpAuth::None).await;
+    let error = tools["get_quote"].execute(tool_ctx(), json!({ "kw": 5 })).await.unwrap_err();
+    let text = error.to_string();
+    assert!(text.contains("tool.forbidden (mcp.server.call_refused)"), "{text}");
+    assert!(text.contains("no tool policy"), "{text}");
+
+    let policy = DeclarativePolicy::builder().allow_read_only().build();
+    let governed = builder()
+        .tool_governance(RunConfig::builder().tool_policy(Arc::new(policy)).build())
+        .build()
+        .unwrap();
+    let running = start(governed, |router| router).await;
+    let tools = listed(&running, McpAuth::None).await;
+    let quote = tools["get_quote"].execute(tool_ctx(), json!({ "kw": 5 })).await.unwrap();
+    assert_eq!(quote["output"], json!({ "kw": 5, "price": 5000 }));
+    let booking = tools["book_install"].execute(tool_ctx(), json!({ "date": "2026-11-02" })).await;
+    let text = booking.unwrap_err().to_string();
+    assert!(text.contains("no policy rule permits tool 'book_install'"), "{text}");
 }
 
 #[tokio::test]
