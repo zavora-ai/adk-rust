@@ -1599,6 +1599,21 @@ scheduling, and a durable run the switch refuses after it made a call parks at i
 model-call boundary — the refused calls of its batch answered `not run` — and resumes on
 unfreeze. See [Server](../deployment/server.md#kill-switch).
 
+The managed runtime (`adk-managed`) builds a `Runner` for every turn of every session, and
+each one shares the runtime's control: the operator's from
+`DefaultManagedAgentRuntime::with_governance(control)`, or the runtime's own,
+`runtime.governance()`. A frozen runtime refuses a turn at its start and stops a running turn
+before its next tool or model call, and the session reports the reason as an `error` event.
+The runtime's `with_tool_policy` and `with_action_ledger` reach every turn the same way. See
+[Managed Agent Runtime](../managed-agents/runtime.md#governance).
+
+| Where the switch is attached | How |
+|------------------------------|-----|
+| A `Runner` | `Runner::builder().governance(control)`, or the runner's own |
+| One run | `RunConfig::builder().governance(control)` |
+| `adk-server` | `ServerConfig::governance`, shared by every runner it builds |
+| `adk-managed` | `DefaultManagedAgentRuntime::with_governance(control)`, shared by every turn's runner |
+
 Realtime tool calls go through the same governed path — see
 [Realtime Tools](../realtime/tools.md#the-governed-path).
 
