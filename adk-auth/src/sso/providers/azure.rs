@@ -103,7 +103,7 @@ impl AzureADProvider {
 impl TokenValidator for AzureADProvider {
     async fn validate(&self, token: &str) -> Result<TokenClaims, TokenError> {
         // Decode header to get key ID
-        let header = jsonwebtoken::decode_header(token)?;
+        let header = jsonwebtoken::decode_header(token).map_err(TokenError::from_jwt)?;
         let kid = header.kid.ok_or_else(|| TokenError::MissingClaim("kid".into()))?;
 
         // Get decoding key from JWKS cache
@@ -125,7 +125,8 @@ impl TokenValidator for AzureADProvider {
         validation.validate_nbf = true;
 
         // Validate and decode token
-        let token_data = jsonwebtoken::decode::<TokenClaims>(token, &key, &validation)?;
+        let token_data = jsonwebtoken::decode::<TokenClaims>(token, &key, &validation)
+            .map_err(TokenError::from_jwt)?;
         self.validate_multi_tenant_claims(&token_data.claims)?;
 
         Ok(token_data.claims)
@@ -152,7 +153,9 @@ impl AzureADProvider {
 #[cfg(all(test, feature = "sso"))]
 mod tests {
     use super::AzureADProvider;
-    use crate::sso::test_issuer::{TestIssuer, assert_requires_iss_and_aud, token};
+    use crate::sso::test_issuer::{
+        TestIssuer, assert_refuses_forged_and_stale_tokens, assert_requires_iss_and_aud, token,
+    };
     use crate::sso::{JwksCache, TokenClaims, TokenValidator};
     use std::sync::Arc;
 
@@ -164,6 +167,7 @@ mod tests {
 
         let tenant_issuer = "https://login.microsoftonline.com/tenant-1/v2.0";
         assert_requires_iss_and_aud(&provider, tenant_issuer, "client-id").await;
+        assert_refuses_forged_and_stale_tokens(&provider, tenant_issuer, "client-id").await;
     }
 
     /// `common` still checks no issuer value, so any tenant's token is accepted, but the token

@@ -224,6 +224,8 @@ The `ClaimsMapper` builder controls which JWT claim becomes the `user_id`:
 
 Every validator requires the `exp`, `iss`, and `aud` claims: a token without one fails with `TokenError::MissingClaim`. `JwtValidatorBuilder::build` fails without an audience; for an issuer whose tokens carry no `aud` claim, `without_audience()` opts out, and the validator then refuses any token that carries an audience and still requires `iss`.
 
+`JwtValidatorBuilder::algorithm(JwtAlgorithm::ES256)` adds an allowed signature algorithm; with none, the validator accepts `RS256` only. `JwtAlgorithm` is ADK-owned and lists only the RSA and EC algorithms a JWKS can verify, and `"PS256".parse::<JwtAlgorithm>()` reads one from configuration.
+
 `AzureADProvider::multi_tenant()` accepts tokens from any tenant targeting the configured audience unless you restrict it with `with_allowed_tenants(...)`. It requires the `iss` claim but does not check its value.
 
 `OidcProvider::from_discovery()` rejects discovery documents whose `issuer` does not match the requested issuer URL.
@@ -458,7 +460,8 @@ cargo run --manifest-path examples/tools_hardening/Cargo.toml
 - JWKS refreshes and OIDC discovery give up after 10 seconds, and `TokenExchangeBroker` requests after 30 seconds, each with a 5-second connect timeout.
 - `OidcProvider::from_discovery()` rejects discovery documents whose `issuer` does not match the requested issuer URL.
 - Token revocation and blacklist checks are not built in. If you need immediate revocation, enforce it in a custom `TokenValidator` or request extractor.
-- `JwtValidator` rejects symmetric algorithms (HS256/HS384/HS512) and EdDSA — only RSA and EC algorithms are supported with JWKS-based validation.
+- `JwtAlgorithm` has no symmetric (HS256/HS384/HS512), EdDSA or `none` variant, so a `JwtValidator` cannot be configured to accept them. A token whose `alg` is not in the allow-list, including an HS256 token keyed with the public JWK, is refused before its signature is checked.
+- A token with a `crit` header naming an extension the validator does not implement is refused.
 - Every validator refuses a token without an `iss` or `aud` claim. `JwtValidatorBuilder::without_audience()` is the only way to accept tokens that name no audience; pin an audience whenever the issuer sets one.
 
 ## SQLx compatibility

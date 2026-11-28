@@ -75,7 +75,7 @@ impl OidcProvider {
 impl TokenValidator for OidcProvider {
     async fn validate(&self, token: &str) -> Result<TokenClaims, TokenError> {
         // Decode header to get key ID
-        let header = jsonwebtoken::decode_header(token)?;
+        let header = jsonwebtoken::decode_header(token).map_err(TokenError::from_jwt)?;
         let kid = header.kid.ok_or_else(|| TokenError::MissingClaim("kid".into()))?;
 
         // Get decoding key from JWKS cache
@@ -92,7 +92,8 @@ impl TokenValidator for OidcProvider {
         validation.validate_nbf = true;
 
         // Validate and decode token
-        let token_data = jsonwebtoken::decode::<TokenClaims>(token, &key, &validation)?;
+        let token_data = jsonwebtoken::decode::<TokenClaims>(token, &key, &validation)
+            .map_err(TokenError::from_jwt)?;
 
         Ok(token_data.claims)
     }
@@ -149,7 +150,9 @@ impl OidcProvider {
 mod tests {
     use super::{OidcProvider, ensure_discovery_issuer};
     use crate::sso::TokenError;
-    use crate::sso::test_issuer::{TestIssuer, assert_requires_iss_and_aud};
+    use crate::sso::test_issuer::{
+        TestIssuer, assert_refuses_forged_and_stale_tokens, assert_requires_iss_and_aud,
+    };
 
     #[tokio::test]
     async fn tokens_need_the_iss_and_aud_claims() {
@@ -158,6 +161,12 @@ mod tests {
             OidcProvider::new("https://issuer.example.com", "client-id", issuer.jwks_uri());
 
         assert_requires_iss_and_aud(&provider, "https://issuer.example.com", "client-id").await;
+        assert_refuses_forged_and_stale_tokens(
+            &provider,
+            "https://issuer.example.com",
+            "client-id",
+        )
+        .await;
     }
 
     #[test]

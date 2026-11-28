@@ -49,7 +49,7 @@ impl Auth0Provider {
 #[async_trait]
 impl TokenValidator for Auth0Provider {
     async fn validate(&self, token: &str) -> Result<TokenClaims, TokenError> {
-        let header = jsonwebtoken::decode_header(token)?;
+        let header = jsonwebtoken::decode_header(token).map_err(TokenError::from_jwt)?;
         let kid = header.kid.ok_or_else(|| TokenError::MissingClaim("kid".into()))?;
 
         let key = self.jwks_cache.get_key(&kid).await?;
@@ -61,7 +61,8 @@ impl TokenValidator for Auth0Provider {
         validation.validate_exp = true;
         validation.validate_nbf = true;
 
-        let token_data = jsonwebtoken::decode::<TokenClaims>(token, &key, &validation)?;
+        let token_data = jsonwebtoken::decode::<TokenClaims>(token, &key, &validation)
+            .map_err(TokenError::from_jwt)?;
 
         Ok(token_data.claims)
     }
@@ -83,7 +84,9 @@ impl Auth0Provider {
 mod tests {
     use super::Auth0Provider;
     use crate::sso::JwksCache;
-    use crate::sso::test_issuer::{TestIssuer, assert_requires_iss_and_aud};
+    use crate::sso::test_issuer::{
+        TestIssuer, assert_refuses_forged_and_stale_tokens, assert_requires_iss_and_aud,
+    };
     use std::sync::Arc;
 
     #[tokio::test]
@@ -93,6 +96,12 @@ mod tests {
         provider.jwks_cache = Arc::new(JwksCache::new(issuer.jwks_uri()));
 
         assert_requires_iss_and_aud(
+            &provider,
+            "https://tenant.auth0.com/",
+            "https://api.example.com",
+        )
+        .await;
+        assert_refuses_forged_and_stale_tokens(
             &provider,
             "https://tenant.auth0.com/",
             "https://api.example.com",

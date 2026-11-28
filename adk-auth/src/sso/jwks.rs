@@ -78,10 +78,10 @@ impl JwksCache {
         self
     }
 
-    /// Get a decoding key by key ID.
+    /// Get a decoding key by key ID, refreshing the cache if needed.
     ///
-    /// Refreshes the cache if needed.
-    pub async fn get_key(&self, kid: &str) -> Result<DecodingKey, TokenError> {
+    /// Crate-private so the JWT library's key type stays out of the public API.
+    pub(crate) async fn get_key(&self, kid: &str) -> Result<DecodingKey, TokenError> {
         // Check if we have the key
         if let Some(key) = self.keys.get(kid) {
             return Ok(key.clone());

@@ -21,6 +21,7 @@
 //! println!("User: {}", claims.sub);
 //! ```
 
+mod algorithm;
 mod claims;
 mod error;
 mod jwks;
@@ -30,6 +31,7 @@ mod sso_access;
 mod test_issuer;
 mod validator;
 
+pub use algorithm::JwtAlgorithm;
 pub use claims::{Audience, TokenClaims};
 pub use error::TokenError;
 pub use jwks::JwksCache;

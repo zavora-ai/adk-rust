@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use adk_agent::LlmAgentBuilder;
 use adk_artifact::{ArtifactService, FileArtifactService, InMemoryArtifactService};
-use adk_auth::sso::{ClaimsMapper, JwtValidator, SsoAccessControl};
+use adk_auth::sso::{ClaimsMapper, JwtAlgorithm, JwtValidator, SsoAccessControl};
 use adk_auth::{
     AccessControl, AuditEvent, AuditSink, AuthError, InMemoryAuditSink, Permission, Role,
     ScopeGuard, StaticScopeResolver,
@@ -365,7 +365,7 @@ fn sso(issuer: &Issuer, sink: impl AuditSink + 'static) -> anyhow::Result<SsoAcc
         .issuer(&issuer.url)
         .audience(issuer::AUDIENCE)
         .jwks_uri(issuer.jwks_uri())
-        .algorithm(jsonwebtoken::Algorithm::ES256)
+        .algorithm(JwtAlgorithm::ES256)
         .build()?;
     let access = AccessControl::builder()
         .role(Role::new("engineer").allow(Permission::Tool("deploy".into())))

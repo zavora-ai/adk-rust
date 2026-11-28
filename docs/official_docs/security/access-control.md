@@ -306,6 +306,36 @@ fn validators() -> Result<(JwtValidator, JwtValidator), TokenError> {
 }
 ```
 
+### Signature algorithms
+
+`JwtValidatorBuilder::algorithm` takes a `JwtAlgorithm`, an ADK-owned enum of the RSA and EC
+algorithms a JWKS can verify: `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`, `ES256` and
+`ES384`. A builder with no `algorithm(..)` call accepts `RS256` only; the providers accept
+`RS256`. `"ES256".parse::<JwtAlgorithm>()` reads a name from configuration and fails with
+`TokenError::UnsupportedAlgorithm` for any other name.
+
+| Token | Refused with |
+|-------|--------------|
+| `alg` not in the validator's allow-list, including `HS256` keyed with the public JWK (RS/HS confusion) | `TokenError::DecodingError` |
+| `alg: none`, or an unsigned token | `TokenError::DecodingError` |
+| A `crit` header naming an extension the validator does not implement | `TokenError::DecodingError` |
+| A signature the JWKS key does not verify | `TokenError::InvalidSignature` |
+| `exp` in the past, or `nbf` in the future, beyond 60 seconds of leeway | `TokenError::Expired`, `TokenError::NotYetValid` |
+
+```rust
+use adk_auth::sso::{JwtAlgorithm, JwtValidator, TokenError};
+
+fn validator(configured: &str) -> Result<JwtValidator, TokenError> {
+    JwtValidator::builder()
+        .issuer("https://issuer.example.com")
+        .audience("https://api.example.com")
+        .jwks_uri("https://issuer.example.com/.well-known/jwks.json")
+        .algorithm(JwtAlgorithm::RS256)
+        .algorithm(configured.parse()?)
+        .build()
+}
+```
+
 OIDC discovery and every JWKS refresh give up after 10 seconds (connect timeout 5 seconds), so an identity provider that accepts the connection and never answers fails the validation instead of holding it and the JWKS refresh lock. `JwksCache::with_http_client` replaces the client.
 
 ### TokenClaims

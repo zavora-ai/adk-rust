@@ -62,9 +62,11 @@ pub enum TokenError {
     ValidationError(String),
 }
 
+// A crate-private conversion, not a `From` impl, so the JWT library's error type stays out
+// of the public API and its next major release is not an `adk-auth` breaking change.
 #[cfg(feature = "sso")]
-impl From<jsonwebtoken::errors::Error> for TokenError {
-    fn from(err: jsonwebtoken::errors::Error) -> Self {
+impl TokenError {
+    pub(crate) fn from_jwt(err: jsonwebtoken::errors::Error) -> Self {
         use jsonwebtoken::errors::ErrorKind;
         match err.kind() {
             ErrorKind::ExpiredSignature => TokenError::Expired,
