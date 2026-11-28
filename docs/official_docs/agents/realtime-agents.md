@@ -332,7 +332,8 @@ through `adk_core::authorize_tool_call`, the path `LlmAgent` uses:
 
 | Control | `RealtimeAgent` | `RealtimeRunner` / `IntegratedRealtimeRunner` |
 |---------|-----------------|-----------------------------------------------|
-| Kill switch, `ToolPolicy`, confirmation | Read from the run's `RunConfig` | `RealtimeRunner`: `tool_governance(run_config, approval_scope)` on the builder. `IntegratedRealtimeRunner`: `tool_governance(run_config)`, with the approval scope from `identity(app, user, session)` |
+| Kill switch, `ToolPolicy`, confirmation | Read from the run's `RunConfig` | `RealtimeRunner`: `tool_governance(run_config, approval_scope)` on the builder. `IntegratedRealtimeRunner`: `tool_governance(run_config)`, with the approval scope from `identity(app, user, session)`. Without it, `RunConfig::default()` and the runner's own kill switch (`governance()`) |
+| Confirmation policy | `require_tool_confirmation(name)` on the builder, or the context's rule | `require_tool_confirmation(name)` on either runner builder; a call nothing can decide is refused (see [Confirmation in a live session](../realtime/tools.md#confirmation-in-a-live-session)) |
 | Runner plugin agent and tool callbacks | Run ahead of the agent's own | — |
 | Per-call timeout | `tool_timeout` (default five minutes) | `tool_timeout` (default five minutes) |
 | Result screening | `tool_result_screen` | `tool_result_screen` |

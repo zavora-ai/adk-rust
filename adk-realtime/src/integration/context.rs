@@ -332,7 +332,7 @@ pub(crate) struct IdentityToolContextFactory {
     pub(crate) memory_service: Option<Arc<dyn MemoryService>>,
     pub(crate) request_context: Option<RequestContext>,
     /// The governance config, carried into every context as its run config.
-    pub(crate) run_config: Option<RunConfig>,
+    pub(crate) run_config: RunConfig,
     /// The agent calls are governed under.
     pub(crate) agent_name: String,
 }
@@ -350,15 +350,13 @@ impl ToolContextFactory for IdentityToolContextFactory {
         if let Some(request_context) = &self.request_context {
             ctx = ctx.with_request_context(request_context.clone());
         }
-        if let Some(run_config) = &self.run_config {
-            ctx = ctx
-                .with_acting_context(run_config.acting_context_for(
-                    &self.identity.app_name,
-                    &self.agent_name,
-                    &self.identity.user_id,
-                ))
-                .with_run_config(run_config.clone());
-        }
+        ctx = ctx
+            .with_acting_context(self.run_config.acting_context_for(
+                &self.identity.app_name,
+                &self.agent_name,
+                &self.identity.user_id,
+            ))
+            .with_run_config(self.run_config.clone());
         Arc::new(ctx)
     }
 }

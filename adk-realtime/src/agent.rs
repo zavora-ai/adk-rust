@@ -183,6 +183,7 @@ pub struct RealtimeAgentBuilder {
     tool_timeout: std::time::Duration,
     tool_result_screen: Option<Arc<dyn adk_core::ToolResultScreen>>,
     expose_tool_error_messages: bool,
+    tool_confirmation_policy: adk_core::ToolConfirmationPolicy,
     #[cfg(feature = "guardrails")]
     output_guardrails: Option<adk_guardrail::GuardrailSet>,
     pricing: Option<RealtimePricing>,
@@ -223,6 +224,7 @@ impl RealtimeAgentBuilder {
             tool_timeout: crate::runner::DEFAULT_REALTIME_TOOL_TIMEOUT,
             tool_result_screen: None,
             expose_tool_error_messages: false,
+            tool_confirmation_policy: adk_core::ToolConfirmationPolicy::Never,
             #[cfg(feature = "guardrails")]
             output_guardrails: None,
             pricing: None,
@@ -432,6 +434,46 @@ impl RealtimeAgentBuilder {
         self
     }
 
+    /// Sets which tools need a person's approval before they run, as
+    /// `LlmAgentBuilder::tool_confirmation_policy` does. A call that needs one is decided by
+    /// the run's confirmation handler, approvals, or approval store, and otherwise held in the
+    /// session until a later run resumes it with a decision.
+    pub fn tool_confirmation_policy(mut self, policy: adk_core::ToolConfirmationPolicy) -> Self {
+        self.tool_confirmation_policy = policy;
+        self
+    }
+
+    /// Requires a person's approval before `tool_name` runs. See
+    /// [`tool_confirmation_policy`](Self::tool_confirmation_policy).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::Tool;
+    /// use adk_realtime::RealtimeAgent;
+    /// use adk_realtime::model::BoxedModel;
+    /// use std::sync::Arc;
+    ///
+    /// fn agent(model: BoxedModel, refund: Arc<dyn Tool>) -> adk_core::Result<RealtimeAgent> {
+    ///     RealtimeAgent::builder("voice")
+    ///         .model(model)
+    ///         .tool(refund)
+    ///         .require_tool_confirmation("refund")
+    ///         .build()
+    /// }
+    /// ```
+    pub fn require_tool_confirmation(mut self, tool_name: impl Into<String>) -> Self {
+        self.tool_confirmation_policy = self.tool_confirmation_policy.with_tool(tool_name);
+        self
+    }
+
+    /// Requires a person's approval before every tool call. See
+    /// [`tool_confirmation_policy`](Self::tool_confirmation_policy).
+    pub fn require_tool_confirmation_for_all(mut self) -> Self {
+        self.tool_confirmation_policy = adk_core::ToolConfirmationPolicy::Always;
+        self
+    }
+
     /// Screens the model's completed text and transcripts with `guardrails` before the
     /// final event reaches the client or the session, as `LlmAgent` screens final text. A
     /// transform rewrites the text; a block interrupts the response, ends the run with the
@@ -561,6 +603,7 @@ impl RealtimeAgentBuilder {
                 timeout: self.tool_timeout,
                 screen: self.tool_result_screen,
                 expose_error_messages: self.expose_tool_error_messages,
+                confirmation: self.tool_confirmation_policy,
             },
             #[cfg(feature = "guardrails")]
             output_guardrails: self.output_guardrails.map(Arc::new),
@@ -1652,7 +1695,8 @@ fn pcm16_mono_wav(pcm: &[u8], sample_rate: u32) -> Vec<u8> {
     wav
 }
 
-/// How the agent bounds, redacts, and screens tool results.
+/// Which calls the agent asks a person about, and how it bounds, redacts, and screens tool
+/// results.
 #[derive(Clone)]
 struct ToolResultPolicy {
     /// How long one tool call may run.
@@ -1661,6 +1705,8 @@ struct ToolResultPolicy {
     screen: Option<Arc<dyn adk_core::ToolResultScreen>>,
     /// Whether tool and callback error messages reach the model.
     expose_error_messages: bool,
+    /// The tools that need a person's approval before they run.
+    confirmation: adk_core::ToolConfirmationPolicy,
 }
 
 /// Screens the model's completed `text` with the output guardrails, as `LlmAgent` screens
@@ -1862,7 +1908,10 @@ async fn dispatch_tool(
         None => {
             let gate = adk_core::ToolGate::for_context(ctx.as_ref());
             let mut call = adk_core::GovernedCall::for_tool(tool.as_ref(), call_id, args)
-                .requiring_confirmation(ctx.requires_tool_confirmation(&name));
+                .requiring_confirmation(
+                    ctx.requires_tool_confirmation(&name)
+                        || policy.confirmation.requires_confirmation(&name),
+                );
             // A resumed call runs under a later invocation, so it is ledgered under its held
             // call's identity, as `LlmAgent` ledgers it.
             let ledger_key = match &resumes {
@@ -2316,6 +2365,7 @@ mod tool_safety_tests {
             timeout: std::time::Duration::from_millis(50),
             screen: None,
             expose_error_messages: false,
+            confirmation: adk_core::ToolConfirmationPolicy::Never,
         };
         dispatch_with_policy(config, tool, arguments, before, after, &policy).await
     }
@@ -2417,6 +2467,7 @@ mod tool_safety_tests {
             timeout: std::time::Duration::from_millis(50),
             screen: None,
             expose_error_messages: false,
+            confirmation: adk_core::ToolConfirmationPolicy::Never,
         };
         let hooks = DispatchHooks {
             before_tool_callbacks: &[],
@@ -2507,6 +2558,37 @@ mod tool_safety_tests {
             dispatch_with(approval, &counting(&executions), "{}", vec![], vec![]).await.unwrap();
         assert_eq!(executions.load(Ordering::SeqCst), 0);
         assert_eq!(held.held.map(|request| request.tool_name), Some("counting".to_string()));
+    }
+
+    /// The agent's own confirmation policy holds a call no run-level rule holds, as
+    /// `LlmAgent`'s `require_tool_confirmation` does.
+    #[tokio::test]
+    async fn the_agents_confirmation_policy_holds_the_call() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let policy = ToolResultPolicy {
+            timeout: std::time::Duration::from_millis(50),
+            screen: None,
+            expose_error_messages: false,
+            confirmation: adk_core::ToolConfirmationPolicy::Never.with_tool("counting"),
+        };
+
+        let held = dispatch_with_policy(
+            RunConfig::default(),
+            &counting(&executions),
+            "{}",
+            vec![],
+            vec![],
+            &policy,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        assert_eq!(held.held.map(|request| request.tool_name), Some("counting".to_string()));
+        assert_eq!(
+            held.result,
+            serde_json::json!({ "error": "Tool 'counting' requires confirmation" })
+        );
     }
 
     #[tokio::test]
@@ -2686,6 +2768,7 @@ mod tool_safety_tests {
             timeout: std::time::Duration::from_millis(50),
             screen: None,
             expose_error_messages: false,
+            confirmation: adk_core::ToolConfirmationPolicy::Never,
         };
         let hidden =
             dispatch_with_policy(RunConfig::default(), &tool, "{}", vec![], vec![], &policy)
@@ -2735,6 +2818,7 @@ mod tool_safety_tests {
             timeout: std::time::Duration::from_millis(50),
             screen: Some(Arc::new(FixedScreen { fail: false })),
             expose_error_messages: false,
+            confirmation: adk_core::ToolConfirmationPolicy::Never,
         };
         let result = dispatch_with_policy(
             RunConfig::default(),
@@ -2757,6 +2841,7 @@ mod tool_safety_tests {
             timeout: std::time::Duration::from_millis(50),
             screen: Some(Arc::new(FixedScreen { fail: true })),
             expose_error_messages: false,
+            confirmation: adk_core::ToolConfirmationPolicy::Never,
         };
         let result = dispatch_with_policy(
             RunConfig::default(),
@@ -3151,6 +3236,7 @@ mod tool_safety_tests {
                 timeout: std::time::Duration::from_millis(50),
                 screen: Some(Arc::new(WithholdAll)),
                 expose_error_messages: false,
+                confirmation: adk_core::ToolConfirmationPolicy::Never,
             };
             let blocked = adk_core::result_blocked_response("counting", "screening is down");
 
