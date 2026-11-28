@@ -1240,7 +1240,8 @@ async fn a_live_model_draws_a_form_whose_call_waits_for_the_person() {
         | ThreadItem::Drawn { .. }
         | ThreadItem::DrawnRefused { .. }
         | ThreadItem::DrawnSent { .. }
-        | ThreadItem::App { .. } => None,
+        | ThreadItem::App { .. }
+        | ThreadItem::TurnFailed { .. } => None,
     });
     let Some(form) = form else {
         println!("{} runs", finished.len());
