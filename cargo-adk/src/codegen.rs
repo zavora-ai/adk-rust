@@ -131,8 +131,11 @@ pub fn generate_cargo_toml(manifest: &CompositionManifest, project_name: &str) -
     } else {
         ""
     };
-    // A project on the `cli` launcher logs through ADK telemetry (see `generate_main_rs`).
-    let subscriber = if launcher_owns_telemetry(manifest) {
+    // A project on the `cli` launcher, or with the `telemetry` addon, logs through ADK
+    // telemetry (see `generate_main_rs`).
+    let subscriber = if launcher_owns_telemetry(manifest)
+        || manifest.addons.iter().any(|addon| addon == "telemetry")
+    {
         ""
     } else {
         "tracing-subscriber = { version = \"0.3\", features = [\"env-filter\"] }\n"
@@ -311,21 +314,14 @@ pub fn generate_main_rs_with_registry(
         placeholder_agent_construction(project_name)
     };
 
-    // Build addon initialization (sorted by priority)
-    let mut addon_init_lines = Vec::new();
-    for addon in &sorted_addons {
-        let init = addon.code_fragments.initialization;
-        if !init.is_empty() && !init.starts_with("// TODO") {
-            addon_init_lines.push(format!("    {init}"));
-        } else {
-            // Generate placeholder initialization based on addon name
-            addon_init_lines.push(format!(
-                "    // {} initialization (priority {})",
-                addon.name, addon.init_priority
-            ));
-            addon_init_lines.push(generate_placeholder_init(addon.name));
-        }
-    }
+    // Build addon initialization (sorted by priority). An addon without initialization,
+    // such as `telemetry`, contributes elsewhere and adds nothing here.
+    let addon_init_lines: Vec<String> = sorted_addons
+        .iter()
+        .map(|addon| addon.code_fragments.initialization)
+        .filter(|init| !init.is_empty())
+        .map(|init| format!("    {init}"))
+        .collect();
 
     // Build addon builder calls
     let mut builder_calls = Vec::new();
@@ -347,12 +343,14 @@ pub fn generate_main_rs_with_registry(
     adk_rust::telemetry::init_with_adk_exporter("{project_name}")?;"#
         )
     } else if has_telemetry {
-        r#"    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_target(true)
-        .init();
-    tracing::info!("telemetry initialized");"#
-            .to_string()
+        format!(
+            r#"    // Spans are exported to the OpenTelemetry collector at OTEL_EXPORTER_OTLP_ENDPOINT
+    // when it is set; RUST_LOG filters the console log either way.
+    match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {{
+        Ok(endpoint) => adk_rust::telemetry::init_with_otlp("{project_name}", &endpoint)?,
+        Err(_) => adk_rust::telemetry::init_telemetry("{project_name}")?,
+    }}"#
+        )
     } else {
         r#"    tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -584,24 +582,6 @@ pub fn generate_gitignore() -> String {
     .to_string()
 }
 
-/// Generate placeholder initialization code for an addon.
-fn generate_placeholder_init(addon_name: &str) -> String {
-    match addon_name {
-        "telemetry" => "    tracing::info!(\"telemetry configured\");".to_string(),
-        "auth" => "    tracing::info!(\"auth middleware configured\");".to_string(),
-        "sessions" => "    tracing::info!(\"session service initialized\");".to_string(),
-        "memory" => "    tracing::info!(\"memory service initialized\");".to_string(),
-        "mcp" => "    tracing::info!(\"MCP tools connected\");".to_string(),
-        "guardrails" => "    tracing::info!(\"guardrails configured\");".to_string(),
-        "eval" => "    tracing::info!(\"eval harness ready\");".to_string(),
-        "browser" => "    tracing::info!(\"browser tools initialized\");".to_string(),
-        "server" => r#"    let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
-    tracing::info!("server will bind to port {}", port);"#
-            .to_string(),
-        _ => format!("    tracing::info!(\"{addon_name} initialized\");"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -638,8 +618,10 @@ mod tests {
 
         assert!(toml.contains("\"minimal\""));
         assert!(toml.contains("\"openai\""));
-        assert!(toml.contains("\"telemetry\""));
+        assert!(toml.contains("\"telemetry-otlp\""));
         assert!(toml.contains("\"sessions\""));
+        // ADK telemetry installs the subscriber.
+        assert!(!toml.contains("tracing-subscriber"), "{toml}");
     }
 
     #[test]
@@ -732,6 +714,96 @@ mod tests {
     }
 
     #[test]
+    fn workflow_templates_share_one_model_between_their_agents() {
+        for (template, root) in [
+            ("sequential", "SequentialAgent::new(\"flow\", vec![researcher, writer])"),
+            ("parallel", "SequentialAgent::new(\"flow\", vec![specialists, aggregator])"),
+            ("loop", "LoopAgent::new(\"flow\", vec![writer, critic])"),
+            ("conditional", "LlmConditionalAgent::builder(\"flow\", model)"),
+        ] {
+            let manifest = resolve_composition(&registry(), template, &[], "openai").unwrap();
+            let main_rs = generate_main_rs(&manifest, "flow");
+            assert!(main_rs.contains(root), "{template}: missing `{root}` in:\n{main_rs}");
+            // Provider clients are not `Clone`; the agents share one `Arc<dyn Llm>`.
+            assert!(main_rs.contains("let model: Arc<dyn Llm> = Arc::new(model);"), "{main_rs}");
+            assert!(!main_rs.contains("Arc::new(model.clone())"), "{main_rs}");
+            assert!(!main_rs.contains("adk_rust::agents"), "{main_rs}");
+        }
+
+        let parallel = generate_main_rs(
+            &resolve_composition(&registry(), "parallel", &[], "gemini").unwrap(),
+            "flow",
+        );
+        for expected in [
+            "ParallelAgent::new(\"specialists\", vec![analyst, reviewer])",
+            ".output_key(\"analysis\")",
+            ".output_key(\"review\")",
+            "Analysis:\\n{analysis}\\n\\nReview:\\n{review}",
+        ] {
+            assert!(parallel.contains(expected), "missing `{expected}` in:\n{parallel}");
+        }
+
+        // The critic ends the loop with `exit_loop`, which the `tools` feature brings.
+        let manifest = resolve_composition(&registry(), "loop", &[], "gemini").unwrap();
+        assert!(manifest.feature_set.contains("tools"));
+        let main_rs = generate_main_rs(&manifest, "flow");
+        assert!(main_rs.contains(".tool(Arc::new(ExitLoopTool::new()))"), "{main_rs}");
+        assert!(main_rs.contains(".with_max_iterations(5)"), "{main_rs}");
+    }
+
+    #[test]
+    fn custom_template_implements_agent_with_prelude_imports_only() {
+        let manifest = resolve_composition(&registry(), "custom", &[], "gemini").unwrap();
+        let main_rs = generate_main_rs(&manifest, "mine");
+        for expected in [
+            "#[async_trait]",
+            "impl Agent for MyAgent",
+            "self.model.generate_content(request, false).await?",
+            "Arc::new(MyAgent { model: Arc::new(model) })",
+            "Launcher::new(agent).run().await?;",
+        ] {
+            assert!(main_rs.contains(expected), "missing `{expected}` in:\n{main_rs}");
+        }
+        // The project depends on neither crate; the prelude and `adk_rust::futures` serve.
+        assert!(!main_rs.contains("use async_trait::"), "{main_rs}");
+        assert!(!main_rs.contains(" futures::stream"), "{main_rs}");
+        assert!(manifest.dependencies.is_empty());
+    }
+
+    #[test]
+    fn starting_point_addons_build_real_values_and_announce_nothing() {
+        let manifest = resolve_composition(
+            &registry(),
+            "llm",
+            &["auth", "mcp", "guardrails", "eval", "browser"],
+            "gemini",
+        )
+        .unwrap();
+        let main_rs = generate_main_rs(&manifest, "my-agent");
+        for expected in [
+            "use adk_rust::browser::{BrowserConfig, BrowserSession, BrowserToolset};",
+            "Arc::new(BrowserToolset::new(Arc::new(BrowserSession::new(browser_config))))",
+            "use adk_rust::guardrail::{ContentFilter, GuardrailSet, PiiRedactor};",
+            ".with(ContentFilter::harmful_content())",
+            "std::env::var(\"AUTH_API_KEY\").ok()",
+        ] {
+            assert!(main_rs.contains(expected), "missing `{expected}` in:\n{main_rs}");
+        }
+        // Glob or unused imports would warn in every generated project; the MCP connection
+        // code is a comment.
+        for import in [
+            "use adk_rust::guardrail::*;",
+            "use adk_rust::eval::*;",
+            "use adk_rust::tool::McpToolset;",
+        ] {
+            assert!(!main_rs.lines().any(|line| line == import), "`{import}` in:\n{main_rs}");
+        }
+        for absent in ["BrowserTool;", ".expect(", "tracing::info!("] {
+            assert!(!main_rs.contains(absent), "unexpected `{absent}` in:\n{main_rs}");
+        }
+    }
+
+    #[test]
     fn test_generate_main_rs_with_openai_provider() {
         let reg = registry();
         let manifest = resolve_composition(&reg, "llm", &[], "openai").unwrap();
@@ -748,31 +820,19 @@ mod tests {
             resolve_composition(&reg, "llm", &["server", "telemetry", "auth"], "gemini").unwrap();
         let main_rs = generate_main_rs(&manifest, "my-agent");
 
-        // Check initialization ordering within the addon initialization section.
-        // Telemetry (10) should appear before auth (20) which should appear before server (90).
-        // Use the initialization-specific markers to avoid matching import lines.
-        let telemetry_init_pos = main_rs.find("telemetry initialized").or_else(|| {
-            // Telemetry addon has empty initialization; codegen generates a placeholder comment
-            main_rs.find("// telemetry initialization")
-        });
-        let auth_init_pos = main_rs.find("AUTH_API_KEY");
-        let server_init_pos =
-            main_rs.find(r#"std::env::var("PORT").unwrap_or_else(|_| "8080".to_string())"#);
-
-        // Auth initialization must appear before server initialization
-        if let (Some(auth_p), Some(server_p)) = (auth_init_pos, server_init_pos) {
-            assert!(
-                auth_p < server_p,
-                "auth initialization should appear before server initialization"
-            );
-        }
-
-        // If telemetry has a placeholder, it should appear before auth
-        if let (Some(tel_p), Some(auth_p)) = (telemetry_init_pos, auth_init_pos) {
-            assert!(
-                tel_p < auth_p,
-                "telemetry initialization should appear before auth initialization"
-            );
+        // Telemetry installs the subscriber first, then auth (20) initializes before the
+        // server (90) binds.
+        let position = |marker: &str| {
+            main_rs.find(marker).unwrap_or_else(|| panic!("missing `{marker}` in:\n{main_rs}"))
+        };
+        let telemetry = position("adk_rust::telemetry::init_with_otlp(\"my-agent\", &endpoint)?");
+        let auth = position("std::env::var(\"AUTH_API_KEY\")");
+        let server = position(r#"std::env::var("PORT").unwrap_or_else(|_| "8080".to_string())"#);
+        assert!(telemetry < auth, "telemetry must initialize before auth:\n{main_rs}");
+        assert!(auth < server, "auth must initialize before the server:\n{main_rs}");
+        // No addon announces work it does not do.
+        for placeholder in ["telemetry configured", "auth key loaded", "MCP tools"] {
+            assert!(!main_rs.contains(placeholder), "{main_rs}");
         }
     }
 
@@ -1100,10 +1160,10 @@ mod tests {
             let manifest = resolve_composition(&registry(), "harness", &[], provider).unwrap();
             assert!(manifest.feature_set.contains(provider), "{provider}");
         }
-        let manifest =
-            resolve_composition(&registry(), "harness", &["telemetry", "mcp"], "gemini").unwrap();
+        let manifest = resolve_composition(&registry(), "harness", &["mcp"], "gemini").unwrap();
         assert!(manifest.feature_set.contains("mcp"));
-        for addon in ["server", "docker"] {
+        // The launcher serves the harness and installs its own span exporter.
+        for addon in ["server", "docker", "telemetry"] {
             assert!(
                 resolve_composition(&registry(), "harness", &[addon], "gemini").is_err(),
                 "{addon} must be refused"
