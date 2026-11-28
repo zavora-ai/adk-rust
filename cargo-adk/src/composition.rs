@@ -150,7 +150,7 @@ pub struct DryRunFile {
 /// ```rust,ignore
 /// let registry = TemplateRegistry::builtin();
 /// let manifest = resolve_composition(&registry, "llm", &["telemetry", "sessions"], "gemini")?;
-/// assert!(manifest.feature_set.contains("telemetry"));
+/// assert!(manifest.feature_set.contains("telemetry-otlp"));
 /// assert!(manifest.feature_set.contains("sessions"));
 /// ```
 pub fn resolve_composition(
@@ -354,7 +354,7 @@ mod tests {
         // Feature set is union
         assert!(manifest.feature_set.contains("minimal"));
         assert!(manifest.feature_set.contains("openai"));
-        assert!(manifest.feature_set.contains("telemetry"));
+        assert!(manifest.feature_set.contains("telemetry-otlp"));
         assert!(manifest.feature_set.contains("sessions"));
     }
 
@@ -426,12 +426,12 @@ mod tests {
         let manifest =
             resolve_composition(&reg, "graph", &["mcp", "telemetry"], "anthropic").unwrap();
 
-        // Union of: graph(minimal, graph) + mcp(tools, mcp) + telemetry(telemetry) + anthropic
+        // Union of: graph(minimal, graph) + mcp(tools, mcp) + telemetry(telemetry-otlp) + anthropic
         assert!(manifest.feature_set.contains("minimal"));
         assert!(manifest.feature_set.contains("graph"));
         assert!(manifest.feature_set.contains("tools"));
         assert!(manifest.feature_set.contains("mcp"));
-        assert!(manifest.feature_set.contains("telemetry"));
+        assert!(manifest.feature_set.contains("telemetry-otlp"));
         assert!(manifest.feature_set.contains("anthropic"));
     }
 }

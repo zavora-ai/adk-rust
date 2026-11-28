@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
+# Generates cargo-adk projects and checks that each compiles, with no warning in its own
+# code, against the crates of this checkout.
+#
+# Usage: scripts/check-cargo-adk-templates.sh [ENTRY...]
+#
+# With no ENTRY, every entry below is checked; otherwise only the given entries, such as
+# `scripts/check-cargo-adk-templates.sh loop:gemini llm::browser`. cargo-adk's
+# tests/template_check_coverage.rs fails when a built-in template or addon has no entry.
+#
+# CARGO_TARGET_DIR, when set, is the target directory every project shares; otherwise one
+# is made in the scratch directory and removed with it.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -6,7 +17,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # main disk (RUNNER_TEMP on GitHub Actions): /tmp there carries a quota that the
 # projects' builds overflow.
 SCRATCH="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/adk-templates.XXXXXX")"
-CHECK_TARGET_DIR="$SCRATCH/target"
+CHECK_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/target}"
 trap 'rm -rf "$SCRATCH"' EXIT
 
 # The generated projects are checked from TMPDIR, outside the repository where
@@ -21,34 +32,54 @@ fi
 # An empty provider means "omit --provider" (exercises the template's
 # default provider, e.g. openai for the openai template).
 templates=(
+  # Agent types
   "basic:gemini"
   "basic:openai"
   "basic:anthropic"
   "tools:gemini"
   "tools:anthropic"
+  "sequential:"
+  "parallel:"
+  "loop:"
+  "conditional:"
+  "custom:"
   "rag:gemini"
   "api:gemini"
   "api:openai"
   "openai:"
   "graph:gemini"
   "realtime:"
-  "a2a:gemini"
-  "tools:gemini:telemetry,sessions"
-  "llm:gemini:server,sessions"
+  "agent-engine:"
   "harness:gemini"
   "harness:openai"
   "harness:anthropic"
-  "harness:gemini:telemetry,mcp"
   "autonomous:anthropic"
   "website:"
   "vision:"
+  # Enterprise patterns
+  "a2a:gemini"
+  "multi-agent::eval"
+  "pipeline:"
+  "production:"
+  "chatbot:"
+  # The legacy generator
+  "managed-agents:"
+  # Addons
+  "tools:gemini:telemetry,sessions"
+  "llm:gemini:server,sessions"
+  "harness:gemini:mcp"
+  "tools:gemini:telemetry,auth,sessions,memory,mcp,guardrails,eval,browser,server,docker"
 )
+
+if [[ $# -gt 0 ]]; then
+  templates=("$@")
+fi
 
 for entry in "${templates[@]}"; do
   IFS=':' read -r template provider addons <<<"$entry"
-  name="adk_${template}_${provider:-default}_check"
+  name="adk_${template//-/_}_${provider:-default}_check"
   if [[ -n "$addons" ]]; then
-    name="${name}_addons"
+    name="${name}_${addons//,/_}"
   fi
 
   args=(adk new "$name" --template "$template")
@@ -62,6 +93,7 @@ for entry in "${templates[@]}"; do
     done
   fi
 
+  echo "::group::$entry"
   (
     cd "$SCRATCH"
     cargo run --manifest-path "$ROOT/Cargo.toml" -p cargo-adk -- "${args[@]}"
@@ -90,10 +122,18 @@ PATCH
     # Every generated project builds into the shared target directory without debug
     # info, so the dependencies compile once and the build stays within the disk.
     export CARGO_TARGET_DIR="$CHECK_TARGET_DIR" CARGO_PROFILE_DEV_DEBUG=0
-    cargo check --manifest-path "$name/Cargo.toml"
+    log="$SCRATCH/$name.check.log"
+    cargo check --manifest-path "$name/Cargo.toml" --all-targets 2>&1 | tee "$log"
+    # A warning in the generated code is a defect every user of the template sees; cargo
+    # sums up each package's warnings on one line.
+    if grep -E "^warning: \`$name\` \(" "$log"; then
+      echo "error: the $entry project compiles with warnings" >&2
+      exit 1
+    fi
     # The harness, autonomous, website and vision templates ship tests that need no API key.
     if [[ "$template" == "harness" || "$template" == "autonomous" || "$template" == "website" || "$template" == "vision" ]]; then
       cargo test --manifest-path "$name/Cargo.toml"
     fi
   )
+  echo "::endgroup::"
 done

@@ -31,7 +31,7 @@ pub struct TemplateRegistry {
 impl TemplateRegistry {
     /// Build the default registry with all built-in templates.
     ///
-    /// Populates 14 agent templates, 10 capability addons, 5 enterprise patterns,
+    /// Populates 17 agent templates, 10 capability addons, 5 enterprise patterns,
     /// and 2 legacy aliases.
     pub fn builtin() -> Self {
         Self {
@@ -173,7 +173,7 @@ fn parse_custom_template(content: &str) -> Result<AgentTemplate, String> {
 // Built-in data population
 // ---------------------------------------------------------------------------
 
-/// All 14 built-in agent templates.
+/// All 17 built-in agent templates.
 fn builtin_agent_templates() -> Vec<AgentTemplate> {
     vec![
         AgentTemplate {
@@ -205,25 +205,31 @@ fn builtin_agent_templates() -> Vec<AgentTemplate> {
             incompatible_addons: vec![],
             additional_deps: vec![],
             code_fragments: AgentCodeFragments {
-                imports: vec!["use std::sync::Arc;", "use adk_rust::agents::SequentialAgent;"],
-                agent_construction: r#"let researcher = Arc::new(
+                // `SequentialAgent` and `Llm` come from the prelude.
+                imports: vec!["use std::sync::Arc;"],
+                agent_construction: r#"// The agents share one model; each runs after the previous one and reads its output
+    // from the conversation.
+    let model: Arc<dyn Llm> = Arc::new(model);
+
+    let researcher: Arc<dyn Agent> = Arc::new(
         LlmAgentBuilder::new("researcher")
             .description("Research agent")
             .instruction("Research the given topic thoroughly.")
-            .model(Arc::new(model.clone()))
+            .model(model.clone())
             .build()?,
     );
 
-    let writer = Arc::new(
+    let writer: Arc<dyn Agent> = Arc::new(
         LlmAgentBuilder::new("writer")
             .description("Writing agent")
             .instruction("Write a clear summary based on the research.")
-            .model(Arc::new(model))
+            .model(model)
             .build()?,
     );
 
     let agent: Arc<dyn Agent> = Arc::new(
-        SequentialAgent::new("{name}", vec![researcher, writer]),
+        SequentialAgent::new("{name}", vec![researcher, writer])
+            .with_description("Researches a topic, then summarizes the research"),
     );"#,
                 additional_files: vec![],
             },
@@ -237,25 +243,48 @@ fn builtin_agent_templates() -> Vec<AgentTemplate> {
             incompatible_addons: vec![],
             additional_deps: vec![],
             code_fragments: AgentCodeFragments {
-                imports: vec!["use std::sync::Arc;", "use adk_rust::agents::ParallelAgent;"],
-                agent_construction: r#"let analyst = Arc::new(
+                // `ParallelAgent`, `SequentialAgent` and `Llm` come from the prelude.
+                imports: vec!["use std::sync::Arc;"],
+                agent_construction: r#"let model: Arc<dyn Llm> = Arc::new(model);
+
+    // Both specialists work on the request at the same time; each stores its answer in
+    // session state under its output key.
+    let analyst: Arc<dyn Agent> = Arc::new(
         LlmAgentBuilder::new("analyst")
-            .description("Data analyst")
-            .instruction("Analyze the data and provide insights.")
-            .model(Arc::new(model.clone()))
+            .description("Analyst")
+            .instruction("Analyze the request and list the key insights.")
+            .model(model.clone())
+            .output_key("analysis")
             .build()?,
     );
 
-    let reviewer = Arc::new(
+    let reviewer: Arc<dyn Agent> = Arc::new(
         LlmAgentBuilder::new("reviewer")
-            .description("Quality reviewer")
-            .instruction("Review the analysis for accuracy.")
-            .model(Arc::new(model))
+            .description("Reviewer")
+            .instruction("List the risks, gaps and open questions in the request.")
+            .model(model.clone())
+            .output_key("review")
+            .build()?,
+    );
+
+    let specialists: Arc<dyn Agent> =
+        Arc::new(ParallelAgent::new("specialists", vec![analyst, reviewer]));
+
+    // The aggregator runs once both have answered and combines their answers from state.
+    let aggregator: Arc<dyn Agent> = Arc::new(
+        LlmAgentBuilder::new("aggregator")
+            .description("Combines the specialists' answers")
+            .instruction(
+                "Combine the two answers below into one response.\n\n\
+                 Analysis:\n{analysis}\n\nReview:\n{review}",
+            )
+            .model(model)
             .build()?,
     );
 
     let agent: Arc<dyn Agent> = Arc::new(
-        ParallelAgent::new("{name}", vec![analyst, reviewer]),
+        SequentialAgent::new("{name}", vec![specialists, aggregator])
+            .with_description("Runs two specialists in parallel, then combines their answers"),
     );"#,
                 additional_files: vec![],
             },
@@ -265,25 +294,43 @@ fn builtin_agent_templates() -> Vec<AgentTemplate> {
             description: "Loop agent that iterates until a condition is met",
             category: TemplateCategory::AgentType,
             default_provider: "gemini",
-            required_features: vec!["minimal"],
+            // `tools` brings `ExitLoopTool`, the call that ends the loop.
+            required_features: vec!["minimal", "tools"],
             incompatible_addons: vec![],
             additional_deps: vec![],
             code_fragments: AgentCodeFragments {
-                imports: vec!["use std::sync::Arc;", "use adk_rust::agents::LoopAgent;"],
-                agent_construction: r#"let worker = Arc::new(
-        LlmAgentBuilder::new("worker")
-            .description("Iterative worker")
-            .instruction("Refine the output. When satisfied, respond with DONE.")
-            .model(Arc::new(model))
+                // `LoopAgent`, `ExitLoopTool` and `Llm` come from the prelude.
+                imports: vec!["use std::sync::Arc;"],
+                agent_construction: r#"let model: Arc<dyn Llm> = Arc::new(model);
+
+    let writer: Arc<dyn Agent> = Arc::new(
+        LlmAgentBuilder::new("writer")
+            .description("Drafts and revises the answer")
+            .instruction(
+                "Answer the user's request. When the conversation already holds a draft \
+                 and a critique, revise the draft to address the critique.",
+            )
+            .model(model.clone())
+            .build()?,
+    );
+
+    // The critic ends the loop by calling `exit_loop`; the loop also stops after five rounds.
+    let critic: Arc<dyn Agent> = Arc::new(
+        LlmAgentBuilder::new("critic")
+            .description("Reviews the latest draft")
+            .instruction(
+                "Review the latest draft. When it fully answers the request, call the \
+                 exit_loop tool. Otherwise list the specific changes it needs.",
+            )
+            .model(model)
+            .tool(Arc::new(ExitLoopTool::new()))
             .build()?,
     );
 
     let agent: Arc<dyn Agent> = Arc::new(
-        LoopAgent::builder()
-            .name("{name}")
-            .agent(worker)
-            .max_iterations(5)
-            .build(),
+        LoopAgent::new("{name}", vec![writer, critic])
+            .with_description("Drafts and critiques until the critic approves")
+            .with_max_iterations(5),
     );"#,
                 additional_files: vec![],
             },
@@ -297,25 +344,39 @@ fn builtin_agent_templates() -> Vec<AgentTemplate> {
             incompatible_addons: vec![],
             additional_deps: vec![],
             code_fragments: AgentCodeFragments {
-                imports: vec!["use std::sync::Arc;", "use adk_rust::agents::ConditionalAgent;"],
-                agent_construction: r#"let technical = Arc::new(
+                // `LlmConditionalAgent` and `Llm` come from the prelude.
+                imports: vec!["use std::sync::Arc;"],
+                agent_construction: r#"let model: Arc<dyn Llm> = Arc::new(model);
+
+    let technical: Arc<dyn Agent> = Arc::new(
         LlmAgentBuilder::new("technical")
             .description("Technical expert")
             .instruction("Provide detailed technical answers.")
-            .model(Arc::new(model.clone()))
+            .model(model.clone())
             .build()?,
     );
 
-    let general = Arc::new(
+    let general: Arc<dyn Agent> = Arc::new(
         LlmAgentBuilder::new("general")
             .description("General assistant")
             .instruction("Provide helpful general answers.")
-            .model(Arc::new(model))
+            .model(model.clone())
             .build()?,
     );
 
+    // The model classifies each request and the matching route answers it. For a rule
+    // that needs no model, such as a feature flag, use `ConditionalAgent`.
     let agent: Arc<dyn Agent> = Arc::new(
-        ConditionalAgent::new("{name}", vec![technical, general]),
+        LlmConditionalAgent::builder("{name}", model)
+            .description("Routes each request to a specialist")
+            .instruction(
+                "Classify the user's request as 'technical' or 'general'. \
+                 Respond with only the category name.",
+            )
+            .route("technical", technical)
+            .route("general", general.clone())
+            .default_route(general)
+            .build()?,
     );"#,
                 additional_files: vec![],
             },
@@ -446,22 +507,44 @@ fn builtin_agent_templates() -> Vec<AgentTemplate> {
             incompatible_addons: vec![],
             additional_deps: vec![],
             code_fragments: AgentCodeFragments {
-                imports: vec!["use std::sync::Arc;", "use async_trait::async_trait;"],
-                agent_construction: r#"// Custom agent implementing the Agent trait directly
-    struct MyAgent;
+                // `async_trait`, `Llm` and `LlmRequest` come from the prelude.
+                imports: vec!["use std::sync::Arc;", "use adk_rust::futures::StreamExt;"],
+                agent_construction: r#"// A custom agent implements the `Agent` trait directly. This one sends the user's
+    // latest message to the model and returns the reply as its event; replace `run` with
+    // the control flow your agent needs.
+    struct MyAgent {
+        model: Arc<dyn Llm>,
+    }
 
     #[async_trait]
     impl Agent for MyAgent {
-        fn name(&self) -> &str { "{name}" }
-        fn description(&self) -> &str { "A custom agent" }
-        fn sub_agents(&self) -> &[Arc<dyn Agent>] { &[] }
-        async fn run(&self, ctx: Arc<dyn InvocationContext>) -> adk_rust::prelude::Result<EventStream> {
-            // Your custom logic here
-            Ok(Box::pin(futures::stream::empty()))
+        fn name(&self) -> &str {
+            "{name}"
+        }
+
+        fn description(&self) -> &str {
+            "A custom agent"
+        }
+
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
+
+        async fn run(&self, ctx: Arc<dyn InvocationContext>) -> adk_rust::Result<EventStream> {
+            let request = LlmRequest::new(self.model.name(), vec![ctx.user_content().clone()]);
+            let responses = self.model.generate_content(request, false).await?;
+            let invocation_id = ctx.invocation_id().to_string();
+            let author = self.name().to_string();
+            Ok(Box::pin(responses.map(move |response| {
+                let mut event = Event::new(invocation_id.clone());
+                event.author = author.clone();
+                event.llm_response = response?;
+                Ok(event)
+            })))
         }
     }
 
-    let agent: Arc<dyn Agent> = Arc::new(MyAgent);"#,
+    let agent: Arc<dyn Agent> = Arc::new(MyAgent { model: Arc::new(model) });"#,
                 additional_files: vec![],
             },
         },
@@ -1297,34 +1380,38 @@ fn builtin_capability_addons() -> Vec<CapabilityAddon> {
     vec![
         CapabilityAddon {
             name: "telemetry",
-            description: "OpenTelemetry tracing integration",
-            required_features: vec!["telemetry"],
+            description: "OpenTelemetry tracing: spans exported over OTLP when OTEL_EXPORTER_OTLP_ENDPOINT is set, console log either way",
+            required_features: vec!["telemetry-otlp"],
             additional_deps: vec![],
             init_priority: 10,
-            incompatible_with: vec![],
+            // Their launcher installs the ADK span exporter as the global subscriber, which
+            // leaves no place for a second one.
+            incompatible_with: vec!["harness", "autonomous", "vision"],
             code_fragments: AddonCodeFragments {
                 imports: vec![],
+                // The subscriber is installed first thing in `main` (codegen's tracing init).
                 initialization: "",
                 agent_builder_calls: "",
                 env_vars: vec![(
                     "OTEL_EXPORTER_OTLP_ENDPOINT",
-                    "OpenTelemetry collector endpoint (optional)",
+                    "OpenTelemetry collector endpoint, e.g. http://localhost:4317 (optional)",
                 )],
                 additional_files: vec![],
             },
         },
         CapabilityAddon {
             name: "auth",
-            description: "API key and JWT authentication",
+            description: "Enables adk-auth (API keys, JWT, RBAC) and reads AUTH_API_KEY; checking requests is left to you",
             required_features: vec!["auth"],
             additional_deps: vec![],
             init_priority: 20,
             incompatible_with: vec![],
             code_fragments: AddonCodeFragments {
                 imports: vec![],
-                initialization: r#"let _auth_key = std::env::var("AUTH_API_KEY")
-        .expect("AUTH_API_KEY must be set for authentication");
-    tracing::info!("auth key loaded");"#,
+                initialization: r#"// The `auth` feature brings adk-auth: API keys, JWT and OIDC, RBAC and `ProtectedTool`.
+    // Nothing in this project checks AUTH_API_KEY yet. Authenticate requests in front of
+    // the agent before you serve it beyond loopback.
+    let _auth_api_key = std::env::var("AUTH_API_KEY").ok();"#,
                 agent_builder_calls: "",
                 env_vars: vec![("AUTH_API_KEY", "API key for request authentication")],
                 additional_files: vec![],
@@ -1332,38 +1419,34 @@ fn builtin_capability_addons() -> Vec<CapabilityAddon> {
         },
         CapabilityAddon {
             name: "sessions",
-            description: "Session state management and persistence",
+            description: "An in-memory session service to pass to your runner or server",
             required_features: vec!["sessions"],
             additional_deps: vec![],
             init_priority: 30,
             incompatible_with: vec![],
             code_fragments: AddonCodeFragments {
                 imports: vec!["use adk_rust::session::InMemorySessionService;"],
-                initialization: r#"let _session_service = Arc::new(InMemorySessionService::new());
-    tracing::info!("session service initialized");
-    // Wire into runner: Runner::builder().session_service(_session_service)
-    // For PostgreSQL: PostgresSessionService::connect(&database_url).await?
-    // For Redis: RedisSessionService::connect(&redis_url).await?"#,
+                initialization: r#"// Pass it to a runner (`Runner::builder().session_service(..)`) or a server. The
+    // PostgreSQL and Redis services in `adk_rust::session` keep sessions across restarts,
+    // behind the `postgres-session` and `redis-session` features.
+    let _session_service = Arc::new(InMemorySessionService::new());"#,
                 agent_builder_calls: "",
-                env_vars: vec![(
-                    "DATABASE_URL",
-                    "Session database URL (optional, uses in-memory by default)",
-                )],
+                env_vars: vec![],
                 additional_files: vec![],
             },
         },
         CapabilityAddon {
             name: "memory",
-            description: "Semantic memory and RAG search integration",
+            description: "An in-memory semantic memory service to pass to your runner",
             required_features: vec!["memory"],
             additional_deps: vec![],
             init_priority: 40,
             incompatible_with: vec![],
             code_fragments: AddonCodeFragments {
                 imports: vec!["use adk_rust::memory::InMemoryMemoryService;"],
-                initialization: r#"let _memory_service = Arc::new(InMemoryMemoryService::new());
-    tracing::info!("memory service initialized");
-    // Wire into runner: Runner::builder().memory_service(_memory_service)"#,
+                initialization: r#"// Wrap it in `adk_rust::memory::MemoryServiceAdapter` and pass that to a runner with
+    // `Runner::builder().memory_service(..)`.
+    let _memory_service = Arc::new(InMemoryMemoryService::new());"#,
                 agent_builder_calls: "",
                 env_vars: vec![],
                 additional_files: vec![],
@@ -1371,16 +1454,21 @@ fn builtin_capability_addons() -> Vec<CapabilityAddon> {
         },
         CapabilityAddon {
             name: "mcp",
-            description: "Model Context Protocol server connections",
+            description: "Enables the MCP client (`McpToolset`), with the connection code to add",
             required_features: vec!["tools", "mcp"],
             additional_deps: vec![],
             init_priority: 50,
             incompatible_with: vec![],
             code_fragments: AddonCodeFragments {
-                imports: vec!["use adk_rust::tool::McpToolset;"],
-                initialization: r#"// Connect to MCP servers for extended tool capabilities
-    // let mcp_tools = McpToolset::from_server("npx", &["-y", "@anthropic/mcp-server-filesystem", "/tmp"]).await?;
-    tracing::info!("MCP tools ready");"#,
+                imports: vec![],
+                initialization: r#"// The `mcp` feature is on. To give the agent an MCP server's tools, connect before the
+    // agent is built and add the toolset to its builder:
+    //
+    //     use adk_rust::tool::McpToolset;
+    //     use adk_rust::tool::mcp::rmcp::{ServiceExt, transport::TokioChildProcess};
+    //     let server = tokio::process::Command::new("my-mcp-server");
+    //     let client = ().serve(TokioChildProcess::new(server)?).await?;
+    //     // ... LlmAgentBuilder::new(..).toolset(Arc::new(McpToolset::new(client)))"#,
                 agent_builder_calls: "",
                 env_vars: vec![],
                 additional_files: vec![],
@@ -1388,16 +1476,21 @@ fn builtin_capability_addons() -> Vec<CapabilityAddon> {
         },
         CapabilityAddon {
             name: "guardrails",
-            description: "Input/output validation and content filtering",
+            description: "Builds input guardrails (harmful content, PII) to pass to your agent builder",
             required_features: vec!["guardrail"],
             additional_deps: vec![],
             init_priority: 60,
             incompatible_with: vec![],
             code_fragments: AddonCodeFragments {
-                imports: vec!["use adk_rust::guardrail::*;"],
-                initialization: r#"// Configure input/output guardrails
-    // let guardrail = PiiRedactionGuardrail::new();
-    tracing::info!("guardrails configured");"#,
+                imports: vec![
+                    "use adk_rust::guardrail::{ContentFilter, GuardrailSet, PiiRedactor};",
+                ],
+                initialization: r#"// Blocks harmful content and redacts personal data in the user's message. Build it
+    // before the agent and pass it with `.input_guardrails(..)` on the agent builder;
+    // `.output_guardrails(..)` takes a set for the agent's answer.
+    let _input_guardrails = GuardrailSet::new()
+        .with(ContentFilter::harmful_content())
+        .with(PiiRedactor::new());"#,
                 agent_builder_calls: "",
                 env_vars: vec![],
                 additional_files: vec![],
@@ -1405,16 +1498,16 @@ fn builtin_capability_addons() -> Vec<CapabilityAddon> {
         },
         CapabilityAddon {
             name: "eval",
-            description: "Evaluation framework for agent quality testing",
+            description: "Enables adk-eval for scoring the agent against eval sets",
             required_features: vec!["eval"],
             additional_deps: vec![],
             init_priority: 70,
             incompatible_with: vec![],
             code_fragments: AddonCodeFragments {
-                imports: vec!["use adk_rust::eval::*;"],
-                initialization: r#"// Evaluation harness for agent quality testing
-    // Run with: cargo test -- --ignored
-    tracing::info!("eval framework available");"#,
+                imports: vec![],
+                initialization: r#"// The `eval` feature brings adk-eval: score this agent against eval sets with
+    // `adk_rust::eval::Evaluator` in a test, or run them against its binary with
+    // `cargo adk eval`, which speaks a JSONL protocol on stdin and stdout."#,
                 agent_builder_calls: "",
                 env_vars: vec![],
                 additional_files: vec![],
@@ -1422,16 +1515,23 @@ fn builtin_capability_addons() -> Vec<CapabilityAddon> {
         },
         CapabilityAddon {
             name: "browser",
-            description: "Browser automation tools via WebDriver",
+            description: "Builds a WebDriver `BrowserToolset` to pass to your agent builder",
             required_features: vec!["browser"],
             additional_deps: vec![],
             init_priority: 80,
             incompatible_with: vec![],
             code_fragments: AddonCodeFragments {
-                imports: vec!["use adk_rust::browser::BrowserTool;"],
-                initialization: r#"// Browser automation tool via WebDriver
-    // let browser_tool = BrowserTool::new().await?;
-    tracing::info!("browser tools available");"#,
+                imports: vec![
+                    "use adk_rust::browser::{BrowserConfig, BrowserSession, BrowserToolset};",
+                ],
+                initialization: r#"// Browser tools over a WebDriver session that starts on first use: chromedriver on
+    // localhost, or WEBDRIVER_URL. Build them before the agent and pass them with
+    // `.toolset(..)` on the agent builder.
+    let mut browser_config = BrowserConfig::new().headless(true);
+    if let Ok(url) = std::env::var("WEBDRIVER_URL") {
+        browser_config = browser_config.webdriver_url(url);
+    }
+    let _browser_tools = Arc::new(BrowserToolset::new(Arc::new(BrowserSession::new(browser_config))));"#,
                 agent_builder_calls: "",
                 env_vars: vec![("WEBDRIVER_URL", "WebDriver endpoint URL (optional)")],
                 additional_files: vec![],
@@ -1501,7 +1601,7 @@ fn builtin_enterprise_patterns() -> Vec<EnterprisePattern> {
     vec![
         EnterprisePattern {
             name: "multi-agent",
-            description: "Multi-agent supervisor with telemetry observability",
+            description: "Two agents in sequence, a researcher and a writer, with OpenTelemetry tracing",
             base_template: "sequential",
             included_addons: vec!["telemetry"],
             override_features: None,
@@ -1509,7 +1609,7 @@ fn builtin_enterprise_patterns() -> Vec<EnterprisePattern> {
         },
         EnterprisePattern {
             name: "production",
-            description: "Production-ready LLM agent with server, auth, sessions, and telemetry",
+            description: "LLM agent served over A2A with OpenTelemetry tracing, and the auth and sessions starting points",
             base_template: "llm",
             included_addons: vec!["server", "auth", "sessions", "telemetry"],
             override_features: None,
@@ -1517,7 +1617,7 @@ fn builtin_enterprise_patterns() -> Vec<EnterprisePattern> {
         },
         EnterprisePattern {
             name: "pipeline",
-            description: "Sequential data processing pipeline with session state",
+            description: "Sequential agents with OpenTelemetry tracing and an in-memory session service",
             base_template: "sequential",
             included_addons: vec!["sessions", "telemetry"],
             override_features: None,
@@ -1525,7 +1625,7 @@ fn builtin_enterprise_patterns() -> Vec<EnterprisePattern> {
         },
         EnterprisePattern {
             name: "chatbot",
-            description: "Conversational chatbot with memory and HTTP interface",
+            description: "LLM agent served over A2A, with in-memory session and memory services to wire in",
             base_template: "llm",
             included_addons: vec!["sessions", "memory", "server"],
             override_features: None,

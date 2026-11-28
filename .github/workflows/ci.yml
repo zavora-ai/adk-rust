@@ -649,9 +649,10 @@ jobs:
         python3 -m unittest discover -s scripts/tests
 
   # ── Scaffolds: cargo-adk generated projects compile ────────────
-  # Scaffolds every advertised template — addon combos and default-provider resolution
-  # included — and cargo-checks the generated projects. Runs when a change can affect
-  # cargo-adk or a crate the scaffolds build from this checkout.
+  # Scaffolds every template, pattern and addon — default-provider resolution included —
+  # and cargo-checks each generated project with --all-targets, failing on a warning in the
+  # generated code. cargo-adk's template_check_coverage test keeps the list complete. Runs
+  # when a change can affect cargo-adk or a crate the scaffolds build from this checkout.
   templates:
     needs: [scope, fmt, clippy]
     if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'push' && contains(fromJSON(needs.scope.outputs.jobs), 'templates')
