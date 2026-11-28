@@ -1,38 +1,34 @@
-//! The JWKS validator must reject algorithms it has not vetted.
+//! The JWKS validator accepts only the algorithms it has vetted.
 //!
-//! `jsonwebtoken::Algorithm` is `#[non_exhaustive]`: a dependency release can add a variant
-//! without a major bump on our side. An exhaustive match stopped compiling when v11 did exactly
-//! that, and because no CI job built `--features sso`, nothing noticed.
+//! `JwtAlgorithm` is ADK-owned and lists RSA and EC algorithms only, so a symmetric
+//! algorithm or `none` cannot reach a validator's allow-list, and a JWT library release
+//! that adds an algorithm does not widen it.
 #![cfg(feature = "sso")]
 
-use adk_auth::sso::JwtValidator;
+use adk_auth::sso::{JwtAlgorithm, JwtValidator, TokenError};
 
-/// Symmetric algorithms cannot be validated against a public JWKS, so they are refused.
+/// Symmetric algorithms would verify with a secret anyone can read from the JWKS, so they
+/// do not parse, and neither does `none`.
 #[test]
-fn hmac_algorithms_are_refused_for_jwks_validation() {
-    // `JwtValidator` is not `Debug`, so match rather than `expect_err`.
-    let Err(error) = JwtValidator::builder()
-        .issuer("https://issuer.example.com")
-        .audience("https://api.example.com")
-        .jwks_uri("https://issuer.example.com/.well-known/jwks.json")
-        .algorithm(jsonwebtoken::Algorithm::HS256)
-        .build()
-    else {
-        panic!("HS256 cannot be validated with a public key");
-    };
-
-    assert!(error.to_string().contains("not supported"), "{error}");
+fn symmetric_algorithms_and_none_do_not_parse() {
+    for name in ["HS256", "HS384", "HS512", "none", "EdDSA"] {
+        let refused = name.parse::<JwtAlgorithm>();
+        assert!(
+            matches!(&refused, Err(TokenError::UnsupportedAlgorithm(_))),
+            "{name}: {refused:?}"
+        );
+    }
 }
 
-/// The asymmetric set stays accepted — the wildcard arm must not swallow valid algorithms.
+/// The asymmetric set stays accepted.
 #[test]
 fn asymmetric_algorithms_remain_accepted() {
     let accepted = JwtValidator::builder()
         .issuer("https://issuer.example.com")
         .audience("https://api.example.com")
         .jwks_uri("https://issuer.example.com/.well-known/jwks.json")
-        .algorithm(jsonwebtoken::Algorithm::RS256)
-        .algorithm(jsonwebtoken::Algorithm::ES256)
+        .algorithm(JwtAlgorithm::RS256)
+        .algorithm("ES256".parse().unwrap())
         .build()
         .is_ok();
 

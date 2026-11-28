@@ -10,7 +10,7 @@ use std::sync::Arc;
 use adk_core::{AgentId, AgentPrincipal};
 
 use super::FederationError;
-use crate::sso::{JwtValidator, OidcProvider, TokenClaims, TokenValidator};
+use crate::sso::{JwtAlgorithm, JwtValidator, OidcProvider, TokenClaims, TokenValidator};
 
 /// Names the agent a cloud's validated token identifies.
 ///
@@ -301,7 +301,7 @@ impl InboundAgentVerifier {
             .issuer(format!("https://login.microsoftonline.com/{tenant}/v2.0"))
             .audience(audience)
             .jwks_uri(format!("https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys"))
-            .algorithm(jsonwebtoken::Algorithm::RS256)
+            .algorithm(JwtAlgorithm::RS256)
             .build()?;
         Ok(Self::new(Arc::new(validator), Arc::new(EntraAgentProfile)))
     }
@@ -391,7 +391,7 @@ mod tests {
                 .issuer(issuer)
                 .audience(audience)
                 .jwks_uri(format!("{}/keys", server.uri()))
-                .algorithm(jsonwebtoken::Algorithm::RS256)
+                .algorithm(JwtAlgorithm::RS256)
                 .build()
                 .unwrap(),
         )

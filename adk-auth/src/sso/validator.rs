@@ -1,5 +1,7 @@
 //! Token validator trait and JWT implementation.
 
+#[cfg(feature = "sso")]
+use super::JwtAlgorithm;
 use super::{JwksCache, TokenClaims, TokenError};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -82,7 +84,7 @@ impl JwtValidator {
 impl TokenValidator for JwtValidator {
     async fn validate(&self, token: &str) -> Result<TokenClaims, TokenError> {
         // Decode header to get key ID
-        let header = jsonwebtoken::decode_header(token)?;
+        let header = jsonwebtoken::decode_header(token).map_err(TokenError::from_jwt)?;
 
         // The token's algorithm must be one this validator was built with. The check is made
         // here, and the validation below names that one algorithm, because `jsonwebtoken`
@@ -90,10 +92,9 @@ impl TokenValidator for JwtValidator {
         // family: a list holding both RS256 and ES256 would refuse every token.
         let algorithm = header.alg;
         if !self.algorithms.contains(&algorithm) {
-            return Err(jsonwebtoken::errors::Error::from(
-                jsonwebtoken::errors::ErrorKind::InvalidAlgorithm,
-            )
-            .into());
+            return Err(TokenError::from_jwt(
+                jsonwebtoken::errors::ErrorKind::InvalidAlgorithm.into(),
+            ));
         }
         let kid = header.kid.ok_or_else(|| TokenError::MissingClaim("kid".into()))?;
 
@@ -102,7 +103,8 @@ impl TokenValidator for JwtValidator {
 
         // Validate and decode token
         let validation = self.validation(algorithm);
-        let token_data = jsonwebtoken::decode::<TokenClaims>(token, &key, &validation)?;
+        let token_data = jsonwebtoken::decode::<TokenClaims>(token, &key, &validation)
+            .map_err(TokenError::from_jwt)?;
 
         Ok(token_data.claims)
     }
@@ -120,7 +122,7 @@ pub struct JwtValidatorBuilder {
     audience: Option<String>,
     without_audience: bool,
     jwks_uri: Option<String>,
-    algorithms: Vec<jsonwebtoken::Algorithm>,
+    algorithms: Vec<JwtAlgorithm>,
 }
 
 #[cfg(feature = "sso")]
@@ -172,9 +174,28 @@ impl JwtValidatorBuilder {
         self
     }
 
-    /// Add an allowed algorithm.
-    pub fn algorithm(mut self, alg: jsonwebtoken::Algorithm) -> Self {
-        self.algorithms.push(alg);
+    /// Add an allowed signature algorithm. Call it once per algorithm; with none, the
+    /// validator accepts `RS256` only.
+    ///
+    /// A token whose `alg` header names an algorithm not added here is refused before its
+    /// signature is checked.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_auth::sso::{JwtAlgorithm, JwtValidator};
+    ///
+    /// let validator = JwtValidator::builder()
+    ///     .issuer("https://issuer.example.com")
+    ///     .audience("https://api.example.com")
+    ///     .jwks_uri("https://issuer.example.com/.well-known/jwks.json")
+    ///     .algorithm(JwtAlgorithm::RS256)
+    ///     .algorithm(JwtAlgorithm::ES256)
+    ///     .build()?;
+    /// # Ok::<(), adk_auth::sso::TokenError>(())
+    /// ```
+    pub fn algorithm(mut self, algorithm: JwtAlgorithm) -> Self {
+        self.algorithms.push(algorithm);
         self
     }
 
@@ -182,9 +203,9 @@ impl JwtValidatorBuilder {
     ///
     /// # Errors
     ///
-    /// Returns [`TokenError::ValidationError`] when the issuer or JWKS URI is missing, when
-    /// neither [`audience`](Self::audience) nor [`without_audience`](Self::without_audience)
-    /// was called or both were, or when an algorithm is not an RSA or EC algorithm.
+    /// Returns [`TokenError::ValidationError`] when the issuer or JWKS URI is missing, or
+    /// when neither [`audience`](Self::audience) nor
+    /// [`without_audience`](Self::without_audience) was called or both were.
     pub fn build(self) -> Result<JwtValidator, TokenError> {
         let issuer =
             self.issuer.ok_or_else(|| TokenError::ValidationError("issuer is required".into()))?;
@@ -208,40 +229,13 @@ impl JwtValidatorBuilder {
             }
         };
 
+        // `JwtAlgorithm` lists only RSA and EC algorithms, so a symmetric algorithm, `none`, or
+        // one this validator has not vetted cannot reach the allow-list.
         let algorithms = if self.algorithms.is_empty() {
             vec![jsonwebtoken::Algorithm::RS256]
         } else {
-            self.algorithms
+            self.algorithms.into_iter().map(JwtAlgorithm::to_jsonwebtoken).collect()
         };
-
-        for algorithm in &algorithms {
-            match algorithm {
-                jsonwebtoken::Algorithm::RS256
-                | jsonwebtoken::Algorithm::RS384
-                | jsonwebtoken::Algorithm::RS512
-                | jsonwebtoken::Algorithm::PS256
-                | jsonwebtoken::Algorithm::PS384
-                | jsonwebtoken::Algorithm::PS512
-                | jsonwebtoken::Algorithm::ES256
-                | jsonwebtoken::Algorithm::ES384 => {}
-                jsonwebtoken::Algorithm::HS256
-                | jsonwebtoken::Algorithm::HS384
-                | jsonwebtoken::Algorithm::HS512
-                | jsonwebtoken::Algorithm::EdDSA => {
-                    return Err(TokenError::ValidationError(format!(
-                        "algorithm '{algorithm:?}' is not supported with JWKS-based validation. Use an RSA or EC algorithm instead."
-                    )));
-                }
-                // `jsonwebtoken::Algorithm` is `#[non_exhaustive]`, so a future release can add
-                // an algorithm this validator has never vetted. Rejecting is the only safe
-                // default: falling through would let an unreviewed algorithm validate tokens.
-                unvetted => {
-                    return Err(TokenError::ValidationError(format!(
-                        "algorithm '{unvetted:?}' is not recognised by this validator. Use an RSA or EC algorithm instead."
-                    )));
-                }
-            }
-        }
 
         Ok(JwtValidator {
             issuer,
@@ -287,9 +281,11 @@ impl JwtValidatorBuilder {
 
 #[cfg(all(test, feature = "sso"))]
 mod tests {
-    use super::{JwtValidator, JwtValidatorBuilder, TokenValidator};
+    use super::{JwtAlgorithm, JwtValidator, JwtValidatorBuilder, TokenValidator};
     use crate::sso::TokenError;
-    use crate::sso::test_issuer::{TestIssuer, assert_requires_iss_and_aud, token};
+    use crate::sso::test_issuer::{
+        TestIssuer, assert_refuses_forged_and_stale_tokens, assert_requires_iss_and_aud, token,
+    };
 
     const ISSUER: &str = "https://issuer.example.com";
     const AUDIENCE: &str = "https://api.example.com";
@@ -319,6 +315,7 @@ mod tests {
         let validator = builder(&issuer).audience(AUDIENCE).build().unwrap();
 
         assert_requires_iss_and_aud(&validator, ISSUER, AUDIENCE).await;
+        assert_refuses_forged_and_stale_tokens(&validator, ISSUER, AUDIENCE).await;
         let other_issuer = token(Some("https://evil.example"), Some(AUDIENCE));
         let refused = validator.validate(&other_issuer).await;
         assert!(matches!(&refused, Err(TokenError::ValidationError(_))), "{refused:?}");
@@ -344,8 +341,8 @@ mod tests {
         let issuer = TestIssuer::start().await;
         let validator = builder(&issuer)
             .audience(AUDIENCE)
-            .algorithm(jsonwebtoken::Algorithm::ES256)
-            .algorithm(jsonwebtoken::Algorithm::RS256)
+            .algorithm(JwtAlgorithm::ES256)
+            .algorithm(JwtAlgorithm::RS256)
             .build()
             .unwrap();
 
@@ -356,14 +353,25 @@ mod tests {
     #[tokio::test]
     async fn a_token_signed_with_an_algorithm_that_was_not_configured_is_refused() {
         let issuer = TestIssuer::start().await;
-        let validator = builder(&issuer)
-            .audience(AUDIENCE)
-            .algorithm(jsonwebtoken::Algorithm::ES256)
-            .build()
-            .unwrap();
+        let validator =
+            builder(&issuer).audience(AUDIENCE).algorithm(JwtAlgorithm::ES256).build().unwrap();
 
         let refused = validator.validate(&token(Some(ISSUER), Some(AUDIENCE))).await;
         assert!(matches!(&refused, Err(TokenError::DecodingError(_))), "{refused:?}");
+    }
+
+    /// An allow-list spanning two key families still refuses every forged token.
+    #[tokio::test]
+    async fn a_mixed_allow_list_refuses_forged_and_stale_tokens() {
+        let issuer = TestIssuer::start().await;
+        let validator = builder(&issuer)
+            .audience(AUDIENCE)
+            .algorithm(JwtAlgorithm::ES256)
+            .algorithm(JwtAlgorithm::RS256)
+            .build()
+            .unwrap();
+
+        assert_refuses_forged_and_stale_tokens(&validator, ISSUER, AUDIENCE).await;
     }
 
     #[tokio::test]

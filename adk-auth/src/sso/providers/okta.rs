@@ -69,7 +69,7 @@ impl OktaProvider {
 #[async_trait]
 impl TokenValidator for OktaProvider {
     async fn validate(&self, token: &str) -> Result<TokenClaims, TokenError> {
-        let header = jsonwebtoken::decode_header(token)?;
+        let header = jsonwebtoken::decode_header(token).map_err(TokenError::from_jwt)?;
         let kid = header.kid.ok_or_else(|| TokenError::MissingClaim("kid".into()))?;
 
         let key = self.jwks_cache.get_key(&kid).await?;
@@ -81,7 +81,8 @@ impl TokenValidator for OktaProvider {
         validation.validate_exp = true;
         validation.validate_nbf = true;
 
-        let token_data = jsonwebtoken::decode::<TokenClaims>(token, &key, &validation)?;
+        let token_data = jsonwebtoken::decode::<TokenClaims>(token, &key, &validation)
+            .map_err(TokenError::from_jwt)?;
 
         Ok(token_data.claims)
     }
@@ -103,7 +104,9 @@ impl OktaProvider {
 mod tests {
     use super::OktaProvider;
     use crate::sso::JwksCache;
-    use crate::sso::test_issuer::{TestIssuer, assert_requires_iss_and_aud};
+    use crate::sso::test_issuer::{
+        TestIssuer, assert_refuses_forged_and_stale_tokens, assert_requires_iss_and_aud,
+    };
     use std::sync::Arc;
 
     #[tokio::test]
@@ -113,6 +116,12 @@ mod tests {
         provider.jwks_cache = Arc::new(JwksCache::new(issuer.jwks_uri()));
 
         assert_requires_iss_and_aud(
+            &provider,
+            "https://dev-1.okta.com/oauth2/default",
+            "client-id",
+        )
+        .await;
+        assert_refuses_forged_and_stale_tokens(
             &provider,
             "https://dev-1.okta.com/oauth2/default",
             "client-id",

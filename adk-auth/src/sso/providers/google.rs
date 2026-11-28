@@ -57,7 +57,7 @@ impl GoogleProvider {
 #[async_trait]
 impl TokenValidator for GoogleProvider {
     async fn validate(&self, token: &str) -> Result<TokenClaims, TokenError> {
-        let header = jsonwebtoken::decode_header(token)?;
+        let header = jsonwebtoken::decode_header(token).map_err(TokenError::from_jwt)?;
         let kid = header.kid.ok_or_else(|| TokenError::MissingClaim("kid".into()))?;
 
         let key = self.jwks_cache.get_key(&kid).await?;
@@ -70,7 +70,8 @@ impl TokenValidator for GoogleProvider {
         validation.validate_exp = true;
         validation.validate_nbf = true;
 
-        let token_data = jsonwebtoken::decode::<TokenClaims>(token, &key, &validation)?;
+        let token_data = jsonwebtoken::decode::<TokenClaims>(token, &key, &validation)
+            .map_err(TokenError::from_jwt)?;
 
         Ok(token_data.claims)
     }
@@ -92,7 +93,9 @@ impl GoogleProvider {
 mod tests {
     use super::GoogleProvider;
     use crate::sso::JwksCache;
-    use crate::sso::test_issuer::{TestIssuer, assert_requires_iss_and_aud};
+    use crate::sso::test_issuer::{
+        TestIssuer, assert_refuses_forged_and_stale_tokens, assert_requires_iss_and_aud,
+    };
 
     #[tokio::test]
     async fn tokens_need_the_iss_and_aud_claims() {
@@ -101,5 +104,11 @@ mod tests {
             GoogleProvider::new("client-id").with_jwks_cache(JwksCache::new(issuer.jwks_uri()));
 
         assert_requires_iss_and_aud(&provider, "https://accounts.google.com", "client-id").await;
+        assert_refuses_forged_and_stale_tokens(
+            &provider,
+            "https://accounts.google.com",
+            "client-id",
+        )
+        .await;
     }
 }

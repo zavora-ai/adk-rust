@@ -10,7 +10,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use adk_agent::LlmAgentBuilder;
 use adk_auth::auth_bridge::JwtRequestContextExtractor;
-use adk_auth::sso::{JwtValidator, JwtValidatorBuilder, TokenClaims, TokenError, TokenValidator};
+use adk_auth::sso::{
+    JwtAlgorithm, JwtValidator, JwtValidatorBuilder, TokenClaims, TokenError, TokenValidator,
+};
 use adk_core::{Agent, Event, SingleAgentLoader};
 use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
 use adk_server::{ServerBuilder, ServerConfig};
@@ -70,7 +72,7 @@ impl ClaimsIssuer {
         JwtValidator::builder()
             .issuer(&self.url)
             .jwks_uri(format!("{}/jwks", self.url))
-            .algorithm(Algorithm::ES256)
+            .algorithm(JwtAlgorithm::ES256)
     }
 
     /// A token for `alice`, valid for ten minutes, with `iss` and `aud` only when given.
