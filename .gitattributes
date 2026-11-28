@@ -1,3 +1,4 @@
 # Generated files that tests compare byte for byte; a Windows checkout would otherwise
 # convert them to CRLF.
 adk-surface/web/src/generated/** text eol=lf
+adk-deploy/tests/snapshots/** text eol=lf

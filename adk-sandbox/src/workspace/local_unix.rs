@@ -918,6 +918,8 @@ mod tests {
     }
 
     /// Only the allowlisted host variables, plus what `sh` sets itself, reach a command.
+    // An MSYS `sh` on Windows adds variables of its own (`MSYSTEM`, `EXEPATH`, ...).
+    #[cfg(unix)]
     #[tokio::test]
     async fn session_exec_command_environment_is_an_allowlist() {
         let temp = tempfile::tempdir().unwrap();
@@ -968,6 +970,8 @@ mod tests {
     }
 
     /// A timeout kills the command's children, not only `sh`.
+    // The kill reaches the children through the Unix process group.
+    #[cfg(unix)]
     #[tokio::test]
     async fn session_exec_command_timeout_kills_children() {
         let temp = tempfile::tempdir().unwrap();
@@ -981,6 +985,8 @@ mod tests {
     }
 
     /// Background jobs end with the command that started them.
+    // The kill reaches the jobs through the Unix process group.
+    #[cfg(unix)]
     #[tokio::test]
     async fn session_exec_command_exit_kills_background_jobs() {
         let temp = tempfile::tempdir().unwrap();
@@ -1144,6 +1150,8 @@ mod tests {
         }
     }
 
+    // Needs a POSIX `patch`; the one on a Windows `PATH` rejects LF hunks.
+    #[cfg(unix)]
     #[tokio::test]
     async fn session_apply_patch_success() {
         let (_client, _handle, session) = create_test_session().await;
