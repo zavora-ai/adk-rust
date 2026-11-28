@@ -69,11 +69,35 @@ pub(crate) fn parse_tool_arguments(
     }
 }
 
+/// The user a runner built without [`RealtimeRunnerBuilder::tool_governance`] governs its
+/// calls for.
+const DEFAULT_REALTIME_USER: &str = "anonymous";
+
 /// The run-wide governance a runner applies to every tool call it dispatches.
 #[derive(Clone)]
 pub(crate) struct ToolGovernance {
     pub(crate) config: adk_core::RunConfig,
     pub(crate) scope: adk_core::ApprovalScope,
+}
+
+/// Whether a call held for a decision can be decided later: the run records it in an
+/// approval store or submits it to an approval service.
+pub(crate) fn holds_reach_an_approver(config: &adk_core::RunConfig) -> bool {
+    config.approval_store.is_some() || config.approval_service.is_some()
+}
+
+/// The answer to a call that needs a person's approval when nothing can ask anyone for it:
+/// the call is refused, in words the model can speak to the user.
+pub(crate) fn no_approver_refusal(name: &str, reason: &str) -> String {
+    tracing::warn!(
+        tool.name = %name,
+        "tool call needs approval but the run has no approval store, approval service, or \
+         confirmation handler to decide it; refused. Configure one through tool_governance"
+    );
+    format!(
+        "{reason}. Nobody can approve it in this session, so it was not run. Tell the user it \
+         needs a person's approval and do not call it again."
+    )
 }
 
 /// Internal state machine tracking the resumability status of the RealtimeRunner.
@@ -264,6 +288,8 @@ pub struct RealtimeRunnerBuilder {
     duplicate_tool: Option<String>,
     event_handler: Option<Arc<dyn EventHandler>>,
     governance: Option<ToolGovernance>,
+    control: Option<adk_core::GovernanceControl>,
+    confirmation: adk_core::ToolConfirmationPolicy,
     tool_timeout: std::time::Duration,
     tool_result_screen: Option<Arc<dyn adk_core::ToolResultScreen>>,
     expose_tool_error_messages: bool,
@@ -288,6 +314,8 @@ impl RealtimeRunnerBuilder {
             duplicate_tool: None,
             event_handler: None,
             governance: None,
+            control: None,
+            confirmation: adk_core::ToolConfirmationPolicy::Never,
             tool_timeout: DEFAULT_REALTIME_TOOL_TIMEOUT,
             tool_result_screen: None,
             expose_tool_error_messages: false,
@@ -330,13 +358,19 @@ impl RealtimeRunnerBuilder {
         self
     }
 
-    /// Governs every tool call this runner dispatches.
+    /// Governs every tool call this runner dispatches with `config`, under `scope`.
     ///
     /// The config's `tool_policy`, `governance` kill switches, confirmation handler,
     /// approvals, and approval store apply exactly as they do to an agent run, through
     /// [`adk_core::authorize_tool_call`]. A call held for confirmation is answered with an
     /// error and recorded in the approval store under `scope`. A frozen kill switch ends
     /// [`run`](RealtimeRunner::run) with an error.
+    ///
+    /// Without it, every call still takes the governed path, under `RunConfig::default()`
+    /// for the user `anonymous` in app `realtime`: no tool policy, so a call runs unless the
+    /// runner's kill switch ([`RealtimeRunner::governance`]) is frozen or the call needs
+    /// confirmation ([`require_tool_confirmation`](Self::require_tool_confirmation)), which
+    /// nobody can then give, so the call is refused.
     ///
     /// # Example
     ///
@@ -359,6 +393,67 @@ impl RealtimeRunnerBuilder {
         scope: adk_core::ApprovalScope,
     ) -> Self {
         self.governance = Some(ToolGovernance { config, scope });
+        self
+    }
+
+    /// Attaches `control` as this runner's kill switch, so one control freezes this runner
+    /// together with the others it is attached to, as `Runner::builder().governance(control)`
+    /// does. Without it the runner creates its own; either way
+    /// [`RealtimeRunner::governance`] returns it, and every tool call is checked against it
+    /// and against the controls of the [`tool_governance`](Self::tool_governance) config.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::GovernanceControl;
+    /// use adk_realtime::RealtimeRunner;
+    /// use adk_realtime::model::BoxedModel;
+    ///
+    /// fn build(model: BoxedModel, control: GovernanceControl) -> adk_realtime::Result<RealtimeRunner> {
+    ///     RealtimeRunner::builder().model(model).governance(control).build()
+    /// }
+    /// ```
+    pub fn governance(mut self, control: adk_core::GovernanceControl) -> Self {
+        self.control = Some(control);
+        self
+    }
+
+    /// Sets which tools need a person's approval before they run, as
+    /// `LlmAgentBuilder::tool_confirmation_policy` does. A call that needs one is decided by
+    /// the governance config's confirmation handler, approvals, or approval store; with none
+    /// of them it is refused rather than run.
+    pub fn tool_confirmation_policy(mut self, policy: adk_core::ToolConfirmationPolicy) -> Self {
+        self.confirmation = policy;
+        self
+    }
+
+    /// Requires a person's approval before `tool_name` runs. See
+    /// [`tool_confirmation_policy`](Self::tool_confirmation_policy).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_realtime::config::ToolDefinition;
+    /// use adk_realtime::model::BoxedModel;
+    /// use adk_realtime::RealtimeRunner;
+    ///
+    /// fn build(model: BoxedModel) -> adk_realtime::Result<RealtimeRunner> {
+    ///     RealtimeRunner::builder()
+    ///         .model(model)
+    ///         .tool_fn(ToolDefinition::new("refund"), |_call| Ok(serde_json::json!({ "ok": true })))
+    ///         .require_tool_confirmation("refund")
+    ///         .build()
+    /// }
+    /// ```
+    pub fn require_tool_confirmation(mut self, tool_name: impl Into<String>) -> Self {
+        self.confirmation = self.confirmation.with_tool(tool_name);
+        self
+    }
+
+    /// Requires a person's approval before every tool call. See
+    /// [`tool_confirmation_policy`](Self::tool_confirmation_policy).
+    pub fn require_tool_confirmation_for_all(mut self) -> Self {
+        self.confirmation = adk_core::ToolConfirmationPolicy::Always;
         self
     }
 
@@ -504,16 +599,29 @@ impl RealtimeRunnerBuilder {
 
         let max_concurrent_tools = self.runner_config.max_concurrent_tools.max(1);
 
-        // Every response is metered in the run's spend ledger, as `LlmAgent` meters a call.
-        let meter = self.governance.as_ref().and_then(|governance| {
-            ResponseMeter::for_run(
-                &governance.config,
-                &governance.scope.app_name,
-                &self.agent_name,
-                model.model_id(),
-                self.pricing,
-            )
+        // Every call takes the governed path; without a configuration of its own the runner
+        // governs under the defaults, as an agent under a default `Runner` is governed.
+        let mut governance = self.governance.unwrap_or_else(|| ToolGovernance {
+            config: adk_core::RunConfig::default(),
+            scope: adk_core::ApprovalScope::new(
+                DEFAULT_REALTIME_AGENT_NAME,
+                DEFAULT_REALTIME_USER,
+                format!("realtime-{}", uuid::Uuid::new_v4().simple()),
+            ),
         });
+        let control = self.control.unwrap_or_default();
+        if !governance.config.governance.iter().any(|existing| existing.same_as(&control)) {
+            governance.config.governance.push(control.clone());
+        }
+
+        // Every response is metered in the run's spend ledger, as `LlmAgent` meters a call.
+        let meter = ResponseMeter::for_run(
+            &governance.config,
+            &governance.scope.app_name,
+            &self.agent_name,
+            model.model_id(),
+            self.pricing,
+        );
 
         Ok(RealtimeRunner {
             model,
@@ -527,7 +635,9 @@ impl RealtimeRunnerBuilder {
             tool_permits: Arc::new(tokio::sync::Semaphore::new(max_concurrent_tools)),
             outstanding_tools: Arc::new(AtomicUsize::new(0)),
             response_closed_awaiting_tools: Arc::new(AtomicBool::new(false)),
-            governance: self.governance,
+            governance,
+            control,
+            confirmation: self.confirmation,
             tool_timeout: self.tool_timeout,
             tool_result_screen: self.tool_result_screen,
             expose_tool_error_messages: self.expose_tool_error_messages,
@@ -593,8 +703,12 @@ pub struct RealtimeRunner {
     /// Set when the dispatching response closed while tool calls were still running, so
     /// the follow-up `create_response` is owed by whichever tool finishes last.
     response_closed_awaiting_tools: Arc<AtomicBool>,
-    /// Policy, kill switch, and confirmation applied to every dispatched call.
-    governance: Option<ToolGovernance>,
+    /// Policy, kill switches, and confirmation applied to every dispatched call.
+    governance: ToolGovernance,
+    /// The runner's own kill switch, also among `governance.config.governance`.
+    control: adk_core::GovernanceControl,
+    /// The tools that need a person's approval before they run.
+    confirmation: adk_core::ToolConfirmationPolicy,
     /// How long one tool call may run.
     tool_timeout: std::time::Duration,
     /// Screens every tool result before it is sent to the model.
@@ -617,6 +731,31 @@ impl RealtimeRunner {
     /// Create a new builder.
     pub fn builder() -> RealtimeRunnerBuilder {
         RealtimeRunnerBuilder::new()
+    }
+
+    /// The runner's kill switch: the control passed to
+    /// [`RealtimeRunnerBuilder::governance`], or the one the runner created. While it is
+    /// frozen no tool call runs, and the dispatch, and so [`run`](Self::run), ends with the
+    /// `governance.frozen` error.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_realtime::RealtimeRunner;
+    ///
+    /// fn stop_all_tools(runner: &RealtimeRunner) {
+    ///     runner.governance().freeze("incident 4012");
+    /// }
+    /// ```
+    pub fn governance(&self) -> &adk_core::GovernanceControl {
+        &self.control
+    }
+
+    /// The run config every tool call is governed under: the config passed to
+    /// [`RealtimeRunnerBuilder::tool_governance`], or `RunConfig::default()`, with the
+    /// runner's kill switch among its `governance` controls.
+    pub fn run_config(&self) -> &adk_core::RunConfig {
+        &self.governance.config
     }
 
     /// Connect to the realtime provider.
@@ -1004,16 +1143,10 @@ impl RealtimeRunner {
         &self.agent_name
     }
 
-    /// The run config every tool call is governed under, when one was set.
+    /// The approval scope held calls are recorded under.
     #[cfg(feature = "integration")]
-    pub(crate) fn governance_config(&self) -> Option<&adk_core::RunConfig> {
-        self.governance.as_ref().map(|governance| &governance.config)
-    }
-
-    /// The approval scope held calls are recorded under, when governance was set.
-    #[cfg(feature = "integration")]
-    pub(crate) fn approval_scope(&self) -> Option<&adk_core::ApprovalScope> {
-        self.governance.as_ref().map(|governance| &governance.scope)
+    pub(crate) fn approval_scope(&self) -> &adk_core::ApprovalScope {
+        &self.governance.scope
     }
 
     /// Counts a tool dispatch the caller runs outside [`run`](Self::run), so the follow-up
@@ -1316,23 +1449,20 @@ impl RealtimeRunner {
         Ok(())
     }
 
-    /// Runs one call through the governed path configured with
-    /// [`RealtimeRunnerBuilder::tool_governance`]. Without one, every call executes.
+    /// Runs one call through the governed path: the
+    /// [`tool_governance`](RealtimeRunnerBuilder::tool_governance) config, or the defaults,
+    /// with the runner's kill switch and confirmation policy.
     ///
     /// # Errors
     ///
-    /// Returns [`RealtimeError::ToolError`] when the kill switch is frozen or the
+    /// Returns [`RealtimeError::ToolError`] when a kill switch is frozen or the
     /// confirmation handler or approval store fails; the run ends.
     pub(crate) async fn authorize_tool_call(
         &self,
-        call: adk_core::GovernedCall,
+        mut call: adk_core::GovernedCall,
     ) -> Result<adk_core::ToolAuthorization> {
-        let Some(governance) = &self.governance else {
-            return Ok(adk_core::ToolAuthorization::Execute {
-                args: call.args,
-                confirmation: None,
-            });
-        };
+        call.requires_confirmation |= self.confirmation.requires_confirmation(&call.tool_name);
+        let governance = &self.governance;
         let gate = adk_core::ToolGate::new(
             &governance.config,
             &self.agent_name,
@@ -1351,9 +1481,7 @@ impl RealtimeRunner {
         &self,
         request: &adk_core::ToolConfirmationRequest,
     ) -> Result<()> {
-        let Some(governance) = &self.governance else {
-            return Ok(());
-        };
+        let governance = &self.governance;
         let gate = adk_core::ToolGate::new(
             &governance.config,
             &self.agent_name,
@@ -1394,7 +1522,7 @@ impl RealtimeRunner {
     /// Whether tool error messages may be logged: the `record_payloads` of the config passed to
     /// [`RealtimeRunnerBuilder::tool_governance`]. Without one, only content-free fields are.
     pub(crate) fn records_payloads(&self) -> bool {
-        self.governance.as_ref().is_some_and(|governance| governance.config.record_payloads)
+        self.governance.config.record_payloads
     }
 
     /// Execute a tool call and optionally send the response.
@@ -1452,9 +1580,17 @@ impl RealtimeRunner {
                             }),
                         }
                     }
-                    adk_core::ToolAuthorization::Refuse { reason, .. }
-                    | adk_core::ToolAuthorization::Pending { reason, .. } => {
+                    adk_core::ToolAuthorization::Refuse { reason, .. } => {
                         serde_json::json!({ "error": reason })
+                    }
+                    // A native handler's call is not held in the session, so it waits only
+                    // where an approval store or service can take a decision on it.
+                    adk_core::ToolAuthorization::Pending { reason, .. } => {
+                        if holds_reach_an_approver(&self.governance.config) {
+                            serde_json::json!({ "error": reason })
+                        } else {
+                            serde_json::json!({ "error": no_approver_refusal(name, &reason) })
+                        }
                     }
                 };
                 match screened_args {

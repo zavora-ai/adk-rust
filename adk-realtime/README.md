@@ -300,17 +300,21 @@ fn main() {
 `RealtimeAgent`, `RealtimeRunner`, and `IntegratedRealtimeRunner` (`integration` feature) dispatch
 every tool call through `adk_core::authorize_tool_call`. `RealtimeAgent` reads the kill switch,
 `ToolPolicy`, and confirmation from the run's `RunConfig` and runs the runner's plugin callbacks;
-the runners take them from `tool_governance` on their builders.
+the runners take them from `tool_governance` on their builders, and without it govern under
+`RunConfig::default()`. No runner runs a tool call outside the governed path.
 
 | Behaviour | Rule |
 |-----------|------|
+| Kill switch | Each runner has one: `governance()` returns it, `governance(control)` on the builder shares one across runners. A freeze stops the next call of an open session, and `RealtimeRunner::run` ends with `governance.frozen` |
+| Confirmation | `require_tool_confirmation(name)`, `require_tool_confirmation_for_all()` and `tool_confirmation_policy(policy)` on `RealtimeAgentBuilder` and both runner builders. A call that needs confirmation is decided by the governance config's handler, approvals or approval store; with none of them (and, for `IntegratedRealtimeRunner`, no session service to hold it in) the runner refuses it with a reason the model can speak |
 | Tool timeout | `tool_timeout(duration)` answers a call that runs too long with an error; the default is five minutes |
 | Malformed arguments | Arguments that are not valid JSON are answered with an error and the tool does not run |
 | Tool and callback errors | The model receives the error's component, category, and code; `expose_tool_error_messages(true)` sends the full message |
 | After-tool failure | An after-tool callback or plugin error withholds the result (`result_withheld`) |
 | Result screening | `tool_result_screen(screen)` rewrites or withholds each result before the model sees it; a screen that cannot decide withholds the result |
 | Authenticated identity | `IntegratedRealtimeRunnerBuilder::request_context(ctx)` runs every tool call as the identity the server authenticated: tool contexts answer `is_authenticated()` with `true` and `user_scopes()` with its scopes. Without it they report an unauthenticated user; a context for a user other than `identity`'s fails `build` |
-| Run config in tool contexts | With `tool_governance`, every tool context answers `run_config()` with the governance config and `acting_context()` with the acting context the gate authorized the call under |
+| Run config in tool contexts | Every tool context answers `run_config()` with the governance config (`run_config()` on the runner) and `acting_context()` with the acting context the gate authorized the call under |
+| Secrets in `Debug` | `OpenAIRealtimeModel` and `GeminiLiveBackend` redact their API key and credentials from `Debug` output |
 | Governing agent | `agent_name(name)` on either runner builder names the agent calls are governed, metered and held under (default `realtime`); a surface running an existing agent's tools sets that agent's name, so its tool policy recognises them |
 | Held calls | A call the governed path holds, or that a tool's delegate holds (an `AgentTool` whose agent held a call), is answered to the model as `confirmation_pending`, recorded in the session under the runner's agent name (`agent_name`, default `realtime`) and in the run's `ApprovalStore`, and surfaced as `ServerEvent::ToolConfirmationRequested`; `held_calls()` lists them and `resume_held_calls()` runs each one that has a decision under its original call ID. `RealtimeAgent` holds its own call when its delegate holds one and resumes decided calls at the start of a run |
 | Approval binding | A held call's request names the runner's acting agent and the tool's origin: an ADK tool's `Tool::origin()`, or for a native handler `REALTIME_HANDLER_ORIGIN` (`realtime`) with a digest of its `ToolDefinition` (`ToolDefinition::handler_origin`), so an approval never covers another agent's call, a `Tool` of the same name, or a handler redefined since |

@@ -258,11 +258,17 @@ pub struct OpenAIWebRTCSession {
 }
 
 /// Response from `POST /v1/realtime/client_secrets`: the ephemeral key, its expiry, and the
-/// session it was minted for.
-#[derive(Debug, serde::Deserialize)]
+/// session it was minted for. The key is redacted from `Debug` output.
+#[derive(serde::Deserialize)]
 struct ClientSecretResponse {
     /// The ephemeral key (`ek_...`) the SDP exchange authenticates with.
     value: String,
+}
+
+impl std::fmt::Debug for ClientSecretResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientSecretResponse").field("value", &"[REDACTED]").finish()
+    }
 }
 
 /// Response body from the SDP exchange endpoint.

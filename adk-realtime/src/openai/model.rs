@@ -21,13 +21,27 @@ use super::{DEFAULT_MODEL, OPENAI_REALTIME_URL, OPENAI_VOICES, OpenAITransport};
 /// let model = OpenAIRealtimeModel::new("sk-...", "gpt-realtime-2.1");
 /// let session = model.connect(config).await?;
 /// ```
-#[derive(Debug, Clone)]
+///
+/// The API key is redacted from `Debug` output.
+#[derive(Clone)]
 pub struct OpenAIRealtimeModel {
     api_key: String,
     model_id: String,
     base_url: Option<String>,
     transport: OpenAITransport,
     call_id: Option<String>,
+}
+
+impl std::fmt::Debug for OpenAIRealtimeModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAIRealtimeModel")
+            .field("api_key", &"[REDACTED]")
+            .field("model_id", &self.model_id)
+            .field("base_url", &self.base_url)
+            .field("transport", &self.transport)
+            .field("call_id", &self.call_id)
+            .finish()
+    }
 }
 
 impl OpenAIRealtimeModel {
@@ -186,5 +200,19 @@ impl Default for OpenAIRealtimeModel {
             transport: OpenAITransport::default(),
             call_id: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_output_redacts_the_api_key() {
+        let model = OpenAIRealtimeModel::new("sk-live-secret-123", "gpt-realtime-2.1");
+        let rendered = format!("{model:?}");
+        assert!(!rendered.contains("sk-live-secret-123"), "{rendered}");
+        assert!(rendered.contains("[REDACTED]"), "{rendered}");
+        assert!(rendered.contains("gpt-realtime-2.1"), "{rendered}");
     }
 }

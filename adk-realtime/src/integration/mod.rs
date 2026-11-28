@@ -342,10 +342,24 @@ impl IntegratedRealtimeRunner {
         &self.inner.config
     }
 
-    /// The run config every tool call is governed under, when
-    /// [`tool_governance`](IntegratedRealtimeRunnerBuilder::tool_governance) was set.
-    pub fn governance(&self) -> Option<&adk_core::RunConfig> {
-        self.inner.runner.governance_config()
+    /// The runner's kill switch: the control passed to
+    /// [`governance`](IntegratedRealtimeRunnerBuilder::governance), or the one the runner
+    /// created. While it is frozen no tool call runs.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// runner.governance().freeze("incident 4012");
+    /// ```
+    pub fn governance(&self) -> &adk_core::GovernanceControl {
+        self.inner.runner.governance()
+    }
+
+    /// The run config every tool call is governed under: the config passed to
+    /// [`tool_governance`](IntegratedRealtimeRunnerBuilder::tool_governance), or
+    /// `RunConfig::default()`, with the runner's kill switch among its `governance` controls.
+    pub fn run_config(&self) -> &adk_core::RunConfig {
+        self.inner.runner.run_config()
     }
 
     /// Connect to the realtime provider.
@@ -754,13 +768,11 @@ impl IntegratedRealtimeRunner {
     /// approval store fails, or the provider refuses the result.
     pub async fn resume_held_calls(&self) -> Result<Vec<ResumedToolCall>> {
         let inner = &self.inner;
-        let (Some(session_service), Some(config), Some(scope)) = (
-            &inner.session_service,
-            inner.runner.governance_config(),
-            inner.runner.approval_scope(),
-        ) else {
+        let Some(session_service) = &inner.session_service else {
             return Ok(Vec::new());
         };
+        let config = inner.runner.run_config();
+        let scope = inner.runner.approval_scope();
         let events = inner.session_events(session_service.as_ref()).await?;
         let agent_name = inner.runner.agent_name();
         let held = adk_core::held_tool_calls(&events, agent_name, "");
@@ -1260,46 +1272,43 @@ impl Inner {
             adk_core::ToolAuthorization::Execute { args, .. } => {
                 // A non-idempotent call executes at most once per idempotency key, as under
                 // `LlmAgent` and `RealtimeAgent`; the run's tool-call budget counts it.
-                let config = self.runner.governance_config();
+                let config = self.runner.run_config();
                 let effect = tool.effect();
-                let mut ledgered = None;
-                if let Some(config) = config {
-                    if let Some(tracker) = &config.budget_tracker
-                        && let Err(exceeded) = tracker.begin_tool_calls(1)
-                    {
-                        return Err(failed(exceeded.into()));
+                if let Some(tracker) = &config.budget_tracker
+                    && let Err(exceeded) = tracker.begin_tool_calls(1)
+                {
+                    return Err(failed(exceeded.into()));
+                }
+                let ledgered = match adk_core::begin_ledgered_call(
+                    config,
+                    ctx.as_ref(),
+                    effect,
+                    adk_core::ToolContext::idempotency_key(ctx.as_ref()),
+                    tool.name(),
+                    &args,
+                )
+                .await
+                .map_err(failed)?
+                {
+                    Ok(begun) => begun,
+                    Err(recorded) => {
+                        return Ok(GovernedOutcome {
+                            result: recorded.response,
+                            held: None,
+                            status: Some(recorded.status),
+                            cause: recorded.cause,
+                            executed: false,
+                        });
                     }
-                    match adk_core::begin_ledgered_call(
-                        config,
-                        ctx.as_ref(),
-                        effect,
-                        adk_core::ToolContext::idempotency_key(ctx.as_ref()),
-                        tool.name(),
-                        &args,
-                    )
-                    .await
-                    .map_err(failed)?
-                    {
-                        Ok(begun) => ledgered = begun,
-                        Err(recorded) => {
-                            return Ok(GovernedOutcome {
-                                result: recorded.response,
-                                held: None,
-                                status: Some(recorded.status),
-                                cause: recorded.cause,
-                                executed: false,
-                            });
-                        }
+                };
+                // The kill switch again, after the ledger write.
+                if let Err(refusal) = config.check_governance() {
+                    if let Some(ledgered) = ledgered {
+                        ledgered
+                            .complete(tool.name(), None, &adk_core::not_run_text(&refusal))
+                            .await;
                     }
-                    // The kill switch again, after the ledger write.
-                    if let Err(refusal) = config.check_governance() {
-                        if let Some(ledgered) = ledgered {
-                            ledgered
-                                .complete(tool.name(), None, &adk_core::not_run_text(&refusal))
-                                .await;
-                        }
-                        return Err(failed(refusal));
-                    }
+                    return Err(failed(refusal));
                 }
                 let ledger_args = args.clone();
                 let timeout = self.runner.tool_timeout();
@@ -1358,17 +1367,15 @@ impl Inner {
                 // A call that ended mid-flight keeps its begun record, so a replay is answered
                 // with an unknown outcome instead of executing again.
                 let result = if outcome_unknown {
-                    if let Some(config) = config {
-                        adk_core::record_outcome_unknown(
-                            config,
-                            ctx.as_ref(),
-                            tool.name(),
-                            &ledger_args,
-                            "interrupted",
-                        )
-                        .await
-                        .map_err(failed)?;
-                    }
+                    adk_core::record_outcome_unknown(
+                        config,
+                        ctx.as_ref(),
+                        tool.name(),
+                        &ledger_args,
+                        "interrupted",
+                    )
+                    .await
+                    .map_err(failed)?;
                     adk_core::interrupted_call_response(
                         result["error"].as_str().unwrap_or("the tool timed out"),
                     )
@@ -1422,14 +1429,28 @@ impl Inner {
                 adk_core::ToolResultStatus::Refused,
                 None,
             ),
-            adk_core::ToolAuthorization::Pending { request, reason } => GovernedOutcome {
-                held: Some(request),
-                ..GovernedOutcome::answer(
-                    adk_core::confirmation_pending_response(reason),
-                    adk_core::ToolResultStatus::Held,
-                    None,
-                )
-            },
+            // A hold waits only where a decision can reach it: the run's approval store or
+            // service, or the session `resume_held_calls` reads it back from.
+            adk_core::ToolAuthorization::Pending { request, reason }
+                if self.session_service.is_some()
+                    || crate::runner::holds_reach_an_approver(self.runner.run_config()) =>
+            {
+                GovernedOutcome {
+                    held: Some(request),
+                    ..GovernedOutcome::answer(
+                        adk_core::confirmation_pending_response(reason),
+                        adk_core::ToolResultStatus::Held,
+                        None,
+                    )
+                }
+            }
+            adk_core::ToolAuthorization::Pending { reason, .. } => GovernedOutcome::answer(
+                serde_json::json!({
+                    "error": crate::runner::no_approver_refusal(tool.name(), &reason)
+                }),
+                adk_core::ToolResultStatus::Refused,
+                None,
+            ),
         })
     }
 
@@ -1539,15 +1560,14 @@ impl Inner {
         if let Some(request_context) = &self.request_context {
             ctx = ctx.with_request_context(request_context.clone());
         }
-        if let Some(config) = self.runner.governance_config() {
-            ctx = ctx
-                .with_acting_context(config.acting_context_for(
-                    &self.identity.app_name,
-                    self.runner.agent_name(),
-                    &self.identity.user_id,
-                ))
-                .with_run_config(config.clone());
-        }
+        let config = self.runner.run_config();
+        ctx = ctx
+            .with_acting_context(config.acting_context_for(
+                &self.identity.app_name,
+                self.runner.agent_name(),
+                &self.identity.user_id,
+            ))
+            .with_run_config(config.clone());
         Arc::new(ctx)
     }
 }

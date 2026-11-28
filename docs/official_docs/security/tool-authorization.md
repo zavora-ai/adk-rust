@@ -1599,8 +1599,24 @@ scheduling, and a durable run the switch refuses after it made a call parks at i
 model-call boundary — the refused calls of its batch answered `not run` — and resumes on
 unfreeze. See [Server](../deployment/server.md#kill-switch).
 
-Realtime tool calls go through the same governed path — see
-[Realtime Tools](../realtime/tools.md#the-governed-path).
+Realtime tool calls go through the same governed path, configured or not — see
+[Realtime Tools](../realtime/tools.md#the-governed-path). `RealtimeRunner` and
+`IntegratedRealtimeRunner` each have a kill switch too, reachable through `governance()` on the
+runner and shared with `governance(control)` on its builder; a freeze stops the next call of a
+session that is already open, and `RealtimeRunner::run` ends with the error.
+
+## Realtime Sessions
+
+A realtime runner built without `tool_governance` governs every call under `RunConfig::default()`
+with its own kill switch: no `ToolPolicy`, so a call runs unless the switch is frozen or the call
+needs confirmation (`require_tool_confirmation` on `RealtimeAgentBuilder`,
+`RealtimeRunnerBuilder` and `IntegratedRealtimeRunnerBuilder`, or a policy's
+`RequireApproval`). A live session cannot pause for a person, so such a call is decided by the
+config's `ToolConfirmationHandler`, `tool_approvals`, or approval store — or, on an
+`IntegratedRealtimeRunner` with a session service, held in the session for `resume_held_calls`.
+With none of them the runner refuses the call, answering the model with a reason it can speak
+and logging a `warn` event that names the tool. See
+[Confirmation in a live session](../realtime/tools.md#confirmation-in-a-live-session).
 
 ## Audit Records
 

@@ -69,6 +69,10 @@ pub struct IntegratedRealtimeRunnerBuilder {
     pub(crate) integration_config: IntegrationConfig,
     /// Policy, kill switch, and confirmation applied to every dispatched tool call.
     pub(crate) tool_governance: Option<adk_core::RunConfig>,
+    /// The runner's kill switch, when the caller shares one.
+    pub(crate) control: Option<adk_core::GovernanceControl>,
+    /// The tools that need a person's approval before they run.
+    pub(crate) confirmation: adk_core::ToolConfirmationPolicy,
     /// How long one tool call may run.
     pub(crate) tool_timeout: std::time::Duration,
     /// Screens every tool result before the model and the session see it.
@@ -113,6 +117,8 @@ impl IntegratedRealtimeRunnerBuilder {
             identity: None,
             integration_config: IntegrationConfig::default(),
             tool_governance: None,
+            control: None,
+            confirmation: adk_core::ToolConfirmationPolicy::Never,
             tool_timeout: crate::runner::DEFAULT_REALTIME_TOOL_TIMEOUT,
             tool_result_screen: None,
             expose_tool_error_messages: false,
@@ -289,6 +295,14 @@ impl IntegratedRealtimeRunnerBuilder {
     /// [`IntegratedRealtimeRunner::resume_held_calls`](super::IntegratedRealtimeRunner::resume_held_calls).
     /// With a `spend_ledger`, every response is metered under the identity's app name.
     ///
+    /// Without it, every call still takes the governed path, under `RunConfig::default()`:
+    /// no tool policy, so a call runs unless the runner's kill switch
+    /// ([`IntegratedRealtimeRunner::governance`](super::IntegratedRealtimeRunner::governance))
+    /// is frozen or the call needs confirmation
+    /// ([`require_tool_confirmation`](Self::require_tool_confirmation)). Such a call is held
+    /// in the session when a [`session_service`](Self::session_service) is set, and refused
+    /// otherwise, since nothing could decide it.
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -306,6 +320,59 @@ impl IntegratedRealtimeRunnerBuilder {
     /// ```
     pub fn tool_governance(mut self, config: adk_core::RunConfig) -> Self {
         self.tool_governance = Some(config);
+        self
+    }
+
+    /// Attaches `control` as this runner's kill switch, as
+    /// [`RealtimeRunnerBuilder::governance`](crate::runner::RealtimeRunnerBuilder::governance)
+    /// does. Without it the runner creates its own.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let control = GovernanceControl::new();
+    /// let runner = IntegratedRealtimeRunner::builder()
+    ///     .model(model)
+    ///     .identity("voice", "user-1", "session-1")
+    ///     .governance(control.clone())
+    ///     .build()?;
+    /// control.freeze("incident 4012");
+    /// ```
+    pub fn governance(mut self, control: adk_core::GovernanceControl) -> Self {
+        self.control = Some(control);
+        self
+    }
+
+    /// Sets which tools need a person's approval before they run, as
+    /// `LlmAgentBuilder::tool_confirmation_policy` does. See
+    /// [`tool_governance`](Self::tool_governance) for what happens to such a call.
+    pub fn tool_confirmation_policy(mut self, policy: adk_core::ToolConfirmationPolicy) -> Self {
+        self.confirmation = policy;
+        self
+    }
+
+    /// Requires a person's approval before `tool_name` runs. See
+    /// [`tool_confirmation_policy`](Self::tool_confirmation_policy).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let runner = IntegratedRealtimeRunner::builder()
+    ///     .model(model)
+    ///     .identity("voice", "user-1", "session-1")
+    ///     .adk_tool(refund)
+    ///     .require_tool_confirmation("refund")
+    ///     .build()?;
+    /// ```
+    pub fn require_tool_confirmation(mut self, tool_name: impl Into<String>) -> Self {
+        self.confirmation = self.confirmation.with_tool(tool_name);
+        self
+    }
+
+    /// Requires a person's approval before every tool call. See
+    /// [`tool_confirmation_policy`](Self::tool_confirmation_policy).
+    pub fn require_tool_confirmation_for_all(mut self) -> Self {
+        self.confirmation = adk_core::ToolConfirmationPolicy::Always;
         self
     }
 
@@ -463,12 +530,20 @@ impl IntegratedRealtimeRunnerBuilder {
             )));
         }
 
+        // Resolved here rather than by the inner runner, so tool contexts carry the same
+        // config, kill switch included, that the runner governs with.
+        let control = self.control.unwrap_or_default();
+        let mut run_config = self.tool_governance.unwrap_or_default();
+        if !run_config.governance.iter().any(|existing| existing.same_as(&control)) {
+            run_config.governance.push(control.clone());
+        }
+
         // Create context factory for ADK tools
         let context_factory = Arc::new(IdentityToolContextFactory {
             identity: identity.clone(),
             memory_service: self.memory_service.clone(),
             request_context: self.request_context.clone(),
-            run_config: self.tool_governance.clone(),
+            run_config: run_config.clone(),
             agent_name: self.agent_name.clone(),
         });
 
@@ -500,20 +575,22 @@ impl IntegratedRealtimeRunnerBuilder {
             .runner_config(self.runner_config)
             .tool_timeout(self.tool_timeout)
             .expose_tool_error_messages(self.expose_tool_error_messages)
-            .agent_name(self.agent_name);
+            .agent_name(self.agent_name)
+            .governance(control)
+            .tool_governance(
+                run_config,
+                adk_core::ApprovalScope::new(
+                    &identity.app_name,
+                    &identity.user_id,
+                    &identity.session_id,
+                ),
+            )
+            .tool_confirmation_policy(self.confirmation);
         if let Some(screen) = self.tool_result_screen {
             runner_builder = runner_builder.tool_result_screen(screen);
         }
         if let Some(pricing) = self.pricing {
             runner_builder = runner_builder.realtime_pricing(pricing);
-        }
-        if let Some(config) = self.tool_governance {
-            let scope = adk_core::ApprovalScope::new(
-                &identity.app_name,
-                &identity.user_id,
-                &identity.session_id,
-            );
-            runner_builder = runner_builder.tool_governance(config, scope);
         }
 
         for (_, (def, handler)) in all_tools {

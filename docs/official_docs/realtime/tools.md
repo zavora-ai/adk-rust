@@ -188,7 +188,7 @@ example is a headless OpenAI probe with weather, calculator, and time tools.
 | Registered as | Dispatch | Policy applied |
 |---------------|----------|----------------|
 | `adk_tool(...)` — an ADK `Tool` | The integration policy pipeline | Configured plugins, then the governed path on the rewritten arguments, transcript recording, tool-event persistence |
-| A native realtime handler | `RealtimeRunner` dispatch | The governed path, when `tool_governance` is set |
+| A native realtime handler | `RealtimeRunner` dispatch | The governed path |
 
 `ToolBridgeAdapter` remains available for wrapping an ADK `Tool` as a native handler; a tool
 wrapped that way is dispatched like any native handler.
@@ -223,13 +223,59 @@ messages name the plugin error's component, category, and code; its message is s
 
 Every realtime dispatch runs the same governed path as `LlmAgent`
 (`adk_core::authorize_tool_call`): the kill switch, the `ToolPolicy`, and confirmation, on the
-call's final arguments.
+call's final arguments. There is no ungoverned mode: a runner built without `tool_governance`
+governs its calls under `RunConfig::default()`, as an agent under a default `Runner` is governed.
 
-| Runtime | Where the governance comes from |
-|---------|---------------------------------|
-| `RealtimeAgent` under a `Runner` | The run's `RunConfig`: `tool_policy`, `governance`, confirmation handler, approvals, approval store |
-| `RealtimeRunner` | `RealtimeRunnerBuilder::tool_governance(run_config, approval_scope)` |
-| `IntegratedRealtimeRunner` | `IntegratedRealtimeRunnerBuilder::tool_governance(run_config)`, scoped to the runner's identity |
+| Runtime | Where the governance comes from | Without configuration |
+|---------|---------------------------------|-----------------------|
+| `RealtimeAgent` under a `Runner` | The run's `RunConfig`: `tool_policy`, `governance`, confirmation handler, approvals, approval store | The runner's defaults |
+| `RealtimeRunner` | `RealtimeRunnerBuilder::tool_governance(run_config, approval_scope)` | `RunConfig::default()`, scoped to app `realtime`, user `anonymous` |
+| `IntegratedRealtimeRunner` | `IntegratedRealtimeRunnerBuilder::tool_governance(run_config)`, scoped to the runner's identity | `RunConfig::default()`, scoped to the runner's identity |
+
+Each part of the governed path applies with or without `tool_governance`:
+
+| Control | Set with | Default |
+|---------|----------|---------|
+| Kill switch | `governance(control)` on either runner builder, or the controls of the `tool_governance` config | The runner creates its own; `governance()` on the runner returns it |
+| `ToolPolicy` | The `tool_governance` config's `tool_policy` | None: every call is allowed |
+| Confirmation | `require_tool_confirmation(name)`, `require_tool_confirmation_for_all()`, or `tool_confirmation_policy(policy)` on `RealtimeAgentBuilder` and both runner builders; a policy's `RequireApproval` | No tool needs confirmation |
+| Acting identity | The `tool_governance` config's `acting` settings and the builder's `agent_name` | `urn:adk:agent:{app}/{agent_name}` |
+
+A freeze reaches a session that is already open: the next call the model makes is not run, and
+`RealtimeRunner::run` ends with the `governance.frozen` error.
+
+```rust
+use adk_realtime::RealtimeRunner;
+use adk_realtime::config::ToolDefinition;
+use adk_realtime::model::BoxedModel;
+
+fn build(model: BoxedModel) -> adk_realtime::Result<RealtimeRunner> {
+    let runner = RealtimeRunner::builder()
+        .model(model)
+        .tool_fn(ToolDefinition::new("refund"), |_call| Ok(serde_json::json!({ "ok": true })))
+        .require_tool_confirmation("refund")
+        .build()?;
+    // An operator stops every tool call of the open session.
+    runner.governance().freeze("incident 4012");
+    Ok(runner)
+}
+```
+
+#### Confirmation in a live session
+
+A live audio session cannot pause for a person to click approve. A call that needs confirmation
+is decided by whatever the governance config provides, and is never run without a decision:
+
+| The governance config has | What happens to the call |
+|---------------------------|--------------------------|
+| A `ToolConfirmationHandler` | The handler decides while the session keeps running; an approval runs the call, a denial answers it as not run |
+| A `ToolApproval` in `tool_approvals` for the call's fingerprint | The approval decides it |
+| An `ApprovalStore` or `ApprovalService` | The call is held: answered `{"error": "Tool '<name>' requires confirmation: ..."}`, recorded for an approver, and run when the model issues it again after the decision (`IntegratedRealtimeRunner` resumes it itself with `resume_held_calls`) |
+| None of these, on an `IntegratedRealtimeRunner` with a `session_service` | The call is held in the session and surfaced as `ToolConfirmationRequested`; a later runner whose config holds a decision resumes it with `resume_held_calls` |
+| None of these | The call is refused with an answer the model can speak — `"Tool '<name>' requires confirmation: <reason>. Nobody can approve it in this session, so it was not run. Tell the user it needs a person's approval and do not call it again."` — and a `warn` event names the tool. Configure a handler or an approval store through `tool_governance` to approve such calls |
+
+`RealtimeAgent` holds a call that needs confirmation in the session, as `LlmAgent` does, and
+resumes it at the start of a later run that has a decision.
 
 ```rust
 use adk_core::{ApprovalScope, DeclarativePolicy, RunConfig};
@@ -256,7 +302,7 @@ fn build(model: BoxedModel) -> adk_realtime::Result<RealtimeRunner> {
 |-----------|----------------------------|
 | Arguments are not a JSON object | `{"error": "Tool '<name>' was not run: its arguments are not valid JSON (...)"}` — the tool does not run with `{}` |
 | The policy denies the call | `{"error": "Tool '<name>' denied by policy: <reason>"}` |
-| The call needs confirmation and no decision exists | `{"error": "Tool '<name>' requires confirmation"}`; `RealtimeAgent` also emits an event carrying the `ToolConfirmationRequest`, and the request is recorded in the approval store |
+| The call needs confirmation and no decision exists | `{"error": "Tool '<name>' requires confirmation"}`; `RealtimeAgent` also emits an event carrying the `ToolConfirmationRequest`, and the request is recorded in the approval store. With nothing that could decide it, a runner refuses it instead (see [Confirmation in a live session](#confirmation-in-a-live-session)) |
 | The tool runs past its timeout (default five minutes) | `{"error": "Tool '<name>' timed out after ..."}`; a `NonIdempotent` ADK tool under `RealtimeAgent` is answered `{"status": "outcome_unknown", "detail": "Tool '<name>' timed out after .... The call may have taken effect; ..."}`, as `LlmAgent` answers it |
 | The run's action ledger already holds the call (`RealtimeAgent`) | `{"status": "already_succeeded", ...}`, `{"status": "already_failed", ...}`, or `outcome_unknown` — the tool does not run again |
 | The run's tool-call budget is spent (`RealtimeAgent`) | `{"error": "not run: <budget error>"}`; the session ends with the `budget.*` error |
@@ -272,7 +318,7 @@ ledger write, and the outcome is recorded when the tool returns. A call the prov
 under the same call ID runs once, and a call that timed out keeps its begun record, so a replay
 is answered `outcome_unknown` instead of running again. Each call also counts against the run's
 `RunBudget::max_tool_calls`. `IntegratedRealtimeRunner` does the same for its ADK tools under
-the `tool_governance` configuration (`action_ledger`, `budget_tracker`). A `RealtimeRunner`
+the governance configuration (`action_ledger`, `budget_tracker`). A `RealtimeRunner`
 native handler is neither ledgered nor counted against a budget.
 
 `RealtimeAgent` and `IntegratedRealtimeRunner` record each answer in the session with the

@@ -32,8 +32,9 @@ const AUDIO_FLUSH_TARGET_MS: usize = 40;
 
 /// Backend configuration for Gemini Live connections.
 ///
-/// Determines how to authenticate and which endpoint to connect to.
-#[derive(Debug, Clone)]
+/// Determines how to authenticate and which endpoint to connect to. The API key and the
+/// credentials are redacted from `Debug` output.
+#[derive(Clone)]
 pub enum GeminiLiveBackend {
     /// AI Studio with API key authentication.
     Studio { api_key: String },
@@ -48,6 +49,23 @@ pub enum GeminiLiveBackend {
         /// Google Cloud project ID.
         project_id: String,
     },
+}
+
+impl std::fmt::Debug for GeminiLiveBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Studio { .. } => {
+                f.debug_struct("Studio").field("api_key", &"[REDACTED]").finish()
+            }
+            #[cfg(feature = "vertex-live")]
+            Self::Vertex { region, project_id, .. } => f
+                .debug_struct("Vertex")
+                .field("credentials", &"[REDACTED]")
+                .field("region", region)
+                .field("project_id", project_id)
+                .finish(),
+        }
+    }
 }
 
 impl GeminiLiveBackend {
@@ -1673,6 +1691,19 @@ fn convert_tools(
 mod tests {
     use super::*;
     use adk_core::types::Part;
+
+    #[test]
+    fn debug_output_redacts_the_studio_api_key() {
+        let backend = GeminiLiveBackend::studio("AIza-secret-key-456");
+        let rendered = format!("{backend:?}");
+        assert!(!rendered.contains("AIza-secret-key-456"), "{rendered}");
+        assert!(rendered.contains("[REDACTED]"), "{rendered}");
+
+        let model =
+            crate::gemini::GeminiRealtimeModel::new(backend, "gemini-3.1-flash-live-preview");
+        let rendered = format!("{model:?}");
+        assert!(!rendered.contains("AIza-secret-key-456"), "{rendered}");
+    }
 
     #[test]
     fn test_gemini_translate_text_only() {
