@@ -19,7 +19,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use adk_core::Agent;
+use adk_core::{Agent, GovernanceControl};
 use adk_session::SessionService;
 
 use super::auth::AcpAuthenticator;
@@ -102,6 +102,12 @@ pub struct AcpServerConfig {
     /// When `None` (the default), the server does not advertise the
     /// `providers` capability.
     pub providers: Option<Arc<dyn AcpProviders>>,
+    /// The kill switch every turn's runner shares.
+    ///
+    /// Freezing it fails new turns at their start and stops running ones before
+    /// their next model or tool call. The builder creates one unless
+    /// [`AcpServerConfigBuilder::governance`] shares the operator's.
+    pub governance: GovernanceControl,
 }
 
 /// Builder for [`AcpServerConfig`] with validation.
@@ -129,6 +135,7 @@ pub struct AcpServerConfigBuilder {
     authenticator: Option<Arc<dyn AcpAuthenticator>>,
     system_prompts: SystemPromptSupport,
     providers: Option<Arc<dyn AcpProviders>>,
+    governance: Option<GovernanceControl>,
 }
 
 impl Default for AcpServerConfigBuilder {
@@ -154,6 +161,7 @@ impl AcpServerConfigBuilder {
             authenticator: None,
             system_prompts: SystemPromptSupport::default(),
             providers: None,
+            governance: None,
         }
     }
 
@@ -260,6 +268,30 @@ impl AcpServerConfigBuilder {
         self
     }
 
+    /// Share the operator's kill switch with every turn's runner.
+    ///
+    /// Without one the server creates its own, reachable through
+    /// [`AcpServerConfig::governance`]. Freezing it fails new turns at their
+    /// start and stops running ones before their next model or tool call.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::GovernanceControl;
+    ///
+    /// let control = GovernanceControl::new();
+    /// let config = AcpServerConfigBuilder::new()
+    ///     .agent(agent)
+    ///     .session_service(sessions)
+    ///     .governance(control.clone())
+    ///     .build()?;
+    /// control.freeze("incident 4012");
+    /// ```
+    pub fn governance(mut self, control: GovernanceControl) -> Self {
+        self.governance = Some(control);
+        self
+    }
+
     /// Build the configuration, validating all required fields.
     ///
     /// # Errors
@@ -303,6 +335,7 @@ impl AcpServerConfigBuilder {
             authenticator: self.authenticator,
             system_prompts: self.system_prompts,
             providers: self.providers,
+            governance: self.governance.unwrap_or_default(),
         })
     }
 }

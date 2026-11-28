@@ -20,8 +20,8 @@ use adk_acp::server::{
 };
 use adk_acp::{AcpAgentConfig, AcpConnection, AcpError, AcpToolServer, PermissionPolicy};
 use adk_core::{
-    Agent as AdkAgent, Content, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part, Tool,
-    ToolContext,
+    Agent as AdkAgent, Content, DeclarativePolicy, GovernanceControl, Llm, LlmRequest, LlmResponse,
+    LlmResponseStream, Part, RunConfig, Tool, ToolContext,
 };
 use adk_session::{InMemorySessionService, SessionService};
 use async_trait::async_trait;
@@ -233,6 +233,105 @@ async fn the_agent_calls_tools_the_client_serves_over_the_connection() {
     assert!(again.text.contains("C-3"), "got {}", again.text);
     assert_eq!(calls.load(Ordering::SeqCst), 4);
     resumed.close().await.expect("close");
+    connection.close().await.expect("close connection");
+}
+
+/// The client's tool server governs the agent's calls: a call its policy denies
+/// comes back to the agent's model as a refusal, and the tool does not run.
+#[tokio::test]
+async fn the_client_governs_the_calls_the_agent_makes_to_its_tools() {
+    let model = Arc::new(OrderModel::default());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let governed = tool_server(&calls).run_config(
+        RunConfig::builder()
+            .tool_policy(Arc::new(
+                DeclarativePolicy::builder().deny("lookup_order", "orders are private").build(),
+            ))
+            .build(),
+    );
+    let connection =
+        connect(serve(agent(model), |b| b), client_config().tool_server(governed)).await;
+
+    let mut session = connection.new_session().await.expect("session");
+    let result = tokio::time::timeout(LIMIT, session.prompt("look up A-17"))
+        .await
+        .expect("prompt hung")
+        .expect("prompt");
+    assert!(result.text.contains("orders are private"), "got {}", result.text);
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "a denied call never runs");
+    session.close().await.expect("close");
+    connection.close().await.expect("close connection");
+}
+
+/// Freezes `control` when the model asks for a tool, so the freeze lands between
+/// the model call and the tool dispatch.
+struct FreezesOnToolCall {
+    inner: OrderModel,
+    control: GovernanceControl,
+}
+
+#[async_trait]
+impl Llm for FreezesOnToolCall {
+    fn name(&self) -> &str {
+        "freezes-on-tool-call"
+    }
+
+    async fn generate_content(
+        &self,
+        request: LlmRequest,
+        stream: bool,
+    ) -> adk_core::Result<LlmResponseStream> {
+        self.control.freeze("incident 4012");
+        self.inner.generate_content(request, stream).await
+    }
+}
+
+/// The operator's kill switch reaches every turn of the ACP server: a frozen
+/// switch refuses a turn at its start, and a freeze during a turn stops the
+/// tool call it lands before.
+#[tokio::test]
+async fn the_operators_freeze_reaches_the_servers_turns() {
+    let control = GovernanceControl::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let shared = control.clone();
+    let connection = connect(
+        serve(agent(Arc::new(OrderModel::default())), move |b| b.governance(shared)),
+        client_config().tool_server(tool_server(&calls)),
+    )
+    .await;
+    let mut session = connection.new_session().await.expect("session");
+
+    control.freeze("incident 4012");
+    let refused =
+        tokio::time::timeout(LIMIT, session.prompt("look up A-17")).await.expect("prompt hung");
+    assert!(refused.is_err(), "a frozen switch refuses the turn, got {refused:?}");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    control.unfreeze();
+    let answered = tokio::time::timeout(LIMIT, session.prompt("look up A-17"))
+        .await
+        .expect("prompt hung")
+        .expect("the turn runs once the switch is unfrozen");
+    assert_eq!(answered.stop_reason, StopReason::EndTurn);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    session.close().await.expect("close");
+    connection.close().await.expect("close connection");
+
+    // A freeze that lands during the turn stops the call before it runs.
+    control.unfreeze();
+    let model =
+        Arc::new(FreezesOnToolCall { inner: OrderModel::default(), control: control.clone() });
+    let shared = control.clone();
+    let connection = connect(
+        serve(agent(model), move |b| b.governance(shared)),
+        client_config().tool_server(tool_server(&calls)),
+    )
+    .await;
+    let mut session = connection.new_session().await.expect("session");
+    let stopped =
+        tokio::time::timeout(LIMIT, session.prompt("look up B-2")).await.expect("prompt hung");
+    assert!(stopped.is_err(), "the frozen turn ends with an error, got {stopped:?}");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the call frozen mid-turn never ran");
     connection.close().await.expect("close connection");
 }
 

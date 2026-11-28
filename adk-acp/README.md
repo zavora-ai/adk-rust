@@ -134,7 +134,12 @@ AcpAgentConfig can attach the services that a normal editor supplies:
 - mcp_server includes a typed MCP configuration in every new session;
 - tool_server serves an `AcpToolServer`, a named set of ADK-Rust tools, to the
   agent over the ACP connection itself (unstable MCP over ACP). The tools run
-  in your application, and no MCP process is started.
+  in your application, and no MCP process is started. Every call runs through
+  `adk_core::authorize_tool_call` and the action ledger under the server's
+  `run_config` — its kill switches, tool policy, approvals and audit trail — and
+  `AcpToolServer::governance` is the server's own kill switch. A call held for
+  approval is never run in the request that asked for it, and the agent cannot
+  approve its own call.
 
 These callbacks are opt-in and run outside the JSON-RPC dispatch loop, so a
 long file operation or terminal wait does not freeze other ACP traffic. The
@@ -477,6 +482,9 @@ cargo clippy -p adk-acp --all-features --all-targets -- -D warnings
   held call under its original id before the next model call. The nested
   request is issued from the spawned prompt task, so the outer prompt response
   still completes.
+- Every turn's `Runner` shares the server's kill switch,
+  `AcpServerConfig::governance`; `AcpServerConfigBuilder::governance` shares the
+  operator's, so a freeze stops every ACP turn.
 - `AcpServerConfigBuilder` takes no `ToolPolicy` or run budget. In-process
   controls belong on the agent: tool confirmation, callbacks, guardrails, and
   `adk-auth` wrappers.
