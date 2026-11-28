@@ -25,8 +25,8 @@ tracing = { workspace = true }
 tempfile = "3.10"
 
 # Optional dependencies for wasm feature
-wasmtime = { version = "48.0.8", optional = true }
-wasmtime-wasi = { version = "48.0.8", optional = true }
+wasmtime = { version = "48.0.10", optional = true }
+wasmtime-wasi = { version = "48.0.10", optional = true }
 
 # Optional dependency for the egress proxy's audit records
 chrono = { workspace = true, optional = true }
