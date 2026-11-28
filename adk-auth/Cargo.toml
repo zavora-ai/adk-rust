@@ -62,7 +62,7 @@ http = { version = "1", optional = true }
 httpdate = { version = "1", optional = true }
 
 # SSO dependencies (optional)
-jsonwebtoken = { version = "11", features = ["aws_lc_rs"], optional = true }
+jsonwebtoken = { version = "12", features = ["aws_lc_rs"], optional = true }
 reqwest = { workspace = true, features = ["json"], optional = true }
 dashmap = { version = "6", optional = true }
 base64 = { version = "0.22", optional = true }
