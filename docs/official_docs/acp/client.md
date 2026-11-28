@@ -310,7 +310,56 @@ Starting a session fails with `AcpError::Unsupported` when the agent does not
 advertise `mcp.acp`. Tool server names must be unique among the session's MCP
 servers. A tool that fails comes back to the agent as an `isError` result, so
 its model can read the error. Tools run with a minimal `ToolContext`: no
-session state, artifacts or memory.
+session state, artifacts or memory. Its session is the connection's `serverId`,
+and it exposes the server's run configuration, so an agent-as-tool delegate runs
+under the same governance.
+
+### Govern the agent's calls
+
+Every `tools/call` runs through `adk_core::authorize_tool_call` — the governed
+path an agent run's tool calls take — before the tool executes. Pass the run
+configuration whose controls apply with `AcpToolServer::run_config`:
+
+```rust,ignore
+use std::sync::Arc;
+
+use adk_acp::{AcpAgentConfig, AcpToolServer};
+use adk_core::{DeclarativePolicy, InMemoryActionLedger, RunConfig};
+
+let tools = AcpToolServer::new("app-tools")
+    .tool(lookup_order_tool)
+    .tool(refund_order_tool)
+    .run_config(
+        RunConfig::builder()
+            .governance(operator_control.clone())
+            .tool_policy(Arc::new(
+                DeclarativePolicy::builder()
+                    .allow("lookup_order")
+                    .require_approval("refund_order", "refunds move money")
+                    .build(),
+            ))
+            .action_ledger(Arc::new(InMemoryActionLedger::new()))
+            .build(),
+    );
+let config = AcpAgentConfig::new("my-coding-agent --acp").tool_server(tools);
+```
+
+| Step | Behaviour |
+|------|-----------|
+| Kill switch | The server's own control (`AcpToolServer::governance`) and every control in the run configuration. A frozen control answers the call `not run: ...` |
+| Consent, egress and tool policy | As for an agent run; a refusal becomes the call's `isError` result |
+| Confirmation | The configuration's `ToolConfirmationHandler` decides at once. Without one, a held call is not run: with an `ApprovalStore` or `ApprovalService` it waits there, and the same call made again on the connection after an approval runs; with neither, it is refused with an error naming the missing approver |
+| Action ledger | A `NonIdempotent` call is begun under its idempotency key — the server name, `acp-agent`, the connection's `serverId` and the MCP request id — so a replayed request is answered from its record without running |
+| Audit | The configuration's audit trail records each decision |
+
+The external agent cannot approve its own call. Decisions keyed by call ID
+(`RunConfig::tool_confirmation_decisions`) are dropped from the configuration,
+because the agent chooses each MCP request id. The calls act as the agent named
+after the tool server; `RunConfig::acting` can name its principal, and nothing
+the agent sends does.
+
+Without a tool policy every served tool is allowed, as in an agent run without
+one; the kill switch, the ledger and the audit trail still apply.
 
 `AcpToolServer` is also an SDK `McpService`. Code that drives the SDK directly
 can attach one with

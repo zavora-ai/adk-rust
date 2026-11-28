@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use adk_core::{
-    Agent, Content, RunConfig, SessionId as AdkSessionId, ToolConfirmationDecision,
-    ToolConfirmationRequest, Toolset, UserId,
+    Agent, Content, GovernanceControl, RunConfig, SessionId as AdkSessionId,
+    ToolConfirmationDecision, ToolConfirmationRequest, Toolset, UserId,
 };
 use adk_runner::Runner;
 use adk_session::{CreateRequest, DeleteRequest, GetRequest, ListRequest, SessionService};
@@ -102,6 +102,8 @@ pub struct AcpSessionHandler {
     running_prompts: tokio::sync::watch::Sender<usize>,
     /// Which client system prompts sessions may carry.
     system_prompts: SystemPromptSupport,
+    /// The kill switch every turn's runner shares, so a freeze reaches every turn.
+    governance: GovernanceControl,
 }
 
 /// Counts one prompt as running until it is dropped, however the prompt ends.
@@ -196,6 +198,7 @@ impl AcpSessionHandler {
             standing_permissions: config.standing_permissions.clone(),
             running_prompts: tokio::sync::watch::channel(0).0,
             system_prompts: config.system_prompts,
+            governance: config.governance.clone(),
         })
     }
 
@@ -921,6 +924,7 @@ impl AcpSessionHandler {
                 .agent(self.agent.clone())
                 .session_service(self.session_service.clone())
                 .cancellation_token(cancellation_token.clone())
+                .governance(self.governance.clone())
                 .run_config(run_config)
                 .build()
                 .map_err(|e| AcpServerError::Execution(format!("failed to create runner: {e}")))?;

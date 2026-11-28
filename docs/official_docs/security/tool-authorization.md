@@ -1599,6 +1599,13 @@ scheduling, and a durable run the switch refuses after it made a call parks at i
 model-call boundary — the refused calls of its batch answered `not run` — and resumes on
 unfreeze. See [Server](../deployment/server.md#kill-switch).
 
+`adk-acp` attaches a control on both ACP paths:
+
+| Path | Control |
+|------|---------|
+| ACP server — an editor prompts an ADK-Rust agent | Every turn's `Runner` shares `AcpServerConfig::governance`; `AcpServerConfigBuilder::governance` shares the operator's. See [ACP server](../acp/server.md#kill-switch) |
+| ACP tool server — an external ACP agent calls ADK-Rust tools over MCP over ACP | Each call runs through `authorize_tool_call` and the action ledger under `AcpToolServer::run_config`, which carries the server's own control, `AcpToolServer::governance`. A frozen control answers the call `not run`; a held call with no approver is refused. See [ACP client](../acp/client.md#govern-the-agents-calls) |
+
 Realtime tool calls go through the same governed path — see
 [Realtime Tools](../realtime/tools.md#the-governed-path).
 

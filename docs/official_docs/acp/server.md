@@ -477,9 +477,33 @@ layer or the agent's confirmation policy holds is still asked about.
 Server-owned tool authorization, read-only tools, RBAC, guardrails, and workflow
 interrupts remain available where approval must happen entirely inside the
 ADK-Rust process. Each prompt runs on a `Runner` the server builds with
-only the decisions above: `AcpServerConfigBuilder` takes no `ToolPolicy` or run
-budget, so in-process controls belong on the agent — tool confirmation,
-callbacks, guardrails, and `adk-auth` wrappers.
+only the decisions above and the server's kill switch: `AcpServerConfigBuilder`
+takes no `ToolPolicy` or run budget, so in-process controls belong on the agent —
+tool confirmation, callbacks, guardrails, and `adk-auth` wrappers.
+
+### Kill switch
+
+Every turn's `Runner` shares one `GovernanceControl`, `AcpServerConfig::governance`.
+The builder creates one; `AcpServerConfigBuilder::governance` shares the operator's,
+such as the control an `adk-server` deployment freezes through
+`POST /api/admin/freeze`:
+
+```rust,ignore
+use adk_core::GovernanceControl;
+
+let control = GovernanceControl::new();
+let config = AcpServerConfigBuilder::new()
+    .agent(agent)
+    .session_service(sessions)
+    .governance(control.clone())
+    .build()?;
+
+control.freeze("incident 4012");
+```
+
+While it is frozen, a new turn fails at its start and a running turn stops before
+its next model or tool call, as described in
+[Kill Switch](../security/tool-authorization.md#kill-switch).
 
 ## Deploy safely
 
