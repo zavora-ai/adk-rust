@@ -63,6 +63,9 @@ These accepted advisories are also configured in [`.cargo/audit.toml`](../../.ca
 |---|---|---|
 | RUSTSEC-2026-0457, RUSTSEC-2026-0461, RUSTSEC-2026-0462 | `rmcp` | Lockfile updated from 3.5.1 to 3.10.0; every manifest now requires rmcp 3.9. |
 | RUSTSEC-2026-0420, RUSTSEC-2026-0422, RUSTSEC-2026-0423, RUSTSEC-2026-0424 | `wasmtime`, `wasmtime-wasi` | Lockfile updated from 48.0.7 to 48.0.8; `adk-sandbox` now requires 48.0.8. |
+| RUSTSEC-2026-0566 to RUSTSEC-2026-0573, RUSTSEC-2026-0587 | `wasmtime`, `wasmtime-wasi` | Lockfile updated from 48.0.8 to 48.0.10; `adk-sandbox` now requires 48.0.10. |
+| RUSTSEC-2026-0592 | `url` | Workspace and example lockfiles updated from 2.5.8 to 2.5.9. |
+| RUSTSEC-2026-0594 | `cookie` | Workspace and example lockfiles updated from 0.18.2 to 0.18.3. |
 | RUSTSEC-2026-0414, RUSTSEC-2026-0433 | `pulldown-cmark` | Lockfile updated from 0.13.4 to 0.13.6; `adk-site` and `adk-surface` now require 0.13.6. |
 | RUSTSEC-2026-0391, RUSTSEC-2026-0398, RUSTSEC-2026-0403, RUSTSEC-2026-0410 | `zstd`, `zstd-safe`, `zstd-sys` | Lockfile updated to zstd 0.13.5, zstd-safe 7.4.1, and zstd-sys 2.1.3. |
 | RUSTSEC-2026-0538 | `quinn-udp` | Lockfile updated from 0.5.15 to 0.5.16. |
